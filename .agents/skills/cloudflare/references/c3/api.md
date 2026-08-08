@@ -38,11 +38,9 @@ pnpm create cloudflare@latest [name] [-- flags]
 
 ## Environment Variables
 
-```bash
-CLOUDFLARE_API_TOKEN=xxx    # For deployment
-CLOUDFLARE_ACCOUNT_ID=xxx   # Account ID
-CF_TELEMETRY_DISABLED=1     # Disable telemetry
-```
+Inject `CLOUDFLARE_API_TOKEN` into the C3 process directly from your deployment
+secret manager. `CLOUDFLARE_ACCOUNT_ID` and `CF_TELEMETRY_DISABLED` are ordinary
+non-secret configuration.
 
 ## Exit Codes
 

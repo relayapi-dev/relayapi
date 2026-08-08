@@ -9,10 +9,15 @@ mock.module("@relayapi/db", () => ({
 	queueFailures: {},
 	socialAccounts: {},
 }));
+mock.module("../services/operator-alerts", () => ({
+	dispatchQueueRescuePersistenceAlert: async () => {},
+}));
 
 const { consumeDeadLetterQueue } = await import("../queues/dead-letter");
 
 import type { Env } from "../types";
+
+const TEST_ENCRYPTION_KEY = `test=${"a".repeat(64)}`;
 
 function message() {
 	let acked = 0;
@@ -48,6 +53,7 @@ describe("DLQ independent rescue fallback", () => {
 		const tracked = message();
 		const env = {
 			HYPERDRIVE: { connectionString: "postgres://unavailable" },
+			ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 			QUEUE_RESCUE_BUCKET: {
 				put: async () => {
 					writes += 1;
@@ -68,6 +74,7 @@ describe("DLQ independent rescue fallback", () => {
 		const tracked = message();
 		const env = {
 			HYPERDRIVE: { connectionString: "postgres://unavailable" },
+			ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
 			QUEUE_RESCUE_BUCKET: {
 				put: async () => {
 					throw new Error("R2 unavailable");

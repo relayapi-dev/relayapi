@@ -5,6 +5,7 @@ import {
 	INVALID_CURSOR_BODY,
 	InvalidPaginationCursorError,
 } from "../lib/pagination-cursor";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { ErrorResponse } from "../schemas/common";
 import {
 	ClassifyBody,
@@ -19,6 +20,7 @@ import {
 import {
 	calculatePriorityScore,
 	classifyMessages,
+	InboxAiProviderError,
 	suggestReplies,
 	summarizeConversation,
 } from "../services/inbox-ai";
@@ -27,6 +29,21 @@ import type { Env, Variables } from "../types";
 import { resolveInboxTarget } from "./inbox-helpers";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+app.onError((error, c) => {
+	if (error instanceof InboxAiProviderError) {
+		return c.json(
+			{
+				error: {
+					code: "AI_PROVIDER_FAILED",
+					message: "Workers AI could not complete the request",
+				},
+			},
+			503,
+		);
+	}
+	throw error;
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -109,6 +126,7 @@ const classifyRoute = createRoute({
 app.openapi(classifyRoute, async (c) => {
 	const ai = requireAi(c.env);
 	if (!ai) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -161,6 +179,7 @@ const suggestReplyRoute = createRoute({
 app.openapi(suggestReplyRoute, async (c) => {
 	const ai = requireAi(c.env);
 	if (!ai) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -182,6 +201,7 @@ app.openapi(suggestReplyRoute, async (c) => {
 		workspaceScope: c.get("workspaceScope"),
 	});
 	if (!target) {
+		markMutationInputNotApplied(c);
 		return c.json({ suggestions: [] } as never, 200);
 	}
 
@@ -240,6 +260,7 @@ const summarizeRoute = createRoute({
 app.openapi(summarizeRoute, async (c) => {
 	const ai = requireAi(c.env);
 	if (!ai) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -271,6 +292,7 @@ app.openapi(summarizeRoute, async (c) => {
 		: null;
 
 	if (!result) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {

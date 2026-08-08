@@ -3,14 +3,20 @@ import {
 	automationEntrypoints,
 	automationSecrets,
 	automationWebhookReceipts,
-	byosConfigs,
+	contactChannels,
+	contacts,
 	createDb,
+	emailDeliveries,
+	externalSubjectCleanupJobs,
 	idempotencyReceipts,
 	inboundWebhookEvents,
-	shortLinkConfigs,
+	operatorResolutionNotes,
+	queueFailures,
+	shortLinkCredentials,
 	socialAccounts,
+	storageCredentials,
 	webhookEndpoints,
-	whatsappPhoneNumbers,
+	whatsappPhoneReleaseOperations,
 } from "@relayapi/db";
 import {
 	and,
@@ -18,8 +24,8 @@ import {
 	isNotNull,
 	isNull,
 	or,
-	sql,
 	type SQLWrapper,
+	sql,
 } from "drizzle-orm";
 import {
 	accountTokenNeedsReencryption,
@@ -36,6 +42,7 @@ import {
 	getMetaAdsUserAccessToken,
 	replaceMetaAdsUserAccessTokenCiphertext,
 } from "./ad-access-token";
+import { rotateContactConsentAuthority } from "./contact-consent";
 
 const BATCH_SIZE = 50;
 
@@ -214,22 +221,22 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 
 	const phoneReleaseGrants = await db
 		.select({
-			id: whatsappPhoneNumbers.id,
-			sourceAccountId: whatsappPhoneNumbers.releaseSourceAccountId,
-			ciphertext: whatsappPhoneNumbers.releaseAccessTokenCiphertext,
+			id: whatsappPhoneReleaseOperations.releaseOperationId,
+			sourceAccountId: whatsappPhoneReleaseOperations.releaseSourceAccountId,
+			ciphertext: whatsappPhoneReleaseOperations.releaseAccessTokenCiphertext,
 		})
-		.from(whatsappPhoneNumbers)
+		.from(whatsappPhoneReleaseOperations)
 		.where(
 			and(
-				isNotNull(whatsappPhoneNumbers.releaseSourceAccountId),
-				isNotNull(whatsappPhoneNumbers.releaseAccessTokenCiphertext),
+				isNotNull(whatsappPhoneReleaseOperations.releaseSourceAccountId),
+				isNotNull(whatsappPhoneReleaseOperations.releaseAccessTokenCiphertext),
 				doesNotStartWith(
-					whatsappPhoneNumbers.releaseAccessTokenCiphertext,
+					whatsappPhoneReleaseOperations.releaseAccessTokenCiphertext,
 					activeAccountPrefix,
 				),
 			),
 		)
-		.orderBy(whatsappPhoneNumbers.id)
+		.orderBy(whatsappPhoneReleaseOperations.releaseOperationId)
 		.limit(BATCH_SIZE);
 	for (const row of phoneReleaseGrants) {
 		if (!row.sourceAccountId || !row.ciphertext) continue;
@@ -243,16 +250,22 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 			: null;
 		if (!rotated) continue;
 		const result = await db
-			.update(whatsappPhoneNumbers)
+			.update(whatsappPhoneReleaseOperations)
 			.set({ releaseAccessTokenCiphertext: rotated })
 			.where(
 				and(
-					eq(whatsappPhoneNumbers.id, row.id),
-					eq(whatsappPhoneNumbers.releaseAccessTokenCiphertext, row.ciphertext),
-					eq(whatsappPhoneNumbers.releaseSourceAccountId, row.sourceAccountId),
+					eq(whatsappPhoneReleaseOperations.releaseOperationId, row.id),
+					eq(
+						whatsappPhoneReleaseOperations.releaseAccessTokenCiphertext,
+						row.ciphertext,
+					),
+					eq(
+						whatsappPhoneReleaseOperations.releaseSourceAccountId,
+						row.sourceAccountId,
+					),
 				),
 			)
-			.returning({ id: whatsappPhoneNumbers.id });
+			.returning({ id: whatsappPhoneReleaseOperations.releaseOperationId });
 		changed += result.length;
 	}
 
@@ -287,16 +300,97 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 		changed += result.length;
 	}
 
-	const byosRows = await db
-		.select()
-		.from(byosConfigs)
+	const emailDeliveryRows = await db
+		.select({
+			id: emailDeliveries.id,
+			ciphertext: emailDeliveries.envelopeCiphertext,
+		})
+		.from(emailDeliveries)
 		.where(
-			or(
-				doesNotStartWith(byosConfigs.accessKeyId, activePrefix),
-				doesNotStartWith(byosConfigs.secretAccessKey, activePrefix),
+			and(
+				isNotNull(emailDeliveries.envelopeCiphertext),
+				isNull(emailDeliveries.redactedAt),
+				doesNotStartWith(emailDeliveries.envelopeCiphertext, activePrefix),
 			),
 		)
-		.orderBy(byosConfigs.id)
+		.orderBy(emailDeliveries.id)
+		.limit(BATCH_SIZE);
+	for (const row of emailDeliveryRows) {
+		if (!row.ciphertext) continue;
+		const rotated = await rotateScalar(
+			row.ciphertext,
+			keyConfig,
+			{ recordId: row.id, field: "email_delivery_envelope" },
+			true,
+		);
+		if (!rotated) continue;
+		const result = await db
+			.update(emailDeliveries)
+			.set({ envelopeCiphertext: rotated, envelopeKeyId: activeId })
+			.where(
+				and(
+					eq(emailDeliveries.id, row.id),
+					eq(emailDeliveries.envelopeCiphertext, row.ciphertext),
+					isNull(emailDeliveries.redactedAt),
+				),
+			)
+			.returning({ id: emailDeliveries.id });
+		changed += result.length;
+	}
+
+	const queueFailureRows = await db
+		.select({
+			id: queueFailures.id,
+			queueName: queueFailures.queueName,
+			messageId: queueFailures.messageId,
+			ciphertext: queueFailures.payloadCiphertext,
+		})
+		.from(queueFailures)
+		.where(
+			and(
+				isNotNull(queueFailures.payloadCiphertext),
+				isNull(queueFailures.payloadRedactedAt),
+				doesNotStartWith(queueFailures.payloadCiphertext, activePrefix),
+			),
+		)
+		.orderBy(queueFailures.id)
+		.limit(BATCH_SIZE);
+	for (const row of queueFailureRows) {
+		if (!row.ciphertext) continue;
+		const rotated = await rotateScalar(
+			row.ciphertext,
+			keyConfig,
+			{
+				recordId: `${row.queueName}:${row.messageId}`,
+				field: "queue_failure_payload",
+			},
+			true,
+		);
+		if (!rotated) continue;
+		const result = await db
+			.update(queueFailures)
+			.set({ payloadCiphertext: rotated, payloadKeyId: activeId })
+			.where(
+				and(
+					eq(queueFailures.id, row.id),
+					eq(queueFailures.payloadCiphertext, row.ciphertext),
+					isNull(queueFailures.payloadRedactedAt),
+				),
+			)
+			.returning({ id: queueFailures.id });
+		changed += result.length;
+	}
+
+	const byosRows = await db
+		.select()
+		.from(storageCredentials)
+		.where(
+			or(
+				doesNotStartWith(storageCredentials.accessKeyId, activePrefix),
+				doesNotStartWith(storageCredentials.secretAccessKey, activePrefix),
+			),
+		)
+		.orderBy(storageCredentials.id)
 		.limit(BATCH_SIZE);
 	for (const row of byosRows) {
 		const nextAccess = await rotateScalar(
@@ -313,46 +407,115 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 		);
 		if (!nextAccess && !nextSecret) continue;
 		const result = await db
-			.update(byosConfigs)
+			.update(storageCredentials)
 			.set({
 				accessKeyId: nextAccess ?? row.accessKeyId,
 				secretAccessKey: nextSecret ?? row.secretAccessKey,
 			})
 			.where(
 				and(
-					eq(byosConfigs.id, row.id),
-					eq(byosConfigs.accessKeyId, row.accessKeyId),
-					eq(byosConfigs.secretAccessKey, row.secretAccessKey),
+					eq(storageCredentials.id, row.id),
+					eq(storageCredentials.accessKeyId, row.accessKeyId),
+					eq(storageCredentials.secretAccessKey, row.secretAccessKey),
 				),
 			)
-			.returning({ id: byosConfigs.id });
+			.returning({ id: storageCredentials.id });
 		changed += result.length;
 	}
 
-	const shortLinks = await db
+	const shortLinkCredentialRows = await db
 		.select()
-		.from(shortLinkConfigs)
+		.from(shortLinkCredentials)
 		.where(
-			and(
-				isNotNull(shortLinkConfigs.apiKey),
-				doesNotStartWith(shortLinkConfigs.apiKey, activePrefix),
-			),
+			doesNotStartWith(shortLinkCredentials.apiKeyCiphertext, activePrefix),
 		)
-		.orderBy(shortLinkConfigs.id)
+		.orderBy(shortLinkCredentials.id)
 		.limit(BATCH_SIZE);
-	for (const row of shortLinks) {
-		const rotated = await rotateScalar(row.apiKey, keyConfig, undefined, true);
-		if (!rotated || !row.apiKey) continue;
+	for (const row of shortLinkCredentialRows) {
+		const rotated = await rotateScalar(
+			row.apiKeyCiphertext,
+			keyConfig,
+			undefined,
+			true,
+		);
+		if (!rotated) continue;
 		const result = await db
-			.update(shortLinkConfigs)
-			.set({ apiKey: rotated })
+			.update(shortLinkCredentials)
+			.set({ apiKeyCiphertext: rotated })
 			.where(
 				and(
-					eq(shortLinkConfigs.id, row.id),
-					eq(shortLinkConfigs.apiKey, row.apiKey),
+					eq(shortLinkCredentials.id, row.id),
+					eq(shortLinkCredentials.apiKeyCiphertext, row.apiKeyCiphertext),
 				),
 			)
-			.returning({ id: shortLinkConfigs.id });
+			.returning({ id: shortLinkCredentials.id });
+		changed += result.length;
+	}
+
+	const shortLinkCleanupRows = await db
+		.select({
+			id: externalSubjectCleanupJobs.id,
+			ciphertext: externalSubjectCleanupJobs.credentialCiphertext,
+		})
+		.from(externalSubjectCleanupJobs)
+		.where(
+			and(
+				isNotNull(externalSubjectCleanupJobs.credentialCiphertext),
+				doesNotStartWith(
+					externalSubjectCleanupJobs.credentialCiphertext,
+					activePrefix,
+				),
+			),
+		)
+		.orderBy(externalSubjectCleanupJobs.id)
+		.limit(BATCH_SIZE);
+	for (const row of shortLinkCleanupRows) {
+		const rotated = await rotateScalar(
+			row.ciphertext,
+			keyConfig,
+			undefined,
+			true,
+		);
+		if (!rotated || !row.ciphertext) continue;
+		const result = await db
+			.update(externalSubjectCleanupJobs)
+			.set({ credentialCiphertext: rotated })
+			.where(
+				and(
+					eq(externalSubjectCleanupJobs.id, row.id),
+					eq(externalSubjectCleanupJobs.credentialCiphertext, row.ciphertext),
+				),
+			)
+			.returning({ id: externalSubjectCleanupJobs.id });
+		changed += result.length;
+	}
+
+	const operatorNoteRows = await db
+		.select()
+		.from(operatorResolutionNotes)
+		.where(
+			doesNotStartWith(operatorResolutionNotes.noteCiphertext, activePrefix),
+		)
+		.orderBy(operatorResolutionNotes.evidenceId)
+		.limit(BATCH_SIZE);
+	for (const row of operatorNoteRows) {
+		const rotated = await rotateScalar(
+			row.noteCiphertext,
+			keyConfig,
+			{ recordId: row.evidenceId, field: "note_ciphertext" },
+			true,
+		);
+		if (!rotated) continue;
+		const result = await db
+			.update(operatorResolutionNotes)
+			.set({ noteCiphertext: rotated })
+			.where(
+				and(
+					eq(operatorResolutionNotes.evidenceId, row.evidenceId),
+					eq(operatorResolutionNotes.noteCiphertext, row.noteCiphertext),
+				),
+			)
+			.returning({ evidenceId: operatorResolutionNotes.evidenceId });
 		changed += result.length;
 	}
 
@@ -538,10 +701,115 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 		changed += result.length;
 	}
 
-	if (changed > 0) {
+	const contactRows = await db
+		.select({
+			id: contacts.id,
+			nameCiphertext: contacts.nameCiphertext,
+			emailCiphertext: contacts.emailCiphertext,
+			phoneCiphertext: contacts.phoneCiphertext,
+			metadataCiphertext: contacts.metadataCiphertext,
+		})
+		.from(contacts)
+		.where(
+			or(
+				and(
+					isNotNull(contacts.nameCiphertext),
+					doesNotStartWith(contacts.nameCiphertext, activePrefix),
+				),
+				and(
+					isNotNull(contacts.emailCiphertext),
+					doesNotStartWith(contacts.emailCiphertext, activePrefix),
+				),
+				and(
+					isNotNull(contacts.phoneCiphertext),
+					doesNotStartWith(contacts.phoneCiphertext, activePrefix),
+				),
+				and(
+					isNotNull(contacts.metadataCiphertext),
+					doesNotStartWith(contacts.metadataCiphertext, activePrefix),
+				),
+			),
+		)
+		.orderBy(contacts.id)
+		.limit(BATCH_SIZE);
+	for (const row of contactRows) {
+		for (const [field, column, oldValue] of [
+			["contact_name", contacts.nameCiphertext, row.nameCiphertext],
+			["contact_email", contacts.emailCiphertext, row.emailCiphertext],
+			["contact_phone", contacts.phoneCiphertext, row.phoneCiphertext],
+			["contact_metadata", contacts.metadataCiphertext, row.metadataCiphertext],
+		] as const) {
+			if (!oldValue) continue;
+			const rotated = await rotateScalar(
+				oldValue,
+				keyConfig,
+				{ recordId: row.id, field },
+				true,
+			);
+			if (!rotated) continue;
+			const result = await db
+				.update(contacts)
+				.set(
+					field === "contact_name"
+						? { nameCiphertext: rotated }
+						: field === "contact_email"
+							? { emailCiphertext: rotated }
+							: field === "contact_phone"
+								? { phoneCiphertext: rotated }
+								: { metadataCiphertext: rotated },
+				)
+				.where(and(eq(contacts.id, row.id), eq(column, oldValue)))
+				.returning({ id: contacts.id });
+			changed += result.length;
+		}
+	}
+
+	const contactChannelRows = await db
+		.select({
+			id: contactChannels.id,
+			identifierCiphertext: contactChannels.identifierCiphertext,
+		})
+		.from(contactChannels)
+		.where(doesNotStartWith(contactChannels.identifierCiphertext, activePrefix))
+		.orderBy(contactChannels.id)
+		.limit(BATCH_SIZE);
+	for (const row of contactChannelRows) {
+		const rotated = await rotateScalar(
+			row.identifierCiphertext,
+			keyConfig,
+			{ recordId: row.id, field: "contact_channel_identifier" },
+			true,
+		);
+		if (!rotated) continue;
+		const result = await db
+			.update(contactChannels)
+			.set({ identifierCiphertext: rotated })
+			.where(
+				and(
+					eq(contactChannels.id, row.id),
+					eq(contactChannels.identifierCiphertext, row.identifierCiphertext),
+				),
+			)
+			.returning({ id: contactChannels.id });
+		changed += result.length;
+	}
+
+	const consentAuthority = await rotateContactConsentAuthority(
+		db,
+		keyConfig,
+		BATCH_SIZE,
+	);
+	changed += consentAuthority.rewritten;
+
+	if (changed > 0 || consentAuthority.remaining > 0) {
 		console.log("[encryption-rotation] rotated ciphertext batch", {
 			activeId,
 			changed,
+			consentAuthority: {
+				activeVersion: consentAuthority.activeVersion,
+				rewritten: consentAuthority.rewritten,
+				remaining: consentAuthority.remaining,
+			},
 		});
 	}
 	return changed;

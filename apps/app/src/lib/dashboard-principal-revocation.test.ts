@@ -3,13 +3,22 @@ import { revokeDashboardPrincipal } from "./dashboard-principal-revocation";
 
 function createRevocationDb(membershipExists = false) {
 	const updatedTables: unknown[] = [];
+	const deletedTables: unknown[] = [];
 	let transactionCalls = 0;
 	const tx = {
 		select: () => ({
 			from: () => ({
-				where: async () => [{ key: "hashed_dashboard_key" }],
+				where: async () => [
+					{ key: "hashed_dashboard_key", principalId: "prn_member" },
+				],
 			}),
 		}),
+		delete: (table: unknown) => {
+			deletedTables.push(table);
+			return {
+				where: async () => undefined,
+			};
+		},
 		update: (table: unknown) => {
 			updatedTables.push(table);
 			return {
@@ -34,6 +43,7 @@ function createRevocationDb(membershipExists = false) {
 			},
 		},
 		updatedTables,
+		deletedTables,
 		get transactionCalls() {
 			return transactionCalls;
 		},
@@ -42,7 +52,7 @@ function createRevocationDb(membershipExists = false) {
 
 describe("dashboard principal membership revocation", () => {
 	it("disables principal keys, clears active sessions, and evicts both KV entries", async () => {
-		const { db, updatedTables } = createRevocationDb();
+		const { db, deletedTables, updatedTables } = createRevocationDb();
 		const deleted: string[] = [];
 
 		await revokeDashboardPrincipal(
@@ -52,7 +62,8 @@ describe("dashboard principal membership revocation", () => {
 			"user_123",
 		);
 
-		expect(updatedTables).toHaveLength(2);
+		expect(updatedTables).toHaveLength(3);
+		expect(deletedTables).toHaveLength(1);
 		expect(deleted).toEqual([
 			"dashboard-key:org_123:user_123",
 			"apikey:hashed_dashboard_key",
@@ -88,6 +99,7 @@ describe("dashboard principal membership revocation", () => {
 
 		expect(state.transactionCalls).toBe(0);
 		expect(state.updatedTables).toHaveLength(0);
+		expect(state.deletedTables).toHaveLength(0);
 		expect(deleted).toHaveLength(0);
 	});
 });

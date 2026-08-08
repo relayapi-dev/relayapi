@@ -1,3 +1,4 @@
+import { BASELINE_GENERATION } from "@relayapi/config";
 import type { Env, KVKeyData } from "../../types";
 
 export class MockKV {
@@ -80,6 +81,7 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 		MEDIA_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
 		AVATAR_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
 		THUMBNAIL_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
+		QUEUE_RESCUE_BUCKET: new MockR2Bucket() as unknown as R2Bucket,
 		HYPERDRIVE: {
 			connectionString: "postgresql://mock:mock@localhost:5432/mock",
 		} as unknown as Hyperdrive,
@@ -91,6 +93,12 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 		ADS_QUEUE: createMockQueue(),
 		SYNC_QUEUE: createMockQueue(),
 		CUSTOMER_WEBHOOK_QUEUE: createMockQueue(),
+		QUEUE_RESCUE_QUEUE: createMockQueue(),
+		AI: {
+			run: async () => ({ response: "{}" }),
+		} as unknown as Ai,
+		IMAGES: {} as unknown as ImagesBinding,
+		MEDIA: {} as unknown as MediaBinding,
 		REALTIME: {} as unknown as DurableObjectNamespace,
 		FREE_RATE_LIMITER: {
 			limit: async () => ({ success: true }),
@@ -98,11 +106,33 @@ export function createMockEnv(kvOverride?: MockKV): { env: Env; kv: MockKV } {
 		PRO_RATE_LIMITER: {
 			limit: async () => ({ success: true }),
 		} as unknown as RateLimit,
+		FREE_KEY_BURST_LIMITER: {
+			limit: async () => ({ success: true }),
+		} as unknown as RateLimit,
+		PRO_KEY_BURST_LIMITER: {
+			limit: async () => ({ success: true }),
+		} as unknown as RateLimit,
 		STRIPE_SECRET_KEY: "sk_test_mock",
+		STRIPE_PRO_PRICE_ID: "price_test_pro",
 		STRIPE_WEBHOOK_SECRET: "whsec_test_mock",
+		STRIPE_PORTAL_CONFIGURATION_ID: "bpc_test_relayapi",
 		RESEND_API_KEY: "re_test_mock",
-		ENCRYPTION_KEY: `test=${"a".repeat(64)}`,
+		ENCRYPTION_KEY: `test=${"a".repeat(64)},identity=${"b".repeat(64)}`,
+		OPENAI_API_KEY: "sk-test-openai",
+		BASELINE_GENERATION: String(BASELINE_GENERATION),
+		PERF_LOGS: "0",
+		R2_EVENT_ACCOUNT_ID: "test-account",
+		R2_MEDIA_BUCKET_NAME: "relayapi-media",
+		R2_MEDIA_BUCKET_JURISDICTION: "default",
+		R2_THUMBNAIL_BUCKET_NAME: "relayapi-media-thumbnails",
+		R2_THUMBNAIL_BUCKET_JURISDICTION: "default",
+		AI_EMBEDDING_PROVIDER: "openai",
+		AI_EMBEDDING_MODEL: "text-embedding-3-small",
+		AI_INFERENCE_PROVIDER: "workers_ai",
+		AI_INFERENCE_MODEL: "@cf/zai-org/glm-4.7-flash",
 		API_BASE_URL: "https://api.test.dev",
+		PUBLIC_LINK_BASE_URL: "https://go.test.dev",
+		MAINTENANCE_SMOKE_BYPASS_SHA256: "0".repeat(64),
 		FACEBOOK_WEBHOOK_VERIFY_TOKEN: "test_verify_token",
 		// Platform OAuth credentials
 		TWITTER_CLIENT_ID: "test_twitter_id",
@@ -141,7 +171,17 @@ export async function seedApiKeyInKV(
 	hashedKey: string,
 	data: KVKeyData,
 ): Promise<void> {
-	await kv.put(`apikey:${hashedKey}`, JSON.stringify(data));
+	await kv.put(
+		`apikey:${hashedKey}`,
+		JSON.stringify({
+			principal_type: "service",
+			principal_id: data.key_id,
+			principal_user_id: null,
+			entitlement_recheck_at: null,
+			billing_transition_at: null,
+			...data,
+		}),
+	);
 }
 
 /** SHA-256 hash a key (same as auth middleware) */

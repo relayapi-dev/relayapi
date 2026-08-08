@@ -7,11 +7,24 @@ import {
 	webhookEvents,
 	webhookLogs,
 } from "@relayapi/db";
-import { and, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import {
+	and,
+	eq,
+	inArray,
+	isNotNull,
+	isNull,
+	lt,
+	lte,
+	or,
+	sql,
+} from "drizzle-orm";
 import { decryptToken } from "../lib/crypto";
+import { customerWebhookManualReviewUntil } from "../lib/customer-webhook-policy";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import { classifyPublicUrlWithDns } from "../lib/ssrf-guard";
+import { encryptQueueFailurePayload } from "../queues/failures";
 import type { Env } from "../types";
+import { dispatchCustomerWebhookRepairExhaustedAlert } from "./operator-alerts";
 
 export interface CustomerWebhookQueueMessage {
 	type: "deliver_customer_webhook";
@@ -65,14 +78,17 @@ export type WebhookDeliveryResult =
 	| "succeeded"
 	| "retry_scheduled"
 	| "failed"
-	| "unknown";
+	| "unknown"
+	| "manual_review";
 
 const MAX_DELIVERY_ATTEMPTS = 8;
+const MAX_OPERATOR_AUTHORIZED_DELIVERY_ATTEMPTS = MAX_DELIVERY_ATTEMPTS + 1;
 const DELIVERY_LEASE_MS = 2 * 60_000;
 const DISPATCH_LEASE_MS = 60_000;
 const DISPATCH_RETRY_MS = 30_000;
 const DISPATCH_REDUNDANCY_MS = 5 * 60_000;
 const MAX_DISPATCH_BATCH = 100;
+const MAX_PRE_BOUNDARY_REPAIR_ATTEMPTS = 12;
 const CUSTOMER_WEBHOOK_QUEUE_NAME = "relayapi-customer-webhooks";
 
 async function stableId(prefix: string, value: string): Promise<string> {
@@ -164,6 +180,18 @@ export function webhookRetryDelaySeconds(
 	const requested = parseWebhookRetryAfter(retryAfter, nowMs);
 	if (requested !== null) return requested;
 	return Math.min(30 * 2 ** Math.max(attempt - 1, 0), 3_600);
+}
+
+export function webhookRepairDelaySeconds(attempt: number): number {
+	return Math.min(30 * 2 ** Math.max(attempt - 1, 0), 4 * 60 * 60);
+}
+
+export function webhookDeliveryAttemptLimit(
+	operatorRetryRequestedAt: Date | null,
+): number {
+	return operatorRetryRequestedAt
+		? MAX_OPERATOR_AUTHORIZED_DELIVERY_ATTEMPTS
+		: MAX_DELIVERY_ATTEMPTS;
 }
 
 export function isRetryableWebhookStatus(status: number): boolean {
@@ -452,15 +480,25 @@ export async function dispatchPendingWebhookDeliveries(
 	);
 	const dispatchLeaseId = crypto.randomUUID();
 	const claimed = (await db.execute(sql`
-		WITH due AS (
-			SELECT id
+		WITH ranked AS MATERIALIZED (
+			SELECT id,
+			       next_dispatch_at,
+			       row_number() OVER (
+			         PARTITION BY organization_id
+			         ORDER BY next_dispatch_at ASC, id ASC
+			       ) AS tenant_rank
 			  FROM webhook_deliveries
 			 WHERE status = 'pending'
 			   AND next_dispatch_at <= NOW()
 			   AND (dispatch_lease_expires_at IS NULL OR dispatch_lease_expires_at < NOW())
-			 ORDER BY next_dispatch_at ASC, id ASC
+		),
+		due AS (
+			SELECT delivery.id
+			  FROM ranked
+			  JOIN webhook_deliveries AS delivery ON delivery.id = ranked.id
+			 ORDER BY ranked.tenant_rank ASC, ranked.next_dispatch_at ASC, ranked.id ASC
 			 LIMIT ${batchSize}
-			 FOR UPDATE SKIP LOCKED
+			 FOR UPDATE OF delivery SKIP LOCKED
 		)
 		UPDATE webhook_deliveries AS delivery
 		   SET dispatch_lease_id = ${dispatchLeaseId},
@@ -532,6 +570,7 @@ export async function dispatchPendingWebhookDeliveries(
  */
 async function recordUnknownWebhookDeliveries(
 	db: Database,
+	env: Env,
 	limit: number,
 ): Promise<number> {
 	return db.transaction(async (tx) => {
@@ -541,7 +580,8 @@ async function recordUnknownWebhookDeliveries(
 			       delivery.attempts,
 			       delivery.error
 			  FROM webhook_deliveries AS delivery
-			 WHERE delivery.status = 'unknown'
+			 WHERE delivery.status = 'manual_review'
+			   AND delivery.manual_review_reason = 'http_outcome_unknown'
 			   AND delivery.lease_expires_at IS NULL
 			   AND NOT EXISTS (
 			         SELECT 1
@@ -560,23 +600,33 @@ async function recordUnknownWebhookDeliveries(
 			error: string | null;
 		}>;
 		if (unknown.length === 0) return 0;
+		const encryptedPayloads = await Promise.all(
+			unknown.map((delivery) =>
+				encryptQueueFailurePayload(
+					env,
+					CUSTOMER_WEBHOOK_QUEUE_NAME,
+					`delivery:${delivery.id}`,
+					{
+						type: "deliver_customer_webhook",
+						delivery_id: delivery.id,
+						operation_id: delivery.id,
+						organization_id: delivery.organization_id,
+					},
+				),
+			),
+		);
 
 		await tx
 			.insert(queueFailures)
 			.values(
-				unknown.map((delivery) => ({
+				unknown.map((delivery, index) => ({
 					queueName: CUSTOMER_WEBHOOK_QUEUE_NAME,
 					messageId: `delivery:${delivery.id}`,
 					organizationIds: [delivery.organization_id],
 					operationId: delivery.id,
 					failureKind: "unknown_external_outcome" as const,
 					attempts: delivery.attempts,
-					payload: {
-						type: "deliver_customer_webhook",
-						delivery_id: delivery.id,
-						operation_id: delivery.id,
-						organization_id: delivery.organization_id,
-					},
+					...encryptedPayloads[index],
 					error:
 						delivery.error ??
 						"Customer webhook transmission outcome is unknown",
@@ -597,7 +647,10 @@ async function recordUnknownWebhookDeliveries(
 	});
 }
 
-/** Recover expired pre-boundary HTTP claims and dispatch due outbox rows. */
+/**
+ * Recover expired pre-boundary claims, move post-boundary ambiguity into its
+ * bounded operator-review state, and dispatch due outbox rows.
+ */
 export async function reconcileCustomerWebhookDeliveries(
 	env: Env,
 	limit = MAX_DISPATCH_BATCH,
@@ -622,12 +675,13 @@ export async function reconcileCustomerWebhookDeliveries(
 			 LIMIT ${batchSize}
 			 FOR UPDATE SKIP LOCKED
 		)
-		UPDATE webhook_deliveries AS delivery
-		   SET status = CASE
-		                  WHEN delivery.status = 'in_flight'
-		                   AND request_may_have_been_sent_at IS NULL THEN 'pending'
-		                  ELSE 'unknown'
-		                END,
+			UPDATE webhook_deliveries AS delivery
+			   SET status = CASE
+			                  WHEN delivery.status = 'in_flight'
+			                   AND request_may_have_been_sent_at IS NULL
+			                    THEN 'pending'
+			                  ELSE 'manual_review'
+			                END,
 		       lease_token = lease_token + 1,
 		       lease_expires_at = NULL,
 		       next_attempt_at = CASE
@@ -635,12 +689,24 @@ export async function reconcileCustomerWebhookDeliveries(
 		                            AND request_may_have_been_sent_at IS NULL THEN NOW()
 		                           ELSE next_attempt_at
 		                         END,
-		       next_dispatch_at = CASE
-		                            WHEN delivery.status = 'in_flight'
-		                             AND request_may_have_been_sent_at IS NULL THEN NOW()
-		                            ELSE next_dispatch_at
-		                          END,
-		       error = CASE
+			       next_dispatch_at = CASE
+			                            WHEN delivery.status = 'in_flight'
+			                             AND request_may_have_been_sent_at IS NULL THEN NOW()
+			                            ELSE next_dispatch_at
+			                          END,
+			       manual_review_reason = CASE
+			                                WHEN delivery.status = 'in_flight'
+			                                 AND request_may_have_been_sent_at IS NULL
+			                                  THEN NULL
+			                                ELSE 'http_outcome_unknown'
+			                              END,
+			       manual_review_until = CASE
+			                               WHEN delivery.status = 'in_flight'
+			                                AND request_may_have_been_sent_at IS NULL
+			                                 THEN NULL
+			                               ELSE request_may_have_been_sent_at + interval '90 days'
+			                             END,
+			       error = CASE
 		                 WHEN delivery.status = 'in_flight'
 		                  AND request_may_have_been_sent_at IS NULL
 		                   THEN 'delivery lease expired before the HTTP boundary'
@@ -649,11 +715,11 @@ export async function reconcileCustomerWebhookDeliveries(
 		       updated_at = NOW()
 		  FROM expired
 		 WHERE delivery.id = expired.id
-		RETURNING delivery.status
-	`)) as unknown as Array<{ status: "pending" | "unknown" }>;
+			RETURNING delivery.status
+		`)) as unknown as Array<{ status: "pending" | "manual_review" }>;
 
 	const markedUnknown = recovered.filter(
-		({ status }) => status === "unknown",
+		({ status }) => status === "manual_review",
 	).length;
 	if (markedUnknown > 0) {
 		console.error(
@@ -663,13 +729,96 @@ export async function reconcileCustomerWebhookDeliveries(
 			}),
 		);
 	}
-	const unknownRecorded = await recordUnknownWebhookDeliveries(db, batchSize);
+	const unknownRecorded = await recordUnknownWebhookDeliveries(
+		db,
+		env,
+		batchSize,
+	);
 	return {
 		recoveredPending: recovered.length - markedUnknown,
 		markedUnknown,
 		unknownRecorded,
 		enqueued: await dispatchPendingWebhookDeliveries(env, batchSize),
 	};
+}
+
+async function settlePreBoundaryRepairFailure(
+	db: Database,
+	env: Env,
+	input: {
+		deliveryId: string;
+		organizationId: string;
+		leaseToken: number;
+		repairAttempts: number;
+		repairDeadlineAt: Date;
+		error: string;
+		now?: Date;
+	},
+): Promise<WebhookDeliveryResult> {
+	const now = input.now ?? new Date();
+	const repairAttempts = input.repairAttempts + 1;
+	const exhausted =
+		repairAttempts >= MAX_PRE_BOUNDARY_REPAIR_ATTEMPTS ||
+		input.repairDeadlineAt.getTime() <= now.getTime();
+	const nextAttemptAt = exhausted
+		? null
+		: new Date(
+				now.getTime() + webhookRepairDelaySeconds(repairAttempts) * 1_000,
+			);
+	const persisted = await db
+		.update(webhookDeliveries)
+		.set({
+			status: exhausted ? "manual_review" : "pending",
+			repairAttempts,
+			leaseExpiresAt: null,
+			nextAttemptAt: nextAttemptAt ?? now,
+			nextDispatchAt: nextAttemptAt ?? now,
+			completedAt: null,
+			manualReviewReason: exhausted ? "pre_http_repair_exhausted" : null,
+			manualReviewUntil: exhausted
+				? customerWebhookManualReviewUntil(input.repairDeadlineAt)
+				: null,
+			error: exhausted
+				? `${input.error}; automatic repair exhausted`
+				: input.error,
+			updatedAt: now,
+		})
+		.where(
+			and(
+				eq(webhookDeliveries.id, input.deliveryId),
+				eq(webhookDeliveries.leaseToken, input.leaseToken),
+				eq(webhookDeliveries.status, "in_flight"),
+			),
+		)
+		.returning({ id: webhookDeliveries.id });
+	if (!persisted[0]) return "not_due";
+	if (exhausted) {
+		await dispatchCustomerWebhookRepairExhaustedAlert(
+			{
+				type: "customer_webhook_pre_boundary_repair_exhausted",
+				organizationId: input.organizationId,
+				deliveryId: input.deliveryId,
+				repairAttempts,
+				observedAt: now.toISOString(),
+				occurrenceId: [
+					"customer-webhook-repair-exhausted",
+					input.deliveryId,
+					input.repairDeadlineAt.toISOString(),
+				].join(":"),
+			},
+			env,
+		).catch(() => {
+			console.error(
+				JSON.stringify({
+					event: "customer_webhook_operator_alert_failed",
+					organization_id: input.organizationId,
+					delivery_id: input.deliveryId,
+				}),
+			);
+		});
+		return "manual_review";
+	}
+	return "retry_scheduled";
 }
 
 /** Execute one stable delivery under a fenced pre-network lease. */
@@ -686,16 +835,29 @@ export async function performWebhookDelivery(
 			claimedAt: now,
 			leaseToken: sql`${webhookDeliveries.leaseToken} + 1`,
 			leaseExpiresAt: new Date(now.getTime() + DELIVERY_LEASE_MS),
-			attempts: sql`${webhookDeliveries.attempts} + 1`,
 			requestMayHaveBeenSentAt: null,
 			completedAt: null,
+			manualReviewReason: null,
+			manualReviewUntil: null,
 			error: null,
 			updatedAt: now,
 		})
 		.where(
 			and(
 				eq(webhookDeliveries.id, deliveryId),
-				lt(webhookDeliveries.attempts, MAX_DELIVERY_ATTEMPTS),
+				or(
+					and(
+						isNull(webhookDeliveries.operatorRetryRequestedAt),
+						lt(webhookDeliveries.attempts, MAX_DELIVERY_ATTEMPTS),
+					),
+					and(
+						isNotNull(webhookDeliveries.operatorRetryRequestedAt),
+						lt(
+							webhookDeliveries.attempts,
+							MAX_OPERATOR_AUTHORIZED_DELIVERY_ATTEMPTS,
+						),
+					),
+				),
 				or(
 					and(
 						eq(webhookDeliveries.status, "pending"),
@@ -715,11 +877,15 @@ export async function performWebhookDelivery(
 			.select({
 				status: webhookDeliveries.status,
 				leaseExpiresAt: webhookDeliveries.leaseExpiresAt,
+				manualReviewReason: webhookDeliveries.manualReviewReason,
 			})
 			.from(webhookDeliveries)
 			.where(eq(webhookDeliveries.id, deliveryId))
 			.limit(1);
-		return existing?.status === "unknown" && existing.leaseExpiresAt === null
+		return (existing?.status === "unknown" &&
+			existing.leaseExpiresAt === null) ||
+			(existing?.status === "manual_review" &&
+				existing.manualReviewReason === "http_outcome_unknown")
 			? "unknown"
 			: "not_due";
 	}
@@ -756,19 +922,14 @@ export async function performWebhookDelivery(
 
 	const urlSafety = await classifyPublicUrlWithDns(endpoint.url);
 	if (urlSafety === "indeterminate") {
-		const retryAt = new Date(Date.now() + DISPATCH_RETRY_MS);
-		await db
-			.update(webhookDeliveries)
-			.set({
-				status: "pending",
-				attempts: Math.max(delivery.attempts - 1, 0),
-				leaseExpiresAt: null,
-				nextAttemptAt: retryAt,
-				nextDispatchAt: retryAt,
-				error: "Endpoint DNS safety could not be determined; delivery deferred",
-				updatedAt: new Date(),
-			})
-			.where(and(fence, eq(webhookDeliveries.status, "in_flight")));
+		const result = await settlePreBoundaryRepairFailure(db, env, {
+			deliveryId,
+			organizationId: delivery.organizationId,
+			leaseToken: delivery.leaseToken,
+			repairAttempts: delivery.repairAttempts,
+			repairDeadlineAt: delivery.repairDeadlineAt,
+			error: "Endpoint DNS safety could not be determined; delivery deferred",
+		});
 		console.error(
 			JSON.stringify({
 				event: "customer_webhook_dns_validation_deferred",
@@ -776,7 +937,7 @@ export async function performWebhookDelivery(
 				delivery_id: deliveryId,
 			}),
 		);
-		return "retry_scheduled";
+		return result;
 	}
 	if (urlSafety === "blocked") {
 		const disabled = await db.transaction(async (tx) => {
@@ -836,19 +997,14 @@ export async function performWebhookDelivery(
 			},
 		);
 	} catch (error) {
-		const retryAt = new Date(Date.now() + DISPATCH_RETRY_MS);
-		await db
-			.update(webhookDeliveries)
-			.set({
-				status: "pending",
-				attempts: Math.max(delivery.attempts - 1, 0),
-				leaseExpiresAt: null,
-				nextAttemptAt: retryAt,
-				nextDispatchAt: retryAt,
-				error: "Signing secret could not be decrypted; delivery deferred",
-				updatedAt: new Date(),
-			})
-			.where(and(fence, eq(webhookDeliveries.status, "in_flight")));
+		const result = await settlePreBoundaryRepairFailure(db, env, {
+			deliveryId,
+			organizationId: delivery.organizationId,
+			leaseToken: delivery.leaseToken,
+			repairAttempts: delivery.repairAttempts,
+			repairDeadlineAt: delivery.repairDeadlineAt,
+			error: "Signing secret could not be decrypted; delivery deferred",
+		});
 		console.error(
 			JSON.stringify({
 				event: "customer_webhook_signing_key_unavailable",
@@ -857,7 +1013,7 @@ export async function performWebhookDelivery(
 				error: safeError(error),
 			}),
 		);
-		return "retry_scheduled";
+		return result;
 	}
 
 	const payload = JSON.stringify({
@@ -867,11 +1023,16 @@ export async function performWebhookDelivery(
 		timestamp: event.createdAt.toISOString(),
 	});
 	const signature = await signPayload(payload, rawSecret);
+	const attemptOrdinal = delivery.attempts + 1;
+	const attemptLimit = webhookDeliveryAttemptLimit(
+		delivery.operatorRetryRequestedAt,
+	);
 	const requestStartedAt = new Date();
 	const boundary = await db
 		.update(webhookDeliveries)
 		.set({
 			status: "unknown",
+			attempts: sql`${webhookDeliveries.attempts} + 1`,
 			requestMayHaveBeenSentAt: requestStartedAt,
 			updatedAt: requestStartedAt,
 		})
@@ -896,8 +1057,7 @@ export async function performWebhookDelivery(
 		await response.body?.cancel().catch(() => {});
 		const responseTimeMs = Date.now() - start;
 		const retryable = isRetryableWebhookStatus(response.status);
-		const retryScheduled =
-			retryable && delivery.attempts < MAX_DELIVERY_ATTEMPTS;
+		const retryScheduled = retryable && attemptOrdinal < attemptLimit;
 		const completedAt = retryScheduled ? null : new Date();
 		const error = response.ok
 			? null
@@ -908,7 +1068,7 @@ export async function performWebhookDelivery(
 			? new Date(
 					Date.now() +
 						webhookRetryDelaySeconds(
-							delivery.attempts,
+							attemptOrdinal,
 							response.headers.get("retry-after"),
 						) *
 							1_000,
@@ -944,25 +1104,48 @@ export async function performWebhookDelivery(
 			await tx.insert(webhookLogs).values({
 				webhookId: endpoint.id,
 				webhookEventId: event.id,
+				deliveryId: delivery.id,
 				organizationId: delivery.organizationId,
+				attemptOrdinal,
+				attemptKind: "delivery",
+				outcome: result,
 				statusCode: response.status,
 				responseTimeMs,
-				success: response.ok,
 				error,
 			});
 		});
 		return result;
 	} catch (error) {
-		await db
-			.update(webhookDeliveries)
-			.set({
-				status: "unknown",
-				leaseExpiresAt: null,
-				responseTimeMs: Date.now() - start,
-				error: safeError(error),
-				updatedAt: new Date(),
-			})
-			.where(and(fence, eq(webhookDeliveries.status, "unknown")));
+		const responseTimeMs = Date.now() - start;
+		const attemptError = safeError(error);
+		await db.transaction(async (tx) => {
+			const persisted = await tx
+				.update(webhookDeliveries)
+				.set({
+					status: "manual_review",
+					leaseExpiresAt: null,
+					responseTimeMs,
+					manualReviewReason: "http_outcome_unknown",
+					manualReviewUntil: customerWebhookManualReviewUntil(requestStartedAt),
+					error: attemptError,
+					updatedAt: new Date(),
+				})
+				.where(and(fence, eq(webhookDeliveries.status, "unknown")))
+				.returning({ id: webhookDeliveries.id });
+			if (!persisted[0]) return;
+			await tx.insert(webhookLogs).values({
+				webhookId: endpoint.id,
+				webhookEventId: event.id,
+				deliveryId: delivery.id,
+				organizationId: delivery.organizationId,
+				attemptOrdinal,
+				attemptKind: "delivery",
+				outcome: "unknown",
+				statusCode: null,
+				responseTimeMs,
+				error: attemptError,
+			});
+		});
 		// Transmission errors may have crossed the customer boundary. The stable
 		// delivery ID is retained for operator-side reconciliation; automatic
 		// replay would risk duplicating the customer's effect.

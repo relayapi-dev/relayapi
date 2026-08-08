@@ -1,18 +1,28 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import { DASHBOARD_SESSION_AUTHORITY_HEADER } from "@relayapi/config";
 import {
 	type createDb,
 	socialAccounts,
 	whatsappPhoneNumbers,
+	whatsappPhoneReleaseOperations,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import type { Context } from "hono";
+import { createMiddleware } from "hono/factory";
 import { GRAPH_BASE } from "../config/api-versions";
 import {
 	decryptAccountToken,
 	decryptAccountTokens,
 } from "../lib/account-token-crypto";
+import { durableCredentialAuthorityAdmission } from "../lib/durable-credential-authority";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
-import { inheritOperationalCreateScope } from "../lib/request-access";
+import { isDefinitiveProviderMutationRejection } from "../lib/mutation-provider-boundary";
+import {
+	inheritOperationalCreateScope,
+	validatePersistedOperationalScope,
+} from "../lib/request-access";
 import { canAccessWorkspaceScope } from "../lib/workspace-scope";
+import { requireManageBillingMiddleware } from "../middleware/permissions";
 import { ErrorResponse } from "../schemas/common";
 import {
 	PhoneNumberIdParams,
@@ -26,19 +36,103 @@ import {
 } from "../schemas/whatsapp";
 import { upsertConnectedAccountWithCredentials } from "../services/account-credential-write";
 import {
+	adoptDurableUsageReservation,
+	settleLinkedDurableUsage,
+} from "../services/durable-operation-usage";
+import {
 	continuePhoneProvisioning,
 	createPhoneProvisioningOperation,
 	findPhoneProvisioningOperation,
+	getPhoneRow,
 	PhoneOperationError,
+	type PhoneRow,
 	processPhoneRelease,
 	stagePhoneRelease,
 } from "../services/phone-number-operations";
 import { searchAvailableNumbers } from "../services/telnyx";
+import { settleDurableUsageReservation } from "../services/usage-meter";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+function markPhoneMutationNotApplied(c: AppContext): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "not_applied",
+	});
+}
+
+function phoneAuthoritySessionId(c: AppContext): string | null {
+	if (c.get("principalType") !== "dashboard_user") return null;
+	return c.req.header(DASHBOARD_SESSION_AUTHORITY_HEADER)?.trim() || null;
+}
+
+async function trackMetaPhoneMutation(
+	c: AppContext,
+	label: string,
+	operation: () => Promise<Response>,
+	authoritative = true,
+): Promise<Response> {
+	const tracker = c.get("mutationEffectTracker");
+	if (!tracker) return operation();
+	const attempt = tracker.begin(label);
+	try {
+		const response = await operation();
+		if (response.ok) {
+			attempt.committed(1);
+			if (authoritative) {
+				tracker.setAuthoritativeOutcome({ kind: "committed", units: 1 });
+			}
+		} else if (isDefinitiveProviderMutationRejection(response.status)) {
+			attempt.notApplied();
+			if (authoritative) {
+				tracker.setAuthoritativeOutcome({ kind: "not_applied" });
+			}
+		} else {
+			attempt.unknown();
+			if (authoritative) {
+				tracker.setAuthoritativeOutcome({ kind: "unknown" });
+			}
+		}
+		return response;
+	} catch (error) {
+		attempt.unknown();
+		if (authoritative) {
+			tracker.setAuthoritativeOutcome({ kind: "unknown" });
+		}
+		throw error;
+	}
+}
+
+const requireManageBillingForPhoneMoneyMutations = createMiddleware<{
+	Bindings: Env;
+	Variables: Variables;
+}>(async (c, next) => {
+	if (
+		c.req.method === "DELETE" ||
+		(c.req.method === "POST" && c.req.path.endsWith("/purchase"))
+	) {
+		return requireManageBillingMiddleware(c, next);
+	}
+	return next();
+});
+app.use("*", requireManageBillingForPhoneMoneyMutations);
 
 const WA_API_BASE = GRAPH_BASE.facebook;
+
+export function generateWhatsAppVerificationPin(): string {
+	const range = 900_000;
+	const uint32Cardinality = 2 ** 32;
+	const unbiasedCeiling = Math.floor(uint32Cardinality / range) * range;
+	const random = new Uint32Array(1);
+	let value: number;
+	do {
+		crypto.getRandomValues(random);
+		value = random[0] ?? uint32Cardinality;
+	} while (value >= unbiasedCeiling);
+	return String(100_000 + (value % range));
+}
+
 const RequiredIdempotencyKeyHeaders = z.object({
 	"idempotency-key": z.string().min(1).openapi({
 		description:
@@ -81,7 +175,7 @@ async function getWhatsAppAccount(
 
 async function getProvisioningWhatsAppToken(
 	db: ReturnType<typeof createDb>,
-	phone: typeof whatsappPhoneNumbers.$inferSelect,
+	phone: PhoneRow,
 	orgId: string,
 	encryptionKey?: string,
 	workspaceScope: "all" | string[] = "all",
@@ -91,9 +185,7 @@ async function getProvisioningWhatsAppToken(
 	workspaceId: string | null;
 } | null> {
 	const sourceAccountId = phone.provisioningSourceAccountId;
-	const request = phone.provisioningRequest as { waba_id?: unknown } | null;
-	const expectedWabaId =
-		typeof request?.waba_id === "string" ? request.waba_id : null;
+	const expectedWabaId = phone.provisioningSourceWabaId;
 	if (!sourceAccountId || !expectedWabaId) return null;
 
 	const [account] = await db
@@ -348,6 +440,10 @@ const releasePhoneNumber = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Credential no longer has live release authority",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -391,12 +487,19 @@ app.openapi(purchasePhoneNumber, async (c) => {
 	const operationKey = c.req.valid("header")["idempotency-key"];
 	const db = c.get("db");
 
-	if (plan !== "pro") {
+	if (
+		plan !== "pro" ||
+		(c.get("billingSource") === "stripe" && !c.get("billable"))
+	) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
-					code: "PRO_REQUIRED",
-					message: "Phone number provisioning requires a Pro plan",
+					code: plan !== "pro" ? "PRO_REQUIRED" : "BILLING_NOT_CURRENT",
+					message:
+						plan !== "pro"
+							? "Phone number provisioning requires a Pro plan"
+							: "Phone number provisioning is unavailable while hosted billing is delinquent",
 				},
 			},
 			403,
@@ -405,6 +508,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 
 	const telnyxApiKey = c.env.TELNYX_API_KEY;
 	if (!telnyxApiKey) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -424,6 +528,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 		c.get("workspaceScope"),
 	);
 	if (!account?.accessToken) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -437,6 +542,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 
 	const wabaId = (account.metadata as { waba_id?: string } | null)?.waba_id;
 	if (!wabaId) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -471,6 +577,7 @@ app.openapi(purchasePhoneNumber, async (c) => {
 			});
 			const selected = available[0];
 			if (!selected) {
+				markPhoneMutationNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -486,11 +593,22 @@ app.openapi(purchasePhoneNumber, async (c) => {
 				operationKey,
 				phoneNumber: selected.phone_number,
 				request: operationRequest,
+				usageReservation: c.get("usageReservation"),
 			});
 			operation = created.row;
 		}
+		await adoptDurableUsageReservation(
+			db,
+			operation.provisioningUsageReservationId,
+			c.get("usageReservation"),
+		);
 
 		const completed = await continuePhoneProvisioning(c.env, db, operation.id);
+		await settleLinkedDurableUsage(db, {
+			organizationId: completed.organizationId,
+			usageReservationId: completed.provisioningUsageReservationId,
+			committed: true,
+		});
 		return c.json(
 			{
 				id: completed.id,
@@ -511,6 +629,14 @@ app.openapi(purchasePhoneNumber, async (c) => {
 					400,
 				);
 			}
+			if (
+				["PAYMENT_PENDING", "TELNYX_ORDER_PENDING", "IN_PROGRESS"].includes(
+					error.code,
+				)
+			) {
+				c.header("Idempotency-Retryable", "true");
+				c.header("Retry-After", "60");
+			}
 			return c.json(
 				{ error: { code: error.code, message: error.message } },
 				409,
@@ -526,18 +652,9 @@ app.openapi(getPhoneNumber, async (c) => {
 	const { phone_number_id } = c.req.valid("param");
 	const db = c.get("db");
 
-	const [row] = await db
-		.select()
-		.from(whatsappPhoneNumbers)
-		.where(
-			and(
-				eq(whatsappPhoneNumbers.id, phone_number_id),
-				eq(whatsappPhoneNumbers.organizationId, orgId),
-			),
-		)
-		.limit(1);
+	const row = await getPhoneRow(db, phone_number_id);
 
-	if (!row) {
+	if (!row || row.organizationId !== orgId) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Phone number not found" } },
 			404,
@@ -554,18 +671,10 @@ app.openapi(requestCode, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const [row] = await db
-		.select()
-		.from(whatsappPhoneNumbers)
-		.where(
-			and(
-				eq(whatsappPhoneNumbers.id, phone_number_id),
-				eq(whatsappPhoneNumbers.organizationId, orgId),
-			),
-		)
-		.limit(1);
+	const row = await getPhoneRow(db, phone_number_id);
 
-	if (!row) {
+	if (!row || row.organizationId !== orgId) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Phone number not found" } },
 			404,
@@ -573,6 +682,7 @@ app.openapi(requestCode, async (c) => {
 	}
 
 	if (row.status !== "pending_verification") {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -585,6 +695,7 @@ app.openapi(requestCode, async (c) => {
 	}
 
 	if (!row.waPhoneNumberId) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -603,6 +714,7 @@ app.openapi(requestCode, async (c) => {
 		c.get("workspaceScope"),
 	);
 	if (!waToken) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -617,20 +729,22 @@ app.openapi(requestCode, async (c) => {
 
 	// Meta WhatsApp API: Request verification code
 	// https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/phone-number-verification-request-code-api
-	const metaRes = await fetchWithTimeout(
-		`${WA_API_BASE}/${row.waPhoneNumberId}/request_code`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				code_method: body.method.toUpperCase(),
-				language: "en_US",
+	const metaRes = await trackMetaPhoneMutation(
+		c,
+		"meta.whatsapp.request_code",
+		() =>
+			fetchWithTimeout(`${WA_API_BASE}/${row.waPhoneNumberId}/request_code`, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					code_method: body.method.toUpperCase(),
+					language: "en_US",
+				}),
+				timeout: 5_000,
 			}),
-			timeout: 5_000,
-		},
 	);
 
 	if (!metaRes.ok) {
@@ -663,18 +777,10 @@ app.openapi(verifyCode, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	const [row] = await db
-		.select()
-		.from(whatsappPhoneNumbers)
-		.where(
-			and(
-				eq(whatsappPhoneNumbers.id, phone_number_id),
-				eq(whatsappPhoneNumbers.organizationId, orgId),
-			),
-		)
-		.limit(1);
+	const row = await getPhoneRow(db, phone_number_id);
 
-	if (!row) {
+	if (!row || row.organizationId !== orgId) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Phone number not found" } },
 			404,
@@ -682,6 +788,7 @@ app.openapi(verifyCode, async (c) => {
 	}
 
 	if (row.status !== "pending_verification") {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -694,6 +801,7 @@ app.openapi(verifyCode, async (c) => {
 	}
 
 	if (!row.waPhoneNumberId) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -714,6 +822,7 @@ app.openapi(verifyCode, async (c) => {
 		c.get("workspaceScope"),
 	);
 	if (!waToken) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -731,19 +840,61 @@ app.openapi(verifyCode, async (c) => {
 		[sourceWorkspaceId],
 		"WhatsApp account",
 	);
-	if (!accountScope.ok) return accountScope.response as never;
+	if (!accountScope.ok) {
+		markPhoneMutationNotApplied(c);
+		return accountScope.response as never;
+	}
 	const workspaceId = accountScope.workspaceId;
+	const authoritySessionId = phoneAuthoritySessionId(c);
+	if (c.get("principalType") === "dashboard_user" && !authoritySessionId) {
+		markPhoneMutationNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "SESSION_NO_LONGER_AUTHORIZED",
+					message: "The initiating dashboard session is no longer authorized.",
+				},
+			},
+			401,
+		);
+	}
+	const liveAuthority = await db.transaction((tx) =>
+		validatePersistedOperationalScope(tx, {
+			apiKeyId: c.get("keyId"),
+			authoritySessionId,
+			organizationId: orgId,
+			workspaceId,
+			resourceName: "WhatsApp account",
+		}),
+	);
+	if (!liveAuthority.ok) {
+		markPhoneMutationNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: liveAuthority.code,
+					message: liveAuthority.message,
+				},
+			},
+			liveAuthority.status as never,
+		);
+	}
 
 	// Step 1: Verify the code with Meta
 	// https://developers.facebook.com/docs/graph-api/reference/whats-app-business-account-to-number-current-status/verify_code
 	// Official docs: code is passed as a query parameter
-	const verifyRes = await fetchWithTimeout(
-		`${WA_API_BASE}/${row.waPhoneNumberId}/verify_code?code=${encodeURIComponent(body.code)}`,
-		{
-			method: "POST",
-			headers: { Authorization: `Bearer ${accessToken}` },
-			timeout: 5_000,
-		},
+	const verifyRes = await trackMetaPhoneMutation(
+		c,
+		"meta.whatsapp.verify_code",
+		() =>
+			fetchWithTimeout(
+				`${WA_API_BASE}/${row.waPhoneNumberId}/verify_code?code=${encodeURIComponent(body.code)}`,
+				{
+					method: "POST",
+					headers: { Authorization: `Bearer ${accessToken}` },
+					timeout: 5_000,
+				},
+			),
 	);
 
 	if (!verifyRes.ok) {
@@ -764,21 +915,26 @@ app.openapi(verifyCode, async (c) => {
 
 	// Step 2: Register the number for Cloud API
 	// https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/register-api
-	const pin = String(Math.floor(100000 + Math.random() * 900000));
-	const registerRes = await fetchWithTimeout(
-		`${WA_API_BASE}/${row.waPhoneNumberId}/register`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				messaging_product: "whatsapp",
-				pin,
+	const pin = generateWhatsAppVerificationPin();
+	const registerRes = await trackMetaPhoneMutation(
+		c,
+		"meta.whatsapp.register",
+		() =>
+			fetchWithTimeout(`${WA_API_BASE}/${row.waPhoneNumberId}/register`, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					messaging_product: "whatsapp",
+					pin,
+				}),
+				timeout: 5_000,
 			}),
-			timeout: 5_000,
-		},
+		// Verification already succeeded. Registration evidence may refine local
+		// state, but it must never regress the request's committed K=1 outcome.
+		false,
 	);
 
 	if (!registerRes.ok) {
@@ -813,6 +969,7 @@ app.openapi(verifyCode, async (c) => {
 				c.env.ENCRYPTION_KEY,
 				{
 					apiKeyId: c.get("keyId"),
+					authoritySessionId,
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -881,6 +1038,7 @@ app.openapi(releasePhoneNumber, async (c) => {
 		.limit(1);
 
 	if (!row) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Phone number not found" } },
 			404,
@@ -888,16 +1046,26 @@ app.openapi(releasePhoneNumber, async (c) => {
 	}
 
 	if (row.status === "released") {
+		const usageReservation = c.get("usageReservation");
+		if (usageReservation) {
+			await settleDurableUsageReservation(db, {
+				reservationId: usageReservation.id,
+				organizationId: usageReservation.organizationId,
+				committedUnits: 0,
+			});
+		}
 		return c.json(formatPhoneNumber(row), 200);
 	}
 
 	const releasableStatuses = [
+		"purchasing",
 		"pending_verification",
 		"verified",
 		"active",
 		"releasing",
 	];
 	if (!releasableStatuses.includes(row.status)) {
+		markPhoneMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -909,22 +1077,61 @@ app.openapi(releasePhoneNumber, async (c) => {
 		);
 	}
 
+	let releaseOperationOwnsReservation = false;
 	try {
 		const staged = await stagePhoneRelease(
 			db,
 			orgId,
 			phone_number_id,
 			"user_requested",
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_billing"),
+		);
+		// From this point onward the durable release row, rather than the request,
+		// owns usage settlement. A retry or provider ambiguity must remain parked.
+		releaseOperationOwnsReservation = true;
+		await adoptDurableUsageReservation(
+			db,
+			staged.releaseUsageReservationId,
+			c.get("usageReservation"),
 		);
 		const released = await processPhoneRelease(c.env, db, staged.id);
+		await settleLinkedDurableUsage(db, {
+			organizationId: released.organizationId,
+			usageReservationId: released.releaseUsageReservationId,
+			committed: true,
+		});
 		return c.json(formatPhoneNumber(released), 200);
 	} catch (error) {
 		if (error instanceof PhoneOperationError) {
+			if (error.code === "CREDENTIAL_NO_LONGER_AUTHORIZED") {
+				markPhoneMutationNotApplied(c);
+				return c.json(
+					{ error: { code: error.code, message: error.message } },
+					403,
+				);
+			}
+			if (
+				!releaseOperationOwnsReservation &&
+				(error.code === "NOT_FOUND" || error.code === "IN_PROGRESS")
+			) {
+				// stagePhoneRelease proved its transaction did not create/adopt a
+				// release operation, so the request reservation is exactly K=0.
+				markPhoneMutationNotApplied(c);
+			}
 			if (error.code === "NOT_FOUND") {
 				return c.json(
 					{ error: { code: error.code, message: error.message } },
 					404,
 				);
+			}
+			if (
+				["PAYMENT_PENDING", "TELNYX_ORDER_PENDING", "IN_PROGRESS"].includes(
+					error.code,
+				)
+			) {
+				c.header("Idempotency-Retryable", "true");
+				c.header("Retry-After", "60");
 			}
 			return c.json(
 				{ error: { code: error.code, message: error.message } },
@@ -936,15 +1143,17 @@ app.openapi(releasePhoneNumber, async (c) => {
 		// Surface the durable pending state so clients never infer that the number
 		// has been released while mandatory cleanup is unconfirmed.
 		const [pending] = await db
-			.select()
-			.from(whatsappPhoneNumbers)
-			.where(eq(whatsappPhoneNumbers.id, phone_number_id))
+			.select({ releaseState: whatsappPhoneReleaseOperations.releaseState })
+			.from(whatsappPhoneReleaseOperations)
+			.where(eq(whatsappPhoneReleaseOperations.phoneNumberId, phone_number_id))
 			.limit(1);
 		if (
 			pending?.releaseState === "failed" ||
 			pending?.releaseState === "unknown" ||
 			pending?.releaseState === "request_may_have_been_sent"
 		) {
+			c.header("Idempotency-Retryable", "true");
+			c.header("Retry-After", "60");
 			return c.json(
 				{
 					error: {

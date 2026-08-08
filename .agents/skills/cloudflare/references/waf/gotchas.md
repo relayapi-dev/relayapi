@@ -18,7 +18,7 @@ Within phase: top-to-bottom, first match wins (unless `skip`)
 await client.rulesets.create({
   phase: 'http_request_firewall_custom',
   rules: [
-    { action: 'block', expression: 'cf.waf.score gt 50' },
+    { action: 'block', expression: 'cf.waf.score le 20' },
     { action: 'execute', action_parameters: { id: 'managed_id' } }, // WRONG
   ],
 });
@@ -85,7 +85,7 @@ Skip types:
 await client.rulesets.update({
   zone_id: 'zone_id',
   ruleset_id: 'ruleset_id',
-  rules: [{ action: 'block', expression: 'cf.waf.score gt 50' }],
+  rules: [{ action: 'block', expression: 'cf.waf.score le 20' }],
 });
 
 // CORRECT: Get existing rules first
@@ -93,7 +93,7 @@ const ruleset = await client.rulesets.get({ zone_id: 'zone_id', ruleset_id: 'rul
 await client.rulesets.update({
   zone_id: 'zone_id',
   ruleset_id: 'ruleset_id',
-  rules: [...ruleset.rules, { action: 'block', expression: 'cf.waf.score gt 50' }],
+  rules: [...ruleset.rules, { action: 'block', expression: 'cf.waf.score le 20' }],
 });
 ```
 
@@ -197,7 +197,7 @@ if (rulesets.result.length > 0) {
 
 // Error: "Expression parse error" → Common fixes:
 'ip.geoip.country eq "US"'   // Quote strings
-'cf.waf.score gt 40'         // Use 'gt' not '>'
+'cf.waf.score le 20'         // Use 'le' not '<='
 'http.request.uri.path'      // Not 'http.request.path'
 ```
 

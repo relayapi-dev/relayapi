@@ -1,15 +1,22 @@
 import type { APIRoute } from "astro";
-import { requireClient, requireParam, handleSdkError } from "@/lib/api-utils";
+import {
+	handleSdkError,
+	requireParam,
+	requireSessionBoundClient,
+} from "@/lib/api-utils";
 
 export const POST: APIRoute = async (ctx) => {
-  const client = await requireClient(ctx);
-  if (client instanceof Response) return client;
-  const id = requireParam(ctx.params, "id");
-  if (id instanceof Response) return id;
-  try {
-    const data = await client.autoPostRules.activate(id);
-    return Response.json(data);
-  } catch (e) {
-    return handleSdkError(e);
-  }
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) return boundClient;
+	const id = requireParam(ctx.params, "id");
+	if (id instanceof Response) return id;
+	try {
+		const data = await boundClient.client.autoPostRules.activate(
+			id,
+			boundClient.requestOptions,
+		);
+		return Response.json(data);
+	} catch (e) {
+		return handleSdkError(e);
+	}
 };

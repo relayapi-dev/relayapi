@@ -31,6 +31,8 @@ import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
+import { deleteQueueRescueSubject } from "../queues/queue-rescue";
 import {
 	AccountHealthResponse,
 	AccountListResponse,
@@ -645,6 +647,7 @@ app.openapi(deleteAccount, async (c) => {
 		.limit(1);
 
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -652,7 +655,10 @@ app.openapi(deleteAccount, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	let persistedDisconnectEvent: PersistedWebhookEvent | undefined;
 	try {
@@ -676,13 +682,21 @@ app.openapi(deleteAccount, async (c) => {
 					},
 				),
 		);
-		console.log(`[accounts] Started lifecycle disconnect for ${id}`);
 	} catch (err) {
 		console.error(`[accounts] Failed to delete account ${id}:`, err);
 		return c.json(
 			{ error: { code: "DELETE_FAILED", message: "Failed to delete account" } },
 			500,
 		);
+	}
+	if (!persistedDisconnectEvent) {
+		// DELETE is idempotent. The durable account identity can outlive its
+		// active lifecycle, so a replay after the first disconnect is exact K=0.
+		// Keep the cache/rescue cleanup below: it repairs a prior interrupted
+		// response but is not a new customer-visible account mutation.
+		markMutationInputNotApplied(c);
+	} else {
+		console.log(`[accounts] Started lifecycle disconnect for ${id}`);
 	}
 
 	// Invalidate the KV caches that reference this account so platform webhooks
@@ -693,6 +707,14 @@ app.openapi(deleteAccount, async (c) => {
 			platform: account.platform,
 			platformAccountId: account.platformAccountId,
 			webhookAccountId: account.webhookAccountId,
+		}),
+	);
+	c.executionCtx.waitUntil(
+		deleteQueueRescueSubject(c.env.QUEUE_RESCUE_BUCKET, orgId, {
+			kind: "account",
+			id,
+		}).catch(() => {
+			console.error("[accounts] Queue rescue subject cleanup failed");
 		}),
 	);
 
@@ -1065,6 +1087,7 @@ app.openapi(setFacebookPage, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1072,7 +1095,10 @@ app.openapi(setFacebookPage, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1193,6 +1219,7 @@ app.openapi(setLinkedInOrg, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1200,7 +1227,10 @@ app.openapi(setLinkedInOrg, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1338,6 +1368,7 @@ app.openapi(setPinterestBoard, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1345,7 +1376,10 @@ app.openapi(setPinterestBoard, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1525,6 +1559,7 @@ app.openapi(setRedditSubreddit, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1532,7 +1567,10 @@ app.openapi(setRedditSubreddit, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1752,6 +1790,7 @@ app.openapi(setGmbLocation, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1759,7 +1798,10 @@ app.openapi(setGmbLocation, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1906,6 +1948,7 @@ app.openapi(setYoutubePlaylist, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1913,7 +1956,10 @@ app.openapi(setYoutubePlaylist, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -2178,6 +2224,7 @@ app.openapi(singleSync, async (c) => {
 		.limit(1);
 
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -2185,10 +2232,14 @@ app.openapi(singleSync, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const supportedPlatforms = getSupportedSyncPlatforms();
 	if (!supportedPlatforms.includes(account.platform)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2325,6 +2376,7 @@ app.openapi(forceSync, async (c) => {
 	);
 
 	if (syncable.length === 0) {
+		markMutationInputNotApplied(c);
 		return c.json({ enqueued_count: 0 }, 200);
 	}
 

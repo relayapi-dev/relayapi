@@ -39,15 +39,13 @@ describe("Cloudflare Worker secret policy", () => {
 		).not.toThrow();
 	});
 
-	it("rejects missing required account-email delivery", () => {
+	it("rejects the retired app-side email provider secret", () => {
 		expect(() =>
-			assertWorkerSecretBindings(
-				appSpec,
-				appSpec.required
-					.filter((name) => name !== "RESEND_API_KEY")
-					.map(binding),
-			),
-		).toThrow("RESEND_API_KEY");
+			assertWorkerSecretBindings(appSpec, [
+				...appSpec.required.map(binding),
+				binding("RESEND_API_KEY"),
+			]),
+		).toThrow("outside target allowlist");
 	});
 
 	it("rejects a partially configured provider group", () => {
@@ -130,21 +128,21 @@ describe("Cloudflare Worker secret policy", () => {
 	it("allows a missing intended binding only during deploy convergence", () => {
 		const expected = [...appSpec.required];
 		const live = appSpec.required
-			.filter((name) => name !== "RESEND_API_KEY")
+			.filter((name) => name !== "BETTER_AUTH_SECRET")
 			.map(binding);
 		expect(() =>
 			assertWorkerSecretBindings(appSpec, live, expected, true),
 		).not.toThrow();
 		expect(() => assertWorkerSecretBindings(appSpec, live, expected)).toThrow(
-			"RESEND_API_KEY",
+			"BETTER_AUTH_SECRET",
 		);
 	});
 
 	it("rejects a CryptoKey masquerading as a required text secret", () => {
 		const values = appSpec.required.map(binding);
-		const resend = values.find((value) => value.name === "RESEND_API_KEY");
-		if (!resend) throw new Error("missing RESEND_API_KEY fixture");
-		resend.type = "secret_key";
+		const auth = values.find((value) => value.name === "BETTER_AUTH_SECRET");
+		if (!auth) throw new Error("missing BETTER_AUTH_SECRET fixture");
+		auth.type = "secret_key";
 		expect(() => assertWorkerSecretBindings(appSpec, values)).toThrow(
 			"unsupported Worker secret binding types",
 		);

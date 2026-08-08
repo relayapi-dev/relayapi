@@ -21,6 +21,20 @@ export type AutomationChannel =
 	| "telegram";
 
 export type AutomationStatus = "draft" | "active" | "paused" | "archived";
+export type AutomationNodeKind =
+	| "message"
+	| "input"
+	| "delay"
+	| "wait_event"
+	| "condition"
+	| "randomizer"
+	| "action_group"
+	| "http_request"
+	| "start_automation"
+	| "social_profile_check"
+	| "goto"
+	| "end"
+	| "unknown";
 
 export interface ValidationError {
 	node_key?: string;
@@ -142,7 +156,7 @@ export interface AutomationEnrollResponse {
 
 export interface AutomationSimulateStep {
 	node_key: string;
-	node_kind: string;
+	node_kind: AutomationNodeKind;
 	entered_via_port_key: string | null;
 	exited_via_port_key: string | null;
 	outcome:

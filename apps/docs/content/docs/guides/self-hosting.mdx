@@ -28,6 +28,8 @@ bunx @relayapi/self-host init
   Transformations, and Durable Objects enabled
 - A domain already active in that Cloudflare account
 - A managed PostgreSQL 18 database reachable by Hyperdrive
+- The PostgreSQL server CA bundle uploaded to Cloudflare for Hyperdrive, with
+  its non-secret certificate UUID available
 - Separate PostgreSQL migration and runtime roles; the runtime role must not
   have DDL privileges
 - An R2 S3 API token for presigned browser uploads
@@ -52,11 +54,33 @@ export CLOUDFLARE_ACCOUNT_ID="..."
 
 Supply two TLS PostgreSQL URLs. The migration credential owns schema changes;
 the runtime credential is used by Hyperdrive and must not be able to run DDL.
+Both URLs must name the same host, port, and database, but authenticate as
+different roles. Remote URLs must use `sslmode=verify-full`.
 
 ```bash
-export RELAYAPI_DATABASE_URL='<tls-postgresql-url-for-migration-role>'
+export RELAYAPI_MIGRATION_DATABASE_URL='<tls-postgresql-url-for-migration-role>'
 export RELAYAPI_RUNTIME_DATABASE_URL='<tls-postgresql-url-for-runtime-role>'
 ```
+
+Upload the PostgreSQL server's CA certificate bundle to Cloudflare before
+initializing RelayAPI. Hyperdrive requires the resulting certificate UUID for
+`verify-ca` and `verify-full`; follow Cloudflare's
+[TLS certificate instructions](https://developers.cloudflare.com/hyperdrive/configuration/tls-ssl-certificates-for-hyperdrive/).
+The UUID is non-secret configuration. Do not put the CA private key in the
+operator repository.
+
+```bash
+npx wrangler cert upload certificate-authority \
+  --ca-cert server-ca-chain.pem \
+  --name RELAYAPI_DATABASE_CA
+```
+
+The PostgreSQL 18 server must provide the `btree_gist`, `pg_trgm`, and `vector`
+extension packages. Preflight proves the actual vector(1536), HNSW cosine
+operator class, trigram GIN operator class, and `similarity` operations inside
+a transaction that rolls back. It also connects with the runtime URL and
+proves that credential cannot create a table in `public`; seeing extension
+names in a provider catalog is not enough.
 
 Create an R2 S3 API token in the Cloudflare dashboard and export its access key
 pair:
@@ -71,11 +95,19 @@ administrator password in a local, mode-0600, gitignored file. You may instead
 provide your own values:
 
 ```bash
-export ENCRYPTION_KEY="active=$(openssl rand -hex 32)"
+ENCRYPTION_ACTIVE_KEY="$(openssl rand -hex 32)"
+ENCRYPTION_IDENTITY_KEY="$(openssl rand -hex 32)"
+export ENCRYPTION_KEY="active=${ENCRYPTION_ACTIVE_KEY},identity=${ENCRYPTION_IDENTITY_KEY}"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export RELAYAPI_ADMIN_EMAIL="you@example.com"
 export RELAYAPI_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 ```
+
+The two encryption entries must contain distinct 32-byte values. Keep the
+`identity` entry unchanged and non-active across every future key rotation;
+prepend a new active key and retain old decryption keys until their ciphertext
+has been rotated. Both `doctor` and `deploy` reject a missing, active, duplicate,
+or reused identity key before contacting PostgreSQL or Cloudflare.
 
 ## 2. Initialize the operator repository
 
@@ -93,14 +125,15 @@ bunx @relayapi/self-host init \
   --account-id "$CLOUDFLARE_ACCOUNT_ID" \
   --zone-id "<ZONE_ID>" \
   --domain "example.com" \
-  --admin-email "you@example.com"
+  --admin-email "you@example.com" \
+  --hyperdrive-ca-certificate-id "<CLOUDFLARE_CA_CERTIFICATE_UUID>"
 ```
 
 This creates:
 
 | File | Purpose |
 | --- | --- |
-| `relayapi.selfhost.json` | Domains, feature flags, and provisioned resource IDs |
+| `relayapi.selfhost.json` | Domains, feature flags, immutable resource intent (including the Hyperdrive CA certificate ID), and provisioned resource IDs |
 | `relayapi.lock.json` | Exact stable RelayAPI version and source repository |
 | `.github/workflows/deploy-relayapi.yml` | Migration-first production deployment |
 | `.github/workflows/update-relayapi.yml` | Daily stable-release update pull request |
@@ -148,25 +181,82 @@ bunx @relayapi/self-host plan
 ```
 
 `doctor` verifies the config and release lock, required tools, separate database
-roles, encryption-key format, Cloudflare account/zone access, and permission to
-inspect every required service. `plan` reports which resources will be created
-or reused.
+roles, PostgreSQL 18 semantic capabilities and runtime no-DDL boundary,
+encryption-key format, Cloudflare account/zone access, and permission to inspect
+every required service in the configured R2 jurisdiction. `plan` reports which
+resources will be created or reused.
+
+Hyperdrive creation always sends the configured CA certificate ID, and an
+existing pinned Hyperdrive must retain that exact trust anchor. A conflicting
+ID without an explicit rotation flag, or a Hyperdrive with no attached CA
+certificate, fails closed. Older operator configs without the field remain
+readable: the next successful real `configure` or `deploy` adopts the CA ID from
+the exact existing Hyperdrive and writes it to `relayapi.selfhost.json`. A
+legacy config must persist that attached CA before requesting a different
+rotation target; if the requested target is already attached, it can be safely
+adopted immediately. `plan`, `doctor`, and dry runs remain read-only, while a
+clean installation always requires the explicit ID.
+
+### Rotate the Hyperdrive server CA
+
+Upload the replacement regional CA bundle, retain the returned UUID, and pass
+that UUID explicitly rather than editing the operator config first:
+
+```bash
+bunx @relayapi/self-host plan \
+  --hyperdrive-ca-certificate-id "<NEW_CLOUDFLARE_CA_CERTIFICATE_UUID>"
+bunx @relayapi/self-host doctor \
+  --hyperdrive-ca-certificate-id "<NEW_CLOUDFLARE_CA_CERTIFICATE_UUID>"
+bunx @relayapi/self-host deploy \
+  --hyperdrive-ca-certificate-id "<NEW_CLOUDFLARE_CA_CERTIFICATE_UUID>"
+```
+
+The preview reports `rotate`, `retain`, or legacy `adopt` intent. Rotation is
+allowed only for the exact ID already pinned as `resources.hyperdriveId`, never
+for a resource found only by name. The PATCH preserves any client certificate
+and origin connection limit, verifies the returned and freshly read CA UUID,
+then persists the new UUID only after Cloudflare reconciliation succeeds. Dry
+runs and failed PATCHes leave `relayapi.selfhost.json` unchanged. Rerunning the
+same command is safe if Cloudflare already reached the target but local writing
+was interrupted; an unexplained third UUID fails closed.
+
+Cloudflare performs a fresh database connection and an empty PostgreSQL test
+query before accepting connection-parameter updates. `deploy` additionally
+probes both deployed Workers through their actual Hyperdrive bindings, so no
+undocumented connection-pool restart is used. See Cloudflare's
+[PATCH API](https://developers.cloudflare.com/api/resources/hyperdrive/subresources/configs/methods/edit/)
+and [configuration troubleshooting](https://developers.cloudflare.com/hyperdrive/observability/troubleshooting/).
+
+Choose the R2 jurisdiction during `init` with `--r2-jurisdiction default|eu`.
+The CLI records that choice in `relayapi.selfhost.json`, sends it on every R2
+inspection and apply request, and refuses a same-named bucket in the other
+jurisdiction. Cloudflare does not permit changing a bucket's jurisdiction after
+creation.
 
 Deploy the reviewed version:
-
 ```bash
 bunx @relayapi/self-host deploy
 ```
 
 The deploy is ordered for safety:
 
-1. Create or reuse the named Cloudflare resources.
-2. Apply R2 lifecycle, event-notification, and custom-domain policies.
-3. Download the exact stable source tag in `relayapi.lock.json`.
-4. Verify and apply forward-only PostgreSQL migrations under the migration lock.
-5. Idempotently create the initial administrator and organization.
-6. Build and deploy the API and dashboard Workers.
-7. Stream Worker secrets to Wrangler over stdin.
+1. Prove the complete PostgreSQL 18, extension-semantics, database-identity, and
+   runtime no-DDL contract.
+2. Create or reuse the named Cloudflare resources in the configured immutable
+   R2 jurisdiction.
+3. Apply R2 lifecycle, event-notification, and custom-domain policies.
+4. Download the exact stable source tag in `relayapi.lock.json`.
+5. Recheck extension replay capability, then verify and apply forward-only
+   PostgreSQL migrations under the migration lock.
+6. Recheck the exact installed extension state and semantic/runtime-role
+   contract.
+7. Idempotently create the initial administrator and organization.
+8. Build and deploy the API and dashboard Workers.
+9. Stream Worker secrets to Wrangler over stdin.
+10. Probe each deployed Worker's actual Hyperdrive binding and require the
+    expected database identity, `ok: true`, an open runtime-control state, and
+    matching application/configured baseline generations before reporting the
+    deployment live.
 
 If any migration fails, the Worker deploy does not start. Migrations are never
 automatically rolled back after a forward migration.
@@ -221,7 +311,11 @@ replace an unavailable Cloudflare product with a different architecture.
 
 Confirm the runtime URL is reachable from Cloudflare, uses TLS, and contains a
 direct PostgreSQL hostname rather than a transaction-pool endpoint. The runtime
-role needs normal DML privileges but must not own schemas or tables.
+role needs normal DML privileges but must not own schemas or tables. Also verify
+that `cloudflare.hyperdriveCaCertificateId` is the UUID of the CA bundle
+actually attached to the pinned Hyperdrive; the CLI will not silently replace a
+different trust anchor unless you pass the explicit rotation flag for that exact
+pinned resource.
 
 ### A deployment update is stuck
 

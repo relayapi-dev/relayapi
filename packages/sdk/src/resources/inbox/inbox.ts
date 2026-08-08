@@ -114,6 +114,7 @@ export type InboxPlatform =
 
 export type InboxConversationType = 'comment_thread' | 'dm' | 'review';
 export type InboxConversationStatus = 'open' | 'archived' | 'snoozed';
+export type InboxDirection = 'inbound' | 'outbound';
 
 export interface InboxClassifyParams {
   messages: Array<{ id?: string; text: string }>;
@@ -166,7 +167,7 @@ export interface InboxFeedConversation {
   message_count: number;
   last_message_text: string | null;
   last_message_at: string | null;
-  last_message_direction: string | null;
+  last_message_direction: InboxDirection | null;
   created_at: string;
   updated_at: string;
 }
@@ -203,7 +204,7 @@ export interface InboxSearchResponse {
     author_name: string | null;
     author_avatar_url: string | null;
     text: string | null;
-    direction: string;
+    direction: InboxDirection;
     attachments: unknown;
     created_at: string;
   }>;
@@ -273,6 +274,7 @@ export declare namespace Inbox {
     type InboxPlatform as InboxPlatform,
     type InboxConversationType as InboxConversationType,
     type InboxConversationStatus as InboxConversationStatus,
+    type InboxDirection as InboxDirection,
     type InboxClassifyParams as InboxClassifyParams,
     type InboxClassifyResponse as InboxClassifyResponse,
     type InboxSuggestReplyParams as InboxSuggestReplyParams,

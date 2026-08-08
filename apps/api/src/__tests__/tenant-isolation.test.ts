@@ -85,6 +85,8 @@ function makeRouteApp(
 	app.use("*", async (c, next) => {
 		c.set("orgId", organizationId);
 		c.set("workspaceScope", workspaceScope);
+		c.set("principalType", "service");
+		c.set("permissions", ["read", "write", "manage_spend"]);
 		// biome-ignore lint/suspicious/noExplicitAny: route-isolation DB stub
 		c.set("db", tenantSelectDb(row) as any);
 		await next();
@@ -223,9 +225,17 @@ const routeMatrix: RouteCase[] = [
 ];
 
 function requestFor(testCase: RouteCase): Request {
+	const mutation = ["POST", "PUT", "PATCH", "DELETE"].includes(
+		testCase.method ?? "GET",
+	);
 	return new Request(`http://localhost${testCase.path}`, {
 		method: testCase.method ?? "GET",
-		headers: testCase.body ? { "content-type": "application/json" } : undefined,
+		headers: {
+			...(testCase.body ? { "content-type": "application/json" } : {}),
+			...(testCase.router === adsRouter && mutation
+				? { "idempotency-key": `tenant-isolation-${testCase.name}` }
+				: {}),
+		},
 		body: testCase.body ? JSON.stringify(testCase.body) : undefined,
 	});
 }

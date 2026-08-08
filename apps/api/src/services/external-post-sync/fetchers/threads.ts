@@ -12,7 +12,7 @@ const BASE = GRAPH_BASE.threads;
 const DEFAULT_LIMIT = 25;
 
 // Docs: https://developers.facebook.com/docs/threads/threads-media
-// Base: https://graph.threads.com/v1.0/me/threads
+// Base: https://graph.threads.net/v1.0/me/threads
 const THREAD_FIELDS = [
 	"id",
 	"text",

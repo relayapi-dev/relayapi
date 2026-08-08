@@ -1,13 +1,8 @@
-import type { Command } from "commander";
 import * as prompts from "@clack/prompts";
+import type { Command } from "commander";
 import pc from "picocolors";
-import {
-	loadConfig,
-	saveConfig,
-	resolveApiKey,
-	maskKey,
-} from "../config.js";
 import { createClient } from "../client.js";
+import { loadConfig, maskKey, resolveApiKey, saveConfig } from "../config.js";
 import { outputSuccess, withErrorHandler } from "../output.js";
 
 export function registerAuthCommands(program: Command): void {
@@ -18,7 +13,8 @@ export function registerAuthCommands(program: Command): void {
 			auth.help();
 		});
 
-	auth.command("set-key")
+	auth
+		.command("set-key")
 		.description("Save an API key")
 		.argument("[key]", "API key (rlay_live_* or rlay_test_*)")
 		.action(async (key?: string) => {
@@ -49,7 +45,8 @@ export function registerAuthCommands(program: Command): void {
 			outputSuccess(`API key saved (${maskKey(apiKey)})`);
 		});
 
-	auth.command("status")
+	auth
+		.command("status")
 		.description("Show authentication status and usage")
 		.action(async () => {
 			const apiKey = resolveApiKey();
@@ -78,12 +75,13 @@ export function registerAuthCommands(program: Command): void {
 					`${pc.dim("Cycle:")} ${usage.usage.cycle_start} → ${usage.usage.cycle_end}`,
 				);
 				console.log(
-					`${pc.dim("Rate Limit:")} ${usage.rate_limit.current_minute} / ${usage.rate_limit.limit_per_minute} per min`,
+					`${pc.dim("Rate Limit:")} ${usage.rate_limit.limit_per_minute} per min`,
 				);
 			});
 		});
 
-	auth.command("logout")
+	auth
+		.command("logout")
 		.description("Remove saved credentials")
 		.action(async () => {
 			const apiKey = resolveApiKey();

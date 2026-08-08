@@ -91,7 +91,7 @@ await env.AI.run(model, input);
 
 ```bash
 curl https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/ai/run/@cf/meta/llama-3.1-8b-instruct \
-  -H "Authorization: Bearer <API_TOKEN>" \
+  --header @/secure/bearer-auth-header \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
 

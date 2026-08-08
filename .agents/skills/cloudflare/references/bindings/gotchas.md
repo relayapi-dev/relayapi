@@ -145,7 +145,7 @@ const [user, config] = await Promise.all([
 
 ## Security Gotchas
 
-**❌ Secrets in logs:** `console.log('Key:', env.API_KEY)` - visible in dashboard  
+**❌ Secrets in logs:** Never pass `env.API_KEY` itself to a logging function; Worker logs are visible in the dashboard.
 **✅** `console.log('Key:', env.API_KEY ? '***' : 'missing')`
 
 **❌ Exposing env:** `return Response.json(env)` - exposes all bindings  

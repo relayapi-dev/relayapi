@@ -45,9 +45,35 @@ const cjs = execFileSync(
 ).trim();
 if (cjs !== "true") throw new Error(`CommonJS package smoke failed: ${cjs}`);
 
+const internalEsm = execFileSync(
+	process.execPath,
+	[
+		"--input-type=module",
+		"--eval",
+		'import { createEmailIntentClient } from "@relayapi/sdk/internal"; const client = createEmailIntentClient({ stageEmailIntent: async () => ({ deliveryId: "email_1", status: "staged" }) }); console.log((await client.stage({ type: "organization_invitation", invitationId: "invite_1", occurrenceId: "created" })).status === "staged")',
+	],
+	{ cwd: temporaryDirectory, encoding: "utf8" },
+).trim();
+if (internalEsm !== "true") {
+	throw new Error(`Internal ESM package smoke failed: ${internalEsm}`);
+}
+
+const internalCjs = execFileSync(
+	process.execPath,
+	[
+		"--input-type=commonjs",
+		"--eval",
+		'const { createEmailIntentClient } = require("@relayapi/sdk/internal"); const client = createEmailIntentClient({ stageEmailIntent: async () => ({ deliveryId: "email_1", status: "staged" }) }); client.stage({ type: "organization_invitation", invitationId: "invite_1", occurrenceId: "created" }).then((result) => console.log(result.status === "staged"))',
+	],
+	{ cwd: temporaryDirectory, encoding: "utf8" },
+).trim();
+if (internalCjs !== "true") {
+	throw new Error(`Internal CommonJS package smoke failed: ${internalCjs}`);
+}
+
 writeFileSync(
 	join(temporaryDirectory, "smoke.ts"),
-	'import Relay, { type ClientOptions } from "@relayapi/sdk";\nconst options: ClientOptions = { apiKey: "rlay_test_smoke" };\nnew Relay(options).posts.list();\n',
+	'import Relay, { type ClientOptions } from "@relayapi/sdk";\nimport { createEmailIntentClient, type InternalEmailIntent } from "@relayapi/sdk/internal";\nconst options: ClientOptions = { apiKey: "rlay_test_smoke" };\nnew Relay(options).posts.list();\nconst intent: InternalEmailIntent = { type: "organization_invitation", invitationId: "invite_1", occurrenceId: "created" };\ncreateEmailIntentClient({ stageEmailIntent: async () => ({ deliveryId: "email_1", status: "staged" }) }).stage(intent);\n',
 );
 writeFileSync(
 	join(temporaryDirectory, "tsconfig.json"),
@@ -74,6 +100,9 @@ const installed = JSON.parse(
 );
 if (installed.exports["."].import !== "./dist/index.mjs") {
 	throw new Error("Installed package did not retain conditional exports");
+}
+if (installed.exports["./internal"].import !== "./dist/internal.mjs") {
+	throw new Error("Installed package did not retain the internal conditional export");
 }
 
 console.log("SDK package smoke passed (ESM, CommonJS, and TypeScript).");

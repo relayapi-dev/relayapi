@@ -1,11 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
+	ideaActivity,
+	ideaComments,
 	ideaConversionOperations,
 	ideaGroups,
 	ideaMedia,
 	ideas,
 	media,
+	organizationPrincipals,
 	posts,
 } from "@relayapi/db";
 import { getTableConfig } from "drizzle-orm/pg-core";
@@ -91,6 +94,25 @@ describe("Ideas durable schema contracts", () => {
 			),
 		).toEqual(["organization_id", "idempotency_key"]);
 	});
+
+	it("binds comments and activity to the exact tenant and stable principal", () => {
+		expect(foreignKeyColumns(ideaComments, ideas)).toEqual({
+			local: ["idea_id", "organization_id"],
+			foreign: ["id", "organization_id"],
+		});
+		expect(foreignKeyColumns(ideaComments, organizationPrincipals)).toEqual({
+			local: ["author_principal_id", "organization_id"],
+			foreign: ["id", "organization_id"],
+		});
+		expect(foreignKeyColumns(ideaActivity, ideas)).toEqual({
+			local: ["idea_id", "organization_id"],
+			foreign: ["id", "organization_id"],
+		});
+		expect(foreignKeyColumns(ideaActivity, organizationPrincipals)).toEqual({
+			local: ["actor_principal_id", "organization_id"],
+			foreign: ["id", "organization_id"],
+		});
+	});
 });
 
 describe("Ideas API durability contracts", () => {
@@ -136,8 +158,37 @@ describe("Ideas API durability contracts", () => {
 			reliability.indexOf("export async function reconcileMediaUploads"),
 			reliability.indexOf("export function isMediaEventMessage"),
 		);
-		expect(reconciler).toContain("MEDIA_BUCKET.head");
+		expect(reconciler).toContain("headStoredObject");
+		expect(reconciler).toContain("storageLocatorForMedia(row)");
 		expect(reconciler).toContain("tx.delete(ideaMedia)");
 		expect(reconciler).toContain('status: "ready"');
+	});
+
+	it("uses stable principals for every idea writer and ownership check", () => {
+		const route = readFileSync(
+			new URL("../routes/ideas.ts", import.meta.url),
+			"utf8",
+		);
+		expect(route).not.toContain('c.get("keyId")');
+		expect(route).not.toContain("authorId:");
+		expect(route).not.toContain("actorId:");
+		expect(route).toContain('c.get("principalId")');
+		expect(route).toContain("authorPrincipalId: principalId");
+		expect(route).toContain("actorPrincipalId: principalId");
+		expect(route).toContain("comment.authorPrincipalId !== principalId");
+		expect(route).toContain(
+			"eq(organizationPrincipals.organizationId, organizationId)",
+		);
+
+		const apiKeys = readFileSync(
+			new URL("../routes/api-keys.ts", import.meta.url),
+			"utf8",
+		);
+		const retirement = apiKeys.slice(
+			apiKeys.indexOf("app.openapi(deleteApiKey"),
+		);
+		expect(retirement).not.toContain(".delete(organizationPrincipals)");
+		expect(retirement).toContain('lifecycleStatus: "disabled"');
+		expect(retirement).toContain(".delete(principalWorkspaceGrants)");
 	});
 });

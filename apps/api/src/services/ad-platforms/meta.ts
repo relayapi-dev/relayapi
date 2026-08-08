@@ -10,7 +10,9 @@ import type {
 	AdMetricPoint,
 	AdMetricsWithDemographics,
 	AdPlatformAdapter,
+	AdProviderMutationState,
 	AdTargeting,
+	CampaignProviderMutationState,
 	CreateAdSetParams,
 	CreateAudienceParams,
 	CreateCampaignParams,
@@ -27,6 +29,7 @@ import type {
 	PromotablePage,
 	TargetingInterest,
 	UpdateAdParams,
+	UpdateCampaignParams,
 } from "./types";
 import { AdPlatformError } from "./types";
 
@@ -47,16 +50,21 @@ async function metaFetch<T = unknown>(
 	options: RequestInit = {},
 ): Promise<T> {
 	const separator = url.includes("?") ? "&" : "?";
-	const res = await fetchWithTimeout(`${url}${separator}access_token=${accessToken}`, {
-		timeout: META_FETCH_TIMEOUT_MS,
-		...options,
-		headers: {
-			"Content-Type": "application/json",
-			...options.headers,
+	const res = await fetchWithTimeout(
+		`${url}${separator}access_token=${accessToken}`,
+		{
+			timeout: META_FETCH_TIMEOUT_MS,
+			...options,
+			headers: {
+				"Content-Type": "application/json",
+				...options.headers,
+			},
 		},
-	});
+	);
 
-	const data = (await res.json()) as T & { error?: { message: string; code: number } };
+	const data = (await res.json()) as T & {
+		error?: { message: string; code: number };
+	};
 
 	if (!res.ok || (data as { error?: unknown }).error) {
 		const err = (data as { error?: { message: string; code: number } }).error;
@@ -68,6 +76,26 @@ async function metaFetch<T = unknown>(
 	}
 
 	return data;
+}
+
+async function metaMutationFetch(
+	url: string,
+	accessToken: string,
+	options: RequestInit,
+): Promise<void> {
+	const acknowledgement = await metaFetch<{ success?: unknown }>(
+		url,
+		accessToken,
+		options,
+	);
+
+	if (acknowledgement.success !== true) {
+		throw new AdPlatformError(
+			"META_MUTATION_NOT_ACKNOWLEDGED",
+			"Meta did not acknowledge the requested mutation",
+			acknowledgement,
+		);
+	}
 }
 
 function mapObjectiveToMeta(objective: string): string {
@@ -146,6 +174,23 @@ function mapMetaStatusToLocal(status: string): string {
 
 function buildTargetingSpec(targeting?: AdTargeting): Record<string, unknown> {
 	if (!targeting) return {};
+	const unsupported: string[] = [];
+	if (targeting.locations?.some((location) => location.cities?.length)) {
+		unsupported.push("locations.cities");
+	}
+	if (
+		targeting.locations?.some((location) => location.radiusMiles !== undefined)
+	) {
+		unsupported.push("locations.radius_miles");
+	}
+	if (targeting.languages?.length) unsupported.push("languages");
+	if (targeting.platformSpecific) unsupported.push("platform_specific");
+	if (unsupported.length > 0) {
+		throw new AdPlatformError(
+			"UNSUPPORTED_TARGETING",
+			`Meta targeting does not yet support: ${unsupported.join(", ")}`,
+		);
+	}
 
 	const spec: Record<string, unknown> = {};
 
@@ -154,18 +199,18 @@ function buildTargetingSpec(targeting?: AdTargeting): Record<string, unknown> {
 
 	if (targeting.genders?.length) {
 		const genderMap: Record<string, number> = { male: 1, female: 2 };
-		spec.genders = targeting.genders
-			.map((g) => genderMap[g])
-			.filter(Boolean);
+		spec.genders = targeting.genders.map((g) => genderMap[g]).filter(Boolean);
 	}
 
 	if (targeting.locations?.length) {
-		const countries = targeting.locations.flatMap(
-			(l) => l.countries ?? [],
-		);
-		if (countries.length) {
-			spec.geo_locations = { countries };
+		const countries = targeting.locations.flatMap((l) => l.countries ?? []);
+		if (countries.length === 0) {
+			throw new AdPlatformError(
+				"UNSUPPORTED_TARGETING",
+				"Meta targeting locations currently require at least one country",
+			);
 		}
+		spec.geo_locations = { countries: [...new Set(countries)] };
 	}
 
 	if (targeting.interests?.length) {
@@ -186,9 +231,9 @@ function buildTargetingSpec(targeting?: AdTargeting): Record<string, unknown> {
 	}
 
 	if (targeting.excludedAudiences?.length) {
-		spec.excluded_custom_audiences = targeting.excludedAudiences.map(
-			(id) => ({ id }),
-		);
+		spec.excluded_custom_audiences = targeting.excludedAudiences.map((id) => ({
+			id,
+		}));
 	}
 
 	if (targeting.placements?.length) {
@@ -239,10 +284,7 @@ async function findCreatedObjectByMarker(
 		const result = await metaFetch<{
 			data?: { id: string; name?: string }[];
 			paging?: { next?: string; cursors?: { after?: string } };
-		}>(
-			`${GRAPH_API}/${edge}?fields=id,name&limit=100${cursor}`,
-			accessToken,
-		);
+		}>(`${GRAPH_API}/${edge}?fields=id,name&limit=100${cursor}`, accessToken);
 		const match = result.data?.find((item) =>
 			item.name?.includes(params.marker),
 		);
@@ -260,6 +302,7 @@ async function findCreatedObjectByMarker(
 
 export const metaAdAdapter: AdPlatformAdapter = {
 	platform: "meta",
+	canonicalizeTargeting: buildTargetingSpec,
 	creation: {
 		async createCampaign(
 			accessToken: string,
@@ -291,12 +334,12 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				name: `${params.name} - Ad Set`,
 				campaign_id: params.campaignId,
 				billing_event: "IMPRESSIONS",
-				optimization_goal: params.mode === "boost" ? "POST_ENGAGEMENT" : "REACH",
+				optimization_goal:
+					params.mode === "boost" ? "POST_ENGAGEMENT" : "REACH",
 				status: "PAUSED",
-				targeting:
-					params.mode === "boost"
-						? buildTargetingSpec(params.targeting)
-						: { geo_locations: { countries: ["US"] } },
+				targeting: params.targeting
+					? buildTargetingSpec(params.targeting)
+					: { geo_locations: { countries: ["US"] } },
 			};
 
 			if (params.dailyBudgetCents) {
@@ -306,7 +349,8 @@ export const metaAdAdapter: AdPlatformAdapter = {
 			}
 			if (params.startDate) body.start_time = params.startDate;
 			if (params.endDate) body.end_time = params.endDate;
-			if (params.bidAmount) body.bid_amount = Math.round(params.bidAmount * 100);
+			if (params.bidAmount)
+				body.bid_amount = Math.round(params.bidAmount * 100);
 			if (params.pixelId) body.promoted_object = { pixel_id: params.pixelId };
 
 			const adSet = await metaFetch<{ id: string }>(
@@ -393,17 +437,27 @@ export const metaAdAdapter: AdPlatformAdapter = {
 			accessToken: string,
 			platformCampaignId: string,
 			platformAdSetId: string,
+			refreshAccessTokenBeforeAdSet?: () => Promise<string>,
 		): Promise<void> {
-			await Promise.all([
-				metaFetch(`${GRAPH_API}/${platformCampaignId}`, accessToken, {
+			await metaMutationFetch(
+				`${GRAPH_API}/${platformCampaignId}`,
+				accessToken,
+				{
 					method: "POST",
 					body: JSON.stringify({ status: "ACTIVE" }),
-				}),
-				metaFetch(`${GRAPH_API}/${platformAdSetId}`, accessToken, {
+				},
+			);
+			const adSetAccessToken = refreshAccessTokenBeforeAdSet
+				? await refreshAccessTokenBeforeAdSet()
+				: accessToken;
+			await metaMutationFetch(
+				`${GRAPH_API}/${platformAdSetId}`,
+				adSetAccessToken,
+				{
 					method: "POST",
 					body: JSON.stringify({ status: "ACTIVE" }),
-				}),
-			]);
+				},
+			);
 		},
 
 		async isBoostActivated(
@@ -505,10 +559,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 			const chunk = pages.slice(i, i + IG_CHUNK);
 			try {
 				const res = await metaFetch<
-					Record<
-						string,
-						{ instagram_business_account?: { id: string } }
-					>
+					Record<string, { instagram_business_account?: { id: string } }>
 				>(
 					`${GRAPH_API}/?ids=${chunk
 						.map((p) => p.id)
@@ -577,6 +628,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 		accessToken: string,
 		platformAdId: string,
 		params: UpdateAdParams,
+		refreshAccessTokenBeforeAdSet?: () => Promise<string>,
 	): Promise<void> {
 		const body: Record<string, unknown> = {};
 		if (params.name) body.name = params.name;
@@ -585,14 +637,18 @@ export const metaAdAdapter: AdPlatformAdapter = {
 		}
 
 		if (Object.keys(body).length > 0) {
-			await metaFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
+			await metaMutationFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
 				method: "POST",
 				body: JSON.stringify(body),
 			});
 		}
 
 		// Budget updates go to the ad set level
-		if (params.dailyBudgetCents || params.lifetimeBudgetCents || params.targeting) {
+		if (
+			params.dailyBudgetCents ||
+			params.lifetimeBudgetCents ||
+			params.targeting
+		) {
 			// Fetch the parent ad set
 			const adInfo = await metaFetch<{
 				adset_id: string;
@@ -607,9 +663,12 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				adSetBody.targeting = buildTargetingSpec(params.targeting);
 
 			if (Object.keys(adSetBody).length > 0) {
-				await metaFetch(
+				const adSetAccessToken = refreshAccessTokenBeforeAdSet
+					? await refreshAccessTokenBeforeAdSet()
+					: accessToken;
+				await metaMutationFetch(
 					`${GRAPH_API}/${adInfo.adset_id}`,
-					accessToken,
+					adSetAccessToken,
 					{
 						method: "POST",
 						body: JSON.stringify(adSetBody),
@@ -619,22 +678,146 @@ export const metaAdAdapter: AdPlatformAdapter = {
 		}
 	},
 
+	async updateCampaign(
+		accessToken: string,
+		platformCampaignId: string,
+		platformAdSetId: string | undefined,
+		params: UpdateCampaignParams,
+	): Promise<void> {
+		if (params.name !== undefined) {
+			await metaMutationFetch(
+				`${GRAPH_API}/${platformCampaignId}`,
+				accessToken,
+				{
+					method: "POST",
+					body: JSON.stringify({ name: params.name }),
+				},
+			);
+		}
+
+		if (
+			params.dailyBudgetCents !== undefined ||
+			params.lifetimeBudgetCents !== undefined
+		) {
+			if (!platformAdSetId) {
+				throw new AdPlatformError(
+					"INVALID_STATE",
+					"The campaign has no provider ad set for its budget update",
+				);
+			}
+			const body: Record<string, number> = {};
+			if (params.dailyBudgetCents !== undefined) {
+				body.daily_budget = params.dailyBudgetCents;
+			}
+			if (params.lifetimeBudgetCents !== undefined) {
+				body.lifetime_budget = params.lifetimeBudgetCents;
+			}
+			await metaMutationFetch(`${GRAPH_API}/${platformAdSetId}`, accessToken, {
+				method: "POST",
+				body: JSON.stringify(body),
+			});
+		}
+	},
+
+	async inspectAdMutation(
+		accessToken: string,
+		platformAdId: string,
+	): Promise<AdProviderMutationState> {
+		let ad: {
+			id: string;
+			name?: string;
+			status?: string;
+			effective_status?: string;
+			adset_id?: string;
+		};
+		ad = await metaFetch(
+			`${GRAPH_API}/${platformAdId}?fields=id,name,status,effective_status,adset_id`,
+			accessToken,
+		);
+
+		let adSet:
+			| {
+					status?: string;
+					daily_budget?: string | number;
+					lifetime_budget?: string | number;
+					targeting?: Record<string, unknown>;
+			  }
+			| undefined;
+		if (ad.adset_id) {
+			adSet = await metaFetch(
+				`${GRAPH_API}/${ad.adset_id}?fields=status,daily_budget,lifetime_budget,targeting`,
+				accessToken,
+			);
+		}
+		return {
+			exists: true,
+			name: ad.name,
+			status: ad.status ?? ad.effective_status,
+			adSetId: ad.adset_id,
+			dailyBudgetCents:
+				adSet?.daily_budget === undefined ? null : Number(adSet.daily_budget),
+			lifetimeBudgetCents:
+				adSet?.lifetime_budget === undefined
+					? null
+					: Number(adSet.lifetime_budget),
+			targeting: adSet?.targeting,
+		};
+	},
+
+	async inspectCampaignMutation(
+		accessToken: string,
+		platformCampaignId: string,
+		platformAdSetId?: string,
+	): Promise<CampaignProviderMutationState> {
+		const campaign = await metaFetch<{
+			id: string;
+			name?: string;
+			status?: string;
+			effective_status?: string;
+		}>(
+			`${GRAPH_API}/${platformCampaignId}?fields=id,name,status,effective_status`,
+			accessToken,
+		);
+		const adSet = platformAdSetId
+			? await metaFetch<{
+					status?: string;
+					daily_budget?: string | number;
+					lifetime_budget?: string | number;
+				}>(
+					`${GRAPH_API}/${platformAdSetId}?fields=status,daily_budget,lifetime_budget`,
+					accessToken,
+				)
+			: undefined;
+		return {
+			exists: true,
+			name: campaign.name,
+			status: campaign.status ?? campaign.effective_status,
+			adSetStatus: adSet?.status,
+			dailyBudgetCents:
+				adSet?.daily_budget === undefined ? null : Number(adSet.daily_budget),
+			lifetimeBudgetCents:
+				adSet?.lifetime_budget === undefined
+					? null
+					: Number(adSet.lifetime_budget),
+		};
+	},
+
 	async pauseAd(accessToken: string, platformAdId: string): Promise<void> {
-		await metaFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
+		await metaMutationFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
 			method: "POST",
 			body: JSON.stringify({ status: "PAUSED" }),
 		});
 	},
 
 	async resumeAd(accessToken: string, platformAdId: string): Promise<void> {
-		await metaFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
+		await metaMutationFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
 			method: "POST",
 			body: JSON.stringify({ status: "ACTIVE" }),
 		});
 	},
 
 	async cancelAd(accessToken: string, platformAdId: string): Promise<void> {
-		await metaFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
+		await metaMutationFetch(`${GRAPH_API}/${platformAdId}`, accessToken, {
 			method: "POST",
 			body: JSON.stringify({ status: "DELETED" }),
 		});
@@ -644,28 +827,20 @@ export const metaAdAdapter: AdPlatformAdapter = {
 		accessToken: string,
 		platformCampaignId: string,
 	): Promise<void> {
-		await metaFetch(
-			`${GRAPH_API}/${platformCampaignId}`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({ status: "PAUSED" }),
-			},
-		);
+		await metaMutationFetch(`${GRAPH_API}/${platformCampaignId}`, accessToken, {
+			method: "POST",
+			body: JSON.stringify({ status: "PAUSED" }),
+		});
 	},
 
 	async resumeCampaign(
 		accessToken: string,
 		platformCampaignId: string,
 	): Promise<void> {
-		await metaFetch(
-			`${GRAPH_API}/${platformCampaignId}`,
-			accessToken,
-			{
-				method: "POST",
-				body: JSON.stringify({ status: "ACTIVE" }),
-			},
-		);
+		await metaMutationFetch(`${GRAPH_API}/${platformCampaignId}`, accessToken, {
+			method: "POST",
+			body: JSON.stringify({ status: "ACTIVE" }),
+		});
 	},
 
 	// -----------------------------------------------------------------------
@@ -678,8 +853,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 		dateRange: DateRange,
 		breakdowns?: string[],
 	): Promise<AdMetricsWithDemographics> {
-		const fields =
-			"impressions,reach,clicks,spend,actions,ctr,cpc,cpm";
+		const fields = "impressions,reach,clicks,spend,actions,ctr,cpc,cpm";
 		const url = `${GRAPH_API}/${platformAdId}/insights?fields=${fields}&time_range={"since":"${dateRange.startDate}","until":"${dateRange.endDate}"}&time_increment=1`;
 
 		const data = await metaFetch<{
@@ -700,11 +874,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 			const conversions =
 				d.actions
 					?.filter((a) =>
-						[
-							"offsite_conversion",
-							"lead",
-							"purchase",
-						].includes(a.action_type),
+						["offsite_conversion", "lead", "purchase"].includes(a.action_type),
 					)
 					.reduce((sum, a) => sum + Number(a.value), 0) ?? 0;
 
@@ -716,15 +886,11 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				spendCents: Math.round(Number(d.spend ?? 0) * 100),
 				conversions,
 				videoViews: Number(
-					d.actions?.find((a) => a.action_type === "video_view")
-						?.value ?? 0,
+					d.actions?.find((a) => a.action_type === "video_view")?.value ?? 0,
 				),
 				engagement:
 					Number(d.clicks ?? 0) +
-					(d.actions?.reduce(
-						(sum, a) => sum + Number(a.value),
-						0,
-					) ?? 0),
+					(d.actions?.reduce((sum, a) => sum + Number(a.value), 0) ?? 0),
 				ctr: d.ctr ? Number(d.ctr) : undefined,
 				cpcCents: d.cpc ? Math.round(Number(d.cpc) * 100) : undefined,
 				cpmCents: d.cpm ? Math.round(Number(d.cpm) * 100) : undefined,
@@ -744,10 +910,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				}>(breakdownUrl, accessToken);
 
 				result.demographics = {};
-				if (
-					breakdowns.includes("age") ||
-					breakdowns.includes("gender")
-				) {
+				if (breakdowns.includes("age") || breakdowns.includes("gender")) {
 					result.demographics.ageGender = breakdownData.data;
 				}
 				if (breakdowns.includes("country")) {
@@ -822,12 +985,8 @@ export const metaAdAdapter: AdPlatformAdapter = {
 							operator: "or",
 							rules: [
 								{
-									event_sources: [
-										{ id: params.pixelId, type: "pixel" },
-									],
-									retention_seconds:
-										(params.retentionDays ?? 30) *
-										86400,
+									event_sources: [{ id: params.pixelId, type: "pixel" }],
+									retention_seconds: (params.retentionDays ?? 30) * 86400,
 								},
 							],
 						},
@@ -908,11 +1067,9 @@ export const metaAdAdapter: AdPlatformAdapter = {
 		accessToken: string,
 		platformAudienceId: string,
 	): Promise<void> {
-		await metaFetch(
-			`${GRAPH_API}/${platformAudienceId}`,
-			accessToken,
-			{ method: "DELETE" },
-		);
+		await metaMutationFetch(`${GRAPH_API}/${platformAudienceId}`, accessToken, {
+			method: "DELETE",
+		});
 	},
 
 	// -----------------------------------------------------------------------

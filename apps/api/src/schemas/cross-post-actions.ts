@@ -1,7 +1,8 @@
 import { z } from "@hono/zod-openapi";
+import { CROSS_POST_ACTION_TYPES } from "@relayapi/db";
 import { paginatedResponse } from "./common";
 
-export const CrossPostActionTypeEnum = z.enum(["repost", "comment", "quote"]);
+export const CrossPostActionTypeEnum = z.enum(CROSS_POST_ACTION_TYPES);
 
 export const CrossPostActionStatusEnum = z.enum([
 	"pending",
@@ -50,7 +51,8 @@ export const CrossPostActionResponse = z.object({
 	content: z.string().nullable(),
 	delay_minutes: z.number(),
 	status: CrossPostActionStatusEnum,
-	execute_at: z.string().datetime(),
+	scheduled_for: z.string().datetime(),
+	next_attempt_at: z.string().datetime(),
 	executed_at: z.string().datetime().nullable(),
 	result_post_id: z.string().nullable(),
 	error: z.string().nullable(),

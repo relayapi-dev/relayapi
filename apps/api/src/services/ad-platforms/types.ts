@@ -21,6 +21,29 @@ export class AdPlatformError extends Error {
 	}
 }
 
+/**
+ * Proof that the current request was rejected before it could create a local
+ * projection or cross a provider boundary. The error code alone is not enough
+ * evidence: the same provider-facing code can also surface after a request may
+ * have been sent, so only explicit pre-operation call sites may use this type.
+ */
+export class AdAuthoritativeNotAppliedError extends AdPlatformError {
+	constructor(error: AdPlatformError);
+	constructor(code: string, message: string, platformError?: unknown);
+	constructor(
+		codeOrError: string | AdPlatformError,
+		message?: string,
+		platformError?: unknown,
+	) {
+		if (codeOrError instanceof AdPlatformError) {
+			super(codeOrError.code, codeOrError.message, codeOrError.platformError);
+		} else {
+			super(codeOrError, message ?? codeOrError, platformError);
+		}
+		this.name = "AdAuthoritativeNotAppliedError";
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------
@@ -139,6 +162,7 @@ export interface AdProviderCreationAdapter {
 		accessToken: string,
 		platformCampaignId: string,
 		platformAdSetId: string,
+		refreshAccessTokenBeforeAdSet?: () => Promise<string>,
 	): Promise<void>;
 
 	isBoostActivated(
@@ -154,6 +178,31 @@ export interface UpdateAdParams {
 	dailyBudgetCents?: number;
 	lifetimeBudgetCents?: number;
 	targeting?: AdTargeting;
+}
+
+export interface UpdateCampaignParams {
+	name?: string;
+	dailyBudgetCents?: number;
+	lifetimeBudgetCents?: number;
+}
+
+export interface AdProviderMutationState {
+	exists: boolean;
+	name?: string;
+	status?: string;
+	adSetId?: string;
+	dailyBudgetCents?: number | null;
+	lifetimeBudgetCents?: number | null;
+	targeting?: Record<string, unknown>;
+}
+
+export interface CampaignProviderMutationState {
+	exists: boolean;
+	name?: string;
+	status?: string;
+	adSetStatus?: string;
+	dailyBudgetCents?: number | null;
+	lifetimeBudgetCents?: number | null;
 }
 
 export interface AdTargeting {
@@ -278,6 +327,8 @@ export interface ExternalAdSyncResult {
 export interface AdPlatformAdapter {
 	readonly platform: AdPlatform;
 	readonly creation: AdProviderCreationAdapter;
+	/** Canonical provider payload used only for conservative reconciliation. */
+	canonicalizeTargeting?(targeting: AdTargeting): Record<string, unknown>;
 
 	/** List ad accounts associated with a social account */
 	listAdAccounts(
@@ -300,7 +351,29 @@ export interface AdPlatformAdapter {
 		accessToken: string,
 		platformAdId: string,
 		params: UpdateAdParams,
+		refreshAccessTokenBeforeAdSet?: () => Promise<string>,
 	): Promise<void>;
+
+	/** Update campaign/ad-set fields without changing delivery state. */
+	updateCampaign(
+		accessToken: string,
+		platformCampaignId: string,
+		platformAdSetId: string | undefined,
+		params: UpdateCampaignParams,
+	): Promise<void>;
+
+	/** Read canonical provider state to reconcile an ambiguous absolute mutation. */
+	inspectAdMutation(
+		accessToken: string,
+		platformAdId: string,
+	): Promise<AdProviderMutationState>;
+
+	/** Read canonical campaign/ad-set state for ambiguous mutation recovery. */
+	inspectCampaignMutation(
+		accessToken: string,
+		platformCampaignId: string,
+		platformAdSetId?: string,
+	): Promise<CampaignProviderMutationState>;
 
 	/** Pause an active ad */
 	pauseAd(accessToken: string, platformAdId: string): Promise<void>;
@@ -312,10 +385,7 @@ export interface AdPlatformAdapter {
 	cancelAd(accessToken: string, platformAdId: string): Promise<void>;
 
 	/** Pause all ads in a campaign */
-	pauseCampaign(
-		accessToken: string,
-		platformCampaignId: string,
-	): Promise<void>;
+	pauseCampaign(accessToken: string, platformCampaignId: string): Promise<void>;
 
 	/** Resume all ads in a campaign */
 	resumeCampaign(

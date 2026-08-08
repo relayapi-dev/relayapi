@@ -762,7 +762,69 @@ export async function publishToTargets(
 			const claimedAt = new Date();
 			const leaseExpiresAt = new Date(claimedAt.getTime() + 5 * 60 * 1000);
 			const claimedTarget = await db.transaction(async (tx) => {
-				const rows = await tx
+				const [claimable] = await tx
+					.select({
+						id: postTargets.id,
+						attemptId: postTargets.attemptId,
+						publishOperationId: postTargets.publishOperationId,
+					})
+					.from(postTargets)
+					.where(
+						and(
+							eq(postTargets.id, targetState.id),
+							or(
+								eq(postTargets.deliveryState, "queued"),
+								and(
+									eq(postTargets.deliveryState, "in_flight"),
+									isNull(postTargets.requestMayHaveBeenSentAt),
+									or(
+										isNull(postTargets.leaseExpiresAt),
+										lt(postTargets.leaseExpiresAt, claimedAt),
+									),
+								),
+							),
+							parentFence,
+						),
+					)
+					.for("update")
+					.limit(1);
+				if (!claimable) return null;
+				if (claimable.attemptId) {
+					const [superseded] = await tx
+						.update(publishAttempts)
+						.set({
+							state: "failed",
+							completedAt: claimedAt,
+							leaseExpiresAt: claimedAt,
+							error: "Superseded before the provider request boundary",
+						})
+						.where(
+							and(
+								eq(publishAttempts.id, claimable.attemptId),
+								eq(publishAttempts.postTargetId, claimable.id),
+								eq(
+									publishAttempts.publishOperationId,
+									claimable.publishOperationId,
+								),
+								eq(publishAttempts.state, "in_flight"),
+							),
+						)
+						.returning({ id: publishAttempts.id });
+					if (!superseded) {
+						throw new Error(
+							"Claimable post target is missing its in-flight attempt",
+						);
+					}
+				}
+				await tx.insert(publishAttempts).values({
+					id: attemptId,
+					publishOperationId: claimable.publishOperationId,
+					postTargetId: claimable.id,
+					state: "in_flight",
+					claimedAt,
+					leaseExpiresAt,
+				});
+				const [claimed] = await tx
 					.update(postTargets)
 					.set({
 						status: "publishing",
@@ -774,7 +836,8 @@ export async function publishToTargets(
 					})
 					.where(
 						and(
-							eq(postTargets.id, targetState.id),
+							eq(postTargets.id, claimable.id),
+							eq(postTargets.publishOperationId, claimable.publishOperationId),
 							or(
 								eq(postTargets.deliveryState, "queued"),
 								and(
@@ -793,16 +856,9 @@ export async function publishToTargets(
 						id: postTargets.id,
 						publishOperationId: postTargets.publishOperationId,
 					});
-				const claimed = rows[0];
-				if (!claimed) return null;
-				await tx.insert(publishAttempts).values({
-					id: attemptId,
-					publishOperationId: claimed.publishOperationId,
-					postTargetId: claimed.id,
-					state: "in_flight",
-					claimedAt,
-					leaseExpiresAt,
-				});
+				if (!claimed) {
+					throw new Error("Locked post target claim was not persisted");
+				}
 				return claimed;
 			});
 			if (!claimedTarget) continue;
@@ -873,6 +929,7 @@ export async function publishToTargets(
 						: "marketing";
 				const allowedHashes = await getAllowedRecipientHashes(
 					db,
+					env.ENCRYPTION_KEY,
 					orgId,
 					"sms",
 					purpose,
@@ -880,7 +937,17 @@ export async function publishToTargets(
 				);
 				const authorizedPhones: string[] = [];
 				for (const phone of phoneNumbers) {
-					if (allowedHashes.has(await hashRecipientIdentifier("sms", phone))) {
+					if (
+						allowedHashes.has(
+							await hashRecipientIdentifier(
+								env.ENCRYPTION_KEY,
+								orgId,
+								"sms",
+								purpose,
+								phone,
+							),
+						)
+					) {
 						authorizedPhones.push(phone);
 					}
 				}

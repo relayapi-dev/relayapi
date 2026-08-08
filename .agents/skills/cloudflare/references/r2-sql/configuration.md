@@ -23,8 +23,8 @@ You query by **warehouse** name (`{ACCOUNT_ID}_{BUCKET}`), shown in the output a
 ### Wrangler CLI
 
 ```bash
-export WRANGLER_R2_SQL_AUTH_TOKEN=<your-token>
-# or a .env file in the project dir (auto-loaded): WRANGLER_R2_SQL_AUTH_TOKEN=<your-token>
+# Inject WRANGLER_R2_SQL_AUTH_TOKEN directly with your secret manager before
+# invoking Wrangler. Do not type the token in a shell assignment or print it.
 ```
 
 > Wrangler does **not** use the `wrangler login` OAuth session for R2 SQL — the env var is required.
@@ -34,7 +34,7 @@ export WRANGLER_R2_SQL_AUTH_TOKEN=<your-token>
 ```bash
 curl -X POST \
   "https://api.sql.cloudflarestorage.com/api/v1/accounts/$ACCOUNT_ID/r2-sql/query/$BUCKET" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
   -d '{"query": "SELECT * FROM default.my_table LIMIT 10"}'
 ```
 

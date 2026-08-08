@@ -13,6 +13,8 @@
 // 5. Verify every platform config, not just the one being changed.
 //
 // See CLAUDE.md "OAuth System Rules" for full details.
+// Full config table reverified against each platform's official documentation
+// on 2026-08-03; no non-Threads endpoint or field change was required.
 // =============================================================================
 
 import type { Platform } from "../schemas/common";
@@ -71,14 +73,16 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	},
 	// Facebook — Manual Login Flow (OAuth 2.0)
 	// https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow
-	// Section: "Manually Build a Login Flow"
+	// Sections: "Invoking the Login Dialog and Setting the Redirect URL" and
+	// "Exchanging Code for an Access Token" (reverified 2026-08-03).
 	// Auth: GET https://www.facebook.com/v{version}/dialog/oauth with client_id,
 	// redirect_uri, state, scope, response_type=code.
 	// Token: GET https://graph.facebook.com/v{version}/oauth/access_token with
 	// client_id, redirect_uri, client_secret, code.
 	// Permissions reference: https://developers.facebook.com/docs/permissions
 	// Graph API versions: https://developers.facebook.com/docs/graph-api/changelog/versions/
-	// Current table verified 2026-07-15: v25.0 is the newest listed stable version.
+	// Current table verified 2026-08-03: v26.0 is newest. Runtime remains on
+	// supported v25.0 (supported through 2028-07-29) pending compatibility review.
 	// Long-lived token exchange: https://developers.facebook.com/docs/facebook-login/guides/access-tokens/get-long-lived
 	// Uses fb_exchange_token grant type. Tokens last 60 days.
 	// Note: read_insights requires App Review approval.
@@ -254,12 +258,12 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		tokenExchangeUsesBasicAuth: true,
 		extraAuthParams: { duration: "permanent" },
 	},
-	// Threads — Threads API OAuth (verified 2026-07-15)
+	// Threads — Threads API OAuth (verified 2026-08-03)
 	// https://developers.facebook.com/docs/threads/get-started/get-access-tokens-and-permissions
 	// Sections: "Authorization Window" and "Short-Lived Token Exchange"
-	// Auth: GET https://threads.com/oauth/authorize with client_id, redirect_uri,
+	// Auth: GET https://threads.net/oauth/authorize with client_id, redirect_uri,
 	// scope, response_type=code, state.
-	// Token: POST https://graph.threads.com/oauth/access_token with client_id,
+	// Token: POST https://graph.threads.net/oauth/access_token with client_id,
 	// client_secret, grant_type=authorization_code, redirect_uri, code.
 	// Long-lived token exchange: https://developers.facebook.com/docs/threads/get-started/long-lived-tokens
 	// Section "Get a Long-Lived Token" still documents GET
@@ -267,8 +271,8 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// client_secret, and access_token. Tokens last 60 days.
 	// Scopes: threads_basic (required), threads_content_publish, threads_read_replies, threads_manage_replies, threads_manage_insights
 	threads: {
-		authUrl: "https://threads.com/oauth/authorize",
-		tokenUrl: "https://graph.threads.com/oauth/access_token",
+		authUrl: "https://threads.net/oauth/authorize",
+		tokenUrl: "https://graph.threads.net/oauth/access_token",
 		profileUrl: `${GRAPH_BASE.threads}/me?fields=id,username,name,threads_profile_picture_url`,
 		scopes: [
 			"threads_basic",

@@ -221,10 +221,16 @@ app.openapi(updateTag, async (c) => {
 	const [updated] = await db
 		.update(tags)
 		.set(updates)
-		.where(eq(tags.id, id))
+		.where(and(eq(tags.id, id), eq(tags.organizationId, orgId)))
 		.returning();
 
-	return c.json(serialize(updated ?? existing), 200);
+	if (!updated) {
+		return c.json(
+			{ error: { code: "tag_not_found", message: "Tag not found" } },
+			404,
+		);
+	}
+	return c.json(serialize(updated), 200);
 });
 
 // ── Delete tag ───────────────────────────────────────────────────────────────
@@ -271,7 +277,16 @@ app.openapi(deleteTag, async (c) => {
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied;
 
-	await db.delete(tags).where(eq(tags.id, id));
+	const [deleted] = await db
+		.delete(tags)
+		.where(and(eq(tags.id, id), eq(tags.organizationId, orgId)))
+		.returning({ id: tags.id });
+	if (!deleted) {
+		return c.json(
+			{ error: { code: "tag_not_found", message: "Tag not found" } },
+			404,
+		);
+	}
 
 	return c.body(null, 204);
 });

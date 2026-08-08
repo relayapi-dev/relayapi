@@ -22,7 +22,7 @@ function asStoredResponse(value: unknown): StoredHttpResponse {
 }
 
 const originalFetch = globalThis.fetch;
-const TEST_ENCRYPTION_KEY = `test=${"31".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"31".repeat(32)},identity=${"32".repeat(32)}`;
 const TEST_SECRET_REF = "asec_http_request_test";
 const REDACTED_URL = "https://redacted.invalid/";
 

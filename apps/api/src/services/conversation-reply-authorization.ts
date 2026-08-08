@@ -1,10 +1,9 @@
-import {
-	contactSuppressions,
-	type Database,
-	inboxMessages,
-} from "@relayapi/db";
+import { type Database, inboxMessages } from "@relayapi/db";
 import { and, desc, eq } from "drizzle-orm";
-import { hashRecipientIdentifier } from "./contact-consent";
+import {
+	getAllowedRecipientHashes,
+	hashRecipientIdentifier,
+} from "./contact-consent";
 
 export const MAX_CONVERSATION_REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -31,6 +30,7 @@ export function isWithinConversationReplyWindow(
  */
 export async function authorizeConversationReply(
 	db: Database,
+	keyConfig: string,
 	input: {
 		organizationId: string;
 		scopeKey: string;
@@ -46,22 +46,22 @@ export async function authorizeConversationReply(
 	| { authorized: false; reason: "suppressed" | "no_inbound" | "expired" }
 > {
 	const identifierHash = await hashRecipientIdentifier(
+		keyConfig,
+		input.organizationId,
 		input.platform,
+		"service",
 		input.recipientIdentifier,
 	);
-	const [suppressionRows, inboundRows] = await Promise.all([
-		db
-			.select({ id: contactSuppressions.id })
-			.from(contactSuppressions)
-			.where(
-				and(
-					eq(contactSuppressions.organizationId, input.organizationId),
-					eq(contactSuppressions.channel, input.platform),
-					eq(contactSuppressions.purpose, "service"),
-					eq(contactSuppressions.identifierHash, identifierHash),
-				),
-			)
-			.limit(1),
+	const [allowed, inboundRows] = await Promise.all([
+		getAllowedRecipientHashes(
+			db,
+			keyConfig,
+			input.organizationId,
+			input.platform,
+			"service",
+			[{ identifier: input.recipientIdentifier }],
+			{ requireGrant: false },
+		),
 		db
 			.select({ createdAt: inboxMessages.createdAt })
 			.from(inboxMessages)
@@ -79,7 +79,7 @@ export async function authorizeConversationReply(
 			.limit(1),
 	]);
 
-	if (suppressionRows.length > 0) {
+	if (!allowed.has(identifierHash)) {
 		return { authorized: false, reason: "suppressed" };
 	}
 	const lastInboundAt = inboundRows[0]?.createdAt;

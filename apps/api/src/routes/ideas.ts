@@ -1,6 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	apikey,
 	type createDb,
 	type Database,
 	generateId,
@@ -12,6 +11,8 @@ import {
 	ideas,
 	ideaTags,
 	media,
+	member,
+	organizationPrincipals,
 	posts,
 	tags,
 	user,
@@ -42,11 +43,15 @@ import {
 	resolveOperationalCreateScope,
 	workspaceScopeKey,
 } from "../lib/request-access";
-import { thumbnailKeyFor } from "../lib/thumbnails";
+import { thumbnailKeyFor, thumbnailStorageTarget } from "../lib/thumbnails";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 } from "../lib/workspace-scope";
+import {
+	markMutationInputNotApplied,
+	multipartMutationInputPreflight,
+} from "../middleware/mutation-validation";
 import { ErrorResponse, IdParam } from "../schemas/common";
 import {
 	ConvertIdeaBody,
@@ -186,7 +191,7 @@ async function fetchIdeaTags(
 	db: ReturnType<typeof createDb>,
 	ideaId: string,
 	organizationId: string,
-	workspaceId: string | null,
+	scopeKey: string,
 ): Promise<(typeof tags.$inferSelect)[]> {
 	const rows = await db
 		.select({
@@ -210,7 +215,7 @@ async function fetchIdeaTags(
 			and(
 				eq(ideaTags.ideaId, ideaId),
 				eq(ideaTags.organizationId, organizationId),
-				sql`${ideaTags.workspaceId} IS NOT DISTINCT FROM ${workspaceId}`,
+				eq(ideaTags.scopeKey, scopeKey),
 			),
 		);
 	return rows as (typeof tags.$inferSelect)[];
@@ -319,51 +324,57 @@ async function fetchIdeaMedia(
 
 interface ActorInfo {
 	id: string;
+	kind: "member" | "service";
+	user_id: string | null;
 	name: string | null;
 	image: string | null;
 }
 
 async function resolveActors(
 	db: ReturnType<typeof createDb>,
+	organizationId: string,
 	actorIds: string[],
 ): Promise<Map<string, ActorInfo>> {
 	const unique = [...new Set(actorIds.filter(Boolean))];
 	if (unique.length === 0) return new Map();
 
-	const keyRows = await db
-		.select({ id: apikey.id, referenceId: apikey.referenceId })
-		.from(apikey)
-		.where(inArray(apikey.id, unique));
+	const rows = await db
+		.select({
+			id: organizationPrincipals.id,
+			kind: organizationPrincipals.kind,
+			serviceName: organizationPrincipals.serviceName,
+			userId: member.userId,
+			userName: user.name,
+			userImage: user.image,
+		})
+		.from(organizationPrincipals)
+		.leftJoin(
+			member,
+			and(
+				eq(member.id, organizationPrincipals.memberId),
+				eq(member.organizationId, organizationPrincipals.organizationId),
+			),
+		)
+		.leftJoin(user, eq(user.id, member.userId))
+		.where(
+			and(
+				eq(organizationPrincipals.organizationId, organizationId),
+				inArray(organizationPrincipals.id, unique),
+			),
+		);
 
-	const keyToUserId = new Map<string, string>();
-	for (const row of keyRows) {
-		if (row.referenceId) keyToUserId.set(row.id, row.referenceId);
-	}
-
-	const userIdTargets = new Set<string>();
-	for (const actorId of unique) {
-		userIdTargets.add(keyToUserId.get(actorId) ?? actorId);
-	}
-
-	const userRows =
-		userIdTargets.size === 0
-			? []
-			: await db
-					.select({ id: user.id, name: user.name, image: user.image })
-					.from(user)
-					.where(inArray(user.id, [...userIdTargets]));
-
-	const userById = new Map(userRows.map((u) => [u.id, u]));
-
-	const result = new Map<string, ActorInfo>();
-	for (const actorId of unique) {
-		const userId = keyToUserId.get(actorId) ?? actorId;
-		const u = userById.get(userId);
-		if (u) {
-			result.set(actorId, { id: u.id, name: u.name, image: u.image });
-		}
-	}
-	return result;
+	return new Map(
+		rows.map((row) => [
+			row.id,
+			{
+				id: row.id,
+				kind: row.kind,
+				user_id: row.userId ?? null,
+				name: row.kind === "service" ? row.serviceName : row.userName,
+				image: row.kind === "member" ? row.userImage : null,
+			},
+		]),
+	);
 }
 
 function serializeComment(
@@ -372,7 +383,7 @@ function serializeComment(
 ) {
 	return {
 		id: row.id,
-		author_id: row.authorId,
+		author_id: row.authorPrincipalId,
 		author,
 		content: row.content,
 		parent_id: row.parentId ?? null,
@@ -384,13 +395,15 @@ function serializeComment(
 async function logActivity(
 	db: ReturnType<typeof createDb>,
 	ideaId: string,
-	actorId: string,
+	organizationId: string,
+	actorPrincipalId: string,
 	action: (typeof ideaActivity.$inferInsert)["action"],
 	metadata?: Record<string, unknown>,
 ): Promise<void> {
 	await db.insert(ideaActivity).values({
 		ideaId,
-		actorId,
+		organizationId,
+		actorPrincipalId,
 		action,
 		metadata: metadata ?? null,
 	});
@@ -467,7 +480,7 @@ app.openapi(listIdeas, async (c) => {
 			WHERE scoped_idea_tags.idea_id = ${ideas.id}
 				AND scoped_idea_tags.tag_id = ${tag_id}
 				AND scoped_idea_tags.organization_id = ${orgId}
-				AND scoped_idea_tags.workspace_id IS NOT DISTINCT FROM ${ideas.workspaceId}
+				AND scoped_idea_tags.scope_key = ${ideas.scopeKey}
 		)`);
 	}
 
@@ -640,7 +653,7 @@ app.openapi(getIdea, async (c) => {
 	if (denied) return denied as never;
 
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id, orgId, row.workspaceId),
+		fetchIdeaTags(db, id, orgId, row.scopeKey),
 		fetchIdeaMedia(db, id, orgId),
 	]);
 
@@ -682,7 +695,7 @@ const createIdea = createRoute({
 
 app.openapi(createIdea, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
@@ -749,14 +762,15 @@ app.openapi(createIdea, async (c) => {
 							relationScopes.tagScopeKeys.get(tagId) ??
 							workspaceScopeKey(workspaceId),
 						organizationId: orgId,
-						workspaceId,
+						scopeKey: row.scopeKey,
 					})),
 				);
 			}
 
 			await tx.insert(ideaActivity).values({
 				ideaId: row.id,
-				actorId: keyId,
+				organizationId: orgId,
+				actorPrincipalId: principalId,
 				action: "created",
 			});
 
@@ -780,7 +794,7 @@ app.openapi(createIdea, async (c) => {
 
 	const tagRows =
 		tagIds.length > 0
-			? await fetchIdeaTags(db, result.row.id, orgId, workspaceId)
+			? await fetchIdeaTags(db, result.row.id, orgId, result.row.scopeKey)
 			: [];
 
 	return c.json(
@@ -826,7 +840,7 @@ const updateIdea = createRoute({
 
 app.openapi(updateIdea, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
@@ -870,7 +884,7 @@ app.openapi(updateIdea, async (c) => {
 			);
 		}
 		const [tagRows, mediaRows] = await Promise.all([
-			fetchIdeaTags(db, id, orgId, current.workspaceId),
+			fetchIdeaTags(db, id, orgId, current.scopeKey),
 			fetchIdeaMedia(db, id, orgId),
 		]);
 		return c.json(
@@ -926,7 +940,7 @@ app.openapi(updateIdea, async (c) => {
 								tagScopeKeys?.get(tagId) ??
 								workspaceScopeKey(current.workspaceId),
 							organizationId: orgId,
-							workspaceId: current.workspaceId,
+							scopeKey: current.scopeKey,
 						})),
 					);
 				}
@@ -936,7 +950,8 @@ app.openapi(updateIdea, async (c) => {
 				await tx.insert(ideaActivity).values(
 					activities.map((action) => ({
 						ideaId: id,
-						actorId: keyId,
+						organizationId: orgId,
+						actorPrincipalId: principalId,
 						action,
 					})),
 				);
@@ -998,7 +1013,7 @@ app.openapi(updateIdea, async (c) => {
 	const updatedRow = updateResult.row;
 
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id, orgId, updatedRow.workspaceId),
+		fetchIdeaTags(db, id, orgId, updatedRow.scopeKey),
 		fetchIdeaMedia(db, id, orgId),
 	]);
 
@@ -1070,6 +1085,7 @@ app.openapi(deleteIdea, async (c) => {
 			)
 			.for("update", { of: media });
 		const now = new Date();
+		const thumbnailTarget = thumbnailStorageTarget(c.env);
 		for (const row of owned) {
 			const uploadMayStillFinish =
 				row.status === "uploading" || row.status === "upload_failed";
@@ -1079,6 +1095,13 @@ app.openapi(deleteIdea, async (c) => {
 					status: "deleting",
 					url: null,
 					thumbnailKey: row.thumbnailKey ?? thumbnailKeyFor(row.storageKey),
+					...(row.thumbnailKey
+						? {}
+						: {
+								thumbnailStorageProvider: thumbnailTarget.provider,
+								thumbnailStorageBucketLocator: thumbnailTarget.bucket,
+								thumbnailStorageRegion: thumbnailTarget.region,
+							}),
 					deletionRequestedAt: sql`COALESCE(${media.deletionRequestedAt}, ${now})`,
 					deletionNextRetryAt: uploadMayStillFinish
 						? new Date(now.getTime() + 5 * 60_000)
@@ -1156,7 +1179,7 @@ const moveIdea = createRoute({
 
 app.openapi(moveIdea, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
@@ -1340,7 +1363,8 @@ app.openapi(moveIdea, async (c) => {
 
 			await tx.insert(ideaActivity).values({
 				ideaId: id,
-				actorId: keyId,
+				organizationId: orgId,
+				actorPrincipalId: principalId,
 				action: "moved",
 				metadata: {
 					from_group: current.groupId,
@@ -1386,7 +1410,7 @@ app.openapi(moveIdea, async (c) => {
 	const updatedRow = moveResult.row;
 
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id, orgId, updatedRow.workspaceId),
+		fetchIdeaTags(db, id, orgId, updatedRow.scopeKey),
 		fetchIdeaMedia(db, id, orgId),
 	]);
 
@@ -1441,7 +1465,7 @@ const convertIdea = createRoute({
 
 app.openapi(convertIdea, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
@@ -1651,7 +1675,8 @@ app.openapi(convertIdea, async (c) => {
 		}
 		await tx.insert(ideaActivity).values({
 			ideaId: id,
-			actorId: keyId,
+			organizationId: orgId,
+			actorPrincipalId: principalId,
 			action: "converted",
 			metadata: { post_id: newPost.id, media_copied: copiedMedia.length },
 		});
@@ -1709,7 +1734,7 @@ app.openapi(convertIdea, async (c) => {
 	}
 
 	const [tagRows, mediaRows] = await Promise.all([
-		fetchIdeaTags(db, id, orgId, result.row.workspaceId),
+		fetchIdeaTags(db, id, orgId, result.row.scopeKey),
 		fetchIdeaMedia(db, id, orgId),
 	]);
 
@@ -1740,6 +1765,7 @@ const uploadIdeaMedia = createRoute({
 	description:
 		"Multipart upload (max 2MB). The database upload intent is committed before R2 and recovered from object events or the scheduled reconciler.",
 	security: [{ Bearer: [] }],
+	middleware: multipartMutationInputPreflight,
 	request: {
 		params: IdParam,
 		body: {
@@ -1773,7 +1799,7 @@ const uploadIdeaMedia = createRoute({
 // @ts-expect-error — handler may return additional error statuses
 app.openapi(uploadIdeaMedia, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id } = c.req.valid("param");
 	const db = c.get("db");
 
@@ -1782,6 +1808,7 @@ app.openapi(uploadIdeaMedia, async (c) => {
 	try {
 		formData = await c.req.formData();
 	} catch {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -1795,6 +1822,7 @@ app.openapi(uploadIdeaMedia, async (c) => {
 
 	const file = formData.get("file");
 	if (!file || !(file instanceof File)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "BAD_REQUEST", message: "Missing 'file' field" } },
 			400,
@@ -1803,6 +1831,7 @@ app.openapi(uploadIdeaMedia, async (c) => {
 
 	const MAX_SIZE = 2 * 1024 * 1024; // 2MB
 	if (file.size <= 0 || file.size > MAX_SIZE) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -1839,6 +1868,7 @@ app.openapi(uploadIdeaMedia, async (c) => {
 	} else if (mime === "application/pdf") {
 		mediaType = "document";
 	} else {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -1884,6 +1914,9 @@ app.openapi(uploadIdeaMedia, async (c) => {
 			mimeType: mime,
 			size: file.size,
 			storageKey,
+			storageProvider: "r2",
+			storageBucketLocator: c.env.R2_MEDIA_BUCKET_NAME,
+			storageRegion: c.env.R2_MEDIA_BUCKET_JURISDICTION,
 			url: canonicalUrl,
 			status: "uploading",
 		});
@@ -1907,7 +1940,8 @@ app.openapi(uploadIdeaMedia, async (c) => {
 		if (!attachment) throw new Error("Failed to persist Idea media intent");
 		await tx.insert(ideaActivity).values({
 			ideaId: id,
-			actorId: keyId,
+			organizationId: orgId,
+			actorPrincipalId: principalId,
 			action: "media_added",
 			metadata: {
 				media_id: attachment.id,
@@ -1919,12 +1953,16 @@ app.openapi(uploadIdeaMedia, async (c) => {
 		return { kind: "ready", attachmentId: attachment.id } as const;
 	});
 	if (intent.kind === "missing") {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "idea_not_found", message: "Idea not found" } },
 			404,
 		);
 	}
-	if (intent.kind === "denied") return intent.response;
+	if (intent.kind === "denied") {
+		markMutationInputNotApplied(c);
+		return intent.response;
+	}
 
 	try {
 		await c.env.MEDIA_BUCKET.put(storageKey, arrayBuffer, {
@@ -2009,7 +2047,7 @@ const deleteIdeaMedia = createRoute({
 
 app.openapi(deleteIdeaMedia, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id, media_id } = c.req.valid("param");
 	const db = c.get("db");
 
@@ -2061,6 +2099,7 @@ app.openapi(deleteIdeaMedia, async (c) => {
 		let processNow = false;
 		if (attachment.deleteWithIdea) {
 			const now = new Date();
+			const thumbnailTarget = thumbnailStorageTarget(c.env);
 			const uploadMayStillFinish =
 				attachment.status === "uploading" ||
 				attachment.status === "upload_failed";
@@ -2071,6 +2110,13 @@ app.openapi(deleteIdeaMedia, async (c) => {
 					url: null,
 					thumbnailKey:
 						attachment.thumbnailKey ?? thumbnailKeyFor(attachment.storageKey),
+					...(attachment.thumbnailKey
+						? {}
+						: {
+								thumbnailStorageProvider: thumbnailTarget.provider,
+								thumbnailStorageBucketLocator: thumbnailTarget.bucket,
+								thumbnailStorageRegion: thumbnailTarget.region,
+							}),
 					deletionRequestedAt: sql`COALESCE(${media.deletionRequestedAt}, ${now})`,
 					deletionNextRetryAt: uploadMayStillFinish
 						? new Date(now.getTime() + 5 * 60_000)
@@ -2087,7 +2133,8 @@ app.openapi(deleteIdeaMedia, async (c) => {
 		}
 		await tx.insert(ideaActivity).values({
 			ideaId: id,
-			actorId: keyId,
+			organizationId: orgId,
+			actorPrincipalId: principalId,
 			action: "media_removed",
 			metadata: {
 				media_id,
@@ -2169,7 +2216,10 @@ app.openapi(listComments, async (c) => {
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied as never;
 
-	const conditions = [eq(ideaComments.ideaId, id)];
+	const conditions = [
+		eq(ideaComments.organizationId, orgId),
+		eq(ideaComments.ideaId, id),
+	];
 	if (cursor) {
 		conditions.push(lt(ideaComments.createdAt, new Date(cursor)));
 	}
@@ -2186,13 +2236,14 @@ app.openapi(listComments, async (c) => {
 
 	const actors = await resolveActors(
 		db,
-		data.map((row) => row.authorId),
+		orgId,
+		data.map((row) => row.authorPrincipalId),
 	);
 
 	return c.json(
 		{
 			data: data.map((row) =>
-				serializeComment(row, actors.get(row.authorId) ?? null),
+				serializeComment(row, actors.get(row.authorPrincipalId) ?? null),
 			),
 			next_cursor: hasMore
 				? (data.at(-1)?.createdAt.toISOString() ?? null)
@@ -2237,7 +2288,7 @@ const createComment = createRoute({
 // @ts-expect-error — handler may return 400 from threading validation
 app.openapi(createComment, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
@@ -2268,10 +2319,16 @@ app.openapi(createComment, async (c) => {
 				ideaId: ideaComments.ideaId,
 			})
 			.from(ideaComments)
-			.where(eq(ideaComments.id, body.parent_id))
+			.where(
+				and(
+					eq(ideaComments.id, body.parent_id),
+					eq(ideaComments.ideaId, id),
+					eq(ideaComments.organizationId, orgId),
+				),
+			)
 			.limit(1);
 
-		if (!parent || parent.ideaId !== id) {
+		if (!parent) {
 			return c.json(
 				{
 					error: {
@@ -2303,7 +2360,8 @@ app.openapi(createComment, async (c) => {
 		.insert(ideaComments)
 		.values({
 			ideaId: id,
-			authorId: keyId,
+			organizationId: orgId,
+			authorPrincipalId: principalId,
 			content: body.content,
 			parentId,
 		})
@@ -2318,11 +2376,16 @@ app.openapi(createComment, async (c) => {
 		);
 	}
 
-	await logActivity(db, id, keyId, "commented", { comment_id: row.id });
+	await logActivity(db, id, orgId, principalId, "commented", {
+		comment_id: row.id,
+	});
 
-	const actors = await resolveActors(db, [row.authorId]);
+	const actors = await resolveActors(db, orgId, [row.authorPrincipalId]);
 
-	return c.json(serializeComment(row, actors.get(row.authorId) ?? null), 201);
+	return c.json(
+		serializeComment(row, actors.get(row.authorPrincipalId) ?? null),
+		201,
+	);
 });
 
 // ── Update comment ────────────────────────────────────────────────────────────
@@ -2360,7 +2423,7 @@ const updateComment = createRoute({
 
 app.openapi(updateComment, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id, comment_id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const db = c.get("db");
@@ -2384,7 +2447,13 @@ app.openapi(updateComment, async (c) => {
 	const [comment] = await db
 		.select()
 		.from(ideaComments)
-		.where(and(eq(ideaComments.id, comment_id), eq(ideaComments.ideaId, id)))
+		.where(
+			and(
+				eq(ideaComments.id, comment_id),
+				eq(ideaComments.ideaId, id),
+				eq(ideaComments.organizationId, orgId),
+			),
+		)
 		.limit(1);
 
 	if (!comment) {
@@ -2395,7 +2464,7 @@ app.openapi(updateComment, async (c) => {
 	}
 
 	// Only the author can edit
-	if (comment.authorId !== keyId) {
+	if (comment.authorPrincipalId !== principalId) {
 		return c.json(
 			{
 				error: {
@@ -2410,12 +2479,21 @@ app.openapi(updateComment, async (c) => {
 	const [updated] = await db
 		.update(ideaComments)
 		.set({ content: body.content, updatedAt: new Date() })
-		.where(eq(ideaComments.id, comment_id))
+		.where(
+			and(
+				eq(ideaComments.id, comment_id),
+				eq(ideaComments.ideaId, id),
+				eq(ideaComments.organizationId, orgId),
+			),
+		)
 		.returning();
 
 	const row = updated ?? comment;
-	const actors = await resolveActors(db, [row.authorId]);
-	return c.json(serializeComment(row, actors.get(row.authorId) ?? null), 200);
+	const actors = await resolveActors(db, orgId, [row.authorPrincipalId]);
+	return c.json(
+		serializeComment(row, actors.get(row.authorPrincipalId) ?? null),
+		200,
+	);
 });
 
 // ── Delete comment ────────────────────────────────────────────────────────────
@@ -2444,7 +2522,7 @@ const deleteComment = createRoute({
 
 app.openapi(deleteComment, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalId = c.get("principalId");
 	const { id, comment_id } = c.req.valid("param");
 	const db = c.get("db");
 
@@ -2465,9 +2543,18 @@ app.openapi(deleteComment, async (c) => {
 	if (denied) return denied;
 
 	const [comment] = await db
-		.select({ id: ideaComments.id, authorId: ideaComments.authorId })
+		.select({
+			id: ideaComments.id,
+			authorPrincipalId: ideaComments.authorPrincipalId,
+		})
 		.from(ideaComments)
-		.where(and(eq(ideaComments.id, comment_id), eq(ideaComments.ideaId, id)))
+		.where(
+			and(
+				eq(ideaComments.id, comment_id),
+				eq(ideaComments.ideaId, id),
+				eq(ideaComments.organizationId, orgId),
+			),
+		)
 		.limit(1);
 
 	if (!comment) {
@@ -2478,7 +2565,7 @@ app.openapi(deleteComment, async (c) => {
 	}
 
 	// Only the author can delete
-	if (comment.authorId !== keyId) {
+	if (comment.authorPrincipalId !== principalId) {
 		return c.json(
 			{
 				error: {
@@ -2490,7 +2577,15 @@ app.openapi(deleteComment, async (c) => {
 		);
 	}
 
-	await db.delete(ideaComments).where(eq(ideaComments.id, comment_id));
+	await db
+		.delete(ideaComments)
+		.where(
+			and(
+				eq(ideaComments.id, comment_id),
+				eq(ideaComments.ideaId, id),
+				eq(ideaComments.organizationId, orgId),
+			),
+		);
 
 	return c.body(null, 204);
 });
@@ -2542,7 +2637,10 @@ app.openapi(listActivity, async (c) => {
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied as never;
 
-	const conditions = [eq(ideaActivity.ideaId, id)];
+	const conditions = [
+		eq(ideaActivity.organizationId, orgId),
+		eq(ideaActivity.ideaId, id),
+	];
 	if (cursor) {
 		conditions.push(lt(ideaActivity.createdAt, new Date(cursor)));
 	}
@@ -2556,12 +2654,18 @@ app.openapi(listActivity, async (c) => {
 
 	const hasMore = rows.length > limit;
 	const data = rows.slice(0, limit);
+	const actors = await resolveActors(
+		db,
+		orgId,
+		data.map((row) => row.actorPrincipalId),
+	);
 
 	return c.json(
 		{
 			data: data.map((row) => ({
 				id: row.id,
-				actor_id: row.actorId,
+				actor_id: row.actorPrincipalId,
+				actor: actors.get(row.actorPrincipalId) ?? null,
 				action: row.action,
 				metadata: row.metadata ?? null,
 				created_at: row.createdAt.toISOString(),

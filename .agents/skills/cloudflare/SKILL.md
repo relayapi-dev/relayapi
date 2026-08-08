@@ -28,6 +28,21 @@ Fetch the **latest** information before citing specific numbers, API signatures,
 
 When a reference file and the docs disagree, **trust the docs**. This is especially important for: numeric limits, pricing tiers, type signatures, and configuration options.
 
+## Credential-Safe Shell Examples
+
+Shell snippets use `--header @/secure/bearer-auth-header` for Bearer
+authentication. That path represents a mode-`0600` file provisioned directly by
+the user's secret manager and containing the complete `Authorization` header.
+When two independent credentials are needed, an
+`/secure/ai-gateway-auth-header` file contains the gateway-specific header. Do
+not create either file by echoing an expanded environment variable, commit it,
+print it, or place its contents in a URL or command argument. Legacy global-key
+examples use `/secure/cloudflare-global-auth-headers`, which contains both
+required header lines. Secret-bearing JSON examples similarly use a mode-`0600`
+file under `/secure/` provisioned directly by the secret manager and pass it to
+curl with `--data-binary @...`. In application code, secrets may be read from
+Worker bindings and sent in HTTPS request headers, but they must never be logged.
+
 ## Quick Decision Trees
 
 ### "I need feature flags"

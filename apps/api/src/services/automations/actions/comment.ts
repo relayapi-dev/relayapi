@@ -4,7 +4,10 @@ import { GRAPH_BASE } from "../../../config/api-versions";
 import { decryptAccountToken } from "../../../lib/account-token-crypto";
 import type { Action } from "../../../schemas/automation-actions";
 import { applyMergeTags } from "../merge-tags";
-import type { RunContext } from "../types";
+import {
+	AutomationExternalEffectKnownFailureError,
+	type RunContext,
+} from "../types";
 import type { ActionHandler } from "./types";
 
 type ReplyToCommentAction = Extract<Action, { type: "reply_to_comment" }>;
@@ -46,42 +49,64 @@ const replyToComment: ActionHandler<ReplyToCommentAction> = async (
 	if (!account.accessToken) {
 		throw new Error(`social account ${accountId} has no access token`);
 	}
+	const accessToken = account.accessToken;
 
-	let res: Response;
-	switch (account.platform) {
-		case "facebook":
-			res = await fetch(`${GRAPH_BASE.facebook}/${commentId}/comments`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					message: renderedText,
-					access_token: account.accessToken,
-				}),
-			});
-			break;
-		case "instagram":
-			res = await fetch(
-				`${instagramGraphBase(account.accessToken)}/${commentId}/replies`,
-				{
+	const dispatch = async () => {
+		let res: Response;
+		switch (account.platform) {
+			case "facebook":
+				res = await fetch(`${GRAPH_BASE.facebook}/${commentId}/comments`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						message: renderedText,
-						access_token: account.accessToken,
+						access_token: accessToken,
 					}),
-				},
+				});
+				break;
+			case "instagram":
+				res = await fetch(
+					`${instagramGraphBase(accessToken)}/${commentId}/replies`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							message: renderedText,
+							access_token: accessToken,
+						}),
+					},
+				);
+				break;
+			default:
+				throw new Error(
+					`reply_to_comment is unsupported for platform "${account.platform}"`,
+				);
+		}
+		if (!res.ok) {
+			const detail = await summarizeErrorResponse(res);
+			if (res.status >= 500) {
+				throw new Error(`reply_to_comment ambiguous: ${detail}`);
+			}
+			throw new AutomationExternalEffectKnownFailureError(
+				`reply_to_comment failed: ${detail}`,
 			);
-			break;
-		default:
-			throw new Error(
-				`reply_to_comment is unsupported for platform "${account.platform}"`,
-			);
-	}
+		}
+		return { status: res.status };
+	};
 
-	if (!res.ok) {
-		throw new Error(
-			`reply_to_comment failed: ${await summarizeErrorResponse(res)}`,
+	if (ctx.executeExternalEffect) {
+		await ctx.executeExternalEffect(
+			{
+				effectKey: `action:${action.id}`,
+				kind: "automation_action",
+			},
+			async () => ({
+				outcome: "succeeded",
+				value: await dispatch(),
+			}),
 		);
+	} else {
+		await dispatch();
 	}
 };
 

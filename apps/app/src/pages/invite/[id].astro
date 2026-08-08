@@ -1,20 +1,28 @@
 ---
-import BaseLayout from "../../layouts/BaseLayout.astro";
-import SEO from "../../components/SEO.astro";
+import { BearerInvitationPage } from "../../components/invitation/bearer-invitation-page";
 import { InvitationPage } from "../../components/invitation/invitation-page";
+import SEO from "../../components/SEO.astro";
+import BaseLayout from "../../layouts/BaseLayout.astro";
 
 const { id } = Astro.params;
 const u = Astro.locals.user;
 const user = u
-  ? {
-      id: u.id as string,
-      name: (u.name as string) || "",
-      email: u.email as string,
-    }
-  : null;
+	? {
+			id: u.id as string,
+			name: (u.name as string) || "",
+			email: u.email as string,
+		}
+	: null;
+const isBearerInvitation = /^rlay_inv_[0-9a-f]{48}$/.test(id ?? "");
 ---
 
 <BaseLayout>
   <SEO slot="head" title="Team Invitation" noIndex={true} />
-  <InvitationPage client:load invitationId={id!} user={user} />
+  {
+    isBearerInvitation ? (
+      <BearerInvitationPage client:load token={id!} user={user} />
+    ) : (
+      <InvitationPage client:load invitationId={id!} user={user} />
+    )
+  }
 </BaseLayout>

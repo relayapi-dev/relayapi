@@ -16,7 +16,7 @@ export class ContentTemplates extends APIResource {
   }
 
   /**
-   * Update a content template
+   * Update a content template. Returns 404 if it is removed before commit.
    */
   update(
     id: string,
@@ -44,7 +44,7 @@ export class ContentTemplates extends APIResource {
   }
 
   /**
-   * Delete a content template
+   * Delete a content template. Returns 404 if another request removes it first.
    */
   delete(id: string, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/content-templates/${id}`, {

@@ -92,7 +92,7 @@ console.log(result.translated_text);
 
 ```bash
 curl https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/meta/llama-3.1-8b-instruct \
-  -H "Authorization: Bearer $TOKEN" \
+  --header @/secure/bearer-auth-header \
   -d '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
 

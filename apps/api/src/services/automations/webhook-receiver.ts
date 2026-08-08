@@ -6,6 +6,7 @@
 
 import {
 	automationEntrypoints,
+	automationScheduledJobs,
 	automations,
 	automationWebhookReceipts,
 	contactChannels,
@@ -29,8 +30,16 @@ import {
 	or,
 	sql,
 } from "drizzle-orm";
+import { normalizeContactPhone } from "../../lib/contact-phone";
 import { maybeDecrypt, maybeEncrypt } from "../../lib/crypto";
 import type { Env } from "../../types";
+import type { AutomationWebhookFailureReason } from "../operator-alerts";
+import {
+	deriveContactChannelIdentifierHash,
+	deriveContactEmailHash,
+	deriveContactPhoneHash,
+	protectContactValues,
+} from "../contact-protection";
 import { type InboundEvent, matchAndEnroll } from "./trigger-matcher";
 
 export type Db = Database;
@@ -66,6 +75,83 @@ async function sha256Hex(value: string): Promise<string> {
 	return Array.from(new Uint8Array(digest))
 		.map((byte) => byte.toString(16).padStart(2, "0"))
 		.join("");
+}
+
+export function automationWebhookFailureOccurrenceId(
+	entrypointId: string,
+	requestDigest: string,
+	reason: AutomationWebhookFailureReason,
+): string {
+	return `webhook-failure:${entrypointId}:${reason}:${requestDigest}`;
+}
+
+async function stageWebhookReceptionFailure(
+	db: Pick<Db, "insert">,
+	match: WebhookMatch,
+	input: {
+		requestDigest: string;
+		reason: AutomationWebhookFailureReason;
+		receivedAt: Date;
+	},
+): Promise<void> {
+	await db
+		.insert(automationScheduledJobs)
+		.values({
+			occurrenceId: automationWebhookFailureOccurrenceId(
+				match.entrypoint.id,
+				input.requestDigest,
+				input.reason,
+			),
+			organizationId: match.automation.organizationId,
+			scopeKey: match.automation.scopeKey,
+			jobType: "webhook_reception_failure",
+			automationId: match.automation.id,
+			entrypointId: match.entrypoint.id,
+			runAt: input.receivedAt,
+			status: "pending",
+			payload: {
+				version: 1,
+				request_digest: input.requestDigest,
+				reason: input.reason,
+				received_at: input.receivedAt.toISOString(),
+				// Routing below comes only from the matched database rows. No field
+				// from the unverified body or request headers is retained.
+				organization_id: match.automation.organizationId,
+				channel: match.automation.channel,
+				social_account_id: match.entrypoint.socialAccountId ?? null,
+			},
+		})
+		.onConflictDoNothing();
+}
+
+async function stageRejectedWebhook(
+	db: Pick<Db, "insert">,
+	match: WebhookMatch,
+	params: {
+		rawBody: string;
+		signatureHeader: string | null;
+		timestampHeader?: string | null;
+	},
+	reason: AutomationWebhookFailureReason,
+	receivedAt: Date,
+): Promise<void> {
+	// The digest identifies the request without retaining any of its untrusted
+	// fields. Including the supplied signature distinguishes two otherwise
+	// identical failed attempts while deterministic uniqueness deduplicates an
+	// exact replay.
+	const requestDigest = await sha256Hex(
+		[
+			match.entrypoint.id,
+			params.timestampHeader ?? "",
+			params.signatureHeader ?? "",
+			params.rawBody,
+		].join("\0"),
+	);
+	await stageWebhookReceptionFailure(db, match, {
+		requestDigest,
+		reason,
+		receivedAt,
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +293,7 @@ async function resolveContact(
 		socialAccountId: string | null;
 		channel: string;
 	},
+	keyConfig: string,
 ): Promise<string | null> {
 	const extract = (path?: string) =>
 		path ? extractByPath(body, path) : undefined;
@@ -230,48 +317,105 @@ async function resolveContact(
 		case "email": {
 			const email = extract(cfg.field_path);
 			if (typeof email !== "string") return null;
+			const emailHash = await deriveContactEmailHash(
+				keyConfig,
+				organizationId,
+				email,
+			);
 			const row = await db.query.contacts.findFirst({
 				where: and(
-					eq(contacts.emailCanonical, email.trim().toLowerCase()),
+					eq(contacts.emailHash, emailHash),
 					eq(contacts.organizationId, organizationId),
 					contactWorkspace,
 				),
 			});
 			if (row) return row.id;
 			if (cfg.auto_create_contact) {
+				const id = generateId("ct_");
 				const [created] = await db
 					.insert(contacts)
 					.values({
+						id,
 						organizationId,
 						workspaceId: scope.workspaceId,
-						email,
+						...(await protectContactValues(
+							keyConfig,
+							organizationId,
+							id,
+							{
+								name: null,
+								email,
+								phone: null,
+								metadata: null,
+							},
+						)),
 					})
+					.onConflictDoNothing()
 					.returning();
-				return created?.id ?? null;
+				if (created) return created.id;
+				const concurrent = await db.query.contacts.findFirst({
+					where: and(
+						eq(contacts.emailHash, emailHash),
+						eq(contacts.organizationId, organizationId),
+						contactWorkspace,
+					),
+				});
+				return concurrent?.id ?? null;
 			}
 			return null;
 		}
 		case "phone": {
 			const phone = extract(cfg.field_path);
 			if (typeof phone !== "string") return null;
+			const phoneCanonical = normalizeContactPhone(phone, {
+				allowBareInternational: true,
+			});
+			if (!phoneCanonical) return null;
+			const phoneHash = await deriveContactPhoneHash(
+				keyConfig,
+				organizationId,
+				phoneCanonical,
+			);
+			if (!phoneHash) return null;
 			const row = await db.query.contacts.findFirst({
 				where: and(
-					eq(contacts.phone, phone),
+					eq(contacts.phoneHash, phoneHash),
 					eq(contacts.organizationId, organizationId),
 					contactWorkspace,
 				),
 			});
 			if (row) return row.id;
 			if (cfg.auto_create_contact) {
+				const id = generateId("ct_");
 				const [created] = await db
 					.insert(contacts)
 					.values({
+						id,
 						organizationId,
 						workspaceId: scope.workspaceId,
-						phone,
+						...(await protectContactValues(
+							keyConfig,
+							organizationId,
+							id,
+							{
+								name: null,
+								email: null,
+								phone,
+								metadata: null,
+							},
+						)),
 					})
+					.onConflictDoNothing()
 					.returning();
-				return created?.id ?? null;
+				if (created) return created.id;
+				const concurrent = await db.query.contacts.findFirst({
+					where: and(
+						eq(contacts.phoneHash, phoneHash),
+						eq(contacts.organizationId, organizationId),
+						contactWorkspace,
+					),
+				});
+				return concurrent?.id ?? null;
 			}
 			return null;
 		}
@@ -283,13 +427,18 @@ async function resolveContact(
 			// Scope the lookup through contacts.organizationId — otherwise a
 			// platform_id collision across orgs (same FB PSID / IG user, different
 			// tenants) could return another tenant's contact.
+			const identifierHash = await deriveContactChannelIdentifierHash(
+				keyConfig,
+				organizationId,
+				identifier,
+			);
 			const rows = await db
 				.select({ contactId: contactChannels.contactId })
 				.from(contactChannels)
 				.innerJoin(contacts, eq(contactChannels.contactId, contacts.id))
 				.where(
 					and(
-						eq(contactChannels.identifier, identifier),
+						eq(contactChannels.identifierHash, identifierHash),
 						eq(contactChannels.socialAccountId, scope.socialAccountId),
 						eq(contacts.organizationId, organizationId),
 						contactWorkspace,
@@ -438,6 +587,11 @@ async function processAcceptedWebhook(
 			socialAccountId: match.entrypoint.socialAccountId ?? null,
 			channel: match.automation.channel,
 		},
+		typeof env.ENCRYPTION_KEY === "string"
+			? env.ENCRYPTION_KEY
+			: (() => {
+					throw new Error("ENCRYPTION_KEY is required");
+				})(),
 	);
 	if (!contactId) return { status: "contact_lookup_failed" };
 
@@ -501,6 +655,7 @@ export async function receiveAutomationWebhook(
 	},
 	env: Record<string, unknown>,
 ): Promise<WebhookReceptionResult> {
+	const receivedAt = new Date();
 	// 1. Look up entrypoint by slug. Push the slug predicate into SQL so we
 	//    fetch at most one row instead of every active webhook entrypoint
 	//    platform-wide (O(tenant count) transfer + JS scan). The database unique
@@ -529,8 +684,20 @@ export async function receiveAutomationWebhook(
 
 	// 2. Decrypt secret + verify HMAC.
 	const encSecret = cfg.webhook_secret as string | undefined;
-	if (!encSecret) return { status: "bad_signature" };
-	if (!params.signatureHeader) return { status: "bad_signature" };
+	if (!encSecret) {
+		await stageRejectedWebhook(db, match, params, "missing_secret", receivedAt);
+		return { status: "bad_signature" };
+	}
+	if (!params.signatureHeader) {
+		await stageRejectedWebhook(
+			db,
+			match,
+			params,
+			"missing_signature",
+			receivedAt,
+		);
+		return { status: "bad_signature" };
+	}
 
 	let secret: string | null;
 	try {
@@ -540,20 +707,59 @@ export async function receiveAutomationWebhook(
 			{ recordId: match.entrypoint.id, field: "webhook_secret" },
 		);
 	} catch {
+		await stageRejectedWebhook(
+			db,
+			match,
+			params,
+			"credential_unavailable",
+			receivedAt,
+		);
 		return { status: "bad_signature" };
 	}
-	if (!secret) return { status: "bad_signature" };
+	if (!secret) {
+		await stageRejectedWebhook(
+			db,
+			match,
+			params,
+			"credential_unavailable",
+			receivedAt,
+		);
+		return { status: "bad_signature" };
+	}
 
 	// Timestamped signatures are mandatory so a captured request cannot remain
 	// valid forever.
 	const timestampHeader = params.timestampHeader?.trim();
 	if (!timestampHeader || !/^\d{1,13}$/.test(timestampHeader)) {
+		await stageRejectedWebhook(
+			db,
+			match,
+			params,
+			"invalid_timestamp",
+			receivedAt,
+		);
 		return { status: "bad_signature" };
 	}
 	const ts = Number(timestampHeader);
-	if (!Number.isSafeInteger(ts)) return { status: "bad_signature" };
+	if (!Number.isSafeInteger(ts)) {
+		await stageRejectedWebhook(
+			db,
+			match,
+			params,
+			"invalid_timestamp",
+			receivedAt,
+		);
+		return { status: "bad_signature" };
+	}
 	const nowSeconds = Date.now() / 1000;
 	if (Math.abs(nowSeconds - ts) > MAX_TIMESTAMP_SKEW_SECONDS) {
+		await stageRejectedWebhook(
+			db,
+			match,
+			params,
+			"stale_timestamp",
+			receivedAt,
+		);
 		return { status: "stale_timestamp" };
 	}
 	const signedPayload = `${timestampHeader}.${params.rawBody}`;
@@ -563,13 +769,17 @@ export async function receiveAutomationWebhook(
 		signedPayload,
 		params.signatureHeader,
 	);
-	if (!sigOk) return { status: "bad_signature" };
+	if (!sigOk) {
+		await stageRejectedWebhook(db, match, params, "bad_signature", receivedAt);
+		return { status: "bad_signature" };
+	}
 
 	// 3. Parse body JSON.
 	let body: unknown;
 	try {
 		body = JSON.parse(params.rawBody);
 	} catch (err) {
+		await stageRejectedWebhook(db, match, params, "bad_payload", receivedAt);
 		return {
 			status: "bad_payload",
 			error: err instanceof Error ? err.message : String(err),
@@ -663,6 +873,19 @@ export async function receiveAutomationWebhook(
 	}
 
 	const result = await processAcceptedWebhook(db, match, body, env, claimed.id);
+	if (result.status !== "ok") {
+		const reason: AutomationWebhookFailureReason =
+			result.status === "contact_lookup_failed"
+				? "contact_lookup_failed"
+				: result.status === "enrollment_blocked"
+					? "enrollment_blocked"
+					: "enrollment_failed";
+		await stageWebhookReceptionFailure(db, match, {
+			requestDigest,
+			reason,
+			receivedAt,
+		});
+	}
 	const retryable = result.status === "enrollment_failed";
 	await db
 		.update(automationWebhookReceipts)
@@ -772,6 +995,7 @@ export async function reconcileAutomationWebhookReceipts(
 		if (!claimed) continue;
 
 		let result: WebhookReceptionResult;
+		let matchedSource: WebhookMatch | null = null;
 		try {
 			const [match] = await db
 				.select({
@@ -791,6 +1015,7 @@ export async function reconcileAutomationWebhookReceipts(
 				)
 				.limit(1);
 			if (!match) throw new Error("accepted webhook source no longer exists");
+			matchedSource = match;
 			const plaintext = await maybeDecrypt(
 				claimed.payloadCiphertext,
 				env.ENCRYPTION_KEY,
@@ -811,6 +1036,20 @@ export async function reconcileAutomationWebhookReceipts(
 				status: "enrollment_failed",
 				error: error instanceof Error ? error.message : "reconciliation failed",
 			};
+		}
+
+		if (result.status !== "ok" && matchedSource) {
+			const reason: AutomationWebhookFailureReason =
+				result.status === "contact_lookup_failed"
+					? "contact_lookup_failed"
+					: result.status === "enrollment_blocked"
+						? "enrollment_blocked"
+						: "enrollment_failed";
+			await stageWebhookReceptionFailure(db, matchedSource, {
+				requestDigest: claimed.requestDigest,
+				reason,
+				receivedAt: claimed.receivedAt,
+			});
 		}
 
 		const retryable = result.status === "enrollment_failed";

@@ -94,6 +94,35 @@ class WorkflowActionReferenceTests(unittest.TestCase):
 
 
 class WorkflowPermissionTests(unittest.TestCase):
+    def test_accepts_reviewed_inventory_artifact_read_permissions(self) -> None:
+        workflow = (
+            "permissions:\n"
+            "  actions: read\n"
+            "  contents: read\n"
+            "\n"
+            "jobs:\n"
+            "  inventory:\n"
+            "    runs-on: ubuntu-latest\n"
+        )
+        VERIFIER.verify_read_only_permissions(
+            ".github/workflows/prelive-destructive-inventory.yml", workflow
+        )
+
+    def test_rejects_unreviewed_inventory_artifact_permissions(self) -> None:
+        workflow = (
+            "permissions:\n"
+            "  contents: read\n"
+            "\n"
+            "jobs:\n"
+            "  inventory:\n"
+            "    runs-on: ubuntu-latest\n"
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                VERIFIER.verify_read_only_permissions(
+                    ".github/workflows/prelive-destructive-inventory.yml", workflow
+                )
+
     def test_rejects_job_level_escalation_in_read_only_workflow(self) -> None:
         workflow = (
             "permissions:\n"
@@ -120,6 +149,43 @@ class WorkflowPermissionTests(unittest.TestCase):
             "    runs-on: ubuntu-latest\n"
         )
         VERIFIER.verify_read_only_permissions("fixture.yml", workflow)
+
+
+class WorkflowRunExpressionTests(unittest.TestCase):
+    def assert_rejected(self, workflow: str) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                VERIFIER.verify_untrusted_expressions_are_environment_bound(
+                    "fixture.yml", workflow
+                )
+
+    def test_rejects_direct_expression_in_mapping_style_run(self) -> None:
+        self.assert_rejected(
+            "steps:\n"
+            "  - name: unsafe\n"
+            "    run: echo '${{ inputs.value }}'\n"
+        )
+
+    def test_rejects_direct_expression_in_compact_sequence_run(self) -> None:
+        self.assert_rejected(
+            "steps:\n"
+            "  - run: echo '${{ github.event.pull_request.title }}'\n"
+        )
+
+    def test_rejects_direct_expression_in_flow_style_run(self) -> None:
+        self.assert_rejected(
+            "steps:\n"
+            "  - { run: \"echo '${{ github.head_ref }}'\", shell: bash }\n"
+        )
+
+    def test_accepts_environment_bound_expression(self) -> None:
+        VERIFIER.verify_untrusted_expressions_are_environment_bound(
+            "fixture.yml",
+            "steps:\n"
+            "  - run: echo \"$VALUE\"\n"
+            "    env:\n"
+            "      VALUE: ${{ inputs.value }}\n",
+        )
 
 
 if __name__ == "__main__":

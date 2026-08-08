@@ -85,10 +85,13 @@ new Miniflare({
 ## Bindings
 
 ```js
+const secretKey = process.env.SECRET_KEY;
+if (!secretKey) throw new Error("SECRET_KEY is required");
+
 new Miniflare({
   // Environment variables
   bindings: {
-    SECRET_KEY: "my-secret-value",
+    SECRET_KEY: secretKey,
     API_URL: "https://api.example.com",
     DEBUG: true,
   },

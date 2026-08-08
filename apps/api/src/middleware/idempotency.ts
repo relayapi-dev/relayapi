@@ -75,7 +75,13 @@ export async function bindReceiptRoute(
 function resourceIdFromBody(text: string): string | null {
 	try {
 		const body = JSON.parse(text) as Record<string, unknown>;
-		for (const key of ["id", "post_id", "thread_group_id", "broadcast_id"]) {
+		for (const key of [
+			"id",
+			"post_id",
+			"thread_group_id",
+			"broadcast_id",
+			"delivery_id",
+		]) {
 			if (typeof body[key] === "string") return body[key];
 		}
 	} catch {
@@ -86,6 +92,14 @@ function resourceIdFromBody(text: string): string | null {
 
 function isReplayableStatus(status: number): boolean {
 	return status >= 200 && status < 500 && ![408, 425, 429].includes(status);
+}
+
+export function isExplicitlyRetryableConflict(response: Response): boolean {
+	return (
+		response.status === 409 &&
+		response.headers.get("Idempotency-Retryable") === "true" &&
+		response.headers.has("Retry-After")
+	);
 }
 
 type DigestTracker = {
@@ -215,6 +229,27 @@ async function markUnknown(
 			state: "unknown",
 			lastError: message.slice(0, 1_000),
 			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(idempotencyReceipts.id, receiptId),
+				eq(idempotencyReceipts.state, "in_progress"),
+			),
+		);
+}
+
+async function expireProvenNotApplied(
+	db: Variables["db"],
+	receiptId: string,
+	requestHash?: string,
+): Promise<void> {
+	await db
+		.update(idempotencyReceipts)
+		.set({
+			...(requestHash ? { requestHash } : {}),
+			expiresAt: new Date(),
+			updatedAt: new Date(),
+			lastError: "mutation effect was proven not applied",
 		})
 		.where(
 			and(
@@ -418,8 +453,35 @@ export const idempotencyMiddleware = createMiddleware<{
 		const requestHash = await sha256Hex(
 			JSON.stringify({ method, route, rawDigest }),
 		);
+		if (isExplicitlyRetryableConflict(c.res)) {
+			// The route has already persisted a durable domain operation and is
+			// explicitly asking the caller to resume it. Release only this outer
+			// HTTP replay receipt; the domain operation remains the idempotency and
+			// provider-reconciliation authority.
+			await db
+				.update(idempotencyReceipts)
+				.set({
+					requestHash,
+					expiresAt: new Date(),
+					updatedAt: new Date(),
+					lastError: "retry delegated to durable domain operation",
+				})
+				.where(
+					and(
+						eq(idempotencyReceipts.id, receiptId),
+						eq(idempotencyReceipts.state, "in_progress"),
+					),
+				);
+			c.res.headers.set("Idempotency-Replayed", "false");
+			return;
+		}
 
 		if (!isReplayableStatus(c.res.status)) {
+			if (c.get("mutationEffectTracker")?.isProvenNotApplied()) {
+				await expireProvenNotApplied(db, receiptId, requestHash);
+				c.res.headers.set("Idempotency-Replayed", "false");
+				return;
+			}
 			await db
 				.update(idempotencyReceipts)
 				.set({
@@ -484,11 +546,15 @@ export const idempotencyMiddleware = createMiddleware<{
 			);
 		c.res.headers.set("Idempotency-Replayed", "false");
 	} catch (error) {
-		await markUnknown(
-			db,
-			receiptId,
-			error instanceof Error ? error.message : "request handler failed",
-		);
+		if (c.get("mutationEffectTracker")?.isProvenNotApplied()) {
+			await expireProvenNotApplied(db, receiptId);
+		} else {
+			await markUnknown(
+				db,
+				receiptId,
+				error instanceof Error ? error.message : "request handler failed",
+			);
+		}
 		throw error;
 	}
 });

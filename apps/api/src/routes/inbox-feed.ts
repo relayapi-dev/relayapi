@@ -9,6 +9,7 @@ import {
 import { and, eq, inArray } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { resolveInboxNoteActor } from "../lib/inbox-note-actor";
+import { SingleUnitProviderMutationAggregate } from "../lib/mutation-provider-boundary";
 import { notifyRealtime } from "../lib/notify-post-update";
 import {
 	INVALID_CURSOR_BODY,
@@ -54,6 +55,7 @@ import { authorizeConversationReply } from "../services/conversation-reply-autho
 import {
 	getConversationWithMessages,
 	getInboxStats,
+	INBOX_CONTENT_RETENTION_MS,
 	insertMessage,
 	listConversations,
 	searchMessages,
@@ -63,6 +65,14 @@ import type { Env, Variables } from "../types";
 import { igGraphHost, resolveInboxTarget } from "./inbox-helpers";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+
+function trackedProviderFetch(
+	mutation: SingleUnitProviderMutationAggregate,
+	label: string,
+	...args: Parameters<typeof fetch>
+): Promise<Response> {
+	return mutation.track(label, () => fetch(...args));
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -296,10 +306,19 @@ app.openapi(bulkRoute, async (c) => {
 		action === "mark_read" ||
 		action === "set_priority"
 	) {
-		const setClause: Record<string, unknown> = { updatedAt: new Date() };
-		if (action === "archive") setClause.status = "archived";
-		else if (action === "unarchive") setClause.status = "open";
-		else if (action === "mark_read") setClause.unreadCount = 0;
+		const now = new Date();
+		const setClause: Record<string, unknown> = { updatedAt: now };
+		if (action === "archive") {
+			setClause.status = "archived";
+			setClause.closedAt = now;
+			setClause.contentExpiresAt = new Date(
+				now.getTime() + INBOX_CONTENT_RETENTION_MS,
+			);
+		} else if (action === "unarchive") {
+			setClause.status = "open";
+			setClause.closedAt = null;
+			setClause.contentExpiresAt = null;
+		} else if (action === "mark_read") setClause.unreadCount = 0;
 		else if (action === "set_priority")
 			setClause.priority = params?.priority ?? "normal";
 
@@ -685,6 +704,9 @@ app.openapi(sendMessageRoute, async (c) => {
 		reply_to,
 	} = body;
 	const db = c.get("db");
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	const target = await resolveInboxTarget(db, {
 		conversationId,
@@ -694,6 +716,7 @@ app.openapi(sendMessageRoute, async (c) => {
 		encryptionKey: c.env.ENCRYPTION_KEY,
 	});
 	if (!target?.account.accessToken) {
+		mutation.finalize();
 		return c.json({ success: false }, 200);
 	}
 	const account = target.account as typeof target.account & {
@@ -732,14 +755,18 @@ app.openapi(sendMessageRoute, async (c) => {
 					}
 				}
 				if (!recipientId) return c.json({ success: false }, 200);
-				const replyAuthorization = await authorizeConversationReply(db, {
-					organizationId: orgId,
-					scopeKey: conversation.scopeKey,
-					conversationId: conversation.id,
-					accountId: account.id,
-					platform: account.platform,
-					recipientIdentifier: recipientId,
-				});
+				const replyAuthorization = await authorizeConversationReply(
+					db,
+					c.env.ENCRYPTION_KEY,
+					{
+						organizationId: orgId,
+						scopeKey: conversation.scopeKey,
+						conversationId: conversation.id,
+						accountId: account.id,
+						platform: account.platform,
+						recipientIdentifier: recipientId,
+					},
+				);
 				if (!replyAuthorization.authorized) {
 					return c.json(
 						{
@@ -760,39 +787,11 @@ app.openapi(sendMessageRoute, async (c) => {
 				if (template) {
 					// Structured template message (generic or button)
 					// Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/templates
-					const res = await fetch(fbSendUrl, {
-						method: "POST",
-						headers: fbHeaders,
-						body: JSON.stringify({
-							recipient: { id: recipientId },
-							messaging_type: message_tag ? "MESSAGE_TAG" : "RESPONSE",
-							...(message_tag && { tag: message_tag }),
-							message: {
-								attachment: {
-									type: "template",
-									payload: {
-										template_type: template.type,
-										elements: template.elements,
-									},
-								},
-							},
-						}),
-					});
-					if (!res.ok) return c.json({ success: false }, 200);
-					const json = (await res.json()) as { message_id?: string };
-					lastMessageId = json.message_id;
-				} else if (attachments && attachments.length > 0) {
-					// Send attachments as attachment messages
-					// Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/saving-assets
-					for (const att of attachments) {
-						const fbType = att.type.startsWith("image/")
-							? "image"
-							: att.type.startsWith("video/")
-								? "video"
-								: att.type.startsWith("audio/")
-									? "audio"
-									: "file";
-						const res = await fetch(fbSendUrl, {
+					const res = await trackedProviderFetch(
+						mutation,
+						`${account.platform}.conversation.template.send`,
+						fbSendUrl,
+						{
 							method: "POST",
 							headers: fbHeaders,
 							body: JSON.stringify({
@@ -801,13 +800,53 @@ app.openapi(sendMessageRoute, async (c) => {
 								...(message_tag && { tag: message_tag }),
 								message: {
 									attachment: {
-										type: fbType,
-										payload: { url: att.url, is_reusable: true },
+										type: "template",
+										payload: {
+											template_type: template.type,
+											elements: template.elements,
+										},
 									},
 								},
 							}),
-						});
+						},
+					);
+					if (!res.ok) return c.json({ success: false }, 200);
+					const json = (await res.json()) as { message_id?: string };
+					lastMessageId = json.message_id;
+				} else if (attachments && attachments.length > 0) {
+					// Send attachments as attachment messages
+					// Docs: https://developers.facebook.com/docs/messenger-platform/send-messages/saving-assets
+					let providerAccepted = false;
+					for (const att of attachments) {
+						const fbType = att.type.startsWith("image/")
+							? "image"
+							: att.type.startsWith("video/")
+								? "video"
+								: att.type.startsWith("audio/")
+									? "audio"
+									: "file";
+						const res = await trackedProviderFetch(
+							mutation,
+							`${account.platform}.conversation.attachment.send`,
+							fbSendUrl,
+							{
+								method: "POST",
+								headers: fbHeaders,
+								body: JSON.stringify({
+									recipient: { id: recipientId },
+									messaging_type: message_tag ? "MESSAGE_TAG" : "RESPONSE",
+									...(message_tag && { tag: message_tag }),
+									message: {
+										attachment: {
+											type: fbType,
+											payload: { url: att.url, is_reusable: true },
+										},
+									},
+								}),
+							},
+						);
 						if (res.ok) {
+							providerAccepted = true;
 							const json = (await res.json()) as { message_id?: string };
 							lastMessageId = json.message_id;
 							if (json.message_id) sentMids.push(json.message_id);
@@ -817,21 +856,30 @@ app.openapi(sendMessageRoute, async (c) => {
 					if (text) {
 						const msgPayload: Record<string, unknown> = { text };
 						if (quick_replies) msgPayload.quick_replies = quick_replies;
-						const res = await fetch(fbSendUrl, {
-							method: "POST",
-							headers: fbHeaders,
-							body: JSON.stringify({
-								recipient: { id: recipientId },
-								messaging_type: message_tag ? "MESSAGE_TAG" : "RESPONSE",
-								...(message_tag && { tag: message_tag }),
-								message: msgPayload,
-							}),
-						});
+						const res = await trackedProviderFetch(
+							mutation,
+							`${account.platform}.conversation.text.send`,
+							fbSendUrl,
+							{
+								method: "POST",
+								headers: fbHeaders,
+								body: JSON.stringify({
+									recipient: { id: recipientId },
+									messaging_type: message_tag ? "MESSAGE_TAG" : "RESPONSE",
+									...(message_tag && { tag: message_tag }),
+									message: msgPayload,
+								}),
+							},
+						);
 						if (res.ok) {
+							providerAccepted = true;
 							const json = (await res.json()) as { message_id?: string };
 							lastMessageId = json.message_id;
 							if (json.message_id) sentMids.push(json.message_id);
 						}
+					}
+					if (!providerAccepted) {
+						return c.json({ success: false }, 200);
 					}
 				} else {
 					// Text-only message (with optional quick replies)
@@ -847,16 +895,21 @@ app.openapi(sendMessageRoute, async (c) => {
 						);
 					const msgPayload: Record<string, unknown> = { text };
 					if (quick_replies) msgPayload.quick_replies = quick_replies;
-					const res = await fetch(fbSendUrl, {
-						method: "POST",
-						headers: fbHeaders,
-						body: JSON.stringify({
-							recipient: { id: recipientId },
-							messaging_type: message_tag ? "MESSAGE_TAG" : "RESPONSE",
-							...(message_tag && { tag: message_tag }),
-							message: msgPayload,
-						}),
-					});
+					const res = await trackedProviderFetch(
+						mutation,
+						`${account.platform}.conversation.text.send`,
+						fbSendUrl,
+						{
+							method: "POST",
+							headers: fbHeaders,
+							body: JSON.stringify({
+								recipient: { id: recipientId },
+								messaging_type: message_tag ? "MESSAGE_TAG" : "RESPONSE",
+								...(message_tag && { tag: message_tag }),
+								message: msgPayload,
+							}),
+						},
+					);
 					if (!res.ok) return c.json({ success: false }, 200);
 					const json = (await res.json()) as { message_id?: string };
 					lastMessageId = json.message_id;
@@ -922,14 +975,18 @@ app.openapi(sendMessageRoute, async (c) => {
 				}
 
 				const recipientPhone = conversation.platformConversationId;
-				const replyAuthorization = await authorizeConversationReply(db, {
-					organizationId: orgId,
-					scopeKey: conversation.scopeKey,
-					conversationId: conversation.id,
-					accountId: account.id,
-					platform: "whatsapp",
-					recipientIdentifier: recipientPhone,
-				});
+				const replyAuthorization = await authorizeConversationReply(
+					db,
+					c.env.ENCRYPTION_KEY,
+					{
+						organizationId: orgId,
+						scopeKey: conversation.scopeKey,
+						conversationId: conversation.id,
+						accountId: account.id,
+						platform: "whatsapp",
+						recipientIdentifier: recipientPhone,
+					},
+				);
 				if (!replyAuthorization.authorized) {
 					return c.json(
 						{
@@ -984,7 +1041,9 @@ app.openapi(sendMessageRoute, async (c) => {
 					);
 				}
 
-				const waRes = await fetch(
+				const waRes = await trackedProviderFetch(
+					mutation,
+					"whatsapp.conversation.message.send",
 					`${GRAPH_BASE.facebook}/${phoneNumberId}/messages`,
 					{
 						method: "POST",
@@ -1042,7 +1101,12 @@ app.openapi(sendMessageRoute, async (c) => {
 				return c.json({ success: false }, 200);
 		}
 	} catch {
-		return c.json({ success: false }, 200);
+		// Once a provider has acknowledged the send, report acceptance even if
+		// response parsing or the local inbox projection fails. Returning false in
+		// that state invites the caller to retry and duplicate the real message.
+		return c.json({ success: mutation.hasCommittedEffect() }, 200);
+	} finally {
+		mutation.finalize();
 	}
 });
 
@@ -1082,6 +1146,9 @@ app.openapi(sendTypingRoute, async (c) => {
 	const { id: conversationId } = c.req.valid("param");
 	const { account_id } = c.req.valid("json");
 	const db = c.get("db");
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	const target = await resolveInboxTarget(db, {
 		conversationId,
@@ -1091,6 +1158,7 @@ app.openapi(sendTypingRoute, async (c) => {
 		encryptionKey: c.env.ENCRYPTION_KEY,
 	});
 	if (!target?.account.accessToken) {
+		mutation.finalize();
 		return c.json({ success: true }, 200); // best-effort
 	}
 	const account = target.account as typeof target.account & {
@@ -1122,7 +1190,9 @@ app.openapi(sendTypingRoute, async (c) => {
 				}
 				if (!recipientId) return c.json({ success: true }, 200);
 
-				await fetch(
+				await trackedProviderFetch(
+					mutation,
+					`${account.platform}.conversation.typing.send`,
 					`${GRAPH_BASE.facebook}/me/messages?access_token=${encodeURIComponent(account.accessToken)}`,
 					{
 						method: "POST",
@@ -1139,7 +1209,9 @@ app.openapi(sendTypingRoute, async (c) => {
 				if (!conversation.platformConversationId) break;
 
 				// Docs: https://core.telegram.org/bots/api#sendchataction
-				await fetch(
+				await trackedProviderFetch(
+					mutation,
+					"telegram.conversation.typing.send",
 					`https://api.telegram.org/bot${account.accessToken}/sendChatAction`,
 					{
 						method: "POST",
@@ -1157,6 +1229,8 @@ app.openapi(sendTypingRoute, async (c) => {
 		}
 	} catch {
 		// best-effort, swallow errors
+	} finally {
+		mutation.finalize();
 	}
 
 	return c.json({ success: true }, 200);
@@ -1203,6 +1277,9 @@ app.openapi(addReactionRoute, async (c) => {
 	const messageId = params.message_id;
 	const { account_id, emoji } = c.req.valid("json");
 	const db = c.get("db");
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	const target = await resolveInboxTarget(db, {
 		conversationId,
@@ -1213,6 +1290,7 @@ app.openapi(addReactionRoute, async (c) => {
 		encryptionKey: c.env.ENCRYPTION_KEY,
 	});
 	if (!target?.account.accessToken || !target.message) {
+		mutation.finalize();
 		return c.json({ success: false }, 200);
 	}
 	const account = target.account as typeof target.account & {
@@ -1228,7 +1306,9 @@ app.openapi(addReactionRoute, async (c) => {
 				}
 
 				// Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#reaction-messages
-				const waRes = await fetch(
+				const waRes = await trackedProviderFetch(
+					mutation,
+					"whatsapp.conversation.reaction.add",
 					`${GRAPH_BASE.facebook}/${account.platformAccountId}/messages`,
 					{
 						method: "POST",
@@ -1257,7 +1337,9 @@ app.openapi(addReactionRoute, async (c) => {
 				}
 
 				// Docs: https://core.telegram.org/bots/api#setmessagereaction
-				const tgRes = await fetch(
+				const tgRes = await trackedProviderFetch(
+					mutation,
+					"telegram.conversation.reaction.add",
 					`https://api.telegram.org/bot${account.accessToken}/setMessageReaction`,
 					{
 						method: "POST",
@@ -1283,6 +1365,8 @@ app.openapi(addReactionRoute, async (c) => {
 		}
 	} catch {
 		return c.json({ success: false }, 200);
+	} finally {
+		mutation.finalize();
 	}
 });
 
@@ -1320,6 +1404,9 @@ app.openapi(removeReactionRoute, async (c) => {
 	const messageId = params.message_id;
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	const target = await resolveInboxTarget(db, {
 		conversationId,
@@ -1330,6 +1417,7 @@ app.openapi(removeReactionRoute, async (c) => {
 		encryptionKey: c.env.ENCRYPTION_KEY,
 	});
 	if (!target?.account.accessToken || !target.message) {
+		mutation.finalize();
 		return c.json({ success: false }, 200);
 	}
 	const account = target.account as typeof target.account & {
@@ -1345,7 +1433,9 @@ app.openapi(removeReactionRoute, async (c) => {
 				}
 
 				// Send empty emoji to remove reaction
-				const waRes = await fetch(
+				const waRes = await trackedProviderFetch(
+					mutation,
+					"whatsapp.conversation.reaction.remove",
 					`${GRAPH_BASE.facebook}/${account.platformAccountId}/messages`,
 					{
 						method: "POST",
@@ -1374,7 +1464,9 @@ app.openapi(removeReactionRoute, async (c) => {
 				}
 
 				// Send empty reaction array to remove
-				const tgRes = await fetch(
+				const tgRes = await trackedProviderFetch(
+					mutation,
+					"telegram.conversation.reaction.remove",
 					`https://api.telegram.org/bot${account.accessToken}/setMessageReaction`,
 					{
 						method: "POST",
@@ -1400,6 +1492,8 @@ app.openapi(removeReactionRoute, async (c) => {
 		}
 	} catch {
 		return c.json({ success: false }, 200);
+	} finally {
+		mutation.finalize();
 	}
 });
 
@@ -1437,6 +1531,9 @@ app.openapi(deleteMessageRoute, async (c) => {
 	const messageId = params.message_id;
 	const { account_id } = c.req.valid("query");
 	const db = c.get("db");
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	const target = await resolveInboxTarget(db, {
 		conversationId,
@@ -1447,6 +1544,7 @@ app.openapi(deleteMessageRoute, async (c) => {
 		encryptionKey: c.env.ENCRYPTION_KEY,
 	});
 	if (!target?.account.accessToken || !target.message) {
+		mutation.finalize();
 		return c.json({ success: false }, 200);
 	}
 	const account = target.account as typeof target.account & {
@@ -1462,7 +1560,9 @@ app.openapi(deleteMessageRoute, async (c) => {
 				}
 
 				// Docs: https://core.telegram.org/bots/api#deletemessage
-				const tgRes = await fetch(
+				const tgRes = await trackedProviderFetch(
+					mutation,
+					"telegram.conversation.message.delete",
 					`https://api.telegram.org/bot${account.accessToken}/deleteMessage`,
 					{
 						method: "POST",
@@ -1482,7 +1582,9 @@ app.openapi(deleteMessageRoute, async (c) => {
 				}
 
 				// Docs: https://developer.x.com/en/docs/twitter-api/direct-messages/manage/api-reference
-				const twRes = await fetch(
+				const twRes = await trackedProviderFetch(
+					mutation,
+					"twitter.conversation.message.delete",
 					`https://api.x.com/2/dm_conversations/${conversation.platformConversationId}/dm_events/${msg.platformMessageId}`,
 					{
 						method: "DELETE",
@@ -1528,6 +1630,8 @@ app.openapi(deleteMessageRoute, async (c) => {
 		return c.json({ success: true }, 200);
 	} catch {
 		return c.json({ success: false }, 200);
+	} finally {
+		mutation.finalize();
 	}
 });
 
@@ -1682,7 +1786,7 @@ app.openapi(createNoteRoute, async (c) => {
 	const body = c.req.valid("json");
 	const actor = resolveInboxNoteActor({
 		principalType: c.get("principalType"),
-		principalId: c.get("principalId"),
+		principalId: c.get("principalUserId"),
 		keyId: c.get("keyId"),
 	});
 
@@ -1713,19 +1817,65 @@ app.openapi(createNoteRoute, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY as never, 403 as never);
 	}
 
-	const [row] = await db
-		.insert(inboxConversationNotes)
-		.values({
-			conversationId,
-			organizationId: orgId,
-			actorType: actor.actorType,
-			actorId: actor.actorId,
-			userId: actor.userId,
-			text: body.text,
-		})
-		.returning();
+	const noteWrite = await db.transaction(async (tx) => {
+		// Retention takes FOR UPDATE on the same conversation before deleting its
+		// notes. This weaker lock serializes note creation with final redaction,
+		// then lets us reject a writer that resumed after the content deadline.
+		const [lockedConversation] = await tx
+			.select({
+				id: inboxConversations.id,
+				contentRedactedAt: inboxConversations.contentRedactedAt,
+			})
+			.from(inboxConversations)
+			.where(
+				and(
+					eq(inboxConversations.id, conversationId),
+					eq(inboxConversations.organizationId, orgId),
+				),
+			)
+			.limit(1)
+			.for("key share");
+		if (!lockedConversation) return { kind: "missing" as const };
+		if (lockedConversation.contentRedactedAt) {
+			return { kind: "retention_elapsed" as const };
+		}
 
-	if (!row) {
+		const [row] = await tx
+			.insert(inboxConversationNotes)
+			.values({
+				conversationId,
+				organizationId: orgId,
+				actorType: actor.actorType,
+				actorId: actor.actorId,
+				userId: actor.userId,
+				text: body.text,
+			})
+			.returning();
+		return row
+			? { kind: "created" as const, row }
+			: { kind: "failed" as const };
+	});
+
+	if (noteWrite.kind === "missing") {
+		return c.json(
+			{
+				error: { code: "NOT_FOUND", message: "Conversation not found" },
+			} as never,
+			404 as never,
+		);
+	}
+	if (noteWrite.kind === "retention_elapsed") {
+		return c.json(
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message: "Conversation content retention has elapsed",
+				},
+			} as never,
+			400 as never,
+		);
+	}
+	if (noteWrite.kind === "failed") {
 		return c.json(
 			{
 				error: {
@@ -1736,6 +1886,7 @@ app.openapi(createNoteRoute, async (c) => {
 			500 as never,
 		);
 	}
+	const { row } = noteWrite;
 
 	const [author] = row.userId
 		? await db
@@ -1811,7 +1962,7 @@ app.openapi(updateNoteRoute, async (c) => {
 	const body = c.req.valid("json");
 	const actor = resolveInboxNoteActor({
 		principalType: c.get("principalType"),
-		principalId: c.get("principalId"),
+		principalId: c.get("principalUserId"),
 		keyId: c.get("keyId"),
 	});
 
@@ -1950,7 +2101,7 @@ app.openapi(deleteNoteRoute, async (c) => {
 	const { noteId } = c.req.valid("param");
 	const actor = resolveInboxNoteActor({
 		principalType: c.get("principalType"),
-		principalId: c.get("principalId"),
+		principalId: c.get("principalUserId"),
 		keyId: c.get("keyId"),
 	});
 

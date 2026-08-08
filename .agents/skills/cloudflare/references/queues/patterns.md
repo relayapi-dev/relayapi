@@ -92,6 +92,9 @@ export default {
         msg.ack();
       } catch (error) {
         console.error(`Failed after ${msg.attempts} attempts:`, error);
+        // A successful handler return would otherwise acknowledge this message.
+        // Explicit retries count toward max_retries and then route to the DLQ.
+        msg.retry({ delaySeconds: 60 });
       }
     }
   }

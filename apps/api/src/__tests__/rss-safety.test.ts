@@ -7,6 +7,7 @@ import {
 	parseFeed,
 	RSS_FEED_MAX_BYTES,
 } from "../services/feed-parser";
+import { isHostedAutoPostEligible } from "../services/rss-generator";
 import type { Env, Variables } from "../types";
 
 const originalFetch = globalThis.fetch;
@@ -190,5 +191,123 @@ describe("RSS pause fencing", () => {
 		expect(
 			source.match(/eq\(autoPostRules\.status, "active"\)/g)?.length ?? 0,
 		).toBeGreaterThanOrEqual(6);
+	});
+});
+
+describe("RSS hosted entitlement admission", () => {
+	const now = new Date("2026-08-02T12:00:00.000Z");
+	const stripeAuthority = {
+		status: "active" as const,
+		source: "stripe" as const,
+		stripeSubscriptionId: "sub_stripe_1",
+		trialEndsAt: null,
+		delinquentAt: null,
+		graceEndsAt: null,
+	};
+
+	it("admits only an authoritative hosted Pro agreement", () => {
+		expect(isHostedAutoPostEligible(stripeAuthority, now)).toBe(true);
+		expect(
+			isHostedAutoPostEligible(
+				{ ...stripeAuthority, stripeSubscriptionId: null },
+				now,
+			),
+		).toBe(false);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "cancelled",
+					stripeSubscriptionId: null,
+				},
+				now,
+			),
+		).toBe(false);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					source: "complimentary",
+					stripeSubscriptionId: null,
+				},
+				now,
+			),
+		).toBe(true);
+	});
+
+	it("uses exact trial and past-due grace boundaries", () => {
+		const delinquentAt = new Date("2026-07-19T12:00:00.000Z");
+		const graceEndsAt = new Date("2026-08-02T13:00:00.000Z");
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "past_due",
+					delinquentAt,
+					graceEndsAt,
+				},
+				now,
+			),
+		).toBe(true);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "past_due",
+					delinquentAt,
+					graceEndsAt: now,
+				},
+				now,
+			),
+		).toBe(false);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "trialing",
+					trialEndsAt: new Date("2026-08-02T12:00:00.001Z"),
+				},
+				now,
+			),
+		).toBe(true);
+		expect(
+			isHostedAutoPostEligible(
+				{ ...stripeAuthority, status: "trialing", trialEndsAt: now },
+				now,
+			),
+		).toBe(false);
+	});
+
+	it("filters ineligible tenants before LIMIT and rechecks under lock", async () => {
+		const source = await Bun.file(
+			new URL("../services/rss-generator.ts", import.meta.url),
+		).text();
+		const claimStart = source.indexOf("async function claimDueRules");
+		const eligibilityInClaim = source.indexOf(
+			"...(hostedEligibility ? [hostedEligibility] : [])",
+			claimStart,
+		);
+		const claimLimit = source.indexOf(".limit(10)", claimStart);
+		expect(eligibilityInClaim).toBeGreaterThan(claimStart);
+		expect(eligibilityInClaim).toBeLessThan(claimLimit);
+
+		const itemLoop = source.indexOf("for (const entry of candidates)");
+		const authorityLock = source.indexOf(
+			"lockOrganizationSubscription(",
+			itemLoop,
+		);
+		const entitlementRecheck = source.indexOf(
+			"isHostedAutoPostEligible(subscription, new Date())",
+			authorityLock,
+		);
+		const postInsert = source.indexOf(".insert(posts)", itemLoop);
+		const outboxInsert = source.indexOf(".insert(publishOutbox)", itemLoop);
+		expect(authorityLock).toBeGreaterThan(itemLoop);
+		expect(entitlementRecheck).toBeGreaterThan(authorityLock);
+		expect(entitlementRecheck).toBeLessThan(postInsert);
+		expect(entitlementRecheck).toBeLessThan(outboxInsert);
+		expect(source.slice(authorityLock, entitlementRecheck)).toContain(
+			'"share"',
+		);
 	});
 });

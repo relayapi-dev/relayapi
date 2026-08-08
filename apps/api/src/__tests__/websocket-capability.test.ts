@@ -13,7 +13,9 @@ mock.module("../services/one-time-capability", () => ({
 }));
 const dbColumn = (name: string) => ({ name });
 mock.module("@relayapi/db", () => ({
+	SOCIAL_PLATFORM_IDS: ["twitter", "facebook"],
 	createDb: () => ({}),
+	LEGACY_CREDENTIAL_VERSION: "legacy-v1",
 	ORGANIZATION_SCOPE_KEY: "org",
 	apikey: {
 		id: dbColumn("id"),
@@ -28,6 +30,32 @@ mock.module("@relayapi/db", () => ({
 		id: dbColumn("id"),
 		userId: dbColumn("userId"),
 		organizationId: dbColumn("organizationId"),
+	},
+	session: {
+		id: dbColumn("id"),
+		userId: dbColumn("userId"),
+		activeOrganizationId: dbColumn("activeOrganizationId"),
+		impersonatedBy: dbColumn("impersonatedBy"),
+		expiresAt: dbColumn("expiresAt"),
+	},
+	user: {
+		id: dbColumn("id"),
+		banned: dbColumn("banned"),
+		banExpires: dbColumn("banExpires"),
+		credentialVersion: dbColumn("credentialVersion"),
+	},
+	organizationPrincipals: {
+		id: dbColumn("id"),
+		organizationId: dbColumn("organizationId"),
+		kind: dbColumn("kind"),
+		memberId: dbColumn("memberId"),
+		scopeMode: dbColumn("scopeMode"),
+		lifecycleStatus: dbColumn("lifecycleStatus"),
+	},
+	principalWorkspaceGrants: {
+		principalId: dbColumn("principalId"),
+		organizationId: dbColumn("organizationId"),
+		workspaceId: dbColumn("workspaceId"),
 	},
 	organization: {
 		id: dbColumn("id"),

@@ -9,27 +9,34 @@ import {
 	ideaActivity,
 	ideas,
 	media as mediaTable,
+	ORGANIZATION_SCOPE_KEY,
 	postRecyclingConfigs,
 	posts,
+	postTags,
 	postTargets,
 	publishOutbox,
 	shortLinkConfigs,
 	shortLinks,
 	signatures,
 	socialAccounts,
+	tags,
 	threadExecutions,
 } from "@relayapi/db";
 import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountToken } from "../lib/account-token-crypto";
-import { maybeDecrypt } from "../lib/crypto";
 import { parseCsv } from "../lib/csv-parser";
 import { mediaPublicHost } from "../lib/deployment-mode";
 import {
 	getLinkedInRestHeaders,
 	LINKEDIN_REST_BASE,
 } from "../lib/linkedin-rest";
+import {
+	isDefinitiveProviderMutationRejection,
+	SingleUnitProviderMutationAggregate,
+	trackSingleUnitProviderMutation,
+} from "../lib/mutation-provider-boundary";
 import { notifyRealtime } from "../lib/notify-post-update";
 import {
 	decodeTimestampIdCursor,
@@ -54,6 +61,10 @@ import {
 	WORKSPACE_ACCESS_DENIED_BODY,
 	workspaceScopeSqlCondition,
 } from "../lib/workspace-scope";
+import {
+	markMutationInputNotApplied,
+	multipartMutationInputPreflight,
+} from "../middleware/mutation-validation";
 import { addToPlaylist } from "../publishers/youtube";
 import {
 	ErrorResponse,
@@ -66,6 +77,9 @@ import {
 	CreatePostBody,
 	PostListResponse,
 	PostResponse,
+	PostTagListQuery,
+	PostTagListResponse,
+	PostTagParams,
 	PostTimelineResponse,
 	RecyclingConfigResponse,
 	RecyclingInput,
@@ -73,6 +87,7 @@ import {
 	UpdateMetadataResponse,
 	UpdatePostBody,
 } from "../schemas/posts";
+import { TagResponse } from "../schemas/tags";
 import { chooseCrossPostSourceTarget } from "../services/cross-post-processor";
 import {
 	lockProviderReconciliationScope,
@@ -86,10 +101,12 @@ import {
 	computeNextRecycleAt,
 	validateRecyclingConfig,
 } from "../services/recycling-validator";
+import { resolveExternalShortLinkProvider } from "../services/short-link-configuration";
 import {
-	getProvider,
-	type ShortLinkProvider,
-} from "../services/short-link-providers";
+	createTrackedExternalShortLink,
+	type ExternalShortLinkProviderType,
+} from "../services/short-link-lifecycle";
+import { createRelayApiProvider } from "../services/short-link-providers";
 import { shortenUrlsInContent } from "../services/short-link-service";
 import { resolveTargets } from "../services/target-resolver";
 import { refreshTokenIfNeeded } from "../services/token-refresh-coordinator";
@@ -115,6 +132,18 @@ type PostResponseBody = z.infer<typeof PostResponse>;
 type PostTargetAccount = NonNullable<
 	PostResponseBody["targets"][string]["accounts"]
 >[number];
+
+function serializePostTag(
+	row: typeof tags.$inferSelect,
+): z.infer<typeof TagResponse> {
+	return {
+		id: row.id,
+		name: row.name,
+		color: row.color,
+		workspace_id: row.workspaceId,
+		created_at: row.createdAt.toISOString(),
+	};
+}
 
 function responseMediaType(value: string | null): MediaItem["type"] {
 	return value === "image" ||
@@ -1656,6 +1685,7 @@ app.openapi(createPostRoute, async (c) => {
 	);
 	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
 	if (mediaViolation) {
+		markMutationInputNotApplied(c);
 		return c.json(mediaPolicyError(mediaViolation), 400 as never);
 	}
 
@@ -1677,7 +1707,10 @@ app.openapi(createPostRoute, async (c) => {
 		targetResolution.workspaceIds,
 		"post",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) {
+		markMutationInputNotApplied(c);
+		return scope.response as never;
+	}
 	const workspaceId = scope.workspaceId;
 	const { resolved, failed } = targetResolution;
 	const noResolved = resolved.length === 0;
@@ -1699,6 +1732,7 @@ app.openapi(createPostRoute, async (c) => {
 			strategy: "smart",
 		});
 		if (!slot) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1813,6 +1847,7 @@ app.openapi(createPostRoute, async (c) => {
 		original: string;
 		short: string;
 		provider: string;
+		shortLinkId?: string;
 	}> = [];
 
 	if (finalContent && !isDraft && c.get("plan") === "pro") {
@@ -1829,40 +1864,82 @@ app.openapi(createPostRoute, async (c) => {
 				shouldShorten = true;
 
 			if (shouldShorten && slConfig?.provider) {
-				let provider: ShortLinkProvider | null | undefined;
-				let apiKey: string | null = null;
-
 				if (slConfig.provider === "relayapi") {
-					const { createRelayApiProvider } = await import(
-						"../services/short-link-providers/relayapi"
-					);
-					const baseUrl = c.env.API_BASE_URL || "https://api.relayapi.dev";
-					provider = createRelayApiProvider({
+					const baseUrl =
+						c.env.PUBLIC_LINK_BASE_URL ||
+						c.env.API_BASE_URL ||
+						"https://api.relayapi.dev";
+					const provider = createRelayApiProvider({
 						db,
 						kv: c.env.KV,
 						baseUrl,
 						organizationId: orgId,
 						workspaceId,
+						providerConfigVersion: slConfig.providerConfigVersion,
 					});
-					apiKey = "builtin"; // not used by relayapi provider
-				} else if (slConfig.apiKey) {
-					provider = getProvider(
-						slConfig.provider as "dub" | "short_io" | "bitly",
-					);
-					apiKey = await maybeDecrypt(slConfig.apiKey, c.env.ENCRYPTION_KEY);
-				}
-
-				if (provider && apiKey) {
 					const result = await shortenUrlsInContent(
-						provider,
-						apiKey,
+						provider.shortLinkDomain,
 						slConfig.domain,
 						finalContent,
+						async (url) => {
+							const created = await provider.shorten(
+								"builtin",
+								slConfig.domain,
+								url,
+								crypto.randomUUID(),
+							);
+							return { shortUrl: created.shortUrl };
+						},
 					);
 					finalContent = result.content;
 					shortenedUrls = result.shortenedUrls.map((url) => ({
 						...url,
-						provider: slConfig.provider ?? "relayapi",
+						provider: "relayapi",
+					}));
+				} else if (slConfig.credentialVersion) {
+					const resolvedProvider = await resolveExternalShortLinkProvider({
+						db,
+						organizationId: orgId,
+						provider: slConfig.provider as ExternalShortLinkProviderType,
+						credentialVersion: slConfig.credentialVersion,
+						encryptionKey: c.env.ENCRYPTION_KEY,
+					});
+					if (!resolvedProvider) {
+						throw new Error(
+							"Short-link provider credential version is unavailable",
+						);
+					}
+					const result = await shortenUrlsInContent(
+						resolvedProvider.provider.shortLinkDomain,
+						slConfig.domain,
+						finalContent,
+						async (url) => {
+							const created = await createTrackedExternalShortLink({
+								db,
+								organizationId: orgId,
+								workspaceId,
+								originalUrl: url,
+								providerType:
+									slConfig.provider as ExternalShortLinkProviderType,
+								providerConfigVersion: slConfig.providerConfigVersion,
+								credentialVersion: slConfig.credentialVersion as number,
+								domain: slConfig.domain,
+								apiKey: resolvedProvider.apiKey,
+								provider: resolvedProvider.provider,
+							});
+							if (!created.shortUrl) {
+								throw new Error("Short-link provider returned no active URL");
+							}
+							return {
+								shortUrl: created.shortUrl,
+								shortLinkId: created.id,
+							};
+						},
+					);
+					finalContent = result.content;
+					shortenedUrls = result.shortenedUrls.map((url) => ({
+						...url,
+						provider: slConfig.provider as ExternalShortLinkProviderType,
 					}));
 				}
 			}
@@ -1927,7 +2004,9 @@ app.openapi(createPostRoute, async (c) => {
 							link.short,
 					);
 				const externalLinks = shortenedUrls.filter(
-					(link) => link.provider !== "relayapi",
+					(link) =>
+						link.provider !== "relayapi" &&
+						typeof link.shortLinkId === "string",
 				);
 
 				if (relayApiCodes.length > 0) {
@@ -1945,19 +2024,20 @@ app.openapi(createPostRoute, async (c) => {
 				}
 
 				if (externalLinks.length > 0) {
-					await tx.insert(shortLinks).values(
-						externalLinks.map((sl) => ({
-							organizationId: orgId,
-							workspaceId: txPost.workspaceId,
-							originalUrl: sl.original,
-							provider: sl.provider,
-							shortCode:
-								new URL(sl.short).pathname.split("/").filter(Boolean).at(-1) ??
-								sl.short,
-							shortUrl: sl.short,
-							postId: txPost.id,
-						})),
-					);
+					await tx
+						.update(shortLinks)
+						.set({ postId: txPost.id })
+						.where(
+							and(
+								eq(shortLinks.organizationId, orgId),
+								eq(shortLinks.scopeKey, workspaceScopeKey(txPost.workspaceId)),
+								inArray(
+									shortLinks.id,
+									externalLinks.map((link) => link.shortLinkId as string),
+								),
+								eq(shortLinks.creationStatus, "active"),
+							),
+						);
 				}
 			}
 
@@ -2147,6 +2227,9 @@ app.openapi(createPostRoute, async (c) => {
 						} as TxEarlyReturn;
 					}
 					const id = generateId("cpa_");
+					const scheduledFor = new Date(
+						publishDate.getTime() + action.delay_minutes * 60 * 1000,
+					);
 					return {
 						id,
 						operationId: `cross-post:${id}`,
@@ -2160,9 +2243,8 @@ app.openapi(createPostRoute, async (c) => {
 						targetPlatform: targetAccount.platform,
 						content: action.content ?? null,
 						delayMinutes: action.delay_minutes,
-						executeAt: new Date(
-							publishDate.getTime() + action.delay_minutes * 60 * 1000,
-						),
+						scheduledFor,
+						nextAttemptAt: scheduledFor,
 					};
 				});
 				await tx.insert(crossPostActions).values(actionValues);
@@ -2213,19 +2295,23 @@ app.openapi(createPostRoute, async (c) => {
 	// --- Update idea reference if created from an idea ---
 	if (ideaSource) {
 		const ideaSourceId = ideaSource.id;
+		const attributionPrincipalId = c.get("principalId");
 		c.executionCtx.waitUntil(
-			(async () => {
-				await db
+			db.transaction(async (tx) => {
+				await tx
 					.update(ideas)
 					.set({ convertedToPostId: post.id, updatedAt: new Date() })
-					.where(eq(ideas.id, ideaSourceId));
-				await db.insert(ideaActivity).values({
+					.where(
+						and(eq(ideas.id, ideaSourceId), eq(ideas.organizationId, orgId)),
+					);
+				await tx.insert(ideaActivity).values({
 					ideaId: ideaSourceId,
-					actorId: c.get("keyId"),
+					organizationId: orgId,
+					actorPrincipalId: attributionPrincipalId,
 					action: "converted",
 					metadata: { post_id: post.id },
 				});
-			})(),
+			}),
 		);
 	}
 
@@ -2476,6 +2562,7 @@ app.openapi(updatePostRoute, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -2483,9 +2570,13 @@ app.openapi(updatePostRoute, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied as never;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied as never;
+	}
 
 	if (!["draft", "scheduled", "failed"].includes(post.status)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2504,6 +2595,7 @@ app.openapi(updatePostRoute, async (c) => {
 	);
 	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
 	if (mediaViolation) {
+		markMutationInputNotApplied(c);
 		return c.json(mediaPolicyError(mediaViolation), 400 as never);
 	}
 
@@ -2556,6 +2648,7 @@ app.openapi(updatePostRoute, async (c) => {
 				strategy: "smart",
 			});
 			if (!slot) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -2600,6 +2693,7 @@ app.openapi(updatePostRoute, async (c) => {
 		// leave the post with zero targets (it would publish to nothing, or get stuck).
 		// Reject with NO_VALID_TARGETS, mirroring createThread.
 		if (resolved.length === 0) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -2684,6 +2778,31 @@ app.openapi(updatePostRoute, async (c) => {
 				}),
 			);
 		}
+
+		// Re-anchor never-attempted actions atomically with the post schedule.
+		// Provider/readiness retries update only nextAttemptAt later, preserving
+		// scheduledFor as the product schedule that was actually requested.
+		if (body.scheduled_at !== undefined && body.scheduled_at !== "draft") {
+			const anchor =
+				txUpdated.status === "publishing"
+					? txUpdated.updatedAt
+					: txUpdated.scheduledAt;
+			if (anchor) {
+				await tx
+					.update(crossPostActions)
+					.set({
+						scheduledFor: sql`${anchor.toISOString()}::timestamptz + (${crossPostActions.delayMinutes} * interval '1 minute')`,
+						nextAttemptAt: sql`${anchor.toISOString()}::timestamptz + (${crossPostActions.delayMinutes} * interval '1 minute')`,
+					})
+					.where(
+						and(
+							eq(crossPostActions.postId, id),
+							eq(crossPostActions.status, "pending"),
+						),
+					);
+			}
+		}
+
 		const webhook = scheduleOccurrenceId
 			? await persistWebhookEventInTransaction(
 					tx,
@@ -2721,33 +2840,6 @@ app.openapi(updatePostRoute, async (c) => {
 		c.executionCtx.waitUntil(
 			enqueuePersistedWebhookEvent(c.env, db, updatedScheduledWebhook),
 		);
-	}
-
-	// Re-anchor pending cross-post actions when the schedule moves. Their executeAt is
-	// computed from the post's scheduledAt at creation; if the post is rescheduled (or
-	// moved to "now"/"draft") the actions otherwise fire at the stale time or fail
-	// terminally ("No published post target found") before the post ever publishes.
-	if (body.scheduled_at !== undefined && body.scheduled_at !== "draft") {
-		// Anchor = the post's new publish time. For "now"/"publishing" use now().
-		const anchor =
-			updates.status === "publishing"
-				? new Date()
-				: ((updates.scheduledAt as Date | null | undefined) ?? null);
-		if (anchor) {
-			c.executionCtx.waitUntil(
-				db
-					.update(crossPostActions)
-					.set({
-						executeAt: sql`${anchor.toISOString()}::timestamptz + (${crossPostActions.delayMinutes} * interval '1 minute')`,
-					})
-					.where(
-						and(
-							eq(crossPostActions.postId, id),
-							eq(crossPostActions.status, "pending"),
-						),
-					),
-			);
-		}
 	}
 
 	// Enqueue for publishing if status changed to "publishing". Usage is billed by
@@ -2849,6 +2941,7 @@ app.openapi(deletePost, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -2856,7 +2949,10 @@ app.openapi(deletePost, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	// Once provider execution has started, retain the durable attempts and result
 	// graph for reconciliation/audit. A draft or never-attempted schedule can be
@@ -2865,6 +2961,7 @@ app.openapi(deletePost, async (c) => {
 		!(["draft", "scheduled"] as string[]).includes(post.status) ||
 		post.publishAttempts > 0
 	) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2889,6 +2986,7 @@ app.openapi(deletePost, async (c) => {
 		)
 		.returning({ id: posts.id });
 	if (deleted.length === 0) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2920,6 +3018,7 @@ app.openapi(retryPost, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -2927,9 +3026,13 @@ app.openapi(retryPost, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied as never;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied as never;
+	}
 
 	if (!["failed", "partial"].includes(post.status)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3480,6 +3583,33 @@ app.openapi(reconcilePublishTarget, async (c) => {
 // Bulk create
 // ---------------------------------------------------------------------------
 
+async function bulkItemErrorFromResponse(response: Response): Promise<{
+	code: string;
+	message: string;
+}> {
+	try {
+		const payload = (await response.json()) as {
+			error?: { code?: unknown; message?: unknown };
+		};
+		if (
+			typeof payload.error?.code === "string" &&
+			typeof payload.error.message === "string"
+		) {
+			return {
+				code: payload.error.code,
+				message: payload.error.message,
+			};
+		}
+	} catch {
+		// Fall through to a stable per-item error. The synthesized response is
+		// internal and should always carry the standard error envelope.
+	}
+	return {
+		code: "WORKSPACE_ACCESS_DENIED",
+		message: "The post could not be authorized for the requested workspace.",
+	};
+}
+
 // @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(bulkCreatePosts, async (c) => {
 	const orgId = c.get("orgId");
@@ -3540,7 +3670,14 @@ app.openapi(bulkCreatePosts, async (c) => {
 				targetResolution.workspaceIds,
 				"post",
 			);
-			if (!itemScope.ok) return itemScope.response as never;
+			if (!itemScope.ok) {
+				results.push({
+					status: "error",
+					error: await bulkItemErrorFromResponse(itemScope.response),
+				});
+				failed++;
+				continue;
+			}
 			const workspaceId = itemScope.workspaceId;
 			const { resolved, failed: _failedTargets } = targetResolution;
 
@@ -3710,6 +3847,7 @@ app.openapi(unpublishPost, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -3720,9 +3858,13 @@ app.openapi(unpublishPost, async (c) => {
 	// and flips the post status, so a workspace-scoped key must not be able to unpublish
 	// a post in another workspace of the same org. Mirrors every other post mutation.
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	if (!["published", "partial"].includes(post.status)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3796,6 +3938,9 @@ app.openapi(unpublishPost, async (c) => {
 
 	// Delete from all platforms in parallel
 	const FETCH_TIMEOUT = 10_000;
+	const unpublishMutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 	const deleteResults = await Promise.allSettled(
 		publishedTargets
 			.filter((t) => t.platformPostId)
@@ -3803,6 +3948,7 @@ app.openapi(unpublishPost, async (c) => {
 				const account = accountMap.get(target.socialAccountId);
 				if (!account?.accessToken)
 					return { targetId: target.id, success: false };
+				const accessToken = account.accessToken;
 				if (!target.platformPostId)
 					return { targetId: target.id, success: false };
 				const platformPostId = target.platformPostId;
@@ -3813,13 +3959,17 @@ app.openapi(unpublishPost, async (c) => {
 					switch (target.platform) {
 						case "twitter":
 							deleteSuccess = (
-								await fetch(
-									`https://api.twitter.com/2/tweets/${target.platformPostId}`,
-									{
-										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
-										signal,
-									},
+								await unpublishMutation.track("twitter.post.delete", () =>
+									fetch(
+										`https://api.twitter.com/2/tweets/${target.platformPostId}`,
+										{
+											method: "DELETE",
+											headers: {
+												Authorization: `Bearer ${account.accessToken}`,
+											},
+											signal,
+										},
+									),
 								)
 							).ok;
 							break;
@@ -3827,11 +3977,13 @@ app.openapi(unpublishPost, async (c) => {
 						// Docs: https://developers.facebook.com/docs/graph-api/reference/post/#deleting
 						case "facebook":
 							deleteSuccess = (
-								await fetch(`${GRAPH_BASE.facebook}/${target.platformPostId}`, {
-									method: "DELETE",
-									headers: { Authorization: `Bearer ${account.accessToken}` },
-									signal,
-								})
+								await unpublishMutation.track("facebook.post.delete", () =>
+									fetch(`${GRAPH_BASE.facebook}/${target.platformPostId}`, {
+										method: "DELETE",
+										headers: { Authorization: `Bearer ${account.accessToken}` },
+										signal,
+									}),
+								)
 							).ok;
 							break;
 						// Instagram Graph API: DELETE an IG Media object
@@ -3842,52 +3994,64 @@ app.openapi(unpublishPost, async (c) => {
 								? "graph.instagram.com"
 								: "graph.facebook.com";
 							deleteSuccess = (
-								await fetch(
-									`https://${igHost}/${API_VERSIONS.meta_graph}/${target.platformPostId}`,
-									{
-										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
-										signal,
-									},
+								await unpublishMutation.track("instagram.post.delete", () =>
+									fetch(
+										`https://${igHost}/${API_VERSIONS.meta_graph}/${target.platformPostId}`,
+										{
+											method: "DELETE",
+											headers: {
+												Authorization: `Bearer ${account.accessToken}`,
+											},
+											signal,
+										},
+									),
 								)
 							).ok;
 							break;
 						}
 						case "linkedin":
 							deleteSuccess = (
-								await fetch(
-									`${LINKEDIN_REST_BASE}/posts/${encodeURIComponent(platformPostId)}`,
-									{
-										method: "DELETE",
-										headers: getLinkedInRestHeaders(account.accessToken),
-										signal,
-									},
+								await unpublishMutation.track("linkedin.post.delete", () =>
+									fetch(
+										`${LINKEDIN_REST_BASE}/posts/${encodeURIComponent(platformPostId)}`,
+										{
+											method: "DELETE",
+											headers: getLinkedInRestHeaders(accessToken),
+											signal,
+										},
+									),
 								)
 							).ok;
 							break;
 						case "reddit":
 							deleteSuccess = (
-								await fetch("https://oauth.reddit.com/api/del", {
-									method: "POST",
-									headers: {
-										Authorization: `Bearer ${account.accessToken}`,
-										"Content-Type": "application/x-www-form-urlencoded",
-										"User-Agent": "RelayAPI/1.0",
-									},
-									body: `id=${target.platformPostId}`,
-									signal,
-								})
+								await unpublishMutation.track("reddit.post.delete", () =>
+									fetch("https://oauth.reddit.com/api/del", {
+										method: "POST",
+										headers: {
+											Authorization: `Bearer ${account.accessToken}`,
+											"Content-Type": "application/x-www-form-urlencoded",
+											"User-Agent": "RelayAPI/1.0",
+										},
+										body: `id=${target.platformPostId}`,
+										signal,
+									}),
+								)
 							).ok;
 							break;
 						case "pinterest":
 							deleteSuccess = (
-								await fetch(
-									`https://api.pinterest.com/v5/pins/${target.platformPostId}`,
-									{
-										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
-										signal,
-									},
+								await unpublishMutation.track("pinterest.post.delete", () =>
+									fetch(
+										`https://api.pinterest.com/v5/pins/${target.platformPostId}`,
+										{
+											method: "DELETE",
+											headers: {
+												Authorization: `Bearer ${account.accessToken}`,
+											},
+											signal,
+										},
+									),
 								)
 							).ok;
 							break;
@@ -3907,6 +4071,7 @@ app.openapi(unpublishPost, async (c) => {
 	const updatePromises: Promise<unknown>[] = [];
 	const processedTargetIds = new Set<string>();
 	let anySuccessfullyRemoved = false;
+	let hasLocalUnpublishEffect = false;
 
 	for (const result of deleteResults) {
 		const val =
@@ -3938,6 +4103,7 @@ app.openapi(unpublishPost, async (c) => {
 	for (const target of publishedTargets) {
 		if (!processedTargetIds.has(target.id)) {
 			anySuccessfullyRemoved = true;
+			hasLocalUnpublishEffect = true;
 			updatePromises.push(
 				db
 					.update(postTargets)
@@ -3948,6 +4114,8 @@ app.openapi(unpublishPost, async (c) => {
 	}
 
 	await Promise.all(updatePromises);
+	if (hasLocalUnpublishEffect) unpublishMutation.markCommitted();
+	unpublishMutation.finalize();
 
 	// Re-fetch all targets and derive the post status from the ACTUAL outcome rather
 	// than hardcoding "draft". If any target is still "published" (a subset was filtered
@@ -4126,6 +4294,7 @@ app.openapi(updateMetadata, async (c) => {
 	if (id === "_") {
 		// Direct mode: video_id + account_id required
 		if (!body.video_id || !body.account_id) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -4160,6 +4329,7 @@ app.openapi(updateMetadata, async (c) => {
 
 		const target = targets[0];
 		if (!target?.platformPostId) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -4193,6 +4363,7 @@ app.openapi(updateMetadata, async (c) => {
 		.limit(1);
 
 	if (!account?.accessToken) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4205,7 +4376,10 @@ app.openapi(updateMetadata, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const token = await decryptAccountToken(
 		account.accessToken,
@@ -4214,6 +4388,7 @@ app.openapi(updateMetadata, async (c) => {
 		"access_token",
 	);
 	if (!token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4232,6 +4407,7 @@ app.openapi(updateMetadata, async (c) => {
 	);
 
 	if (!listRes.ok) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4260,6 +4436,7 @@ app.openapi(updateMetadata, async (c) => {
 
 	const video = listData.items?.[0];
 	if (!video) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4302,6 +4479,7 @@ app.openapi(updateMetadata, async (c) => {
 	}
 
 	if (updatedFields.length === 0 && !body.playlist_id) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4314,22 +4492,30 @@ app.openapi(updateMetadata, async (c) => {
 		);
 	}
 
-	// Call YouTube Data API v3 videos.update (only if metadata fields changed)
+	let providerMutationCommitted = false;
+	// Call YouTube Data API v3 videos.update (only if metadata fields changed).
+	// The boundary records the provider response before later parsing/error
+	// projection can obscure whether YouTube accepted the mutation.
 	if (updatedFields.length > 0) {
-		const updateRes = await fetch(
-			"https://www.googleapis.com/youtube/v3/videos?part=snippet,status",
-			{
-				method: "PUT",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					id: videoId,
-					snippet,
-					status,
-				}),
-			},
+		const updateRes = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"youtube.video.metadata.update",
+			() =>
+				fetch(
+					"https://www.googleapis.com/youtube/v3/videos?part=snippet,status",
+					{
+						method: "PUT",
+						headers: {
+							Authorization: `Bearer ${token}`,
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							id: videoId,
+							snippet,
+							status,
+						}),
+					},
+				),
 		);
 
 		if (!updateRes.ok) {
@@ -4344,17 +4530,48 @@ app.openapi(updateMetadata, async (c) => {
 				400,
 			);
 		}
+		providerMutationCommitted = true;
 	}
 
 	// Add to playlist if requested
 	if (body.playlist_id) {
+		const tracker = c.get("mutationEffectTracker");
+		const attempt = tracker?.begin("youtube.playlist.item.create");
 		try {
 			await addToPlaylist({ access_token: token }, body.playlist_id, videoId);
+			attempt?.committed();
+			tracker?.setAuthoritativeOutcome({ kind: "committed", units: 1 });
+			providerMutationCommitted = true;
 			updatedFields.push("playlist_id");
 		} catch (err) {
-			console.warn(
-				`Failed to add video ${videoId} to playlist ${body.playlist_id}:`,
-				err,
+			const statusCode =
+				typeof err === "object" &&
+				err !== null &&
+				"statusCode" in err &&
+				typeof err.statusCode === "number"
+					? err.statusCode
+					: null;
+			const definitive =
+				statusCode !== null &&
+				isDefinitiveProviderMutationRejection(statusCode);
+			if (definitive) attempt?.notApplied();
+			else attempt?.unknown();
+			if (!providerMutationCommitted) {
+				tracker?.setAuthoritativeOutcome(
+					definitive ? { kind: "not_applied" } : { kind: "unknown" },
+				);
+			}
+			return c.json(
+				{
+					error: {
+						code: "YOUTUBE_API_ERROR",
+						message:
+							err instanceof Error
+								? err.message
+								: "Failed to add video to playlist.",
+					},
+				},
+				502 as never,
 			);
 		}
 	}
@@ -4385,6 +4602,7 @@ const bulkCsvUpload = createRoute({
 		"CSV columns: content, targets (semicolon-separated), scheduled_at, media_urls (semicolon-separated), timezone, target_options (JSON string). " +
 		"Max 500 rows, max 1 MB file size.",
 	security: [{ Bearer: [] }],
+	middleware: multipartMutationInputPreflight,
 	request: {
 		query: z.object({
 			dry_run: z
@@ -4439,6 +4657,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	try {
 		formData = await c.req.formData();
 	} catch {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4452,6 +4671,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 	const file = formData.get("file");
 	if (!file || !(file instanceof File)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4467,6 +4687,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	// --- Validate file ---
 	const MAX_FILE_SIZE = 1_048_576; // 1 MB
 	if (file.size > MAX_FILE_SIZE) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4480,6 +4701,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 	const csvText = await file.text();
 	if (!csvText.trim()) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: { code: "BAD_REQUEST", message: "CSV file is empty." },
@@ -4492,6 +4714,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	const rows = parseCsv(csvText);
 
 	if (rows.length === 0) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4505,6 +4728,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 	const MAX_ROWS = 500;
 	if (rows.length > MAX_ROWS) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4519,6 +4743,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	// --- Validate required columns ---
 	const firstRow = rows[0];
 	if (!firstRow || !("targets" in firstRow) || !("scheduled_at" in firstRow)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4707,7 +4932,15 @@ app.openapi(bulkCsvUpload, async (c) => {
 				targetResolution.workspaceIds,
 				"post",
 			);
-			if (!rowScope.ok) return rowScope.response as never;
+			if (!rowScope.ok) {
+				results.push({
+					row: rowNum,
+					status: "error",
+					error: await bulkItemErrorFromResponse(rowScope.response),
+				});
+				failed++;
+				continue;
+			}
 			const resolvedWorkspaceId = rowScope.workspaceId;
 			const { resolved, failed: failedTargets } = targetResolution;
 
@@ -5079,7 +5312,8 @@ app.openapi(deleteRecyclingConfig, async (c) => {
 				eq(postRecyclingConfigs.sourcePostId, id),
 				eq(postRecyclingConfigs.organizationId, orgId),
 			),
-		);
+		)
+		.returning({ id: postRecyclingConfigs.id });
 
 	return c.body(null, 204);
 });
@@ -5140,6 +5374,245 @@ app.openapi(listRecycledCopies, async (c) => {
 		},
 		200,
 	);
+});
+
+// --- Post Tags ---
+
+const listPostTags = createRoute({
+	operationId: "listPostTags",
+	method: "get",
+	path: "/{id}/tags",
+	tags: ["Posts"],
+	summary: "List tags attached to a post",
+	security: [{ Bearer: [] }],
+	request: { params: IdParam, query: PostTagListQuery },
+	responses: {
+		200: {
+			description: "Attached tags",
+			content: { "application/json": { schema: PostTagListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(listPostTags, async (c) => {
+	const organizationId = c.get("orgId");
+	const { id } = c.req.valid("param");
+	const { cursor, limit } = c.req.valid("query");
+	const db = c.get("db");
+	let decodedCursor: TimestampIdCursor | null = null;
+	if (cursor) {
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+	}
+
+	const [post] = await db
+		.select({ id: posts.id, workspaceId: posts.workspaceId })
+		.from(posts)
+		.where(and(eq(posts.id, id), eq(posts.organizationId, organizationId)))
+		.limit(1);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
+
+	const conditions = [
+		eq(postTags.organizationId, organizationId),
+		eq(postTags.postId, id),
+	];
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${tags.createdAt}, ${tags.id})
+				< (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
+	}
+	const rows = await db
+		.select({
+			tag: tags,
+			cursorTimestamp: sql<string>`to_char(${tags.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
+		.from(postTags)
+		.innerJoin(
+			tags,
+			and(
+				eq(tags.id, postTags.tagId),
+				eq(tags.organizationId, postTags.organizationId),
+				eq(tags.scopeKey, postTags.tagScopeKey),
+			),
+		)
+		.where(and(...conditions))
+		.orderBy(desc(tags.createdAt), desc(tags.id))
+		.limit(limit + 1);
+
+	const hasMore = rows.length > limit;
+	const page = rows.slice(0, limit);
+	const last = page.at(-1);
+	return c.json(
+		{
+			data: page.map(({ tag }) => serializePostTag(tag)),
+			next_cursor:
+				hasMore && last
+					? encodeTimestampIdCursor(last.cursorTimestamp, last.tag.id)
+					: null,
+			has_more: hasMore,
+		},
+		200,
+	);
+});
+
+const attachPostTag = createRoute({
+	operationId: "attachPostTag",
+	method: "put",
+	path: "/{id}/tags/{tag_id}",
+	tags: ["Posts"],
+	summary: "Attach a tag to a post",
+	description:
+		"Idempotently attaches an organization-shared tag or a tag from the post's exact workspace.",
+	security: [{ Bearer: [] }],
+	request: { params: PostTagParams },
+	responses: {
+		200: {
+			description: "Attached tag",
+			content: { "application/json": { schema: TagResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Post or visible tag not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(attachPostTag, async (c) => {
+	const organizationId = c.get("orgId");
+	const { id, tag_id } = c.req.valid("param");
+	const db = c.get("db");
+	const [[post], [tag]] = await Promise.all([
+		db
+			.select({
+				id: posts.id,
+				workspaceId: posts.workspaceId,
+				scopeKey: posts.scopeKey,
+			})
+			.from(posts)
+			.where(and(eq(posts.id, id), eq(posts.organizationId, organizationId)))
+			.limit(1),
+		db
+			.select()
+			.from(tags)
+			.where(and(eq(tags.id, tag_id), eq(tags.organizationId, organizationId)))
+			.limit(1),
+	]);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
+	if (
+		!tag ||
+		(tag.scopeKey !== ORGANIZATION_SCOPE_KEY && tag.scopeKey !== post.scopeKey)
+	) {
+		return c.json(
+			{
+				error: {
+					code: "NOT_FOUND",
+					message: "Tag not found in the post scope",
+				},
+			},
+			404,
+		);
+	}
+
+	await db
+		.insert(postTags)
+		.values({
+			organizationId,
+			postId: post.id,
+			scopeKey: post.scopeKey,
+			tagId: tag.id,
+			tagScopeKey: tag.scopeKey,
+		})
+		.onConflictDoNothing({
+			target: [postTags.organizationId, postTags.tagId, postTags.postId],
+		})
+		.returning({ postId: postTags.postId });
+	return c.json(serializePostTag(tag), 200);
+});
+
+const detachPostTag = createRoute({
+	operationId: "detachPostTag",
+	method: "delete",
+	path: "/{id}/tags/{tag_id}",
+	tags: ["Posts"],
+	summary: "Detach a tag from a post",
+	security: [{ Bearer: [] }],
+	request: { params: PostTagParams },
+	responses: {
+		204: { description: "Tag detached" },
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(detachPostTag, async (c) => {
+	const organizationId = c.get("orgId");
+	const { id, tag_id } = c.req.valid("param");
+	const db = c.get("db");
+	const [post] = await db
+		.select({ id: posts.id, workspaceId: posts.workspaceId })
+		.from(posts)
+		.where(and(eq(posts.id, id), eq(posts.organizationId, organizationId)))
+		.limit(1);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
+
+	await db
+		.delete(postTags)
+		.where(
+			and(
+				eq(postTags.organizationId, organizationId),
+				eq(postTags.postId, id),
+				eq(postTags.tagId, tag_id),
+			),
+		)
+		.returning({ postId: postTags.postId });
+	return c.body(null, 204);
 });
 
 // --- Post Notes (works for both internal and external posts) ---

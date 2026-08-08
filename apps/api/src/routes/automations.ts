@@ -5,6 +5,7 @@
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
+	AUTOMATION_NODE_KINDS,
 	automationEntrypoints,
 	automationScheduledJobs,
 	automations,
@@ -12,6 +13,12 @@ import {
 } from "@relayapi/db";
 import { and, desc, eq, ilike, sql } from "drizzle-orm";
 import type { Context } from "hono";
+import {
+	type CredentialMutationAuthorityResult,
+	type CredentialMutationTransaction,
+	withCredentialMutationAuthority,
+	withCredentialMutationAuthorityInTransaction,
+} from "../lib/credential-mutation-authority";
 import {
 	resolveOperationalCreateScope,
 	workspaceScopeKey,
@@ -21,6 +28,7 @@ import {
 	assertWorkspaceScope,
 	isWorkspaceScopeDenied,
 } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import {
 	EntrypointFilterGroupSchema,
 	isEntrypointKindSupportedOnChannel,
@@ -46,7 +54,10 @@ import {
 	redactAutomationGraphSecrets,
 	sealAutomationGraphSecrets,
 } from "../services/automations/graph-secrets";
-import { enrollContact } from "../services/automations/runner";
+import {
+	EnrollmentBlockedError,
+	enrollContact,
+} from "../services/automations/runner";
 import { armAllScheduleEntrypointsForAutomation } from "../services/automations/scheduler";
 import { simulate } from "../services/automations/simulator";
 import {
@@ -71,6 +82,17 @@ import {
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+type CredentialAuthorityFailure = Extract<
+	CredentialMutationAuthorityResult<unknown>,
+	{ ok: false }
+>;
+
+class EnrollmentAuthorityRejectedError extends Error {
+	constructor(readonly failure: CredentialAuthorityFailure) {
+		super("automation enrollment authority rejected");
+		this.name = "EnrollmentAuthorityRejectedError";
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -153,6 +175,23 @@ function notFound(c: AppContext) {
 	) as never;
 }
 
+function markEnrollmentNotApplied(c: AppContext): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "not_applied",
+	});
+}
+
+function markEnrollmentCommitted(c: AppContext): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "committed",
+		units: 1,
+	});
+}
+
+function markEnrollmentUnknown(c: AppContext): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({ kind: "unknown" });
+}
+
 // ---------------------------------------------------------------------------
 // Route schemas
 // ---------------------------------------------------------------------------
@@ -191,7 +230,7 @@ const SimulateResponseSchema = z.object({
 	steps: z.array(
 		z.object({
 			node_key: z.string(),
-			node_kind: z.string(),
+			node_kind: z.enum(AUTOMATION_NODE_KINDS),
 			entered_via_port_key: z.string().nullable(),
 			exited_via_port_key: z.string().nullable(),
 			outcome: z.enum([
@@ -360,17 +399,7 @@ app.openapi(createAutomation, async (c) => {
 	};
 	let createdFromTemplate: string | null = null;
 	let templateConfig: Record<string, unknown> | null = null;
-	type EntrypointRow = {
-		kind: string;
-		config: Record<string, unknown>;
-		socialAccountId?: string | null;
-		filters?: Record<string, unknown> | null;
-		allowReentry?: boolean;
-		reentryCooldownMin?: number;
-		dailyCap?: number | null;
-		priority?: number;
-	};
-	let entrypoints: EntrypointRow[] = [];
+	let entrypoints: TemplateBuildOutput["entrypoints"] = [];
 
 	if (body.template) {
 		let built: TemplateBuildOutput | undefined;
@@ -427,7 +456,7 @@ app.openapi(createAutomation, async (c) => {
 	// created through /automation-entrypoints. Canonicalize and validate them
 	// before persistence so a preset can never bypass kind/channel/config
 	// validation as those two paths evolve independently.
-	const canonicalEntrypoints: EntrypointRow[] = [];
+	const canonicalEntrypoints: TemplateBuildOutput["entrypoints"] = [];
 	for (const entrypoint of entrypoints) {
 		if (!isEntrypointKindSupportedOnChannel(entrypoint.kind, body.channel)) {
 			return c.json(
@@ -845,57 +874,53 @@ async function setStatus(
 
 async function validateAndActivate(
 	c: AppContext,
+	tx: CredentialMutationTransaction,
 	id: string,
 ): Promise<{
 	row: AutomationRow;
 	errors: ReturnType<typeof validateGraph>["errors"];
 } | null> {
-	const db = c.get("db");
 	const orgId = c.get("orgId");
-	return db.transaction(async (tx) => {
-		// Lock and validate the authoritative graph snapshot in the same
-		// transaction that activates it. Otherwise a concurrent graph replacement
-		// can land between validation and the status update and make an invalid
-		// graph active.
-		const [current] = await tx
-			.select()
-			.from(automations)
-			.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
-			.limit(1)
-			.for("update");
-		if (!current) return null;
-		const validation = validateGraph(current.graph as Graph, current.channel);
-		const [updated] = await tx
-			.update(automations)
-			.set({
-				validationErrors: validation.errors.length ? validation.errors : null,
-				lastValidatedAt: new Date(),
-				...(validation.errors.length === 0
-					? { status: "active" as const }
-					: {}),
-				updatedAt: new Date(),
-			})
-			.where(eq(automations.id, current.id))
-			.returning();
-		if (
-			updated &&
-			validation.errors.length === 0 &&
-			current.status !== "active"
-		) {
-			// Retire any legacy/stale occurrence left from the inactive period before
-			// armAllScheduleEntrypointsForAutomation computes one fresh successor.
-			await tx
-				.delete(automationScheduledJobs)
-				.where(
-					and(
-						eq(automationScheduledJobs.automationId, current.id),
-						eq(automationScheduledJobs.jobType, "scheduled_trigger"),
-						eq(automationScheduledJobs.status, "pending"),
-					),
-				);
-		}
-		return updated ? { row: updated, errors: validation.errors } : null;
-	});
+	// Lock and validate the authoritative graph snapshot in the same
+	// transaction that activates it. Otherwise a concurrent graph replacement
+	// can land between validation and the status update and make an invalid
+	// graph active.
+	const [current] = await tx
+		.select()
+		.from(automations)
+		.where(and(eq(automations.id, id), eq(automations.organizationId, orgId)))
+		.limit(1)
+		.for("update");
+	if (!current) return null;
+	const validation = validateGraph(current.graph as Graph, current.channel);
+	const [updated] = await tx
+		.update(automations)
+		.set({
+			validationErrors: validation.errors.length ? validation.errors : null,
+			lastValidatedAt: new Date(),
+			...(validation.errors.length === 0 ? { status: "active" as const } : {}),
+			updatedAt: new Date(),
+		})
+		.where(eq(automations.id, current.id))
+		.returning();
+	if (
+		updated &&
+		validation.errors.length === 0 &&
+		current.status !== "active"
+	) {
+		// Retire any legacy/stale occurrence left from the inactive period before
+		// armAllScheduleEntrypointsForAutomation computes one fresh successor.
+		await tx
+			.delete(automationScheduledJobs)
+			.where(
+				and(
+					eq(automationScheduledJobs.automationId, current.id),
+					eq(automationScheduledJobs.jobType, "scheduled_trigger"),
+					eq(automationScheduledJobs.status, "pending"),
+				),
+			);
+	}
+	return updated ? { row: updated, errors: validation.errors } : null;
 }
 
 // Activate
@@ -927,7 +952,17 @@ app.openapi(activateAutomation, async (c) => {
 	const { id } = c.req.valid("param");
 	const row = await loadScopedAutomation(c, id);
 	if (!row) return notFound(c);
-	const activation = await validateAndActivate(c, id);
+	const authority = await withCredentialMutationAuthority(c, {}, (tx) =>
+		validateAndActivate(c, tx, id),
+	);
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const activation = authority.value;
 	if (!activation) return notFound(c);
 	if (activation.errors.length > 0) {
 		return c.json(
@@ -1008,7 +1043,17 @@ app.openapi(resumeAutomation, async (c) => {
 	const { id } = c.req.valid("param");
 	const row = await loadScopedAutomation(c, id);
 	if (!row) return notFound(c);
-	const activation = await validateAndActivate(c, id);
+	const authority = await withCredentialMutationAuthority(c, {}, (tx) =>
+		validateAndActivate(c, tx, id),
+	);
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const activation = authority.value;
 	if (!activation) return notFound(c);
 	if (activation.errors.length > 0) {
 		return c.json(
@@ -1127,63 +1172,78 @@ app.openapi(replaceGraph, async (c) => {
 	const row = await loadScopedAutomation(c, id);
 	if (!row) return notFound(c);
 
-	const db = c.get("db");
 	const validation = validateGraph(body.graph as Graph, row.channel);
 
 	let sealedGraph: Graph;
 	let updated: AutomationRow | undefined;
 	try {
-		const result = await db.transaction(async (tx) => {
-			// Serialize graph replacement with activation/pause/archive operations.
-			// The status decision must use the latest locked row, not the snapshot
-			// loaded for authorization before the transaction.
-			const [current] = await tx
-				.select({
-					id: automations.id,
-					organizationId: automations.organizationId,
-					status: automations.status,
-				})
-				.from(automations)
-				.where(
-					and(
-						eq(automations.id, id),
-						eq(automations.organizationId, row.organizationId),
-					),
-				)
-				.limit(1)
-				.for("update");
-			if (!current) {
-				return { graph: validation.canonicalGraph, saved: undefined };
-			}
-			const nextStatus =
-				validation.errors.length > 0 && current.status === "active"
-					? "paused"
-					: current.status;
-			const graph = await sealAutomationGraphSecrets(
-				tx as unknown as Parameters<typeof sealAutomationGraphSecrets>[0],
-				c.env.ENCRYPTION_KEY,
-				current.organizationId,
-				id,
-				validation.canonicalGraph,
+		const authority = await withCredentialMutationAuthority(
+			c,
+			{},
+			async (tx) => {
+				// Serialize graph replacement with activation/pause/archive operations.
+				// The status decision must use the latest locked row, not the snapshot
+				// loaded for authorization before the transaction.
+				const [current] = await tx
+					.select({
+						id: automations.id,
+						organizationId: automations.organizationId,
+						status: automations.status,
+					})
+					.from(automations)
+					.where(
+						and(
+							eq(automations.id, id),
+							eq(automations.organizationId, row.organizationId),
+						),
+					)
+					.limit(1)
+					.for("update");
+				if (!current) {
+					return { graph: validation.canonicalGraph, saved: undefined };
+				}
+				const nextStatus =
+					validation.errors.length > 0 && current.status === "active"
+						? "paused"
+						: current.status;
+				const graph = await sealAutomationGraphSecrets(
+					tx as unknown as Parameters<typeof sealAutomationGraphSecrets>[0],
+					c.env.ENCRYPTION_KEY,
+					current.organizationId,
+					id,
+					validation.canonicalGraph,
+				);
+				const [saved] = await tx
+					.update(automations)
+					.set({
+						graph: graph as never,
+						validationErrors: validation.errors.length
+							? validation.errors
+							: null,
+						lastValidatedAt: new Date(),
+						status: nextStatus,
+						updatedAt: new Date(),
+					})
+					.where(
+						and(
+							eq(automations.id, id),
+							eq(automations.organizationId, row.organizationId),
+						),
+					)
+					.returning();
+				return { graph, saved };
+			},
+		);
+		if (!authority.ok) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: { code: authority.code, message: authority.message },
+				} as never,
+				authority.status as never,
 			);
-			const [saved] = await tx
-				.update(automations)
-				.set({
-					graph: graph as never,
-					validationErrors: validation.errors.length ? validation.errors : null,
-					lastValidatedAt: new Date(),
-					status: nextStatus,
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(automations.id, id),
-						eq(automations.organizationId, row.organizationId),
-					),
-				)
-				.returning();
-			return { graph, saved };
-		});
+		}
+		const result = authority.value;
 		sealedGraph = result.graph;
 		updated = result.saved;
 	} catch (error) {
@@ -1254,12 +1314,16 @@ app.openapi(enrollAutomation, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
 	const row = await loadScopedAutomation(c, id);
-	if (!row) return notFound(c);
+	if (!row) {
+		markEnrollmentNotApplied(c);
+		return notFound(c);
+	}
 
 	// Manual enrollment into a paused/draft/archived automation is almost
 	// certainly a mistake — reject with a specific error code so the dashboard
 	// can surface it instead of silently creating a run that never fires.
 	if (row.status !== "active") {
+		markEnrollmentNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -1272,6 +1336,8 @@ app.openapi(enrollAutomation, async (c) => {
 	}
 
 	const db = c.get("db");
+	let admissionBoundaryEntered = false;
+	let admissionCommitted = false;
 	try {
 		const { runId } = await enrollContact(db, {
 			automationId: row.id,
@@ -1284,9 +1350,62 @@ app.openapi(enrollAutomation, async (c) => {
 			socialAccountId: body.social_account_id ?? null,
 			contextOverrides: body.context_overrides ?? {},
 			env: c.env as unknown as Record<string, unknown>,
+			onPreflightComplete: () => {
+				admissionBoundaryEntered = true;
+			},
+			admissionAuthority: async (tx) => {
+				const authority = await withCredentialMutationAuthorityInTransaction(
+					c,
+					{},
+					tx,
+					async () => undefined,
+				);
+				if (!authority.ok) {
+					throw new EnrollmentAuthorityRejectedError(authority);
+				}
+			},
+			onAdmissionCommitted: () => {
+				admissionCommitted = true;
+				markEnrollmentCommitted(c);
+			},
 		});
 		return c.json({ run_id: runId }, 201);
 	} catch (err) {
+		if (err instanceof EnrollmentAuthorityRejectedError) {
+			markEnrollmentNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: err.failure.code,
+						message: err.failure.message,
+					},
+				} as never,
+				err.failure.status as never,
+			);
+		}
+		if (
+			err instanceof EnrollmentBlockedError &&
+			err.reason === "automation_inactive"
+		) {
+			markEnrollmentNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "automation_not_active",
+						message: "Cannot enroll into a non-active automation",
+					},
+				},
+				422,
+			);
+		}
+		if (!admissionBoundaryEntered) {
+			// enrollContact performs reads/decryption only before this boundary.
+			markEnrollmentNotApplied(c);
+		} else if (!admissionCommitted) {
+			// A rejected transaction acknowledgement cannot prove whether COMMIT
+			// reached PostgreSQL, so keep the reservation parked for reconciliation.
+			markEnrollmentUnknown(c);
+		}
 		return c.json(
 			{
 				error: {

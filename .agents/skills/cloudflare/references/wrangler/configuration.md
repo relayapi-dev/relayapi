@@ -12,7 +12,7 @@ Configuration reference for wrangler.jsonc (recommended).
   "name": "my-worker",
   "main": "src/index.ts",
   "compatibility_date": "2025-01-01",  // Use current date
-  "vars": { "API_KEY": "dev-key" },
+  "vars": { "ENV_LABEL": "development" },
   "kv_namespaces": [{ "binding": "MY_KV", "id": "abc123" }]
 }
 ```

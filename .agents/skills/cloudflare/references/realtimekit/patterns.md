@@ -176,22 +176,68 @@ await meeting.plugins.deactivate();
 ```typescript
 export interface Env { CLOUDFLARE_API_TOKEN: string; CLOUDFLARE_ACCOUNT_ID: string; REALTIMEKIT_APP_ID: string; }
 
+interface Principal { userId: string; displayName: string; }
+type MeetingRole = 'host' | 'participant';
+interface MeetingAuthorization { role: MeetingRole; }
+
+// The authenticator must verify integrity, issuer, audience, expiry, and
+// revocation. Authorization must confirm this user belongs to this meeting.
+declare function authenticateRequest(request: Request, env: Env): Promise<Principal | null>;
+declare function authorizeMeetingAccess(
+  principal: Principal,
+  meetingId: string,
+  env: Env
+): Promise<MeetingAuthorization | null>;
+
+// Preset names are server-owned policy. Never accept preset_name from a client.
+const PRESET_BY_ROLE: Record<MeetingRole, string> = {
+  host: 'host',
+  participant: 'participant'
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     
-    if (url.pathname === '/api/join-meeting') {
-      const { meetingId, userName, presetName } = await request.json();
+    if (url.pathname === '/api/join-meeting' && request.method === 'POST') {
+      const principal = await authenticateRequest(request, env);
+      if (!principal) return new Response('Unauthorized', { status: 401 });
+
+      const input = await request.json() as { meetingId?: unknown };
+      if (typeof input.meetingId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(input.meetingId)) {
+        return new Response('Invalid meeting', { status: 400 });
+      }
+
+      const authorization = await authorizeMeetingAccess(principal, input.meetingId, env);
+      if (!authorization) return new Response('Forbidden', { status: 403 });
+
       const response = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/realtime/kit/${env.REALTIMEKIT_APP_ID}/meetings/${meetingId}/participants`,
+        `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/realtime/kit/${env.REALTIMEKIT_APP_ID}/meetings/${encodeURIComponent(input.meetingId)}/participants`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
-          body: JSON.stringify({ name: userName, preset_name: presetName })
+          body: JSON.stringify({
+            name: principal.displayName,
+            preset_name: PRESET_BY_ROLE[authorization.role],
+            custom_participant_id: principal.userId
+          })
         }
       );
-      const data = await response.json();
-      return Response.json({ authToken: data.result.authToken });
+      if (!response.ok) {
+        console.error('RealtimeKit participant creation failed', { status: response.status });
+        return new Response('Unable to join meeting', { status: 502 });
+      }
+
+      const data = await response.json() as { data?: { token?: string } };
+      if (!data.data?.token) {
+        console.error('RealtimeKit response did not include a participant token');
+        return new Response('Unable to join meeting', { status: 502 });
+      }
+
+      return Response.json(
+        { authToken: data.data.token },
+        { headers: { 'Cache-Control': 'no-store' } }
+      );
     }
     
     return new Response('Not found', { status: 404 });
@@ -205,6 +251,8 @@ export default {
 1. **Never expose API tokens client-side** - Generate participant tokens server-side only
 2. **Don't reuse participant tokens** - Generate fresh token per session, use refresh endpoint if expired
 3. **Use custom participant IDs** - Map to your user system for cross-session tracking
+4. **Authorize meeting membership** - Authenticate the application user and verify access to the requested meeting
+5. **Map presets server-side** - A client must never select its own role or `preset_name`
 
 ### Performance
 1. **Event-driven updates** - Listen to events, don't poll. Use `toArray()` only when needed

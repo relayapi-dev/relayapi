@@ -9,6 +9,17 @@
 		"binding": "ASSETS"
 	},
 	"observability": {
-		"enabled": true
+		"enabled": true,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 0.1,
+			"persist": true,
+			"invocation_logs": false
+		},
+		"traces": {
+			"enabled": false,
+			"persist": false,
+			"head_sampling_rate": 0.01
+		}
 	}
 }

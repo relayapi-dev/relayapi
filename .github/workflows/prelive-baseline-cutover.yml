@@ -1,0 +1,1033 @@
+name: Pre-live Baseline Generation Cutover
+
+# One-time destructive cutover from the sealed generation-1 migration chain to
+# the reviewed, sealed generation-2 baseline. This workflow intentionally has
+# no code, schema, KV, Queue, or R2 rollback. On failure it re-enters
+# maintenance and pauses queue delivery so recovery can move forward from the
+# exact reviewed commit.
+#
+# Required protected `production` environment secrets:
+# - PRODUCTION_DATABASE_URL
+# - PRODUCTION_RUNTIME_DATABASE_URL
+# - PRODUCTION_DATABASE_HOSTNAME
+# - PRODUCTION_DATABASE_CA_CERT
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_ID
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET
+# - MAINTENANCE_SMOKE_BYPASS_TOKEN
+# - PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID
+# - PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256
+# - PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY
+# - PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION
+# - PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION
+# - PRELIVE_STRIPE_CONNECT_ATTESTATION
+# - PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION
+# - PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI
+# - PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED
+# - PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI
+# - PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED
+# - PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION
+# - PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION
+# - PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO
+# - PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED
+# `PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256` is lowercase SHA-256 of
+# `relayapi:telnyx-inventory-credential:v1:` followed by the exact API key.
+# `PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY` must be exactly
+# `block_terminal_history` or `accept_network_reversal_tail`.
+# Repository/environment secrets:
+# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_ACCOUNT_ID
+# - DOTENVX_ARMOR_TOKEN
+# - META_INVENTORY_BUSINESS_ID
+# - META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character main commit containing the sealed generation-2 baseline
+        required: true
+        type: string
+      generation_1_stamp_commit_sha:
+        description: Exact source commit tagged on both active schema-compatible generation-1 stamp Workers
+        required: true
+        type: string
+      generation_1_stamp_run_id:
+        description: Successful protected Pre-live Generation-1 Worker Stamp workflow run ID
+        required: true
+        type: string
+      generation_1_api_version_id:
+        description: Exact active generation-1 API Worker version ID
+        required: true
+        type: string
+      generation_1_app_version_id:
+        description: Exact active generation-1 dashboard Worker version ID
+        required: true
+        type: string
+      expected_database_name:
+        description: Exact disposable pre-live PostgreSQL database name
+        required: true
+        type: string
+      inventory_run_id:
+        description: Successful protected Pre-live Destructive Inventory workflow run ID
+        required: true
+        type: string
+      approved_inventory_sha256:
+        description: SHA-256 printed by the reviewed contained inventory run
+        required: true
+        type: string
+      inventory_confirmation:
+        description: Re-type the exact approved inventory SHA-256
+        required: true
+        type: string
+      confirmation:
+        description: Type WIPE_DISPOSABLE_PRELIVE_GENERATION_1 to authorize the irreversible cutover
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  STRIPE_TERMINAL_TAIL_JQ: >-
+    {
+      paymentIntents: (.stripe.paymentIntents | sort_by(.id)),
+      charges: (.stripe.charges | sort_by(.id)),
+      refunds: (.stripe.refunds | sort_by(.id)),
+      disputes: (.stripe.disputes | sort_by(.id)),
+      topups: (.stripe.topups | sort_by(.id)),
+      payouts: (.stripe.payouts | sort_by(.id))
+    }
+
+concurrency:
+  group: prelive-baseline-generation-cutover
+  cancel-in-progress: false
+
+jobs:
+  validate-reviewed-commit:
+    name: Validate exact generation-2 commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.5-pg18-bookworm@sha256:12a379b47ad65289572ea0756efc11b7c241a6662833e8af7038cd3b73d647e0
+        env:
+          POSTGRES_DB: relayapi_cutover_validation
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d relayapi_cutover_validation"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: postgresql://postgres:postgres@127.0.0.1:5432/relayapi_cutover_validation
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Pin validation to the exact protected main commit
+        env:
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          CUTOVER_CONFIRMATION: ${{ inputs.confirmation }}
+          GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+          GENERATION_1_STAMP_RUN_ID: ${{ inputs.generation_1_stamp_run_id }}
+          GENERATION_1_API_VERSION_ID: ${{ inputs.generation_1_api_version_id }}
+          GENERATION_1_APP_VERSION_ID: ${{ inputs.generation_1_app_version_id }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          INVENTORY_RUN_ID: ${{ inputs.inventory_run_id }}
+          APPROVED_INVENTORY_SHA256: ${{ inputs.approved_inventory_sha256 }}
+          INVENTORY_CONFIRMATION: ${{ inputs.inventory_confirmation }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          database_name_pattern='^[A-Za-z_][-A-Za-z0-9_$]{0,62}$'
+          [[ "$REVIEWED_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GENERATION_1_STAMP_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GENERATION_1_STAMP_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INVENTORY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test -n "$GENERATION_1_API_VERSION_ID"
+          test -n "$GENERATION_1_APP_VERSION_ID"
+          [[ "$EXPECTED_DATABASE_NAME" =~ $database_name_pattern ]]
+          test "$(git rev-parse HEAD)" = "$REVIEWED_COMMIT_SHA"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$REVIEWED_COMMIT_SHA"
+          test "$INVENTORY_CONFIRMATION" = "$APPROVED_INVENTORY_SHA256"
+          test "$CUTOVER_CONFIRMATION" = "WIPE_DISPOSABLE_PRELIVE_GENERATION_1"
+          test "$REF_PROTECTED" = "true"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install exact locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify the reviewed contained inventory artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INVENTORY_RUN_ID: ${{ inputs.inventory_run_id }}
+          APPROVED_INVENTORY_SHA256: ${{ inputs.approved_inventory_sha256 }}
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+        run: |
+          set -euo pipefail
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${INVENTORY_RUN_ID}")"
+          printf '%s' "$run_json" | jq -e \
+            --arg source_sha "$REVIEWED_COMMIT_SHA" '
+              .name == "Pre-live Destructive Inventory" and
+              .path == ".github/workflows/prelive-destructive-inventory.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .head_branch == "main" and
+              .head_sha == $source_sha
+            ' >/dev/null
+          inventory_directory="$RUNNER_TEMP/prelive-inventory-${INVENTORY_RUN_ID}"
+          mkdir "$inventory_directory"
+          gh run download "$INVENTORY_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "prelive-destructive-inventory-${REVIEWED_COMMIT_SHA}" \
+            --dir "$inventory_directory"
+          manifest="$inventory_directory/prelive-inventory-manifest.json"
+          cloudflare_inventory="$inventory_directory/prelive-cloudflare-inventory.json"
+          database_inventory="$inventory_directory/prelive-database-inventory.json"
+          provider_inventory="$inventory_directory/prelive-provider-inventory.json"
+          test -f "$manifest"
+          test -f "$cloudflare_inventory"
+          test -f "$database_inventory"
+          test -f "$provider_inventory"
+          test "$(sha256sum "$manifest" | awk '{print $1}')" = "$APPROVED_INVENTORY_SHA256"
+          jq -e \
+            --arg commit "$REVIEWED_COMMIT_SHA" \
+            --arg database "$EXPECTED_DATABASE_NAME" '
+              .schemaVersion == 1 and
+              .commitSha == $commit and
+              .database == $database and
+              .capturedAfterContainment == true and
+              .moneyBearingCount == 0 and
+              .unresolvedProviderOperationCount == 0 and
+              .providerBlockingResourceCount == 0 and
+              (.cloudflareSha256 | test("^[0-9a-f]{64}$")) and
+              (.databaseSha256 | test("^[0-9a-f]{64}$")) and
+              (.providerSha256 | test("^[0-9a-f]{64}$")) and
+              (.stripeTerminalTailSha256 | test("^[0-9a-f]{64}$")) and
+              (
+                (.stripeTerminalReversalPolicy == "block_terminal_history" and
+                  .strictInventoryProvenance == null) or
+                (.stripeTerminalReversalPolicy == "accept_network_reversal_tail" and
+                  (.strictInventoryProvenance.runId | test("^[1-9][0-9]*$")) and
+                  (.strictInventoryProvenance.preliminaryManifestSha256 |
+                    test("^[0-9a-f]{64}$")) and
+                  (.strictInventoryProvenance.stripeTerminalTailSha256 |
+                    test("^[0-9a-f]{64}$")))
+              )
+            ' "$manifest" >/dev/null
+          test "$(sha256sum "$cloudflare_inventory" | awk '{print $1}')" = \
+            "$(jq -er '.cloudflareSha256' "$manifest")"
+          test "$(sha256sum "$database_inventory" | awk '{print $1}')" = \
+            "$(jq -er '.databaseSha256' "$manifest")"
+          test "$(sha256sum "$provider_inventory" | awk '{print $1}')" = \
+            "$(jq -er '.providerSha256' "$manifest")"
+          jq -e '.moneyBearingReferences == [] and .unresolvedProviderOperations == []' \
+            "$database_inventory" >/dev/null
+          jq -e '.blockingResources == []' "$provider_inventory" >/dev/null
+          jq -e \
+            --arg policy "$(jq -er '.stripeTerminalReversalPolicy' "$manifest")" \
+            '.stripe.terminalReversalPolicy == $policy' \
+            "$provider_inventory" >/dev/null
+          provider_terminal_tail_sha="$(
+            jq -cS "$STRIPE_TERMINAL_TAIL_JQ" "$provider_inventory" |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          test "$provider_terminal_tail_sha" = \
+            "$(jq -er '.stripeTerminalTailSha256' "$manifest")"
+
+      - name: Test baseline generation and cutover workflow guards
+        run: >-
+          bun test
+          scripts/check-live-baseline-generation.test.ts
+          scripts/generation-1-stamp-record.test.ts
+          scripts/prelive-baseline-cutover-workflow.test.ts
+          scripts/prelive-generation-1-stamp-workflow.test.ts
+          scripts/prelive-cloudflare-cutover.test.ts
+
+      - name: Verify the protected generation-1 stamp workflow record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAMP_RUN_ID: ${{ inputs.generation_1_stamp_run_id }}
+          STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+          API_VERSION_ID: ${{ inputs.generation_1_api_version_id }}
+          APP_VERSION_ID: ${{ inputs.generation_1_app_version_id }}
+        run: |
+          set -euo pipefail
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${STAMP_RUN_ID}")"
+          printf '%s' "$run_json" | jq -e \
+            --arg source_sha "$STAMP_COMMIT_SHA" '
+              .name == "Pre-live Generation-1 Worker Stamp" and
+              .path == ".github/workflows/prelive-generation-1-stamp.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .head_branch == "main" and
+              .head_sha == $source_sha
+            ' >/dev/null
+          record_directory="$RUNNER_TEMP/generation-1-stamp-${STAMP_RUN_ID}"
+          mkdir "$record_directory"
+          gh run download "$STAMP_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "generation-1-stamp-${STAMP_COMMIT_SHA}" \
+            --dir "$record_directory"
+          record="$record_directory/generation-1-stamp-record.json"
+          test -f "$record"
+          EXPECTED_GENERATION_1_STAMP_RUN_ID="$STAMP_RUN_ID" \
+          EXPECTED_GENERATION_1_STAMP_COMMIT_SHA="$STAMP_COMMIT_SHA" \
+          EXPECTED_GENERATION_1_API_VERSION_ID="$API_VERSION_ID" \
+          EXPECTED_GENERATION_1_APP_VERSION_ID="$APP_VERSION_ID" \
+            bun scripts/generation-1-stamp-record.ts --verify="$record"
+
+      - name: Require the sealed, attested generation-2 collapse
+        env:
+          GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schemaVersion == 1 and
+            .generation == 2 and
+            .lifecycle == "sealed" and
+            .transition.kind == "collapse" and
+            .transition.fromGeneration == 1 and
+            (.transition.baseCommitSha | test("^[0-9a-f]{40}$")) and
+            (.transition.baseManifestSha256 | test("^[0-9a-f]{64}$")) and
+            (.transition.baseGenerationSha256 | test("^[0-9a-f]{64}$")) and
+            (.transition.baseBuildPolicySha256 | test("^[0-9a-f]{64}$")) and
+            (.transition.candidateManifestSha256 | test("^[0-9a-f]{64}$")) and
+            (.transition.oldChainCatalogSha256 | test("^[0-9a-f]{64}$")) and
+            (.transition.candidateCatalogSha256 | test("^[0-9a-f]{64}$")) and
+            (.transition.catalogDifferenceReviewSha256 | test("^[0-9a-f]{64}$"))
+          ' packages/db/baseline-generation.json >/dev/null
+          bun run --cwd packages/db baseline:sealed:check
+          git merge-base --is-ancestor "$GENERATION_1_STAMP_COMMIT_SHA" HEAD
+          stamp_manifest_sha="$(
+            git show \
+              "$GENERATION_1_STAMP_COMMIT_SHA:packages/db/drizzle/migration-manifest.json" |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          test "$stamp_manifest_sha" = "$(
+            jq -er '.transition.baseManifestSha256' \
+              packages/db/baseline-generation.json
+          )"
+
+      - name: Verify the Git-backed generation transition
+        env:
+          GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+        run: |
+          set -euo pipefail
+          base_sha="$(
+            jq -er '.transition.baseCommitSha' \
+              packages/db/baseline-generation.json
+          )"
+          test "$base_sha" = "$GENERATION_1_STAMP_COMMIT_SHA"
+          test "$(git rev-parse HEAD^1)" = "$GENERATION_1_STAMP_COMMIT_SHA"
+          MIGRATION_BASE_SHA="$base_sha" \
+          MIGRATION_PROTECTED_REF=HEAD \
+            bun run --cwd packages/db migration:append-only
+
+      - name: Verify migration and schema ownership contracts
+        run: |
+          set -euo pipefail
+          bun run --cwd packages/db test:migration-contracts
+          bun run --cwd packages/db test:schema-invariants
+          bun run --cwd packages/db migration:source-ownership
+          bun run db:migration-manifest
+          bun run db:migration-policy
+          bun run db:verify-schema-contracts
+
+      - name: Replay the replacement baseline twice on a clean database
+        run: |
+          set -euo pipefail
+          bun run --cwd packages/db migrate
+          bun run --cwd packages/db migrate
+          bun run --cwd packages/db verify:migrations
+          bun run --cwd packages/db catalog:fingerprint:verify-active --require-boundary
+          bun run --cwd packages/db migration:history:current
+
+      - name: Require all generation-2 database lifecycle fixtures
+        env:
+          RELAYAPI_REQUIRE_DB_FIXTURES: "1"
+        run: bun run --cwd apps/api test:db-fixtures:required
+
+      - name: Typecheck the complete monorepo
+        run: bun run typecheck
+
+      - name: Run isolated API suite and workerd contracts
+        run: |
+          set -euo pipefail
+          bun run --cwd apps/api test
+          bun run --cwd apps/api test:workerd
+
+      - name: Run dashboard suite
+        run: bun test
+        working-directory: apps/app
+
+  cutover:
+    name: Wipe disposable stores and promote generation 2
+    needs: validate-reviewed-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Re-pin destructive work to the exact protected main commit
+        env:
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          CUTOVER_CONFIRMATION: ${{ inputs.confirmation }}
+          GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+          GENERATION_1_STAMP_RUN_ID: ${{ inputs.generation_1_stamp_run_id }}
+          GENERATION_1_API_VERSION_ID: ${{ inputs.generation_1_api_version_id }}
+          GENERATION_1_APP_VERSION_ID: ${{ inputs.generation_1_app_version_id }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          INVENTORY_RUN_ID: ${{ inputs.inventory_run_id }}
+          APPROVED_INVENTORY_SHA256: ${{ inputs.approved_inventory_sha256 }}
+          INVENTORY_CONFIRMATION: ${{ inputs.inventory_confirmation }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          database_name_pattern='^[A-Za-z_][-A-Za-z0-9_$]{0,62}$'
+          [[ "$REVIEWED_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GENERATION_1_STAMP_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GENERATION_1_STAMP_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INVENTORY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_INVENTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test -n "$GENERATION_1_API_VERSION_ID"
+          test -n "$GENERATION_1_APP_VERSION_ID"
+          [[ "$EXPECTED_DATABASE_NAME" =~ $database_name_pattern ]]
+          test "$(git rev-parse HEAD)" = "$REVIEWED_COMMIT_SHA"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$REVIEWED_COMMIT_SHA"
+          test "$INVENTORY_CONFIRMATION" = "$APPROVED_INVENTORY_SHA256"
+          test "$CUTOVER_CONFIRMATION" = "WIPE_DISPOSABLE_PRELIVE_GENERATION_1"
+          test "$REF_PROTECTED" = "true"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install exact locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Re-verify and bind the reviewed contained inventory artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INVENTORY_RUN_ID: ${{ inputs.inventory_run_id }}
+          APPROVED_INVENTORY_SHA256: ${{ inputs.approved_inventory_sha256 }}
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+        run: |
+          set -euo pipefail
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${INVENTORY_RUN_ID}")"
+          printf '%s' "$run_json" | jq -e \
+            --arg source_sha "$REVIEWED_COMMIT_SHA" '
+              .name == "Pre-live Destructive Inventory" and
+              .path == ".github/workflows/prelive-destructive-inventory.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .head_branch == "main" and
+              .head_sha == $source_sha
+            ' >/dev/null
+          inventory_directory="$RUNNER_TEMP/prelive-inventory-${INVENTORY_RUN_ID}"
+          mkdir "$inventory_directory"
+          gh run download "$INVENTORY_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "prelive-destructive-inventory-${REVIEWED_COMMIT_SHA}" \
+            --dir "$inventory_directory"
+          manifest="$inventory_directory/prelive-inventory-manifest.json"
+          cloudflare_inventory="$inventory_directory/prelive-cloudflare-inventory.json"
+          database_inventory="$inventory_directory/prelive-database-inventory.json"
+          provider_inventory="$inventory_directory/prelive-provider-inventory.json"
+          test "$(sha256sum "$manifest" | awk '{print $1}')" = "$APPROVED_INVENTORY_SHA256"
+          cloudflare_sha="$(jq -er '.cloudflareSha256' "$manifest")"
+          database_sha="$(jq -er '.databaseSha256' "$manifest")"
+          provider_sha="$(jq -er '.providerSha256' "$manifest")"
+          test "$(sha256sum "$cloudflare_inventory" | awk '{print $1}')" = "$cloudflare_sha"
+          test "$(sha256sum "$database_inventory" | awk '{print $1}')" = "$database_sha"
+          test "$(sha256sum "$provider_inventory" | awk '{print $1}')" = "$provider_sha"
+          jq -e \
+            --arg commit "$REVIEWED_COMMIT_SHA" \
+            --arg database "$EXPECTED_DATABASE_NAME" '
+              .schemaVersion == 1 and
+              .commitSha == $commit and
+              .database == $database and
+              .capturedAfterContainment == true and
+              .moneyBearingCount == 0 and
+              .unresolvedProviderOperationCount == 0 and
+              .providerBlockingResourceCount == 0 and
+              (.stripeTerminalTailSha256 | test("^[0-9a-f]{64}$")) and
+              (
+                (.stripeTerminalReversalPolicy == "block_terminal_history" and
+                  .strictInventoryProvenance == null) or
+                (.stripeTerminalReversalPolicy == "accept_network_reversal_tail" and
+                  (.strictInventoryProvenance.runId | test("^[1-9][0-9]*$")) and
+                  (.strictInventoryProvenance.preliminaryManifestSha256 |
+                    test("^[0-9a-f]{64}$")) and
+                  (.strictInventoryProvenance.stripeTerminalTailSha256 |
+                    test("^[0-9a-f]{64}$")))
+              )
+            ' "$manifest" >/dev/null
+          jq -e '.moneyBearingReferences == [] and .unresolvedProviderOperations == []' \
+            "$database_inventory" >/dev/null
+          jq -e '.blockingResources == []' "$provider_inventory" >/dev/null
+          jq -e \
+            --arg policy "$(jq -er '.stripeTerminalReversalPolicy' "$manifest")" \
+            '.stripe.terminalReversalPolicy == $policy' \
+            "$provider_inventory" >/dev/null
+          provider_terminal_tail_sha="$(
+            jq -cS "$STRIPE_TERMINAL_TAIL_JQ" "$provider_inventory" |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          test "$provider_terminal_tail_sha" = \
+            "$(jq -er '.stripeTerminalTailSha256' "$manifest")"
+          printf 'PRELIVE_APPROVED_INVENTORY_SHA256=%s\n' "$APPROVED_INVENTORY_SHA256" >> "$GITHUB_ENV"
+          printf 'PRELIVE_APPROVED_CLOUDFLARE_INVENTORY=%s\n' "$cloudflare_inventory" >> "$GITHUB_ENV"
+          printf 'PRELIVE_APPROVED_CLOUDFLARE_INVENTORY_SHA256=%s\n' "$cloudflare_sha" >> "$GITHUB_ENV"
+          printf 'PRELIVE_APPROVED_DATABASE_INVENTORY=%s\n' "$database_inventory" >> "$GITHUB_ENV"
+          printf 'PRELIVE_APPROVED_DATABASE_INVENTORY_SHA256=%s\n' "$database_sha" >> "$GITHUB_ENV"
+          printf 'PRELIVE_APPROVED_PROVIDER_INVENTORY=%s\n' "$provider_inventory" >> "$GITHUB_ENV"
+          printf 'PRELIVE_APPROVED_PROVIDER_INVENTORY_SHA256=%s\n' "$provider_sha" >> "$GITHUB_ENV"
+
+      - name: Re-verify the protected generation-1 stamp workflow record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAMP_RUN_ID: ${{ inputs.generation_1_stamp_run_id }}
+          STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+          API_VERSION_ID: ${{ inputs.generation_1_api_version_id }}
+          APP_VERSION_ID: ${{ inputs.generation_1_app_version_id }}
+        run: |
+          set -euo pipefail
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${STAMP_RUN_ID}")"
+          printf '%s' "$run_json" | jq -e \
+            --arg source_sha "$STAMP_COMMIT_SHA" '
+              .name == "Pre-live Generation-1 Worker Stamp" and
+              .path == ".github/workflows/prelive-generation-1-stamp.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .head_branch == "main" and
+              .head_sha == $source_sha
+            ' >/dev/null
+          record_directory="$RUNNER_TEMP/generation-1-stamp-${STAMP_RUN_ID}"
+          mkdir "$record_directory"
+          gh run download "$STAMP_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "generation-1-stamp-${STAMP_COMMIT_SHA}" \
+            --dir "$record_directory"
+          record="$record_directory/generation-1-stamp-record.json"
+          test -f "$record"
+          EXPECTED_GENERATION_1_STAMP_RUN_ID="$STAMP_RUN_ID" \
+          EXPECTED_GENERATION_1_STAMP_COMMIT_SHA="$STAMP_COMMIT_SHA" \
+          EXPECTED_GENERATION_1_API_VERSION_ID="$API_VERSION_ID" \
+          EXPECTED_GENERATION_1_APP_VERSION_ID="$APP_VERSION_ID" \
+            bun scripts/generation-1-stamp-record.ts --verify="$record"
+
+      - name: Require generation 2 in metadata and both Worker bundles
+        run: |
+          set -euo pipefail
+          jq -e '
+            .generation == 2 and
+            .lifecycle == "sealed" and
+            .transition.kind == "collapse" and
+            .transition.fromGeneration == 1
+          ' packages/db/baseline-generation.json >/dev/null
+          grep -Eq '^export const BASELINE_GENERATION = 2;$' \
+            packages/config/src/index.ts
+          grep -Fq 'import { BASELINE_GENERATION } from "@relayapi/config";' \
+            apps/api/src/lib/runtime-controls.ts
+          grep -Fq 'export const APP_BASELINE_GENERATION = BASELINE_GENERATION;' \
+            apps/app/src/lib/runtime-control.ts
+          grep -Fq 'BASELINE_GENERATION: String(BASELINE_GENERATION),' \
+            packages/self-host/src/wrangler-config.ts
+          jq -e '.workerBindings.BASELINE_GENERATION.text == "2"' \
+            apps/api/production-resources.json >/dev/null
+          api_types="$RUNNER_TEMP/api-cutover-env.d.ts"
+          app_types="$RUNNER_TEMP/app-cutover-env.d.ts"
+          bun run --cwd apps/api wrangler types "$api_types" \
+            --config wrangler.jsonc \
+            --env-file=/dev/null \
+            --env-interface=CutoverApiEnv \
+            --include-runtime=false
+          bun run --cwd apps/app wrangler types "$app_types" \
+            --config wrangler.jsonc \
+            --env-file=/dev/null \
+            --env-interface=CutoverAppEnv \
+            --include-runtime=false
+          test "$(grep -Fc 'BASELINE_GENERATION: "2";' "$api_types")" -eq 1
+          test "$(grep -Fc 'BASELINE_GENERATION: "2";' "$app_types")" -eq 1
+          bun run --cwd packages/self-host test
+
+      - name: Require the exact schema-compatible generation-1 API and App stamps
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/baseline-generation.out"
+          : > "$output"
+          GITHUB_OUTPUT="$output" \
+            bun scripts/check-live-baseline-generation.ts --attest-cutover-stamp
+          grep -qx 'stamp_attested=true' "$output"
+          grep -qx 'api_worker_status=ready' "$output"
+          grep -qx 'app_worker_status=ready' "$output"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECTED_GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+          EXPECTED_GENERATION_1_API_VERSION_ID: ${{ inputs.generation_1_api_version_id }}
+          EXPECTED_GENERATION_1_APP_VERSION_ID: ${{ inputs.generation_1_app_version_id }}
+
+      - name: Verify Cloudflare resources and both secret intents before maintenance
+        run: |
+          set -euo pipefail
+          bun run --cwd apps/api cloudflare:verify-prelive-prerequisites
+          bun run secrets:cf:preflight -- api
+          bun run secrets:cf:preflight -- app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Build the generation-2 dashboard bundle before maintenance
+        run: |
+          set -euo pipefail
+          bun run build:sdk
+          bun run --cwd apps/app build
+          bun run --cwd apps/app deploy:dry-run
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+          BETTER_AUTH_SECRET: "github-actions-build-secret"
+          BETTER_AUTH_URL: "https://relayapi.dev"
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: "postgres://x:x@localhost:5433/x"
+
+      - name: Start Access-protected production database tunnel
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRODUCTION_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+          PRODUCTION_DATABASE_HOSTNAME: ${{ secrets.PRODUCTION_DATABASE_HOSTNAME }}
+          PRODUCTION_DATABASE_CA_CERT: ${{ secrets.PRODUCTION_DATABASE_CA_CERT }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DATABASE_URL"
+          test -n "$PRODUCTION_RUNTIME_DATABASE_URL"
+          test -n "$PRODUCTION_DATABASE_HOSTNAME"
+          test -n "$PRODUCTION_DATABASE_CA_CERT"
+          test -n "$TUNNEL_SERVICE_TOKEN_ID"
+          test -n "$TUNNEL_SERVICE_TOKEN_SECRET"
+
+          bun -e '
+            const migrationUrl = new URL(process.env.PRODUCTION_DATABASE_URL);
+            const runtimeUrl = new URL(process.env.PRODUCTION_RUNTIME_DATABASE_URL);
+            if (!["postgres:", "postgresql:"].includes(migrationUrl.protocol)) {
+              throw new Error("PRODUCTION_DATABASE_URL must use PostgreSQL");
+            }
+            if (!["postgres:", "postgresql:"].includes(runtimeUrl.protocol)) {
+              throw new Error("PRODUCTION_RUNTIME_DATABASE_URL must use PostgreSQL");
+            }
+            if (
+              migrationUrl.hostname !== process.env.PRODUCTION_DATABASE_HOSTNAME ||
+              runtimeUrl.hostname !== process.env.PRODUCTION_DATABASE_HOSTNAME
+            ) {
+              throw new Error("Both DSN hostnames must match the protected Access hostname");
+            }
+            if (migrationUrl.port !== "5433" || runtimeUrl.port !== "5433") {
+              throw new Error("Both database DSNs must target local cloudflared port 5433");
+            }
+            if (
+              migrationUrl.searchParams.get("sslmode") !== "verify-full" ||
+              runtimeUrl.searchParams.get("sslmode") !== "verify-full"
+            ) {
+              throw new Error("Both database DSNs must require sslmode=verify-full");
+            }
+            if (decodeURIComponent(migrationUrl.username) === "relayapi_runtime") {
+              throw new Error("The no-DDL runtime role cannot perform the reset");
+            }
+            if (decodeURIComponent(runtimeUrl.username) !== "relayapi_runtime") {
+              throw new Error("The runtime DSN must authenticate as relayapi_runtime");
+            }
+            if (migrationUrl.pathname !== runtimeUrl.pathname) {
+              throw new Error("Migration and runtime DSNs must name the same database");
+            }
+          '
+
+          printf '%s\n' "$PRODUCTION_DATABASE_CA_CERT" > "$RUNNER_TEMP/relayapi-postgres-ca.crt"
+          sudo install -m 0644 "$RUNNER_TEMP/relayapi-postgres-ca.crt" \
+            /usr/local/share/ca-certificates/relayapi-postgres-ca.crt
+          sudo update-ca-certificates
+
+          docker run --detach --rm --pull always --network host \
+            --name "relayapi-prelive-db-${GITHUB_RUN_ID}" \
+            --env TUNNEL_SERVICE_TOKEN_ID \
+            --env TUNNEL_SERVICE_TOKEN_SECRET \
+            cloudflare/cloudflared:2026.6.0@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f \
+            access tcp \
+            --hostname "$PRODUCTION_DATABASE_HOSTNAME" \
+            --url 127.0.0.1:5433 \
+            --loglevel warn
+
+          printf '127.0.0.1\t%s\n' "$PRODUCTION_DATABASE_HOSTNAME" | \
+            sudo tee -a /etc/hosts >/dev/null
+          ready=false
+          for _ in $(seq 1 30); do
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/5433' 2>/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "true"
+
+      - name: Prepare exact database identity, generation-1 ledger, and one-use sentinel
+        env:
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+        run: |
+          set -euo pipefail
+          base_sha="$(jq -er '.transition.baseCommitSha' packages/db/baseline-generation.json)"
+          ledger_manifest="$RUNNER_TEMP/generation-1-migration-manifest.json"
+          git show "$base_sha:packages/db/drizzle/migration-manifest.json" > "$ledger_manifest"
+          stamp_manifest="$RUNNER_TEMP/generation-1-stamp-migration-manifest.json"
+          git merge-base --is-ancestor "$GENERATION_1_STAMP_COMMIT_SHA" HEAD
+          git show \
+            "$GENERATION_1_STAMP_COMMIT_SHA:packages/db/drizzle/migration-manifest.json" \
+            > "$stamp_manifest"
+          test "$(sha256sum "$stamp_manifest" | awk '{print $1}')" = "$(
+            jq -er '.transition.baseManifestSha256' \
+              packages/db/baseline-generation.json
+          )"
+          sentinel="$(openssl rand -hex 32)"
+          echo "::add-mask::$sentinel"
+          printf 'PRELIVE_EXPECTED_LEDGER_MANIFEST=%s\n' "$ledger_manifest" >> "$GITHUB_ENV"
+          printf 'PRELIVE_RESET_SENTINEL=%s\n' "$sentinel" >> "$GITHUB_ENV"
+          printf 'PRELIVE_EXPECTED_DATABASE=%s\n' "$EXPECTED_DATABASE_NAME" >> "$GITHUB_ENV"
+
+      - name: Verify the exact database, migration role, ledger, and capabilities before maintenance
+        run: bun run --cwd packages/db prelive:reset preflight
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRELIVE_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+
+      - name: Re-assert the reviewed generation-2 containment record and paused Queues
+        id: containment
+        run: |
+          set -euo pipefail
+          bun scripts/prelive-cloudflare-cutover.ts maintenance-on
+          printf 'active=true\n' >> "$GITHUB_OUTPUT"
+          bun scripts/prelive-cloudflare-cutover.ts queues-pause
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Wait for the re-asserted maintenance record to converge globally
+        run: |
+          set -euo pipefail
+          convergence_seconds="$(
+            bun scripts/prelive-cloudflare-cutover.ts control-convergence-seconds
+          )"
+          test "$convergence_seconds" = "120"
+          sleep "$convergence_seconds"
+
+      - name: "Containment gate 1/4: re-attest exact generation-1 Worker versions and source"
+        run: bun scripts/check-live-baseline-generation.ts --attest-cutover-stamp
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECTED_GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
+          EXPECTED_GENERATION_1_API_VERSION_ID: ${{ inputs.generation_1_api_version_id }}
+          EXPECTED_GENERATION_1_APP_VERSION_ID: ${{ inputs.generation_1_app_version_id }}
+
+      - name: "Containment gate 2/4: read back every reviewed Queue as paused"
+        run: bun scripts/prelive-cloudflare-cutover.ts queues-verify-paused
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: "Containment gate 3/4: prove API containment and narrow read-only smoke"
+        env:
+          MAINTENANCE_SMOKE_BYPASS_TOKEN: ${{ secrets.MAINTENANCE_SMOKE_BYPASS_TOKEN }}
+        run: |
+          set -euo pipefail
+          headers="$RUNNER_TEMP/api-control.headers"
+          body="$RUNNER_TEMP/api-control.json"
+          status="$(curl --silent --show-error --dump-header "$headers" \
+            --output "$body" --write-out '%{http_code}' --max-time 20 \
+            https://api.relayapi.dev/health/control)"
+          test "$status" = "503"
+          grep -Eiq '^cache-control:[[:space:]]*no-store([[:space:]]|$)' "$headers"
+          jq -e '.status == "maintenance" or .status == "blocked"' "$body"
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            -H "x-relayapi-maintenance-smoke-bypass: $MAINTENANCE_SMOKE_BYPASS_TOKEN" \
+            https://api.relayapi.dev/internal/cutover-smoke |
+            jq -e '.ok == true and (.control.status == "maintenance" or .control.status == "blocked")'
+
+      - name: "Containment gate 4/4: prove App containment and narrow read-only smoke"
+        env:
+          MAINTENANCE_SMOKE_BYPASS_TOKEN: ${{ secrets.MAINTENANCE_SMOKE_BYPASS_TOKEN }}
+        run: |
+          set -euo pipefail
+          headers="$RUNNER_TEMP/app-control.headers"
+          body="$RUNNER_TEMP/app-control.json"
+          status="$(curl --silent --show-error --dump-header "$headers" \
+            --output "$body" --write-out '%{http_code}' --max-time 20 \
+            https://relayapi.dev/health/control)"
+          test "$status" = "503"
+          grep -Eiq '^cache-control:[[:space:]]*no-store([[:space:]]|$)' "$headers"
+          jq -e '.status == "maintenance" or .status == "blocked"' "$body"
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            -H "x-relayapi-maintenance-smoke-bypass: $MAINTENANCE_SMOKE_BYPASS_TOKEN" \
+            https://relayapi.dev/internal/cutover-smoke |
+            jq -e '.ok == true and (.control.status == "maintenance" or .control.status == "blocked")'
+
+      - name: Re-capture and exactly match the approved contained inventory
+        run: |
+          set -euo pipefail
+          bunx dotenvx run --redact --strict --overload \
+            --token "$DOTENVX_ARMOR_TOKEN" \
+            -f apps/api/.production.secrets.vault -- \
+            bun scripts/prelive-cloudflare-cutover.ts inventory-verify
+          bun run --cwd packages/db prelive:inventory verify
+          bunx dotenvx run --redact --strict --overload \
+            --token "$DOTENVX_ARMOR_TOKEN" \
+            -f apps/api/.production.secrets.vault -- \
+            bun run --cwd apps/api prelive:provider-inventory verify
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+          META_INVENTORY_BUSINESS_ID: ${{ secrets.META_INVENTORY_BUSINESS_ID }}
+          META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN: ${{ secrets.META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN }}
+          PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID: ${{ secrets.PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID }}
+          PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256: ${{ secrets.PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256 }}
+          PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY: ${{ secrets.PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY }}
+          PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION }}
+          PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION }}
+          PRELIVE_STRIPE_CONNECT_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_CONNECT_ATTESTATION }}
+          PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION }}
+          PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI: ${{ secrets.PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI }}
+          PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED: ${{ secrets.PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED }}
+          PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI: ${{ secrets.PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI }}
+          PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED: ${{ secrets.PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED }}
+          PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION: ${{ secrets.PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION }}
+          PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION: ${{ secrets.PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION }}
+          PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO: ${{ secrets.PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO }}
+          PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED: ${{ secrets.PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED }}
+
+      - name: Arm the one-use database reset sentinel after every containment gate
+        run: bun run --cwd packages/db prelive:reset arm-reset
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRELIVE_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+
+      - name: Reset PostgreSQL schemas and apply the single generation-2 baseline
+        run: |
+          set -euo pipefail
+          bun run --cwd packages/db prelive:reset reset
+          bun run --cwd packages/db migrate
+          bun run --cwd packages/db verify:migrations
+          bun run --cwd packages/db catalog:fingerprint:verify-active --require-boundary
+          bun run --cwd packages/db migration:history:current
+          bun run --cwd packages/db prelive:reset grant-runtime
+          bun run --cwd packages/db prelive:reset postflight
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRELIVE_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+          PRELIVE_RESET_CONFIRMATION: WIPE-DISPOSABLE-PRELIVE-GENERATION-2
+
+      - name: Wipe disposable R2 and KV, then purge every Queue after the database verifies
+        run: |
+          set -euo pipefail
+          bunx dotenvx run --redact --strict --overload \
+            --token "$DOTENVX_ARMOR_TOKEN" \
+            -f apps/api/.production.secrets.vault -- \
+            bun scripts/prelive-cloudflare-cutover.ts r2-empty-approved
+          r2_settle_seconds="$(
+            bun scripts/prelive-cloudflare-cutover.ts r2-event-settle-seconds
+          )"
+          test "$r2_settle_seconds" = "60"
+          sleep "$r2_settle_seconds"
+          bunx dotenvx run --redact --strict --overload \
+            --token "$DOTENVX_ARMOR_TOKEN" \
+            -f apps/api/.production.secrets.vault -- \
+            bun scripts/prelive-cloudflare-cutover.ts r2-verify-empty
+          bun scripts/prelive-cloudflare-cutover.ts kv-clear-approved
+          bun scripts/prelive-cloudflare-cutover.ts queues-purge-approved
+          bunx dotenvx run --redact --strict --overload \
+            --token "$DOTENVX_ARMOR_TOKEN" \
+            -f apps/api/.production.secrets.vault -- \
+            bun scripts/prelive-cloudflare-cutover.ts r2-verify-empty
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Deploy the exact generation-2 API with no rollback path
+        run: |
+          set -euo pipefail
+          output_file="$RUNNER_TEMP/relayapi-cutover-api.jsonl"
+          : > "$output_file"
+          WRANGLER_OUTPUT_FILE_PATH="$output_file" \
+            bun run secrets:cf:deploy -- api -- \
+              --keep-vars --strict \
+              --tag "baseline-2-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --message "Pre-live baseline generation 2 ${GITHUB_SHA}"
+          active_version="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one API version at 100% traffic")
+            end
+          ')"
+          version_json="$(bunx wrangler versions view "$active_version" --json)"
+          test "$(printf '%s' "$version_json" | jq -er '.annotations["workers/tag"]')" = \
+            "baseline-2-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf 'EXPECTED_WORKER_VERSION_ID=%s\n' "$active_version" >> "$GITHUB_ENV"
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Verify API configuration and generation-2 secret intent
+        run: |
+          set -euo pipefail
+          bun run --cwd apps/api cloudflare:verify-prelive-contained
+          bun run secrets:cf:verify -- api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+          EXPECTED_WORKER_VERSION_ID: ${{ env.EXPECTED_WORKER_VERSION_ID }}
+
+      - name: Deploy the exact generation-2 dashboard with no rollback path
+        run: |
+          set -euo pipefail
+          output_file="$RUNNER_TEMP/relayapi-cutover-app.jsonl"
+          : > "$output_file"
+          WRANGLER_OUTPUT_FILE_PATH="$output_file" \
+            bun run secrets:cf:deploy -- app -- \
+              --config dist/server/wrangler.json --keep-vars --strict \
+              --tag "baseline-2-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --message "Pre-live baseline generation 2 ${GITHUB_SHA}"
+          active_version="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one App version at 100% traffic")
+            end
+          ')"
+          version_json="$(bunx wrangler versions view "$active_version" --json)"
+          test "$(printf '%s' "$version_json" | jq -er '.annotations["workers/tag"]')" = \
+            "baseline-2-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf 'APP_WORKER_VERSION_ID=%s\n' "$active_version" >> "$GITHUB_ENV"
+        working-directory: apps/app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Verify dashboard configuration and generation-2 secret intent
+        run: |
+          set -euo pipefail
+          EXPECTED_WORKER_VERSION_ID="$APP_WORKER_VERSION_ID" \
+            bun scripts/verify-cloudflare-worker-deployment.ts app
+          bun run secrets:cf:verify -- app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Smoke both generation-2 Workers while maintenance remains contained
+        env:
+          MAINTENANCE_SMOKE_BYPASS_TOKEN: ${{ secrets.MAINTENANCE_SMOKE_BYPASS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$MAINTENANCE_SMOKE_BYPASS_TOKEN"
+          curl --fail-with-body --silent --show-error \
+            --retry 5 --retry-delay 3 --retry-all-errors --max-time 20 \
+            -H "x-relayapi-maintenance-smoke-bypass: $MAINTENANCE_SMOKE_BYPASS_TOKEN" \
+            https://api.relayapi.dev/internal/cutover-smoke >/dev/null
+          curl --fail-with-body --silent --show-error \
+            --retry 5 --retry-delay 3 --retry-all-errors --max-time 20 \
+            -H "x-relayapi-maintenance-smoke-bypass: $MAINTENANCE_SMOKE_BYPASS_TOKEN" \
+            https://relayapi.dev/internal/cutover-smoke >/dev/null
+
+      - name: Leave maintenance only after every contained cutover check passes
+        run: |
+          set -euo pipefail
+          bun scripts/prelive-cloudflare-cutover.ts maintenance-off
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Prove open control state after convergence, then resume Queues
+        run: |
+          set -euo pipefail
+          convergence_seconds="$(
+            bun scripts/prelive-cloudflare-cutover.ts control-convergence-seconds
+          )"
+          test "$convergence_seconds" = "120"
+          sleep "$convergence_seconds"
+          api_headers="$RUNNER_TEMP/api-open-control.headers"
+          api_body="$RUNNER_TEMP/api-open-control.json"
+          api_status="$(curl --silent --show-error --dump-header "$api_headers" \
+            --output "$api_body" --write-out '%{http_code}' --max-time 20 \
+            https://api.relayapi.dev/health/control)"
+          test "$api_status" = "200"
+          grep -Eiq '^cache-control:[[:space:]]*no-store([[:space:]]|$)' "$api_headers"
+          jq -e '.status == "open"' "$api_body"
+
+          app_headers="$RUNNER_TEMP/app-open-control.headers"
+          app_body="$RUNNER_TEMP/app-open-control.json"
+          app_status="$(curl --silent --show-error --dump-header "$app_headers" \
+            --output "$app_body" --write-out '%{http_code}' --max-time 20 \
+            https://relayapi.dev/health/control)"
+          test "$app_status" = "200"
+          grep -Eiq '^cache-control:[[:space:]]*no-store([[:space:]]|$)' "$app_headers"
+          jq -e '.status == "open"' "$app_body"
+
+          curl --fail-with-body --silent --show-error \
+            --retry 5 --retry-delay 3 --retry-all-errors --max-time 20 \
+            https://api.relayapi.dev/health >/dev/null
+          curl --fail-with-body --silent --show-error --location \
+            --retry 5 --retry-delay 3 --retry-all-errors --max-time 20 \
+            https://relayapi.dev/app >/dev/null
+          bun scripts/prelive-cloudflare-cutover.ts queues-resume
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Re-contain a failed cutover without rolling back generation 2
+        if: ${{ failure() && steps.containment.outputs.active == 'true' }}
+        run: |
+          set -euo pipefail
+          bun scripts/prelive-cloudflare-cutover.ts maintenance-on
+          bun scripts/prelive-cloudflare-cutover.ts queues-pause
+          echo "::error::Cutover failed; maintenance is active and reviewed queues are paused. Recover forward from this exact commit."
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Stop production database tunnel
+        if: ${{ always() }}
+        run: docker rm --force "relayapi-prelive-db-${GITHUB_RUN_ID}" >/dev/null 2>&1 || true

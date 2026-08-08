@@ -136,15 +136,18 @@ export async function writeScaffold(configPath: string): Promise<void> {
 			`${[
 				"CLOUDFLARE_API_TOKEN=",
 				"CLOUDFLARE_ACCOUNT_ID=",
-				"RELAYAPI_DATABASE_URL=<tls-postgresql-url-for-migration-role>",
+				"RELAYAPI_MIGRATION_DATABASE_URL=postgresql://migration-role:password@db.example.com:5432/relayapi?sslmode=verify-full",
 				"RELAYAPI_RUNTIME_DATABASE_URL=<tls-postgresql-url-for-runtime-role>",
 				"RELAYAPI_ADMIN_EMAIL=admin@example.com",
 				"RELAYAPI_ADMIN_PASSWORD=<random-12+-character-password>",
-				"ENCRYPTION_KEY=active=<64-hex-characters>",
+				"ENCRYPTION_KEY=active=<64-hex-characters>,identity=<retained-64-hex-characters>",
 				"BETTER_AUTH_SECRET=<random-secret>",
 				"R2_ACCESS_KEY_ID=",
 				"R2_SECRET_ACCESS_KEY=",
+				"# OPENAI_API_KEY=",
 				"# RESEND_API_KEY=",
+				"# OPERATIONS_ALERT_WEBHOOK_URL=https://alerts.example.com/relayapi",
+				"# OPERATIONS_ALERT_EMAIL=alerts@example.com",
 				"# GOOGLE_CLIENT_ID=",
 				"# GOOGLE_CLIENT_SECRET=",
 				"# TWITTER_CLIENT_ID=",
@@ -187,7 +190,7 @@ export async function writeScaffold(configPath: string): Promise<void> {
 const githubSecretNames = [
 	"CLOUDFLARE_API_TOKEN",
 	"CLOUDFLARE_ACCOUNT_ID",
-	"RELAYAPI_DATABASE_URL",
+	"RELAYAPI_MIGRATION_DATABASE_URL",
 	"RELAYAPI_RUNTIME_DATABASE_URL",
 	"RELAYAPI_ADMIN_EMAIL",
 	"RELAYAPI_ADMIN_PASSWORD",
@@ -195,6 +198,7 @@ const githubSecretNames = [
 	"BETTER_AUTH_SECRET",
 	"R2_ACCESS_KEY_ID",
 	"R2_SECRET_ACCESS_KEY",
+	"OPENAI_API_KEY",
 	"RESEND_API_KEY",
 	"DOWNLOADER_SERVICE_URL",
 	"DOWNLOADER_SERVICE_KEY",
@@ -290,7 +294,7 @@ export function generatedSecrets(): {
 	adminPassword: string;
 } {
 	return {
-		encryptionKey: `active=${randomBytes(32).toString("hex")}`,
+		encryptionKey: `active=${randomBytes(32).toString("hex")},identity=${randomBytes(32).toString("hex")}`,
 		betterAuthSecret: randomBytes(32).toString("base64url"),
 		adminPassword: randomBytes(24).toString("base64url"),
 	};

@@ -1,28 +1,7 @@
 import { z } from "@hono/zod-openapi";
+import { SOCIAL_PLATFORM_IDS } from "@relayapi/db";
 
-export const PLATFORMS = [
-	"twitter",
-	"instagram",
-	"facebook",
-	"linkedin",
-	"tiktok",
-	"youtube",
-	"pinterest",
-	"reddit",
-	"bluesky",
-	"threads",
-	"telegram",
-	"snapchat",
-	"googlebusiness",
-	"whatsapp",
-	"mastodon",
-	"discord",
-	"sms",
-	"beehiiv",
-	"convertkit",
-	"mailchimp",
-	"listmonk",
-] as const;
+export const PLATFORMS = SOCIAL_PLATFORM_IDS;
 
 export type Platform = (typeof PLATFORMS)[number];
 
@@ -45,8 +24,16 @@ export const PaginationParams = z.object({
 		.max(100)
 		.default(20)
 		.describe("Number of items per page"),
-	from: z.string().datetime({ offset: true }).optional().describe("Filter: start date (ISO 8601)"),
-	to: z.string().datetime({ offset: true }).optional().describe("Filter: end date (ISO 8601)"),
+	from: z
+		.string()
+		.datetime({ offset: true })
+		.optional()
+		.describe("Filter: start date (ISO 8601)"),
+	to: z
+		.string()
+		.datetime({ offset: true })
+		.optional()
+		.describe("Filter: end date (ISO 8601)"),
 });
 
 // Cursor pagination only supports sequential (next/prev) navigation. Log
@@ -75,12 +62,29 @@ export const FilterParams = PaginationParams.extend({
 			"Filter by any of several account IDs (comma-separated). Takes precedence over account_id.",
 		),
 	status: z
-		.enum(["draft", "scheduled", "publishing", "published", "failed", "partial"])
+		.enum([
+			"draft",
+			"scheduled",
+			"publishing",
+			"published",
+			"failed",
+			"partial",
+		])
 		.optional()
 		.describe("Filter by post status"),
-	include: z.string().optional().describe("Comma-separated list of fields to include in the response (e.g. 'targets,media')"),
-	include_external: z.enum(["true", "false"]).default("false").optional()
-		.describe("When true, also return external posts merged by published_at (works with status=published or no status filter)"),
+	include: z
+		.string()
+		.optional()
+		.describe(
+			"Comma-separated list of fields to include in the response (e.g. 'targets,media')",
+		),
+	include_external: z
+		.enum(["true", "false"])
+		.default("false")
+		.optional()
+		.describe(
+			"When true, also return external posts merged by published_at (works with status=published or no status filter)",
+		),
 });
 
 export function paginatedResponse<T extends z.ZodTypeAny>(itemSchema: T) {

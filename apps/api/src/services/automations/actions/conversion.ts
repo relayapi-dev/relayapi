@@ -1,16 +1,13 @@
 // apps/api/src/services/automations/actions/conversion.ts
 //
-// log_conversion_event persists an immutable conversion fact before emitting
-// the corresponding internal trigger event.
+// log_conversion_event persists one conversion fact/outbox row. A best-effort
+// fast path dispatches it now; the every-minute reconciler owns recovery.
 
 import { automationConversionEvents } from "@relayapi/db";
 import type { Action } from "../../../schemas/automation-actions";
-import {
-	emitInternalEvent,
-	resolveTriggeringSocialAccountId,
-} from "../internal-events";
+import { processAutomationConversionDispatch } from "../../automation-conversion-dispatch";
+import { resolveTriggeringSocialAccountId } from "../internal-events";
 import { applyMergeTags } from "../merge-tags";
-import type { InboundEvent } from "../trigger-matcher";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type LogConversionEventAction = Extract<
@@ -37,6 +34,11 @@ const logConversionEvent: ActionHandler<LogConversionEventAction> = async (
 	const occurrenceId =
 		ctx.effectIdempotencyKeyFor?.(`conversion:${action.id}`) ??
 		`${ctx.runId}:${action.id}`;
+	const triggerEvent = ctx.context.triggerEvent as
+		| { payload?: { _event_depth?: number } }
+		| undefined;
+	const eventDepth = triggerEvent?.payload?._event_depth ?? 0;
+	const socialAccountId = resolveTriggeringSocialAccountId(ctx);
 
 	await ctx.db
 		.insert(automationConversionEvents)
@@ -50,32 +52,23 @@ const logConversionEvent: ActionHandler<LogConversionEventAction> = async (
 			eventName,
 			value,
 			currency,
+			channel: ctx.channel,
+			socialAccountId,
+			conversationId: ctx.conversationId,
+			eventDepth,
 			metadata: { action_id: action.id },
 		})
 		.onConflictDoNothing({ target: automationConversionEvents.occurrenceId });
 
-	const triggerEvent = ctx.context.triggerEvent as
-		| { payload?: { _event_depth?: number } }
-		| undefined;
-	const event: InboundEvent = {
-		kind: "conversion_event",
-		channel: ctx.channel as InboundEvent["channel"],
-		organizationId: ctx.organizationId,
-		socialAccountId: resolveTriggeringSocialAccountId(ctx),
-		contactId: ctx.contactId,
-		conversationId: ctx.conversationId,
-		eventName,
-		payload: {
-			value,
-			currency,
-			source: "automation",
-			automation_id: ctx.automationId,
-			run_id: ctx.runId,
-			action_id: action.id,
-			_event_depth: triggerEvent?.payload?._event_depth ?? 0,
-		},
-	};
-	await emitInternalEvent(ctx.db, event, ctx.env);
+	try {
+		await processAutomationConversionDispatch(ctx.db, ctx.env, {
+			occurrenceId,
+			limit: 1,
+		});
+	} catch {
+		// The committed conversion row is the authority. The every-minute
+		// dispatcher will reclaim it if the fast-path handoff is unavailable.
+	}
 };
 
 export const conversionHandlers: ActionRegistry = {

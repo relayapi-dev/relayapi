@@ -19,25 +19,10 @@ interface RTCIceServer {
 }
 
 async function getTURNConfig(): Promise<RTCIceServer[]> {
-  const response = await fetch('/api/turn-credentials');
-  const data = await response.json();
-  
-  return [
-    {
-      urls: 'stun:stun.cloudflare.com:3478'
-    },
-    {
-      urls: [
-        'turn:turn.cloudflare.com:3478?transport=udp',
-        'turn:turn.cloudflare.com:3478?transport=tcp',
-        'turns:turn.cloudflare.com:5349?transport=tcp',
-        'turns:turn.cloudflare.com:443?transport=tcp'
-      ],
-      username: data.username,
-      credential: data.credential,
-      credentialType: 'password'
-    }
-  ];
+  const response = await fetch('/api/turn-credentials', { method: 'POST' });
+  if (!response.ok) throw new Error('Unable to get TURN credentials');
+  const data = await response.json() as { iceServers: RTCIceServer[] };
+  return data.iceServers;
 }
 
 // Use in RTCPeerConnection
@@ -59,7 +44,7 @@ Recommended order for browser clients:
 ```typescript
 function filterICEServersForBrowser(urls: string[]): string[] {
   return urls
-    .filter(url => !url.includes(':53'))  // Remove port 53
+    .filter(url => !/:53(?:\?|$)/.test(url))  // Remove port 53, but keep 5349
     .sort((a, b) => {
       // Prioritize UDP over TCP over TLS
       if (a.includes('transport=udp')) return -1;
@@ -77,7 +62,9 @@ When credentials expire during long calls:
 
 ```typescript
 async function refreshTURNCredentials(pc: RTCPeerConnection): Promise<void> {
-  const newCreds = await fetch('/turn-credentials').then(r => r.json());
+  const response = await fetch('/api/turn-credentials', { method: 'POST' });
+  if (!response.ok) throw new Error('Unable to refresh TURN credentials');
+  const newCreds = await response.json() as { iceServers: RTCIceServer[] };
   const config = pc.getConfiguration();
   config.iceServers = newCreds.iceServers;
   pc.setConfiguration(config);
@@ -117,20 +104,20 @@ pc.addEventListener('iceconnectionstatechange', async () => {
 
 ```typescript
 class TURNCredentialsManager {
-  private creds: { username: string; credential: string; urls: string[]; expiresAt: number; } | null = null;
+  private creds: { iceServers: RTCIceServer[]; expiresAt: number } | null = null;
 
   async getCredentials(keyId: string, keySecret: string): Promise<RTCIceServer[]> {
     const now = Date.now();
     
     if (this.creds && this.creds.expiresAt > now) {
-      return this.buildIceServers(this.creds);
+      return this.creds.iceServers;
     }
 
     const ttl = 3600;
     if (ttl > 172800) throw new Error('TTL max 48hrs');
 
     const res = await fetch(
-      `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate`,
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
       {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${keySecret}`, 'Content-Type': 'application/json' },
@@ -138,24 +125,21 @@ class TURNCredentialsManager {
       }
     );
 
-    const data = await res.json();
-    const filteredUrls = data.iceServers.urls.filter((url: string) => !url.includes(':53'));
+    if (!res.ok) throw new Error(`TURN credential generation failed: ${res.status}`);
+    const data = await res.json() as { iceServers: RTCIceServer[] };
+    const iceServers = data.iceServers.map(server => ({
+      ...server,
+      urls: Array.isArray(server.urls)
+        ? server.urls.filter(url => !/:53(?:\?|$)/.test(url))
+        : server.urls
+    }));
 
     this.creds = {
-      username: data.iceServers.username,
-      credential: data.iceServers.credential,
-      urls: filteredUrls,
+      iceServers,
       expiresAt: now + (ttl * 1000) - 60000
     };
 
-    return this.buildIceServers(this.creds);
-  }
-
-  private buildIceServers(c: { username: string; credential: string; urls: string[] }): RTCIceServer[] {
-    return [
-      { urls: 'stun:stun.cloudflare.com:3478' },
-      { urls: c.urls, username: c.username, credential: c.credential, credentialType: 'password' as const }
-    ];
+    return this.creds.iceServers;
   }
 }
 ```

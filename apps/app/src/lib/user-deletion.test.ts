@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	account,
 	apikey,
+	emailDeliveries,
 	inviteTokens,
 	media,
 	member,
@@ -10,9 +11,25 @@ import {
 	session,
 	user,
 } from "@relayapi/db";
+import type { AvatarObjectBucket } from "./avatar-object-keys";
+import type { QueueRescueErasureBucket } from "./queue-rescue-erasure";
 import { deleteUserAtomically } from "./user-deletion";
 
 type Row = Record<string, unknown>;
+
+function emptyQueueRescueBucket(): QueueRescueErasureBucket {
+	return {
+		list: async () => ({ objects: [], truncated: false }),
+		delete: async () => undefined,
+	};
+}
+
+function emptyAvatarBucket(): AvatarObjectBucket {
+	return {
+		list: async () => ({ objects: [], truncated: false }),
+		delete: async () => undefined,
+	};
+}
 
 function fakeDatabase(seed: {
 	users?: Row[];
@@ -32,7 +49,9 @@ function fakeDatabase(seed: {
 				? (seed.memberships ?? [])
 				: (seed.ownerCandidates ?? []);
 		}
-		if (table === apikey) return seed.keys ?? [];
+		if (table === apikey) {
+			return (seed.keys ?? []).filter((key) => key.principalKind === "member");
+		}
 		if (table === organization) {
 			return (
 				seed.activeOrganizations ??
@@ -87,7 +106,13 @@ describe("user deletion preparation", () => {
 	it("fails closed when cache invalidation is unavailable", async () => {
 		const { db } = fakeDatabase({});
 		await expect(
-			deleteUserAtomically(db as never, undefined, "user_1"),
+			deleteUserAtomically(
+				db as never,
+				undefined,
+				undefined,
+				undefined,
+				"user_1",
+			),
 		).rejects.toMatchObject({
 			status: "SERVICE_UNAVAILABLE",
 			body: { code: "IDENTITY_DELETION_UNAVAILABLE" },
@@ -104,7 +129,13 @@ describe("user deletion preparation", () => {
 		const kv = { delete: async () => undefined };
 
 		await expect(
-			deleteUserAtomically(db as never, kv, "user_1"),
+			deleteUserAtomically(
+				db as never,
+				kv,
+				emptyAvatarBucket(),
+				emptyQueueRescueBucket(),
+				"user_1",
+			),
 		).rejects.toMatchObject({
 			status: "CONFLICT",
 			body: {
@@ -122,7 +153,13 @@ describe("user deletion preparation", () => {
 		});
 		const kv = { delete: async () => undefined };
 
-		await deleteUserAtomically(db as never, kv, "user_1");
+		await deleteUserAtomically(
+			db as never,
+			kv,
+			emptyAvatarBucket(),
+			emptyQueueRescueBucket(),
+			"user_1",
+		);
 		expect(deletedTables).toContain(user);
 	});
 
@@ -133,7 +170,8 @@ describe("user deletion preparation", () => {
 					id: "key_1",
 					key: "hash_1",
 					organizationId: "org_1",
-					metadata: { principal_type: "dashboard_user" },
+					principalId: "prn_member_1",
+					principalKind: "member",
 				},
 			],
 		});
@@ -144,7 +182,13 @@ describe("user deletion preparation", () => {
 		};
 
 		await expect(
-			deleteUserAtomically(db as never, kv, "user_1"),
+			deleteUserAtomically(
+				db as never,
+				kv,
+				emptyAvatarBucket(),
+				emptyQueueRescueBucket(),
+				"user_1",
+			),
 		).rejects.toThrow("KV unavailable");
 		expect(deletedTables).toHaveLength(0);
 		expect(updatedTables).toHaveLength(0);
@@ -162,13 +206,15 @@ describe("user deletion preparation", () => {
 					id: "key_1",
 					key: "hash_1",
 					organizationId: "org_1",
-					metadata: { principal_type: "dashboard_user" },
+					principalId: "prn_member_1",
+					principalKind: "member",
 				},
 				{
 					id: "key_2",
 					key: "hash_2",
 					organizationId: "org_1",
-					metadata: { principal_type: "service" },
+					principalId: "prn_service_1",
+					principalKind: "service",
 				},
 			],
 		});
@@ -179,7 +225,13 @@ describe("user deletion preparation", () => {
 			},
 		};
 
-		await deleteUserAtomically(db as never, kv, "user_1");
+		await deleteUserAtomically(
+			db as never,
+			kv,
+			emptyAvatarBucket(),
+			emptyQueueRescueBucket(),
+			"user_1",
+		);
 
 		expect(deletedTables).toContain(apikey);
 		expect(deletedTables).toContain(inviteTokens);
@@ -193,7 +245,7 @@ describe("user deletion preparation", () => {
 		});
 		expect(updatedTables).toContainEqual({
 			table: inviteTokens,
-			values: { usedBy: null },
+			values: { redeemedByUserId: null },
 		});
 		expect(updatedTables).toContainEqual({
 			table: media,
@@ -202,6 +254,15 @@ describe("user deletion preparation", () => {
 		expect(updatedTables).toContainEqual({
 			table: posts,
 			values: { createdBy: null },
+		});
+		expect(updatedTables).toContainEqual({
+			table: emailDeliveries,
+			values: expect.objectContaining({
+				subjectUserId: null,
+				envelopeCiphertext: null,
+				envelopeKeyId: null,
+				error: "recipient_identity_erased",
+			}),
 		});
 		expect(deletedCacheKeys.sort()).toEqual([
 			"apikey:hash_1",

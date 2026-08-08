@@ -28,16 +28,21 @@ import { eq } from "drizzle-orm";
 import { encryptToken } from "../lib/crypto";
 import type { Graph } from "../schemas/automation-graph";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
+import { decryptContactRow } from "../services/contact-protection";
 import {
 	deleteOwnedFixtureOrganization,
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import {
+	protectedContactChannelFixture,
+	protectedContactFixture,
+} from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -125,7 +130,7 @@ async function makeAutomation(name: string) {
 async function makeContact(name: string) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({ organizationId: orgId, workspaceId, name })
+		.values(await protectedContactFixture({ organizationId: orgId, workspaceId, name }))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -309,32 +314,36 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 			const primaryContact = await makeContact("primary-contact");
 			const [otherContact] = await db
 				.insert(contacts)
-				.values({
+				.values(await protectedContactFixture({
 					organizationId: otherOrgId,
 					workspaceId: otherWs.id,
 					name: "other-contact",
-				})
+				}))
 				.returning();
 			if (!otherContact) throw new Error("other contact insert failed");
 
 			// Both contacts have the same platform_id identifier "abc123" but on
 			// their respective org-scoped social accounts.
-			await db.insert(contactChannels).values([
-				{
+			await db.insert(contactChannels).values(
+				await Promise.all([
+					protectedContactChannelFixture({
 					organizationId: orgId,
+					workspaceId,
 					contactId: primaryContact.id,
 					socialAccountId: primarySa.id,
 					platform: "telegram",
 					identifier: "abc123",
-				},
-				{
+					}),
+					protectedContactChannelFixture({
 					organizationId: otherOrgId,
+					workspaceId: otherWs.id,
 					contactId: otherContact.id,
 					socialAccountId: otherSa.id,
 					platform: "telegram",
 					identifier: "abc123",
-				},
-			]);
+					}),
+				]),
+			);
 
 			const auto = await makeAutomation("webhook-platform-id-scope");
 			const slug = `slug-${generateId("").slice(-10)}`;
@@ -460,7 +469,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				where: eq(contacts.id, run.contactId),
 			});
 			expect(created).toBeTruthy();
-			expect(created?.email).toBe(email);
+			const plaintextCreated = created
+				? await decryptContactRow(TEST_ENCRYPTION_KEY, created)
+				: null;
+			expect(plaintextCreated?.email).toBe(email);
 			// The new row lives under this automation's workspace.
 			expect(created?.workspaceId).toBe(workspaceId);
 		}
@@ -560,7 +572,10 @@ describe("receiveAutomationWebhook — custom_field contact lookup", () => {
 				const created = await db.query.contacts.findFirst({
 					where: eq(contacts.id, run.contactId),
 				});
-				expect(created?.email).toBe(email);
+				const plaintextCreated = created
+					? await decryptContactRow(TEST_ENCRYPTION_KEY, created)
+					: null;
+				expect(plaintextCreated?.email).toBe(email);
 				expect(created?.workspaceId).toBeNull();
 				expect(created?.scopeKey).toBe("org");
 			}

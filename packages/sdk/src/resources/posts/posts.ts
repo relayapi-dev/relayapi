@@ -3,6 +3,8 @@
 import { APIResource } from '../../core/resource';
 import * as LogsAPI from './logs';
 import { LogListParams, LogListResponse, LogRetrieveResponse, Logs } from './logs';
+import * as PostTagsAPI from './tags';
+import { PostTagListParams, PostTagListResponse, PostTags } from './tags';
 import { APIPromise } from '../../core/api-promise';
 import { buildHeaders } from '../../internal/headers';
 import { RequestOptions } from '../../internal/request-options';
@@ -16,6 +18,7 @@ function isRequestOptions(
 
 export class Posts extends APIResource {
   logs: LogsAPI.Logs = new LogsAPI.Logs(this._client);
+  tags: PostTagsAPI.PostTags = new PostTagsAPI.PostTags(this._client);
 
   /**
    * Create a post. Use scheduled_at: "now" to publish immediately, "draft" to save
@@ -1717,6 +1720,7 @@ export interface ExternalPost {
 }
 
 Posts.Logs = Logs;
+Posts.PostTags = PostTags;
 
 export declare namespace Posts {
   export {
@@ -1755,5 +1759,11 @@ export declare namespace Posts {
     type LogRetrieveResponse as LogRetrieveResponse,
     type LogListResponse as LogListResponse,
     type LogListParams as LogListParams,
+  };
+
+  export {
+    PostTags as PostTags,
+    type PostTagListResponse as PostTagListResponse,
+    type PostTagListParams as PostTagListParams,
   };
 }

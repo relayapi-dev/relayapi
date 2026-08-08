@@ -2,17 +2,17 @@
 
 ## CRITICAL: Top Production Mistakes
 
-### 1. "Entire Batch Retried After Single Error"
+### 1. "Unhandled Batch Messages Retried After Single Error"
 
-**Problem:** Throwing uncaught error in queue handler retries the entire batch, not just the failed message  
+**Problem:** Throwing an uncaught error retries every message without an explicit outcome, not just the failed message; messages already acknowledged remain acknowledged
 **Cause:** Uncaught exceptions propagate to the runtime, triggering batch-level retry  
 **Solution:** Always wrap individual message processing in try/catch and call `msg.retry()` explicitly
 
 ```typescript
-// ❌ BAD: Throws error, retries entire batch
+// ❌ BAD: Throws error, retries all messages without an explicit outcome
 async queue(batch: MessageBatch): Promise<void> {
   for (const msg of batch.messages) {
-    await riskyOperation(msg.body); // If this throws, entire batch retries
+    await riskyOperation(msg.body); // If this throws, remaining unhandled messages retry
     msg.ack();
   }
 }
@@ -30,32 +30,34 @@ async queue(batch: MessageBatch): Promise<void> {
 }
 ```
 
-### 2. "Messages Retry Forever"
+### 2. "Failed Messages Disappear"
 
-**Problem:** Messages not explicitly ack'd or retry'd will auto-retry indefinitely  
-**Cause:** Runtime default behavior retries unhandled messages until `max_retries` reached  
-**Solution:** Always call `msg.ack()` or `msg.retry()` for each message. Never leave messages unhandled.
+**Problem:** A caught processing failure is never redelivered or sent to the DLQ
+**Cause:** Returning successfully implicitly acknowledges messages without an explicit outcome
+**Solution:** Call `msg.retry()` in each per-message catch. An uncaught handler error instead retries all messages in the batch that were not already acknowledged.
 
 ```typescript
-// ❌ BAD: Skipped messages auto-retry forever
+// ❌ BAD: Caught failures are implicitly acknowledged when the handler returns
 async queue(batch: MessageBatch): Promise<void> {
   for (const msg of batch.messages) {
-    if (shouldProcess(msg.body)) {
+    try {
       await process(msg.body);
       msg.ack();
+    } catch (error) {
+      console.error('Processing failed', error);
+      // Missing msg.retry(): this message will be lost.
     }
-    // Missing: msg.ack() for skipped messages - they will retry!
   }
 }
 
-// ✅ GOOD: Explicitly handle all messages
+// ✅ GOOD: Explicitly retry failures
 async queue(batch: MessageBatch): Promise<void> {
   for (const msg of batch.messages) {
-    if (shouldProcess(msg.body)) {
+    try {
       await process(msg.body);
       msg.ack();
-    } else {
-      msg.ack(); // Explicitly ack even if not processing
+    } catch (error) {
+      msg.retry({ delaySeconds: 60 });
     }
   }
 }

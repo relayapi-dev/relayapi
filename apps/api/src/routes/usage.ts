@@ -1,10 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { PRICING } from "@relayapi/config";
-import {
-	apiRequestLogs,
-	organizationSubscriptions,
-	usageBuckets,
-} from "@relayapi/db";
+import { apiRequestLogs, usageBuckets } from "@relayapi/db";
 import { and, count, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import { resolveBillingPeriod } from "../middleware/usage-tracking";
 import {
@@ -13,6 +9,16 @@ import {
 	paginatedResponse,
 } from "../schemas/common";
 import { UsageResponse } from "../schemas/usage";
+import { ensureComplimentaryBillingAuthority } from "../services/billing-periods";
+import { reconcileStripeBillingAuthority } from "../services/stripe-billing-authority";
+import {
+	effectiveCarryoverAllowance,
+	getUsageCarryoverContribution,
+} from "../services/usage-carryover";
+import {
+	resolveSuccessfulMutationAuthority,
+	type SuccessfulMutationAuthoritySnapshot,
+} from "../services/usage-meter";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -37,6 +43,10 @@ const getUsage = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		503: {
+			description: "Billing authority is temporarily pending reconciliation",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -44,56 +54,157 @@ const getUsage = createRoute({
 
 app.openapi(getUsage, async (c) => {
 	const orgId = c.get("orgId");
-	const plan = c.get("plan");
-	const callsIncluded = c.get("callsIncluded");
 	const db = c.get("db");
-
 	const now = new Date();
-	// Resolve the org's current billing window exactly as the write path does
-	// (resolveBillingPeriod): the Stripe period for pro orgs, calendar month
-	// otherwise. PostgreSQL usage buckets are authoritative; KV is only a display
-	// hint written after commit and is never consulted for quota or billing.
-	const { periodStart: cycleStart, periodEnd: cycleEnd } = resolveBillingPeriod(
-		c.get("periodStart"),
-		c.get("periodEnd"),
-		now,
-	);
 
-	const [subResult, currentUsageRows] = await Promise.all([
-		db
-			.select()
-			.from(organizationSubscriptions)
-			.where(eq(organizationSubscriptions.organizationId, orgId))
-			.limit(1),
-		db
+	let snapshot:
+		| SuccessfulMutationAuthoritySnapshot
+		| {
+				plan: "pro";
+				billingSource: "self_hosted";
+				billable: false;
+				billingPeriodId: null;
+				periodStart: Date;
+				periodEnd: Date;
+				quotaMode: "unlimited";
+				includedUnits: null;
+				basePriceCents: 0;
+				pricePerThousandUnitsCents: null;
+				subscriptionStatus: "active";
+				bucketId: string | null;
+				committedUnits: number;
+				reservedUnits: number;
+				carryoverCommittedUnits: number;
+				carryoverPendingUnits: number;
+		  };
+
+	if (c.get("billingSource") === "self_hosted") {
+		const period = resolveBillingPeriod(null, null, now);
+		const [bucket] = await db
 			.select()
 			.from(usageBuckets)
 			.where(
 				and(
 					eq(usageBuckets.organizationId, orgId),
 					eq(usageBuckets.metric, "successful_mutation"),
-					eq(usageBuckets.periodStart, cycleStart),
+					eq(usageBuckets.periodStart, period.periodStart),
 				),
 			)
-			.limit(1),
-	]);
+			.limit(1);
+		const carryover = bucket
+			? await getUsageCarryoverContribution(db, {
+					organizationId: orgId,
+					successorBucketId: bucket.id,
+				})
+			: { committedUnits: 0, pendingUnits: 0 };
+		snapshot = {
+			plan: "pro",
+			billingSource: "self_hosted",
+			billable: false,
+			billingPeriodId: null,
+			...period,
+			quotaMode: "unlimited",
+			includedUnits: null,
+			basePriceCents: 0,
+			pricePerThousandUnitsCents: null,
+			subscriptionStatus: "active",
+			bucketId: bucket?.id ?? null,
+			committedUnits: bucket?.committedUnits ?? 0,
+			reservedUnits: bucket?.reservedUnits ?? 0,
+			carryoverCommittedUnits: carryover.committedUnits,
+			carryoverPendingUnits: carryover.pendingUnits,
+		};
+	} else {
+		let resolution = await resolveSuccessfulMutationAuthority(db, orgId, now);
+		if (resolution.state === "pending") {
+			try {
+				if (resolution.billingSource === "stripe") {
+					const repaired = await reconcileStripeBillingAuthority(c.env, db, {
+						organizationId: orgId,
+						ownerId: `usage:${orgId}:${crypto.randomUUID()}`,
+						now,
+					});
+					if (repaired.state === "pending") {
+						c.header("Retry-After", "5");
+						return c.json(
+							{
+								error: {
+									code: "BILLING_AUTHORITY_PENDING",
+									message:
+										"Billing authority is being reconciled; retry shortly",
+								},
+							},
+							503,
+						);
+					}
+				} else {
+					await ensureComplimentaryBillingAuthority(db, {
+						organizationId: orgId,
+						now,
+					});
+				}
+				// The durable outbox invalidates every organization key; remove this
+				// request's projection immediately only after authority now exists.
+				await c.env.KV.delete(`apikey:${c.get("keyHash")}`);
+				resolution = await resolveSuccessfulMutationAuthority(db, orgId, now);
+			} catch (error) {
+				console.error("Usage billing-authority repair failed", {
+					organizationId: orgId,
+					error: error instanceof Error ? error.message : "unknown error",
+				});
+			}
+		}
+		if (resolution.state === "pending") {
+			c.header("Retry-After", "5");
+			return c.json(
+				{
+					error: {
+						code: "BILLING_AUTHORITY_PENDING",
+						message: "Billing authority is being reconciled; retry shortly",
+					},
+				},
+				503,
+			);
+		}
+		snapshot = resolution.authority;
+	}
 
-	const sub = subResult[0];
-	const dbUsage = currentUsageRows[0];
-	const apiCallsUsed = dbUsage?.committedUnits ?? 0;
-	const overageCalls = Math.max(0, apiCallsUsed - callsIncluded);
+	const plan = snapshot.plan;
+	const quotaMode = snapshot.quotaMode;
+	const apiCallsUsed = snapshot.committedUnits;
+	const effectiveIncluded = effectiveCarryoverAllowance(
+		snapshot.includedUnits,
+		snapshot.carryoverCommittedUnits,
+	);
+	const overageCalls =
+		effectiveIncluded === null
+			? 0
+			: Math.max(0, apiCallsUsed - effectiveIncluded);
 	// Pro-rated to the cent, matching the amount actually charged via Stripe
 	// in invoice-generator.ts and the "$1 per 1,000 extra calls" pricing copy.
 	const overageCostCents = Math.max(
 		0,
-		Math.ceil((overageCalls * PRICING.pricePerThousandCallsCents) / 1000),
+		Math.ceil(
+			(overageCalls * (snapshot.pricePerThousandUnitsCents ?? 0)) / 1000,
+		),
 	);
 
 	// Free plan: remaining is hard-capped; Pro plan: can go negative (overage billed)
 	const apiCallsRemaining =
-		plan === "free"
-			? Math.max(0, callsIncluded - apiCallsUsed)
-			: callsIncluded - apiCallsUsed; // Pro: can go negative (overage billed)
+		effectiveIncluded === null
+			? null
+			: quotaMode === "hard"
+				? Math.max(
+						0,
+						effectiveIncluded -
+							apiCallsUsed -
+							snapshot.reservedUnits -
+							snapshot.carryoverPendingUnits,
+					)
+				: effectiveIncluded -
+					apiCallsUsed -
+					snapshot.reservedUnits -
+					snapshot.carryoverPendingUnits;
 
 	// Rate limit info from plan config (counters managed by CF Rate Limiting binding)
 	const rateLimitMax =
@@ -103,7 +214,9 @@ app.openapi(getUsage, async (c) => {
 		{
 			plan: {
 				name: plan,
-				api_calls_limit: callsIncluded,
+				quota_mode: quotaMode,
+				api_calls_limit:
+					effectiveIncluded === null ? null : String(effectiveIncluded),
 				api_calls_per_min: rateLimitMax,
 				features: {
 					analytics: plan === "pro",
@@ -111,19 +224,22 @@ app.openapi(getUsage, async (c) => {
 				},
 			},
 			subscription: {
-				status: sub?.status ?? (plan === "free" ? "cancelled" : "active"),
-				monthly_price_cents:
-					sub?.monthlyPriceCents ??
-					(plan === "pro" ? PRICING.monthlyPriceCents : 0),
-				price_per_thousand_calls_cents: PRICING.pricePerThousandCallsCents,
+				status: snapshot.subscriptionStatus,
+				monthly_price_cents: snapshot.basePriceCents,
+				price_per_thousand_calls_cents:
+					snapshot.pricePerThousandUnitsCents ?? 0,
 			},
 			usage: {
-				api_calls_used: apiCallsUsed,
-				api_calls_remaining: apiCallsRemaining,
-				overage_calls: overageCalls,
+				quota_mode: quotaMode,
+				included_units:
+					effectiveIncluded === null ? null : String(effectiveIncluded),
+				api_calls_used: String(apiCallsUsed),
+				api_calls_remaining:
+					apiCallsRemaining === null ? null : String(apiCallsRemaining),
+				overage_calls: String(overageCalls),
 				overage_cost_cents: overageCostCents,
-				cycle_start: cycleStart.toISOString(),
-				cycle_end: cycleEnd.toISOString(),
+				cycle_start: snapshot.periodStart.toISOString(),
+				cycle_end: snapshot.periodEnd.toISOString(),
 			},
 			rate_limit: {
 				limit_per_minute: rateLimitMax,

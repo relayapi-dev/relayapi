@@ -38,18 +38,10 @@ npx wrangler pipelines setup   # creates stream + sink + pipeline, optionally bu
 # 1. Stream
 npx wrangler pipelines streams create my_stream --schema-file schema.json
 
-# 2. Sink — R2 Data Catalog (Iceberg). Creates the namespace + table.
-npx wrangler pipelines sinks create my_sink \
-  --type r2-data-catalog \
-  --bucket my-bucket --namespace my_namespace --table my_table \
-  --catalog-token $API_TOKEN \
-  --compression zstd --roll-interval 300
-
-# 2b. Sink — R2 raw Parquet (alternative)
-npx wrangler pipelines sinks create my_sink \
-  --type r2 --bucket my-bucket --format parquet \
-  --path analytics/events --partitioning "year=%Y/month=%m/day=%d" \
-  --access-key-id $KEY --secret-access-key $SECRET
+# 2. Create the R2 Data Catalog or raw-R2 sink in the dashboard, whose masked
+#    fields keep catalog tokens and S3 credentials out of shell argv. For
+#    automation, use the REST pattern below with a secret-manager-provisioned
+#    request-body file. Do not pass credentials with Wrangler's token/key flags.
 
 # 3. Pipeline (SQL connects stream → sink)
 npx wrangler pipelines create my_pipeline \
@@ -66,25 +58,22 @@ Base: `https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pipelines/v1`
 
 ```bash
 # Stream
-curl -X POST "$BASE_URL/streams" -H "Authorization: Bearer $API_TOKEN" \
+curl -X POST "$BASE_URL/streams" --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" -d '{
     "name": "my_stream",
     "http": {"enabled": true, "authentication": false},
     "schema": {"fields": [{"name": "event_id", "type": "string", "required": true}]}
   }'
 
-# Sink — NOTE REST field names differ from CLI flags (see table)
-curl -X POST "$BASE_URL/sinks" -H "Authorization: Bearer $API_TOKEN" \
-  -H "Content-Type: application/json" -d '{
-    "name": "my_sink", "type": "r2_data_catalog",
-    "config": {"bucket": "my-bucket", "namespace": "my_namespace",
-               "table_name": "my_table", "token": "'$API_TOKEN'",
-               "rolling_policy": {"interval_seconds": 300}},
-    "format": {"type": "parquet"}
-  }'
+# Sink — NOTE REST field names differ from CLI flags (see table).
+# /secure/pipeline-sink.json is a mode-0600 file provisioned directly by the
+# secret manager; it contains the complete sink JSON, including its token.
+curl -X POST "$BASE_URL/sinks" --header @/secure/bearer-auth-header \
+  -H "Content-Type: application/json" \
+  --data-binary @/secure/pipeline-sink.json
 
 # Pipeline
-curl -X POST "$BASE_URL/pipelines" -H "Authorization: Bearer $API_TOKEN" \
+curl -X POST "$BASE_URL/pipelines" --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{"name": "my_pipeline", "sql": "INSERT INTO my_sink SELECT * FROM my_stream;"}'
 ```

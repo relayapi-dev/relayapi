@@ -47,6 +47,9 @@ export interface APIKeyCreateResponse {
    */
   created_at: string;
 
+  /** Principal that created this service key. */
+  created_by_principal_id: string | null;
+
   /**
    * Expiration timestamp
    */
@@ -71,6 +74,15 @@ export interface APIKeyCreateResponse {
    * Whether this key can create, list, and revoke API keys
    */
   can_manage_api_keys: boolean;
+
+  /** Whether this key can view billing */
+  can_view_billing: boolean;
+
+  /** Whether this key can mutate subscriptions and paid add-ons */
+  can_manage_billing: boolean;
+
+  /** Whether this key can create or increase provider spend */
+  can_manage_spend: boolean;
 
   /**
    * Key prefix
@@ -110,6 +122,12 @@ export namespace APIKeyListResponse {
     created_at: string;
 
     /**
+     * Principal that created the service key, when attribution metadata is
+     * available.
+     */
+    created_by_principal_id: string | null;
+
+    /**
      * Whether the key is active
      */
     enabled: boolean;
@@ -133,6 +151,15 @@ export namespace APIKeyListResponse {
      * Whether this key can create, list, and revoke API keys
      */
     can_manage_api_keys: boolean;
+
+    /** Whether this key can view billing */
+    can_view_billing: boolean;
+
+    /** Whether this key can mutate subscriptions and paid add-ons */
+    can_manage_billing: boolean;
+
+    /** Whether this key can create or increase provider spend */
+    can_manage_spend: boolean;
 
     /**
      * Key prefix (e.g. rlay*live*)
@@ -162,6 +189,15 @@ export interface APIKeyCreateParams {
    * workspace_scope='all'
    */
   can_manage_api_keys?: boolean;
+
+  /** Allow this key to view billing; organization owner grant required. */
+  can_view_billing?: boolean;
+
+  /** Allow subscription and paid add-on mutations; also requires view billing. */
+  can_manage_billing?: boolean;
+
+  /** Allow creation or increases of provider spend. */
+  can_manage_spend?: boolean;
 
   /**
    * Number of days until the key expires

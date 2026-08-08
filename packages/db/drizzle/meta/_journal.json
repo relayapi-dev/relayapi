@@ -8,55 +8,6 @@
       "when": 1783987200000,
       "tag": "0000_baseline",
       "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1784330876246,
-      "tag": "0001_external_post_previews",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1784360680570,
-      "tag": "0002_aspiring_lake",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1784362088619,
-      "tag": "0003_fine_blazing_skull",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1784362487412,
-      "tag": "0004_amused_shaman",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1784365100749,
-      "tag": "0005_atomic_identity_deletion",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1784377480200,
-      "tag": "0006_automation_runtime_integrity",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1784377487117,
-      "tag": "0007_automation_binding_rollout",
-      "breakpoints": true
     }
   ]
 }

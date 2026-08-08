@@ -20,6 +20,11 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
 import { authClient, useSession } from "@/lib/auth-client";
 import { PageHeader } from "@/components/dashboard/page-header";
+import {
+  cacheUserLanguage,
+  DEFAULT_USER_LANGUAGE,
+  USER_LANGUAGE_OPTIONS,
+} from "@/hooks/use-user-language";
 
 const stagger = {
   hidden: {},
@@ -80,6 +85,8 @@ export function ProfilePage() {
   );
   const [_timezoneLoading, setTimezoneLoading] = useState(true);
   const timezoneTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [language, setLanguage] = useState(DEFAULT_USER_LANGUAGE);
+  const languageTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const allTimezones = typeof Intl !== "undefined" && Intl.supportedValuesOf
     ? Intl.supportedValuesOf("timeZone")
     : [];
@@ -108,6 +115,10 @@ export function ProfilePage() {
           setTimezone(browserTz);
           saveTimezone(browserTz);
         }
+        if (typeof data.language === "string") {
+          setLanguage(data.language);
+          cacheUserLanguage(data.language);
+        }
       })
       .catch(() => {})
       .finally(() => setTimezoneLoading(false));
@@ -120,6 +131,18 @@ export function ProfilePage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ timezone: tz }),
+      }).catch(() => {});
+    }, 500);
+  }, []);
+
+  const saveLanguage = useCallback((nextLanguage: string) => {
+    clearTimeout(languageTimer.current);
+    cacheUserLanguage(nextLanguage);
+    languageTimer.current = setTimeout(() => {
+      fetch("/api/user-preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: nextLanguage }),
       }).catch(() => {});
     }, 500);
   }, []);
@@ -478,7 +501,7 @@ export function ProfilePage() {
         </div>
       </motion.div>
 
-      {/* Timezone */}
+      {/* Locale */}
       <motion.div
         variants={fadeUp}
         className="rounded-[12px] border border-border bg-card overflow-hidden"
@@ -486,11 +509,35 @@ export function ProfilePage() {
         <div className="px-5 py-3.5 border-b border-border">
           <h2 className="text-[13px] font-medium flex items-center gap-2">
             <Globe className="size-3.5 text-muted-foreground" />
-            Timezone
+            Language &amp; timezone
           </h2>
         </div>
         <div className="p-5">
-          <div className="space-y-2 max-w-xs">
+          <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label
+                htmlFor="profile-language"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Language
+              </label>
+              <select
+                id="profile-language"
+                value={language}
+                onChange={(event) => {
+                  setLanguage(event.target.value);
+                  saveLanguage(event.target.value);
+                }}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-ring"
+              >
+                {USER_LANGUAGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
             <label
               htmlFor="profile-timezone"
               className="text-xs font-medium text-muted-foreground"
@@ -512,6 +559,7 @@ export function ProfilePage() {
                 </option>
               ))}
             </select>
+            </div>
           </div>
         </div>
       </motion.div>

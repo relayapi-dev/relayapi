@@ -1,8 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import {
+	AUTOMATION_STEP_FAILURE_OUTCOME,
+	AUTOMATION_STEP_OUTCOMES,
 	automationEffects,
 	automationNodeExecutions,
 	automationRuns,
+	automationStepRuns,
 	automations,
 	type Database,
 } from "@relayapi/db";
@@ -150,8 +153,18 @@ describe("automation runner durable execution fence", () => {
 			"provider_idempotency_key",
 		]);
 		expect(automationRuns.revision).toBeDefined();
-		expect(automationNodeExecutions.requestMayHaveBeenSentAt).toBeDefined();
+		expect("requestMayHaveBeenSentAt" in automationNodeExecutions).toBe(false);
 		expect(automationEffects.requestMayHaveBeenSentAt).toBeDefined();
+		expect(automationEffects.kind.enumValues).toEqual([
+			"message_block",
+			"http_request",
+			"automation_action",
+		]);
+		expect(AUTOMATION_STEP_FAILURE_OUTCOME).toBe("failed");
+		expect(AUTOMATION_STEP_OUTCOMES).toContain(AUTOMATION_STEP_FAILURE_OUTCOME);
+		expect(automationStepRuns.outcome.enumValues).toContain(
+			AUTOMATION_STEP_FAILURE_OUTCOME,
+		);
 	});
 
 	it("reclaims only pre-boundary claims and makes expired effects manual-safe", () => {
@@ -262,9 +275,7 @@ describe("automation runner durable execution fence", () => {
 		expect(handler).toBeGreaterThan(arm);
 		expect(completion).toBeGreaterThan(handler);
 		expect(resultCas).toBeGreaterThan(completion);
-		expect(source).toContain(
-			"requestMayHaveBeenSentAt: sql`CURRENT_TIMESTAMP`",
-		);
+		expect(source).toContain("requestMayHaveBeenSentAt: requestBoundary");
 		expect(source).toContain("eq(automationRuns.revision, expectedRevision)");
 		expect(source).toMatch(
 			/revision: sql`\$\{automationRuns\.revision\} \+ 1`/,
@@ -276,5 +287,16 @@ describe("automation runner durable execution fence", () => {
 		expect(source).toContain("_automation_manual_reconciliation");
 		expect(source).toContain("reconcileExpiredAutomationNodeExecutions");
 		expect(source).toContain("node-execution-recovery:");
+	});
+
+	it("derives insights failure accounting from the schema literal", async () => {
+		const source = await Bun.file(
+			new URL("../routes/_automation-insights.ts", import.meta.url),
+		).text();
+		expect(source).toContain("AUTOMATION_STEP_FAILURE_OUTCOME");
+		expect(source).toMatch(
+			/automationStepRuns\.outcome} != \$\{AUTOMATION_STEP_FAILURE_OUTCOME}/,
+		);
+		expect(source).not.toContain('eq(automationStepRuns.outcome, "fail")');
 	});
 });

@@ -5,6 +5,7 @@ import {
 	bigserial,
 	boolean,
 	check,
+	date,
 	foreignKey,
 	index,
 	integer,
@@ -20,7 +21,63 @@ import {
 	unique,
 	uniqueIndex,
 	varchar,
+	vector,
 } from "drizzle-orm/pg-core";
+import {
+	AI_EMBEDDING_DIMENSIONS,
+	AI_EMBEDDING_MODEL,
+	AI_EMBEDDING_PROVIDER,
+	AI_INFERENCE_MODEL,
+	AI_INFERENCE_PROVIDER,
+	AI_KNOWLEDGE_DOCUMENT_MAX_ATTEMPTS,
+} from "./ai-contracts";
+import { LEGACY_CREDENTIAL_VERSION } from "./credential-version";
+import { ddlIntegerLiteral, ddlTextLiteral } from "./ddl-literals";
+import {
+	AD_AUDIENCE_TYPES,
+	AD_CREATION_OPERATION_KINDS,
+	AD_SYNC_TYPES,
+	AI_KNOWLEDGE_SOURCE_TYPES,
+	AUTOMATION_BINDING_TYPES,
+	AUTOMATION_EFFECT_KINDS,
+	AUTOMATION_ENTRYPOINT_KINDS,
+	AUTOMATION_NODE_KINDS,
+	AUTOMATION_SCHEDULED_JOB_TYPES,
+	AUTOMATION_SECRET_KINDS,
+	BILLING_OUTBOX_KINDS,
+	CONTACT_SUBSCRIPTION_EVENT_TYPES,
+	CROSS_POST_ACTION_TYPES,
+	CUSTOM_FIELD_TYPES,
+	ERASURE_HOLD_SUBJECT_KINDS,
+	EXTERNAL_SUBJECT_CLEANUP_SUBJECT_KINDS,
+	IDEA_MEDIA_TYPES,
+	INBOX_CONVERSATION_TYPES,
+	INBOX_DIRECTIONS,
+	INBOX_NOTE_ACTOR_TYPES,
+	INVITE_TOKEN_ROLES,
+	NOTIFICATION_TYPES,
+	ONE_TIME_CAPABILITY_KINDS,
+	ORGANIZATION_PRINCIPAL_KINDS,
+	PUBLIC_GROWTH_EVENT_TYPES,
+	PUBLISH_OUTBOX_KINDS,
+	QUEUE_FAILURE_KINDS,
+	REF_URL_DESTINATION_TYPES,
+	SOCIAL_PLATFORM_IDS,
+	TOOL_JOB_KINDS,
+	WEBHOOK_ATTEMPT_KINDS,
+	WEBHOOK_ATTEMPT_OUTCOMES,
+} from "./domain-contracts";
+import {
+	FINANCIAL_RETENTION_CLASSES,
+	FINANCIAL_RETENTION_SOURCE_KINDS,
+	FINANCIAL_RETENTION_STATUSES,
+} from "./financial-retention-contracts";
+import {
+	OPERATOR_RESOLUTION_ACTIONS,
+	OPERATOR_RESOLUTION_REASON_CODES,
+	OPERATOR_RESOLUTION_TARGET_TYPES,
+	type OperatorResolutionState,
+} from "./operator-resolution-contracts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,6 +121,9 @@ export const user = authSchema.table(
 		banned: boolean("banned"),
 		banReason: text("banReason"),
 		banExpires: timestamp("banExpires", { withTimezone: true }),
+		credentialVersion: text("credentialVersion")
+			.default(LEGACY_CREDENTIAL_VERSION)
+			.notNull(),
 		createdAt: timestamp("createdAt", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -97,6 +157,8 @@ export const session = authSchema.table(
 	(table) => [
 		uniqueIndex("session_token_idx").on(table.token),
 		index("session_userId_idx").on(table.userId),
+		index("session_impersonatedBy_idx").on(table.impersonatedBy),
+		index("session_expires_idx").on(table.expiresAt, table.id),
 	],
 );
 
@@ -142,7 +204,11 @@ export const verification = authSchema.table(
 	},
 	(table) => [
 		index("verification_identifier_idx").on(table.identifier),
-		index("verification_expires_idx").on(table.expiresAt),
+		// Better Auth stores the affected user ID in `value` for password-reset
+		// and account-deletion capabilities. This locator makes identity erasure
+		// independent of parsing opaque token identifiers.
+		index("verification_value_idx").on(table.value),
+		index("verification_expires_idx").on(table.expiresAt, table.id),
 	],
 );
 
@@ -158,7 +224,8 @@ export const apikey = authSchema.table(
 		referenceId: text("referenceId").references(() => user.id, {
 			onDelete: "set null",
 		}), // points to user.id (who created the key)
-		organizationId: text("organizationId"), // the org this key belongs to
+		organizationId: text("organizationId").notNull(), // the org this key belongs to
+		principalId: text("principalId").notNull(),
 		refillInterval: text("refillInterval"),
 		refillAmount: integer("refillAmount"),
 		lastRefillAt: timestamp("lastRefillAt", { withTimezone: true }),
@@ -172,6 +239,7 @@ export const apikey = authSchema.table(
 		expiresAt: timestamp("expiresAt", { withTimezone: true }),
 		permissions: text("permissions"),
 		metadata: jsonb("metadata"),
+		credentialVersion: text("credentialVersion"),
 		createdAt: timestamp("createdAt", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -180,7 +248,20 @@ export const apikey = authSchema.table(
 			.notNull(),
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.principalId, table.organizationId],
+			foreignColumns: [
+				organizationPrincipals.id,
+				organizationPrincipals.organizationId,
+			],
+			name: "apikey_principal_org_fk",
+		}).onDelete("cascade"),
 		unique("apikey_id_organization_uniq").on(table.id, table.organizationId),
+		index("apikey_principal_idx").on(
+			table.organizationId,
+			table.principalId,
+			table.createdAt,
+		),
 		index("apikey_referenceId_idx").on(table.referenceId),
 		index("apikey_organizationId_idx").on(
 			table.organizationId,
@@ -246,6 +327,7 @@ export const member = authSchema.table(
 			.notNull(),
 	},
 	(table) => [
+		unique("member_id_organization_uniq").on(table.id, table.organizationId),
 		unique("member_user_organization_uniq").on(
 			table.userId,
 			table.organizationId,
@@ -288,6 +370,10 @@ export const organizationCreationReservations = authSchema.table(
 			table.userId,
 			table.expiresAt,
 		),
+		index("organization_creation_reservation_expiry_idx").on(
+			table.expiresAt,
+			table.id,
+		),
 	],
 );
 
@@ -299,6 +385,9 @@ export const invitation = authSchema.table(
 		inviterId: text("inviterId")
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
+		issuerCredentialVersion: text("issuerCredentialVersion")
+			.default(LEGACY_CREDENTIAL_VERSION)
+			.notNull(),
 		organizationId: text("organizationId")
 			.notNull()
 			.references(() => organization.id, { onDelete: "cascade" }),
@@ -315,6 +404,12 @@ export const invitation = authSchema.table(
 			table.status,
 			table.expiresAt,
 		),
+		index("invitation_inviter_status_idx").on(
+			table.inviterId,
+			table.status,
+			table.id,
+		),
+		index("invitation_retention_idx").on(table.expiresAt, table.id),
 	],
 );
 
@@ -336,29 +431,7 @@ export const invoiceStatusEnum = pgEnum("invoice_status", [
 	"void",
 ]);
 
-export const platformEnum = pgEnum("platform", [
-	"twitter",
-	"instagram",
-	"facebook",
-	"linkedin",
-	"tiktok",
-	"youtube",
-	"pinterest",
-	"reddit",
-	"bluesky",
-	"threads",
-	"telegram",
-	"snapchat",
-	"googlebusiness",
-	"whatsapp",
-	"mastodon",
-	"discord",
-	"sms",
-	"beehiiv",
-	"convertkit",
-	"mailchimp",
-	"listmonk",
-]);
+export const platformEnum = pgEnum("platform", [...SOCIAL_PLATFORM_IDS]);
 
 export const postStatusEnum = pgEnum("post_status", [
 	"draft",
@@ -397,6 +470,9 @@ export const workspaces = pgTable(
 			.notNull()
 			.references(() => organization.id),
 		name: text("name").notNull(),
+		slug: text("slug")
+			.notNull()
+			.$defaultFn(() => generateId("workspace-")),
 		description: text("description"),
 		lifecycleStatus: text("lifecycle_status", {
 			enum: ["active", "archived", "erasing"],
@@ -417,6 +493,11 @@ export const workspaces = pgTable(
 	},
 	(table) => [
 		unique("workspaces_id_org_uniq").on(table.id, table.organizationId),
+		unique("workspaces_org_slug_uniq").on(table.organizationId, table.slug),
+		check(
+			"workspaces_slug_format_check",
+			sql`${table.slug} ~ '^[a-z0-9][a-z0-9_-]{0,99}$'`,
+		),
 		check(
 			"workspaces_lifecycle_status_check",
 			sql`${table.lifecycleStatus} IN ('active', 'archived', 'erasing')`,
@@ -429,9 +510,156 @@ export const workspaces = pgTable(
 		),
 		index("workspaces_org_idx").on(table.organizationId),
 		index("workspaces_org_name_idx").on(table.organizationId, table.name),
+		index("workspaces_org_slug_idx").on(table.organizationId, table.slug),
 		index("workspaces_org_lifecycle_idx").on(
 			table.organizationId,
 			table.lifecycleStatus,
+		),
+	],
+);
+
+/**
+ * Stable organization-scoped authority. Membership and credentials have
+ * independent lifecycles: a member principal survives credential rotation,
+ * retires to a pseudonymous actor when membership ends, and a service
+ * principal can own one or more replaceable API keys.
+ */
+export const organizationPrincipals = pgTable(
+	"organization_principals",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("prn_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		kind: text("kind", {
+			enum: [...ORGANIZATION_PRINCIPAL_KINDS],
+		}).notNull(),
+		memberId: text("member_id"),
+		serviceName: text("service_name"),
+		scopeMode: text("scope_mode", { enum: ["all", "selected"] }).notNull(),
+		lifecycleStatus: text("lifecycle_status", {
+			enum: ["active", "disabled"],
+		})
+			.notNull()
+			.default("active"),
+		disabledAt: timestamp("disabled_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.memberId, table.organizationId],
+			foreignColumns: [member.id, member.organizationId],
+			name: "organization_principals_member_org_fk",
+		}),
+		unique("organization_principals_id_org_uniq").on(
+			table.id,
+			table.organizationId,
+		),
+		unique("organization_principals_id_org_scope_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeMode,
+		),
+		uniqueIndex("organization_principals_member_uniq")
+			.on(table.organizationId, table.memberId)
+			.where(sql`${table.kind} = 'member'`),
+		check(
+			"organization_principals_kind_check",
+			sql`${table.kind} IN ('member', 'service')`,
+		),
+		check(
+			"organization_principals_scope_mode_check",
+			sql`${table.scopeMode} IN ('all', 'selected')`,
+		),
+		check(
+			"organization_principals_lifecycle_status_check",
+			sql`${table.lifecycleStatus} IN ('active', 'disabled')`,
+		),
+		check(
+			"organization_principals_identity_tuple_check",
+			sql`(${table.kind} = 'member'
+					AND ${table.serviceName} IS NULL
+					AND (
+						${table.memberId} IS NOT NULL
+						OR ${table.lifecycleStatus} = 'disabled'
+					))
+				OR (${table.kind} = 'service'
+					AND ${table.memberId} IS NULL
+					AND length(btrim(${table.serviceName})) BETWEEN 1 AND 120)`,
+		),
+		check(
+			"organization_principals_lifecycle_check",
+			sql`(${table.lifecycleStatus} = 'active' AND ${table.disabledAt} IS NULL)
+				OR (${table.lifecycleStatus} = 'disabled' AND ${table.disabledAt} IS NOT NULL)`,
+		),
+		check(
+			"organization_principals_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}
+				AND (${table.disabledAt} IS NULL OR ${table.disabledAt} >= ${table.createdAt})`,
+		),
+		index("organization_principals_org_kind_status_idx").on(
+			table.organizationId,
+			table.kind,
+			table.lifecycleStatus,
+		),
+	],
+);
+
+/**
+ * Exact workspace grants for selected-scope principals. The local selected
+ * discriminator participates in the parent FK, so an all-scope principal
+ * cannot accidentally accumulate contradictory grant rows.
+ */
+export const principalWorkspaceGrants = pgTable(
+	"principal_workspace_grants",
+	{
+		organizationId: text("organization_id").notNull(),
+		principalId: text("principal_id").notNull(),
+		workspaceId: text("workspace_id").notNull(),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		scopeMode: text("scope_mode", { enum: ["selected"] })
+			.notNull()
+			.default("selected"),
+		grantedAt: timestamp("granted_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		primaryKey({
+			name: "principal_workspace_grants_pkey",
+			columns: [table.organizationId, table.principalId, table.workspaceId],
+		}),
+		foreignKey({
+			columns: [table.principalId, table.organizationId, table.scopeMode],
+			foreignColumns: [
+				organizationPrincipals.id,
+				organizationPrincipals.organizationId,
+				organizationPrincipals.scopeMode,
+			],
+			name: "principal_workspace_grants_selected_principal_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "principal_workspace_grants_workspace_org_fk",
+		}).onDelete("cascade"),
+		check(
+			"principal_workspace_grants_scope_mode_check",
+			sql`${table.scopeMode} = 'selected'`,
+		),
+		index("principal_workspace_grants_workspace_idx").on(
+			table.organizationId,
+			table.workspaceId,
+			table.principalId,
 		),
 	],
 );
@@ -455,6 +683,633 @@ export const workspaceTombstones = pgTable(
 	],
 );
 
+export const erasureHoldSubjectKind = pgEnum(
+	"erasure_hold_subject_kind",
+	ERASURE_HOLD_SUBJECT_KINDS,
+);
+
+/**
+ * Auditable legal-hold lifecycle for organization and workspace erasure.
+ *
+ * This table deliberately has no FK to either deletable root. The subject and
+ * organization identifiers become minimized tombstone references after purge,
+ * while release and evidence-redaction clocks remain reviewable. Placement
+ * fields are immutable by service contract; release only fills the nullable
+ * release tuple once.
+ */
+export const erasureHolds = pgTable(
+	"erasure_holds",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("hold_")),
+		subjectKind: erasureHoldSubjectKind("subject_kind").notNull(),
+		subjectId: text("subject_id").notNull(),
+		organizationTombstoneId: text("organization_tombstone_id").notNull(),
+		reasonCode: text("reason_code").notNull(),
+		reasonSummary: text("reason_summary").notNull(),
+		legalAuthorityRef: text("legal_authority_ref").notNull(),
+		placedBy: text("placed_by").notNull(),
+		placedAt: timestamp("placed_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		releasedBy: text("released_by"),
+		releasedAt: timestamp("released_at", { withTimezone: true }),
+		releaseReasonSummary: text("release_reason_summary"),
+		evidenceCiphertext: text("evidence_ciphertext"),
+		evidenceRedactedAt: timestamp("evidence_redacted_at", {
+			withTimezone: true,
+		}),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		check(
+			"erasure_holds_target_tuple_check",
+			sql`(${table.subjectKind} = 'organization'
+					AND ${table.subjectId} = ${table.organizationTombstoneId})
+				OR (${table.subjectKind} = 'workspace'
+					AND ${table.subjectId} <> ${table.organizationTombstoneId})`,
+		),
+		check(
+			"erasure_holds_reason_code_check",
+			sql`${table.reasonCode} ~ '^[a-z][a-z0-9_]{0,63}$'`,
+		),
+		check(
+			"erasure_holds_placement_text_check",
+			sql`length(btrim(${table.reasonSummary})) > 0
+				AND length(${table.reasonSummary}) <= 500
+				AND length(btrim(${table.legalAuthorityRef})) > 0
+				AND length(${table.legalAuthorityRef}) <= 256
+				AND length(btrim(${table.placedBy})) > 0
+				AND length(${table.placedBy}) <= 256`,
+		),
+		check(
+			"erasure_holds_release_tuple_check",
+			sql`(${table.releasedBy} IS NULL
+					AND ${table.releasedAt} IS NULL
+					AND ${table.releaseReasonSummary} IS NULL)
+				OR (${table.releasedBy} IS NOT NULL
+					AND ${table.releasedAt} IS NOT NULL
+					AND length(btrim(${table.releaseReasonSummary})) > 0
+					AND length(${table.releaseReasonSummary}) <= 500
+					AND length(${table.releasedBy}) <= 256)`,
+		),
+		check(
+			"erasure_holds_timestamp_order_check",
+			sql`${table.placedAt} >= ${table.createdAt}
+				AND (${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.placedAt})`,
+		),
+		check(
+			"erasure_holds_evidence_redaction_check",
+			sql`(${table.evidenceCiphertext} IS NULL
+					OR octet_length(${table.evidenceCiphertext}) <= 65536)
+				AND (${table.evidenceRedactedAt} IS NULL
+					OR (${table.evidenceCiphertext} IS NULL
+						AND ${table.releasedAt} IS NOT NULL
+						AND ${table.evidenceRedactedAt} >= ${table.releasedAt}))`,
+		),
+		uniqueIndex("erasure_holds_active_subject_uniq")
+			.on(table.subjectKind, table.subjectId)
+			.where(sql`${table.releasedAt} IS NULL`),
+		index("erasure_holds_active_organization_idx")
+			.on(table.organizationTombstoneId, table.subjectKind, table.subjectId)
+			.where(sql`${table.releasedAt} IS NULL`),
+		index("erasure_holds_released_evidence_idx").on(
+			table.releasedAt,
+			table.evidenceRedactedAt,
+		),
+		index("erasure_holds_released_evidence_retention_idx")
+			.on(table.releasedAt, table.id)
+			.where(
+				sql`${table.releasedAt} IS NOT NULL AND ${table.evidenceRedactedAt} IS NULL`,
+			),
+	],
+);
+
+/**
+ * Durable, idempotent cleanup intent for external object stores.
+ *
+ * One row represents one exact key, one resumable prefix, or one typed Queue
+ * rescue subject. The row is committed with the database erasure that made the
+ * object unreachable, then a scheduled worker performs the external delete
+ * under a fenced lease. Tombstone locators deliberately have no FK so cleanup
+ * survives deletion of the owning subject and tenant.
+ */
+export const externalSubjectCleanupJobs = pgTable(
+	"external_subject_cleanup_jobs",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("escj_")),
+		organizationId: text("organization_id"),
+		workspaceId: text("workspace_id"),
+		subjectKind: text("subject_kind", {
+			enum: [...EXTERNAL_SUBJECT_CLEANUP_SUBJECT_KINDS],
+		}).notNull(),
+		subjectId: text("subject_id").notNull(),
+		operation: text("operation", {
+			enum: [
+				"delete_exact",
+				"delete_prefix",
+				"purge_rescue_subject",
+				"delete_short_link",
+			],
+		}).notNull(),
+		bucket: text("bucket", {
+			enum: [
+				"avatar",
+				"media",
+				"thumbnail",
+				"queue_rescue",
+				"short_link_provider",
+			],
+		}).notNull(),
+		objectLocator: text("object_locator"),
+		prefixLocator: text("prefix_locator"),
+		externalProvider: text("external_provider", {
+			enum: ["dub", "short_io", "bitly"],
+		}),
+		providerRef: jsonb("provider_ref").$type<Record<string, unknown>>(),
+		credentialCiphertext: text("credential_ciphertext"),
+		cursor: text("cursor"),
+		status: text("status", {
+			enum: ["pending", "processing", "completed", "manual_review"],
+		})
+			.notNull()
+			.default("pending"),
+		attempts: integer("attempts").notNull().default(0),
+		leaseToken: integer("lease_token").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		deadlineAt: timestamp("deadline_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '7 days'`),
+		lastError: text("last_error"),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+		purgeAt: timestamp("purge_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		check(
+			"external_subject_cleanup_jobs_subject_kind_check",
+			sql`${table.subjectKind} IN ('user', 'contact', 'account', 'organization', 'workspace')`,
+		),
+		check(
+			"external_subject_cleanup_jobs_operation_check",
+			sql`${table.operation} IN ('delete_exact', 'delete_prefix', 'purge_rescue_subject', 'delete_short_link')`,
+		),
+		check(
+			"external_subject_cleanup_jobs_bucket_check",
+			sql`${table.bucket} IN ('avatar', 'media', 'thumbnail', 'queue_rescue', 'short_link_provider')`,
+		),
+		check(
+			"external_subject_cleanup_jobs_status_check",
+			sql`${table.status} IN ('pending', 'processing', 'completed', 'manual_review')`,
+		),
+		check(
+			"external_subject_cleanup_jobs_subject_tuple_check",
+			sql`(${table.subjectKind} = 'user' AND ${table.workspaceId} IS NULL)
+				OR (${table.subjectKind} IN ('contact', 'account')
+					AND ${table.organizationId} IS NOT NULL)
+				OR (${table.subjectKind} = 'organization'
+					AND ${table.organizationId} = ${table.subjectId}
+					AND ${table.workspaceId} IS NULL)
+				OR (${table.subjectKind} = 'workspace'
+					AND ${table.organizationId} IS NOT NULL
+					AND ${table.workspaceId} = ${table.subjectId})`,
+		),
+		check(
+			"external_subject_cleanup_jobs_locator_tuple_check",
+			sql`(${table.operation} = 'delete_exact'
+					AND ${table.bucket} IN ('avatar', 'media', 'thumbnail')
+					AND ${table.objectLocator} IS NOT NULL
+					AND ${table.prefixLocator} IS NULL
+					AND ${table.cursor} IS NULL
+					AND ${table.externalProvider} IS NULL
+					AND ${table.providerRef} IS NULL
+					AND ${table.credentialCiphertext} IS NULL)
+				OR (${table.operation} = 'delete_prefix'
+					AND ${table.bucket} IN ('avatar', 'media', 'thumbnail')
+					AND ${table.objectLocator} IS NULL
+					AND ${table.prefixLocator} IS NOT NULL
+					AND ${table.externalProvider} IS NULL
+					AND ${table.providerRef} IS NULL
+					AND ${table.credentialCiphertext} IS NULL)
+				OR (${table.operation} = 'purge_rescue_subject'
+					AND ${table.bucket} = 'queue_rescue'
+					AND ${table.organizationId} IS NOT NULL
+					AND ${table.subjectKind} IN ('user', 'contact', 'account', 'workspace')
+					AND ${table.objectLocator} IS NULL
+					AND ${table.prefixLocator} IS NULL
+					AND ${table.externalProvider} IS NULL
+					AND ${table.providerRef} IS NULL
+					AND ${table.credentialCiphertext} IS NULL)
+				OR (${table.operation} = 'delete_short_link'
+					AND ${table.bucket} = 'short_link_provider'
+					AND ${table.organizationId} IS NOT NULL
+					AND ${table.subjectKind} IN ('organization', 'workspace')
+					AND ${table.objectLocator} IS NULL
+					AND ${table.prefixLocator} IS NULL
+					AND ${table.cursor} IS NULL
+					AND ${table.externalProvider} IN ('dub', 'short_io', 'bitly')
+					AND jsonb_typeof(${table.providerRef}) = 'object'
+					AND ${table.providerRef}->>'provider' = ${table.externalProvider}
+					AND (
+						(${table.status} = 'completed'
+							AND ${table.credentialCiphertext} IS NULL)
+						OR (${table.status} <> 'completed'
+							AND ${table.credentialCiphertext} IS NOT NULL
+							AND ${table.credentialCiphertext} LIKE 'enc:v2:%'
+							AND length(${table.credentialCiphertext}) BETWEEN 1 AND 8192)
+					))`,
+		),
+		check(
+			"external_subject_cleanup_jobs_locator_syntax_check",
+			sql`(${table.objectLocator} IS NULL
+					OR (length(${table.objectLocator}) BETWEEN 1 AND 1024
+						AND ${table.objectLocator} !~ '(^/|//|(^|/)\\.\\.?(/|$)|[[:cntrl:]])'
+						AND ${table.objectLocator} !~ '/$'))
+				AND (${table.prefixLocator} IS NULL
+					OR (length(${table.prefixLocator}) BETWEEN 1 AND 1024
+						AND ${table.prefixLocator} !~ '(^/|//|(^|/)\\.\\.?(/|$)|[[:cntrl:]])'
+						AND ${table.prefixLocator} ~ '/$'))`,
+		),
+		check(
+			"external_subject_cleanup_jobs_bucket_locator_check",
+			sql`${table.bucket} IN ('queue_rescue', 'short_link_provider')
+				OR (
+					${table.bucket} = 'avatar'
+					AND COALESCE(${table.objectLocator}, ${table.prefixLocator})
+						~ '^(account|user|organization)/[^/]+/'
+				)
+				OR (
+					${table.bucket} = 'thumbnail'
+					AND (
+						${table.prefixLocator} IS NOT NULL
+						OR ${table.objectLocator} ~ '\\.avif$'
+					)
+				)
+				OR (
+					${table.bucket} = 'media'
+					AND COALESCE(${table.objectLocator}, ${table.prefixLocator})
+						!~ '^(account|user|organization|queue-rescue)/'
+				)`,
+		),
+		check(
+			"external_subject_cleanup_jobs_counters_check",
+			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
+		),
+		check(
+			"external_subject_cleanup_jobs_lease_check",
+			sql`(${table.status} = 'processing' AND ${table.leaseExpiresAt} IS NOT NULL)
+				OR (${table.status} <> 'processing' AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"external_subject_cleanup_jobs_terminal_check",
+			sql`(${table.status} = 'completed'
+					AND ${table.completedAt} IS NOT NULL
+					AND ${table.purgeAt} IS NOT NULL)
+				OR (${table.status} <> 'completed'
+					AND ${table.completedAt} IS NULL
+					AND ${table.purgeAt} IS NULL)`,
+		),
+		check(
+			"external_subject_cleanup_jobs_error_check",
+			sql`${table.lastError} IS NULL OR length(${table.lastError}) BETWEEN 1 AND 1000`,
+		),
+		check(
+			"external_subject_cleanup_jobs_timestamp_check",
+			sql`${table.updatedAt} >= ${table.createdAt}
+				AND ${table.deadlineAt} > ${table.createdAt}
+				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})
+				AND (${table.purgeAt} IS NULL OR ${table.purgeAt} >= ${table.completedAt})`,
+		),
+		uniqueIndex("external_subject_cleanup_jobs_identity_uniq")
+			.on(
+				table.operation,
+				table.bucket,
+				sql`COALESCE(${table.objectLocator}, '')`,
+				sql`COALESCE(${table.prefixLocator}, '')`,
+				sql`CASE WHEN ${table.operation} = 'purge_rescue_subject'
+				THEN COALESCE(${table.organizationId}, '') ELSE '' END`,
+				sql`CASE WHEN ${table.operation} = 'purge_rescue_subject'
+				THEN ${table.subjectKind} ELSE '' END`,
+				sql`CASE WHEN ${table.operation} = 'purge_rescue_subject'
+				THEN ${table.subjectId} ELSE '' END`,
+				sql`CASE WHEN ${table.operation} = 'delete_short_link'
+				THEN COALESCE(${table.externalProvider}, '') ELSE '' END`,
+				sql`CASE WHEN ${table.operation} = 'delete_short_link'
+				THEN COALESCE(${table.providerRef}::text, '') ELSE '' END`,
+				sql`CASE WHEN ${table.operation} = 'delete_short_link'
+				THEN COALESCE(${table.organizationId}, '') ELSE '' END`,
+			)
+			.where(sql`${table.status} <> 'completed'`),
+		index("external_subject_cleanup_jobs_due_idx").on(
+			table.status,
+			sql`COALESCE(${table.organizationId}, ${table.subjectKind} || ':' || ${table.subjectId})`,
+			table.nextAttemptAt,
+			table.id,
+		),
+		index("external_subject_cleanup_jobs_deadline_idx")
+			.on(
+				sql`COALESCE(${table.organizationId}, ${table.subjectKind} || ':' || ${table.subjectId})`,
+				table.deadlineAt,
+				table.id,
+			)
+			.where(sql`${table.status} IN ('pending', 'processing')`),
+		index("external_subject_cleanup_jobs_lease_idx").on(
+			table.status,
+			table.leaseExpiresAt,
+		),
+		index("external_subject_cleanup_jobs_subject_idx").on(
+			table.subjectKind,
+			table.subjectId,
+		),
+		index("external_subject_cleanup_jobs_manual_review_idx")
+			.on(table.updatedAt, table.id)
+			.where(sql`${table.status} = 'manual_review'`),
+		index("external_subject_cleanup_jobs_retention_idx").on(
+			table.purgeAt,
+			table.id,
+		),
+	],
+);
+
+/**
+ * Bounded control state for the canonical high-growth retention executor.
+ *
+ * There is exactly one row per executable handler. Rows are updated in place:
+ * this relation is scheduler authority and backlog evidence, not an
+ * ever-growing execution log. The runtime registry test proves exact handler
+ * equality and the lease token fences overlapping Cron invocations.
+ */
+export const retentionDrainRuns = pgTable(
+	"retention_drain_runs",
+	{
+		handlerId: text("handler_id").primaryKey(),
+		status: text("status", {
+			enum: ["idle", "running", "manual_review"],
+		})
+			.notNull()
+			.default("idle"),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		cursorDueAt: timestamp("cursor_due_at", { withTimezone: true }),
+		cursorRowId: text("cursor_row_id"),
+		lastStartedAt: timestamp("last_started_at", { withTimezone: true }),
+		lastFinishedAt: timestamp("last_finished_at", { withTimezone: true }),
+		rowsLastRun: integer("rows_last_run").notNull().default(0),
+		backlogOldestDueAt: timestamp("backlog_oldest_due_at", {
+			withTimezone: true,
+		}),
+		consecutiveMoreDue: integer("consecutive_more_due").notNull().default(0),
+		lastErrorCode: text("last_error_code"),
+	},
+	(table) => [
+		check(
+			"retention_drain_runs_handler_id_check",
+			sql`length(${table.handlerId}) BETWEEN 1 AND 100
+				AND ${table.handlerId} ~ '^[a-z][a-z0-9_]*$'`,
+		),
+		check(
+			"retention_drain_runs_status_check",
+			sql`${table.status} IN ('idle', 'running', 'manual_review')`,
+		),
+		check(
+			"retention_drain_runs_counters_check",
+			sql`${table.leaseToken} >= 0
+				AND ${table.rowsLastRun} >= 0
+				AND ${table.consecutiveMoreDue} >= 0`,
+		),
+		check(
+			"retention_drain_runs_lease_check",
+			sql`(${table.status} = 'running'
+					AND ${table.leaseExpiresAt} IS NOT NULL
+					AND ${table.lastStartedAt} IS NOT NULL
+					AND ${table.leaseExpiresAt} > ${table.lastStartedAt})
+				OR (${table.status} <> 'running'
+					AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"retention_drain_runs_cursor_check",
+			sql`(${table.cursorDueAt} IS NULL AND ${table.cursorRowId} IS NULL)
+				OR (${table.cursorDueAt} IS NOT NULL
+					AND ${table.cursorRowId} IS NOT NULL
+					AND length(${table.cursorRowId}) BETWEEN 1 AND 256)`,
+		),
+		check(
+			"retention_drain_runs_completion_check",
+			sql`${table.lastFinishedAt} IS NULL
+				OR (${table.lastStartedAt} IS NOT NULL
+					AND ${table.lastFinishedAt} >= ${table.lastStartedAt})`,
+		),
+		check(
+			"retention_drain_runs_manual_review_check",
+			sql`${table.status} <> 'manual_review'
+				OR (${table.backlogOldestDueAt} IS NOT NULL
+					AND ${table.lastFinishedAt} IS NOT NULL)`,
+		),
+		check(
+			"retention_drain_runs_error_code_check",
+			sql`${table.lastErrorCode} IS NULL
+				OR (length(${table.lastErrorCode}) BETWEEN 1 AND 100
+					AND ${table.lastErrorCode} ~ '^[a-z][a-z0-9_]*$')`,
+		),
+		index("retention_drain_runs_continuation_idx")
+			.on(table.status, table.backlogOldestDueAt, table.handlerId)
+			.where(sql`${table.backlogOldestDueAt} IS NOT NULL`),
+		index("retention_drain_runs_lease_idx")
+			.on(table.leaseExpiresAt, table.handlerId)
+			.where(sql`${table.status} = 'running'`),
+	],
+);
+
+/**
+ * Append-only evidence for an authenticated operator's lifecycle decision.
+ *
+ * It deliberately has no FK to a deletable tenant or user. The relation stores
+ * only tombstone-compatible identifiers and sanitized state summaries, so the
+ * evidence can survive the target row and tenant while a database trigger
+ * rejects UPDATE and DELETE.
+ */
+export const operatorResolutionEvidence = pgTable(
+	"operator_resolution_evidence",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("ore_")),
+		organizationId: text("organization_id"),
+		targetType: text("target_type", {
+			enum: [...OPERATOR_RESOLUTION_TARGET_TYPES],
+		}).notNull(),
+		targetId: text("target_id").notNull(),
+		action: text("action", {
+			enum: [...OPERATOR_RESOLUTION_ACTIONS],
+		}).notNull(),
+		reasonCode: text("reason_code", {
+			enum: [...OPERATOR_RESOLUTION_REASON_CODES],
+		}).notNull(),
+		reasonDigest: text("reason_digest").notNull(),
+		actorUserId: text("actor_user_id").notNull(),
+		beforeState: jsonb("before_state")
+			.$type<OperatorResolutionState>()
+			.notNull(),
+		afterState: jsonb("after_state").$type<OperatorResolutionState>().notNull(),
+		targetUpdatedAtBefore: timestamp("target_updated_at_before", {
+			withTimezone: true,
+		}).notNull(),
+		targetUpdatedAtAfter: timestamp("target_updated_at_after", {
+			withTimezone: true,
+		}).notNull(),
+		resolvedAt: timestamp("resolved_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		check(
+			"operator_resolution_evidence_target_type_check",
+			sql`${table.targetType} IN ('automation_effect', 'automation_binding', 'automation_conversion_event', 'stripe_event', 'billing_operation', 'tenant_erasure_job', 'workspace_erasure_job', 'account_revocation_job', 'external_subject_cleanup_job', 'short_link_creation', 'customer_webhook_delivery', 'tool_job', 'whatsapp_phone_provisioning_operation', 'whatsapp_phone_release_operation', 'whatsapp_phone_billing_operation', 'ad_creation_operation', 'ad_mutation_operation')`,
+		),
+		check(
+			"operator_resolution_evidence_action_check",
+			sql`${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry', 'abandon')`,
+		),
+		check(
+			"operator_resolution_evidence_target_action_check",
+			sql`(${table.targetType} = 'automation_effect'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied'))
+				OR (${table.targetType} = 'automation_binding'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry'))
+				OR (${table.targetType} = 'automation_conversion_event'
+					AND ${table.action} = 'retry')
+				OR (${table.targetType} = 'stripe_event'
+					AND ${table.action} IN ('retry', 'abandon'))
+				OR (${table.targetType} = 'billing_operation'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry', 'abandon'))
+				OR (${table.targetType} IN ('tenant_erasure_job', 'workspace_erasure_job')
+					AND ${table.action} = 'retry')
+				OR (${table.targetType} = 'account_revocation_job'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'abandon'))
+				OR (${table.targetType} = 'external_subject_cleanup_job'
+					AND ${table.action} IN ('mark_succeeded', 'retry'))
+				OR (${table.targetType} = 'short_link_creation'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied'))
+						OR (${table.targetType} = 'customer_webhook_delivery'
+							AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry', 'abandon'))
+					OR (${table.targetType} = 'tool_job'
+						AND ${table.action} IN ('mark_not_applied', 'abandon'))
+					OR (${table.targetType} = 'whatsapp_phone_provisioning_operation'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry'))
+				OR (${table.targetType} = 'whatsapp_phone_release_operation'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry'))
+				OR (${table.targetType} = 'ad_creation_operation'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry'))
+				OR (${table.targetType} = 'whatsapp_phone_billing_operation'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied'))
+				OR (${table.targetType} = 'ad_mutation_operation'
+					AND ${table.action} IN ('mark_succeeded', 'mark_not_applied', 'retry'))`,
+		),
+		check(
+			"operator_resolution_evidence_identity_check",
+			sql`length(btrim(${table.targetId})) BETWEEN 1 AND 255
+				AND (${table.organizationId} IS NULL
+					OR length(btrim(${table.organizationId})) BETWEEN 1 AND 255)
+				AND length(btrim(${table.actorUserId})) BETWEEN 1 AND 255`,
+		),
+		check(
+			"operator_resolution_evidence_reason_check",
+			sql`${table.reasonCode} IN ('operator_asserted_succeeded', 'operator_asserted_not_applied', 'operator_requested_retry', 'operator_abandoned')
+				AND ${table.reasonDigest} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"operator_resolution_evidence_state_check",
+			sql`jsonb_typeof(${table.beforeState}) = 'object'
+				AND jsonb_typeof(${table.afterState}) = 'object'
+				AND NOT jsonb_path_exists(${table.beforeState}, '$.* ? (@.type() == "object" || @.type() == "array")')
+				AND NOT jsonb_path_exists(${table.afterState}, '$.* ? (@.type() == "object" || @.type() == "array")')`,
+		),
+		check(
+			"operator_resolution_evidence_stripe_abandon_check",
+			sql`NOT (${table.targetType} = 'stripe_event' AND ${table.action} = 'abandon')
+				OR COALESCE((${table.afterState}->>'reconciliation_reference_sha256' ~ '^[0-9a-f]{64}$'
+					AND ${table.afterState}->>'status' = 'failed'
+					AND ${table.afterState}->>'error_class' = 'permanent'
+					AND ${table.afterState}->>'operator_retry_requested' = 'false'
+					AND NOT (${table.afterState} ? 'provider_reference')), FALSE)`,
+		),
+		check(
+			"operator_resolution_evidence_timestamp_order_check",
+			sql`${table.targetUpdatedAtAfter} >= ${table.targetUpdatedAtBefore}
+				AND ${table.resolvedAt} >= ${table.targetUpdatedAtAfter}`,
+		),
+		index("operator_resolution_evidence_target_idx").on(
+			table.targetType,
+			table.targetId,
+			table.resolvedAt,
+			table.id,
+		),
+		index("operator_resolution_evidence_org_resolved_idx").on(
+			table.organizationId,
+			table.resolvedAt,
+			table.id,
+		),
+		index("operator_resolution_evidence_resolved_idx").on(
+			table.resolvedAt,
+			table.id,
+		),
+		index("operator_resolution_evidence_actor_resolved_idx").on(
+			table.actorUserId,
+			table.resolvedAt,
+		),
+	],
+);
+
+/**
+ * Optional operator prose is encrypted and independently erasable. The
+ * append-only evidence row keeps only a closed reason code and SHA-256 digest.
+ */
+export const operatorResolutionNotes = pgTable(
+	"operator_resolution_notes",
+	{
+		evidenceId: text("evidence_id")
+			.primaryKey()
+			.references(() => operatorResolutionEvidence.id, {
+				onDelete: "cascade",
+			}),
+		organizationId: text("organization_id"),
+		noteCiphertext: text("note_ciphertext").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+	},
+	(table) => [
+		check(
+			"operator_resolution_notes_ciphertext_check",
+			sql`${table.noteCiphertext} LIKE 'enc:v2:%'`,
+		),
+		check(
+			"operator_resolution_notes_expiry_check",
+			sql`${table.expiresAt} = ${table.createdAt} + interval '90 days'`,
+		),
+		index("operator_resolution_notes_expiry_idx").on(
+			table.expiresAt,
+			table.evidenceId,
+		),
+		index("operator_resolution_notes_org_idx").on(
+			table.organizationId,
+			table.evidenceId,
+		),
+	],
+);
+
 /** Durable, retryable workspace erasure state that survives workspace purge. */
 export const workspaceErasureJobs = pgTable(
 	"workspace_erasure_jobs",
@@ -469,7 +1324,14 @@ export const workspaceErasureJobs = pgTable(
 			.unique()
 			.$defaultFn(() => generateId("wse_")),
 		status: text("status", {
-			enum: ["pending", "processing", "manual_review", "failed", "purged"],
+			enum: [
+				"pending",
+				"processing",
+				"held",
+				"manual_review",
+				"failed",
+				"purged",
+			],
 		})
 			.notNull()
 			.default("pending"),
@@ -488,6 +1350,10 @@ export const workspaceErasureJobs = pgTable(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		agedAlertedAt: timestamp("aged_alerted_at", { withTimezone: true }),
+		operatorRetryRequestedAt: timestamp("operator_retry_requested_at", {
+			withTimezone: true,
+		}),
 		completedAt: timestamp("completed_at", { withTimezone: true }),
 	},
 	(table) => [
@@ -498,7 +1364,7 @@ export const workspaceErasureJobs = pgTable(
 		),
 		check(
 			"workspace_erasure_jobs_status_check",
-			sql`${table.status} IN ('pending', 'processing', 'manual_review', 'failed', 'purged')`,
+			sql`${table.status} IN ('pending', 'processing', 'held', 'manual_review', 'failed', 'purged')`,
 		),
 		check(
 			"workspace_erasure_jobs_counters_nonnegative_check",
@@ -516,7 +1382,16 @@ export const workspaceErasureJobs = pgTable(
 		check(
 			"workspace_erasure_jobs_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.requestedAt}
+				AND (${table.agedAlertedAt} IS NULL OR ${table.agedAlertedAt} >= ${table.requestedAt})
+				AND (${table.operatorRetryRequestedAt} IS NULL OR ${table.operatorRetryRequestedAt} >= ${table.requestedAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.requestedAt})`,
+		),
+		check(
+			"workspace_erasure_jobs_operator_retry_check",
+			sql`${table.operatorRetryRequestedAt} IS NULL
+				OR (${table.status} = 'failed'
+					AND ${table.leaseExpiresAt} IS NULL
+					AND ${table.completedAt} IS NULL)`,
 		),
 		index("workspace_erasure_jobs_org_status_idx").on(
 			table.organizationId,
@@ -607,6 +1482,9 @@ export const workspaceErasureSteps = pgTable(
 			table.nextAttemptAt,
 			table.leaseExpiresAt,
 		),
+		index("workspace_erasure_steps_completed_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(sql`${table.status} = 'completed'`),
 	],
 );
 
@@ -654,6 +1532,66 @@ export const organizationSettings = pgTable(
 	],
 );
 
+export interface QueueScheduleSlot {
+	day_of_week: number;
+	time: string;
+	timezone: string;
+}
+
+/**
+ * Authoritative posting schedule configuration. KV may cache this relation for
+ * short reads, but never owns it: the prior no-TTL JSON blob could disappear,
+ * outlive tenant erasure, or lose concurrent writes.
+ *
+ * Slots stay JSONB because they are a small atomic configuration value with no
+ * independent identity or query path. The API validates the complete
+ * day/time/timezone shape; PostgreSQL enforces a non-empty array and the one
+ * default schedule per tenant invariant.
+ */
+export const queueSchedules = pgTable(
+	"queue_schedules",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("qs_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		name: text("name"),
+		slots: jsonb("slots").$type<QueueScheduleSlot[]>().notNull(),
+		isDefault: boolean("is_default").notNull().default(false),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		unique("queue_schedules_id_org_uniq").on(table.id, table.organizationId),
+		uniqueIndex("queue_schedules_one_default_per_org_uniq")
+			.on(table.organizationId)
+			.where(sql`${table.isDefault} = true`),
+		check(
+			"queue_schedules_name_check",
+			sql`${table.name} IS NULL OR (length(btrim(${table.name})) > 0 AND length(${table.name}) <= 255)`,
+		),
+		check(
+			"queue_schedules_slots_check",
+			sql`jsonb_typeof(${table.slots}) = 'array' AND jsonb_array_length(${table.slots}) > 0`,
+		),
+		check(
+			"queue_schedules_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}`,
+		),
+		index("queue_schedules_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+			table.id,
+		),
+	],
+);
+
 /**
  * Durable tenant-deletion state. It intentionally has no FK to auth.organization
  * so the final cleanup receipt and audit snapshot survive organization purge.
@@ -668,6 +1606,7 @@ export const tenantDeletionJobs = pgTable(
 				"processing",
 				"tombstoned",
 				"waiting_external",
+				"held",
 				"manual_review",
 				"failed",
 				"purged",
@@ -693,12 +1632,16 @@ export const tenantDeletionJobs = pgTable(
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		agedAlertedAt: timestamp("aged_alerted_at", { withTimezone: true }),
+		operatorRetryRequestedAt: timestamp("operator_retry_requested_at", {
+			withTimezone: true,
+		}),
 		completedAt: timestamp("completed_at", { withTimezone: true }),
 	},
 	(table) => [
 		check(
 			"tenant_deletion_jobs_status_check",
-			sql`${table.status} IN ('pending', 'processing', 'tombstoned', 'waiting_external', 'manual_review', 'failed', 'purged')`,
+			sql`${table.status} IN ('pending', 'processing', 'tombstoned', 'waiting_external', 'held', 'manual_review', 'failed', 'purged')`,
 		),
 		check(
 			"tenant_deletion_jobs_attempts_nonnegative_check",
@@ -721,7 +1664,16 @@ export const tenantDeletionJobs = pgTable(
 		check(
 			"tenant_deletion_jobs_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.requestedAt}
+				AND (${table.agedAlertedAt} IS NULL OR ${table.agedAlertedAt} >= ${table.requestedAt})
+				AND (${table.operatorRetryRequestedAt} IS NULL OR ${table.operatorRetryRequestedAt} >= ${table.requestedAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.requestedAt})`,
+		),
+		check(
+			"tenant_deletion_jobs_operator_retry_check",
+			sql`${table.operatorRetryRequestedAt} IS NULL
+				OR (${table.status} = 'failed'
+					AND ${table.leaseExpiresAt} IS NULL
+					AND ${table.completedAt} IS NULL)`,
 		),
 		index("tenant_deletion_jobs_due_idx").on(table.status, table.nextAttemptAt),
 	],
@@ -796,6 +1748,9 @@ export const tenantDeletionSteps = pgTable(
 			table.nextAttemptAt,
 			table.leaseExpiresAt,
 		),
+		index("tenant_deletion_steps_completed_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(sql`${table.status} = 'completed'`),
 	],
 );
 
@@ -811,12 +1766,20 @@ export const inviteTokens = pgTable(
 		createdBy: text("created_by")
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
-		tokenHash: text("token_hash").notNull(),
-		scope: text("scope").notNull(), // "all" | "workspaces"
-		scopedWorkspaceIds: jsonb("scoped_workspace_ids").$type<string[]>(),
-		role: text("role").notNull(), // "owner" | "admin" | "member"
-		used: boolean("used").notNull().default(false),
-		usedBy: text("used_by").references(() => user.id, {
+		createdByPrincipalId: text("created_by_principal_id").notNull(),
+		issuerCredentialVersion: text("issuer_credential_version")
+			.default(LEGACY_CREDENTIAL_VERSION)
+			.notNull(),
+		tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+		scopeMode: text("scope_mode", {
+			enum: ["all", "selected"],
+		}).notNull(),
+		role: text("role", { enum: [...INVITE_TOKEN_ROLES] }).notNull(),
+		used: boolean("used").notNull().generatedAlwaysAs(sql`used_at IS NOT NULL`),
+		// Stable pseudonymous principal evidence deliberately has no FK: deleting
+		// the redeemed member must not make the exact consumption tuple invalid.
+		usedBy: text("used_by"),
+		redeemedByUserId: text("redeemed_by_user_id").references(() => user.id, {
 			onDelete: "set null",
 		}),
 		usedAt: timestamp("used_at", { withTimezone: true }),
@@ -826,8 +1789,114 @@ export const inviteTokens = pgTable(
 			.notNull(),
 	},
 	(table) => [
-		index("invite_tokens_org_idx").on(table.organizationId),
+		foreignKey({
+			columns: [table.createdByPrincipalId, table.organizationId],
+			foreignColumns: [
+				organizationPrincipals.id,
+				organizationPrincipals.organizationId,
+			],
+			name: "invite_tokens_issuer_principal_org_fk",
+		}).onDelete("cascade"),
+		unique("invite_tokens_id_org_scope_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeMode,
+		),
 		uniqueIndex("invite_tokens_hash_idx").on(table.tokenHash),
+		check(
+			"invite_tokens_hash_check",
+			sql`${table.tokenHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"invite_tokens_scope_mode_check",
+			sql`${table.scopeMode} IN ('all', 'selected')`,
+		),
+		check(
+			"invite_tokens_role_check",
+			sql`${table.role} IN ('owner', 'admin', 'member')`,
+		),
+		check(
+			"invite_tokens_consumption_tuple_check",
+			sql`(${table.usedAt} IS NULL AND ${table.usedBy} IS NULL)
+				OR (${table.usedAt} IS NOT NULL AND ${table.usedBy} IS NOT NULL)`,
+		),
+		check(
+			"invite_tokens_expiry_window_check",
+			sql`${table.expiresAt} > ${table.createdAt}
+				AND (
+					(${table.role} = 'owner'
+						AND ${table.expiresAt} <= ${table.createdAt} + interval '24 hours')
+					OR (${table.role} IN ('admin', 'member')
+						AND ${table.expiresAt} <= ${table.createdAt} + interval '7 days')
+				)`,
+		),
+		check(
+			"invite_tokens_used_timestamp_order_check",
+			sql`${table.usedAt} IS NULL
+				OR (${table.usedAt} >= ${table.createdAt}
+					AND ${table.usedAt} < ${table.expiresAt})`,
+		),
+		index("invite_tokens_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+			table.id,
+		),
+		index("invite_tokens_expiry_idx").on(table.expiresAt, table.id),
+	],
+);
+
+/**
+ * Immutable workspace evidence captured when a selected-scope token is minted.
+ * Redemption copies these rows into principal_workspace_grants atomically.
+ */
+export const inviteTokenWorkspaces = pgTable(
+	"invite_token_workspaces",
+	{
+		organizationId: text("organization_id").notNull(),
+		inviteTokenId: text("invite_token_id").notNull(),
+		workspaceId: text("workspace_id").notNull(),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		scopeMode: text("scope_mode", { enum: ["selected"] })
+			.notNull()
+			.default("selected"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		primaryKey({
+			name: "invite_token_workspaces_pkey",
+			columns: [table.organizationId, table.inviteTokenId, table.workspaceId],
+		}),
+		foreignKey({
+			columns: [table.inviteTokenId, table.organizationId, table.scopeMode],
+			foreignColumns: [
+				inviteTokens.id,
+				inviteTokens.organizationId,
+				inviteTokens.scopeMode,
+			],
+			name: "invite_token_workspaces_selected_token_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "invite_token_workspaces_workspace_org_fk",
+		}).onDelete("cascade"),
+		check(
+			"invite_token_workspaces_scope_mode_check",
+			sql`${table.scopeMode} = 'selected'`,
+		),
+		index("invite_token_workspaces_workspace_idx").on(
+			table.organizationId,
+			table.workspaceId,
+			table.inviteTokenId,
+		),
+		index("invite_token_workspaces_retention_idx").on(
+			table.inviteTokenId,
+			table.workspaceId,
+		),
 	],
 );
 
@@ -970,15 +2039,27 @@ export const accountRevocationJobs = pgTable(
 		// exact grant being revoked; there is no meaningful fallback version.
 		sourceTokenVersion: integer("source_token_version").notNull(),
 		status: text("status", {
-			enum: ["pending", "processing", "retry", "manual_required", "succeeded"],
+			enum: [
+				"pending",
+				"processing",
+				"retry",
+				"unknown",
+				"manual_required",
+				"succeeded",
+				"abandoned",
+			],
 		})
 			.notNull()
 			.default("pending"),
 		attempts: integer("attempts").notNull().default(0),
+		leaseToken: integer("lease_token").notNull().default(0),
 		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
 		lastError: text("last_error"),
 		providerResponse: jsonb("provider_response"),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -997,11 +2078,11 @@ export const accountRevocationJobs = pgTable(
 		}).onDelete("cascade"),
 		check(
 			"account_revocation_jobs_status_check",
-			sql`${table.status} IN ('pending', 'processing', 'retry', 'manual_required', 'succeeded')`,
+			sql`${table.status} IN ('pending', 'processing', 'retry', 'unknown', 'manual_required', 'succeeded', 'abandoned')`,
 		),
 		check(
 			"account_revocation_jobs_counters_nonnegative_check",
-			sql`${table.attempts} >= 0 AND ${table.sourceTokenVersion} >= 0`,
+			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0 AND ${table.sourceTokenVersion} >= 0`,
 		),
 		check(
 			"account_revocation_jobs_lease_state_check",
@@ -1010,24 +2091,40 @@ export const accountRevocationJobs = pgTable(
 		),
 		check(
 			"account_revocation_jobs_completion_check",
-			sql`(${table.status} IN ('manual_required', 'succeeded') AND ${table.completedAt} IS NOT NULL)
-				OR (${table.status} NOT IN ('manual_required', 'succeeded') AND ${table.completedAt} IS NULL)`,
+			sql`(${table.status} IN ('manual_required', 'succeeded', 'abandoned') AND ${table.completedAt} IS NOT NULL)
+				OR (${table.status} NOT IN ('manual_required', 'succeeded', 'abandoned') AND ${table.completedAt} IS NULL)`,
 		),
 		check(
-			"account_revocation_jobs_success_redaction_check",
-			sql`${table.status} <> 'succeeded'
+			"account_revocation_jobs_terminal_redaction_check",
+			sql`${table.status} NOT IN ('manual_required', 'succeeded', 'abandoned')
 				OR (${table.accessTokenCiphertext} IS NULL AND ${table.refreshTokenCiphertext} IS NULL)`,
+		),
+		check(
+			"account_revocation_jobs_request_boundary_check",
+			sql`(${table.status} NOT IN ('pending', 'retry')
+					OR ${table.requestMayHaveBeenSentAt} IS NULL)
+				AND (${table.status} <> 'unknown'
+					OR ${table.requestMayHaveBeenSentAt} IS NOT NULL)`,
 		),
 		check(
 			"account_revocation_jobs_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.createdAt}
+				AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
 		),
 		index("account_revocation_jobs_due_idx").on(
 			table.status,
 			table.nextAttemptAt,
+			table.createdAt,
+			table.id,
 		),
 		index("account_revocation_jobs_org_idx").on(table.organizationId),
+		index("account_revocation_jobs_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(
+				sql`${table.status} IN ('manual_required', 'succeeded', 'abandoned')
+					AND ${table.completedAt} IS NOT NULL`,
+			),
 	],
 );
 
@@ -1106,6 +2203,12 @@ export const tokenRefreshOperations = pgTable(
 				AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.startedAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.startedAt})`,
 		),
+		index("token_refresh_operations_retention_idx")
+			.on(
+				sql`COALESCE(${table.completedAt}, ${table.updatedAt})`,
+				table.accountId,
+			)
+			.where(sql`${table.state} IN ('succeeded', 'unknown')`),
 	],
 );
 
@@ -1199,6 +2302,29 @@ export const posts = pgTable(
 		metricsCollectedAt: timestamp("metrics_collected_at", {
 			withTimezone: true,
 		}),
+		metricsNextPollAt: timestamp("metrics_next_poll_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.defaultNow(),
+		metricsPollAttempts: integer("metrics_poll_attempts").notNull().default(0),
+		metricsPollLastError: text("metrics_poll_last_error"),
+		metricsPollLastErrorClass: text("metrics_poll_last_error_class", {
+			enum: ["transient", "rate_limited", "permanent"],
+		}),
+		// Scheduler-owned analytics claim. Freshness remains in
+		// metrics_collected_at; queue redelivery must claim started_at before a
+		// provider read and completion is fenced by the observation window.
+		metricsRefreshWindowStart: timestamp("metrics_refresh_window_start", {
+			withTimezone: true,
+		}),
+		metricsRefreshLeaseExpiresAt: timestamp(
+			"metrics_refresh_lease_expires_at",
+			{ withTimezone: true },
+		),
+		metricsRefreshStartedAt: timestamp("metrics_refresh_started_at", {
+			withTimezone: true,
+		}),
 		notes: text("notes"),
 		// Threading support
 		threadGroupId: text("thread_group_id"), // UUID grouping all posts in a thread (null = standalone)
@@ -1258,7 +2384,22 @@ export const posts = pgTable(
 			"posts_publish_attempts_nonnegative_check",
 			sql`${table.publishAttempts} >= 0`,
 		),
+		check(
+			"posts_metrics_poll_state_check",
+			sql`${table.metricsPollAttempts} >= 0
+				AND (${table.metricsPollLastErrorClass} IS NULL
+					OR ${table.metricsPollLastErrorClass} IN ('transient', 'rate_limited', 'permanent'))`,
+		),
 		check("posts_revision_nonnegative_check", sql`${table.revision} >= 0`),
+		check(
+			"posts_metrics_refresh_claim_check",
+			sql`(${table.metricsRefreshLeaseExpiresAt} IS NULL
+					AND ${table.metricsRefreshStartedAt} IS NULL)
+				OR (${table.metricsRefreshLeaseExpiresAt} IS NOT NULL
+					AND ${table.metricsRefreshWindowStart} IS NOT NULL
+					AND (${table.metricsRefreshStartedAt} IS NULL
+						OR ${table.metricsRefreshStartedAt} <= ${table.metricsRefreshLeaseExpiresAt}))`,
+		),
 		uniqueIndex("posts_thread_position_uniq")
 			.on(
 				table.organizationId,
@@ -1299,7 +2440,7 @@ export const posts = pgTable(
 		),
 		// Cron metrics-refresh scan: published posts ordered by collection time.
 		index("posts_metrics_refresh_idx")
-			.on(table.metricsCollectedAt)
+			.on(table.metricsNextPollAt, table.metricsRefreshLeaseExpiresAt)
 			.where(sql`${table.status} = 'published'`),
 	],
 );
@@ -1384,6 +2525,9 @@ export const threadExecutions = pgTable(
 			table.status,
 			table.leaseExpiresAt,
 		),
+		index("thread_executions_retention_idx")
+			.on(table.updatedAt, table.threadGroupId)
+			.where(sql`${table.status} IN ('completed', 'failed', 'unknown')`),
 	],
 );
 
@@ -1400,6 +2544,10 @@ export const telegramConnectionChallenges = pgTable(
 			.notNull()
 			.references(() => organization.id, { onDelete: "cascade" }),
 		apiKeyId: text("api_key_id").notNull(),
+		authoritySessionId: text("authority_session_id").references(
+			() => session.id,
+			{ onDelete: "cascade" },
+		),
 		initialWorkspaceScope: jsonb("initial_workspace_scope").notNull(),
 		workspaceId: text("workspace_id").references(() => workspaces.id, {
 			onDelete: "restrict",
@@ -1478,6 +2626,24 @@ export const telegramConnectionChallenges = pgTable(
 		),
 	],
 );
+
+/**
+ * Resolve the later-declared attempt tuple without weakening the inferred
+ * table types. Drizzle evaluates table extra-config callbacks after the module
+ * has initialized, so the circular current-projection/audit relationship is
+ * safe to resolve here.
+ */
+function currentPublishAttemptIdentityColumns(): [
+	AnyPgColumn,
+	AnyPgColumn,
+	AnyPgColumn,
+] {
+	return [
+		publishAttempts.id,
+		publishAttempts.postTargetId,
+		publishAttempts.publishOperationId,
+	];
+}
 
 export const postTargets = pgTable(
 	"post_targets",
@@ -1575,6 +2741,11 @@ export const postTargets = pgTable(
 			],
 			name: "post_targets_account_org_scope_platform_fk",
 		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.attemptId, table.id, table.publishOperationId],
+			foreignColumns: currentPublishAttemptIdentityColumns(),
+			name: "post_targets_current_attempt_identity_fk",
+		}),
 		check(
 			"post_targets_delivery_state_check",
 			sql`${table.deliveryState} IN ('queued', 'in_flight', 'succeeded', 'failed', 'unknown')`,
@@ -1675,6 +2846,11 @@ export const publishAttempts = pgTable(
 		error: text("error"),
 	},
 	(table) => [
+		unique("publish_attempts_id_target_operation_uniq").on(
+			table.id,
+			table.postTargetId,
+			table.publishOperationId,
+		),
 		foreignKey({
 			columns: [table.postTargetId, table.publishOperationId],
 			foreignColumns: [postTargets.id, postTargets.publishOperationId],
@@ -1706,6 +2882,12 @@ export const publishAttempts = pgTable(
 			table.postTargetId,
 			table.claimedAt,
 		),
+		index("publish_attempts_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(
+				sql`${table.state} IN ('succeeded', 'failed', 'unknown')
+					AND ${table.completedAt} IS NOT NULL`,
+			),
 	],
 );
 
@@ -1720,9 +2902,7 @@ export const publishOutbox = pgTable(
 			.notNull()
 			.references(() => organization.id, { onDelete: "cascade" }),
 		postId: text("post_id"),
-		kind: text("kind", {
-			enum: ["publish", "publish_thread", "notification", "post_completion"],
-		}).notNull(),
+		kind: text("kind", { enum: [...PUBLISH_OUTBOX_KINDS] }).notNull(),
 		payload: jsonb("payload").notNull(),
 		status: text("status", { enum: ["pending", "dispatching", "dispatched"] })
 			.notNull()
@@ -1899,6 +3079,189 @@ export const recyclingOccurrences = pgTable(
 			table.scheduledFor,
 		),
 		index("recycling_occurrences_post_idx").on(table.postId),
+		index("recycling_occurrences_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(
+				sql`${table.status} IN ('committed', 'terminal_failure', 'unknown')
+					AND ${table.completedAt} IS NOT NULL`,
+			),
+	],
+);
+
+/**
+ * Immutable customer-owned object-store location. Routing fields never change:
+ * changing endpoint/bucket/prefix creates another row, while lifecycle columns
+ * only record whether this location ever became active and when it retired.
+ */
+export const storageLocations = pgTable(
+	"storage_locations",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("sloc_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		provider: text("provider", { enum: ["s3"] })
+			.notNull()
+			.default("s3"),
+		endpoint: text("endpoint").notNull(),
+		bucket: text("bucket").notNull(),
+		region: text("region").notNull().default("auto"),
+		keyPrefix: text("key_prefix").notNull().default("relayapi"),
+		forcePathStyle: boolean("force_path_style").notNull().default(false),
+		activatedAt: timestamp("activated_at", { withTimezone: true }),
+		retiredAt: timestamp("retired_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		unique("storage_locations_id_org_uniq").on(table.id, table.organizationId),
+		unique("storage_locations_media_locator_uniq").on(
+			table.id,
+			table.organizationId,
+			table.bucket,
+			table.region,
+		),
+		uniqueIndex("storage_locations_definition_uniq")
+			.on(
+				table.organizationId,
+				table.endpoint,
+				table.bucket,
+				table.region,
+				table.keyPrefix,
+				table.forcePathStyle,
+			)
+			.where(sql`${table.retiredAt} IS NULL`),
+		uniqueIndex("storage_locations_org_active_uniq")
+			.on(table.organizationId)
+			.where(
+				sql`${table.activatedAt} IS NOT NULL AND ${table.retiredAt} IS NULL`,
+			),
+		index("storage_locations_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+			table.id,
+		),
+		check("storage_locations_provider_check", sql`${table.provider} = 's3'`),
+		check(
+			"storage_locations_endpoint_check",
+			sql`${table.endpoint} ~ '^https://' AND ${table.endpoint} !~ '[?#]'`,
+		),
+		check(
+			"storage_locations_key_prefix_check",
+			sql`length(${table.keyPrefix}) BETWEEN 1 AND 200
+				AND ${table.keyPrefix} !~ '(^/|/$|\\.\\.)'`,
+		),
+		check(
+			"storage_locations_lifecycle_check",
+			sql`${table.retiredAt} IS NULL
+				OR (${table.activatedAt} IS NOT NULL AND ${table.retiredAt} >= ${table.activatedAt})`,
+		),
+	],
+);
+
+/**
+ * Versioned encrypted credentials for one immutable location. Only one tenant
+ * credential may be staged and one may be active. Retired versions remain
+ * usable for media pinned to them until those objects have been drained.
+ */
+export const storageCredentials = pgTable(
+	"storage_credentials",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("scred_")),
+		locationId: text("location_id").notNull(),
+		organizationId: text("organization_id").notNull(),
+		version: integer("version").notNull(),
+		accessKeyId: text("access_key_id").notNull(), // encrypted: AES-256-GCM
+		secretAccessKey: text("secret_access_key").notNull(), // encrypted: AES-256-GCM
+		state: text("state", {
+			enum: ["staged", "active", "retired", "failed"],
+		})
+			.notNull()
+			.default("staged"),
+		probeToken: text("probe_token"),
+		probeLeaseExpiresAt: timestamp("probe_lease_expires_at", {
+			withTimezone: true,
+		}),
+		lastTestedAt: timestamp("last_tested_at", { withTimezone: true }),
+		lastErrorCode: text("last_error_code"),
+		activatedAt: timestamp("activated_at", { withTimezone: true }),
+		retiredAt: timestamp("retired_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.locationId, table.organizationId],
+			foreignColumns: [storageLocations.id, storageLocations.organizationId],
+			name: "storage_credentials_location_org_fk",
+		}).onDelete("restrict"),
+		unique("storage_credentials_location_org_version_uniq").on(
+			table.locationId,
+			table.organizationId,
+			table.version,
+		),
+		uniqueIndex("storage_credentials_org_active_uniq")
+			.on(table.organizationId)
+			.where(sql`${table.state} = 'active'`),
+		uniqueIndex("storage_credentials_org_staged_uniq")
+			.on(table.organizationId)
+			.where(sql`${table.state} = 'staged'`),
+		index("storage_credentials_location_state_idx").on(
+			table.locationId,
+			table.state,
+			table.version,
+		),
+		check("storage_credentials_version_check", sql`${table.version} > 0`),
+		check(
+			"storage_credentials_state_check",
+			sql`${table.state} IN ('staged', 'active', 'retired', 'failed')`,
+		),
+		check(
+			"storage_credentials_probe_lease_check",
+			sql`(${table.probeToken} IS NULL AND ${table.probeLeaseExpiresAt} IS NULL)
+				OR (${table.state} = 'staged'
+					AND ${table.probeToken} IS NOT NULL
+					AND ${table.probeLeaseExpiresAt} IS NOT NULL)`,
+		),
+		check(
+			"storage_credentials_state_shape_check",
+			sql`(${table.state} = 'staged'
+					AND ${table.lastTestedAt} IS NULL
+					AND ${table.lastErrorCode} IS NULL
+					AND ${table.activatedAt} IS NULL
+					AND ${table.retiredAt} IS NULL)
+				OR (${table.state} = 'active'
+					AND ${table.probeToken} IS NULL
+					AND ${table.probeLeaseExpiresAt} IS NULL
+					AND ${table.lastTestedAt} IS NOT NULL
+					AND ${table.lastErrorCode} IS NULL
+					AND ${table.activatedAt} IS NOT NULL
+					AND ${table.retiredAt} IS NULL)
+				OR (${table.state} = 'retired'
+					AND ${table.probeToken} IS NULL
+					AND ${table.probeLeaseExpiresAt} IS NULL
+					AND ${table.lastTestedAt} IS NOT NULL
+					AND ${table.lastErrorCode} IS NULL
+					AND ${table.activatedAt} IS NOT NULL
+					AND ${table.retiredAt} IS NOT NULL
+					AND ${table.retiredAt} >= ${table.activatedAt})
+				OR (${table.state} = 'failed'
+					AND ${table.probeToken} IS NULL
+					AND ${table.probeLeaseExpiresAt} IS NULL
+					AND ${table.lastTestedAt} IS NOT NULL
+					AND ${table.lastErrorCode} IS NOT NULL
+					AND ${table.activatedAt} IS NULL
+					AND ${table.retiredAt} IS NULL)`,
+		),
 	],
 );
 
@@ -1918,11 +3281,21 @@ export const media = pgTable(
 		storageProvider: storageProviderEnum("storage_provider")
 			.notNull()
 			.default("r2"),
+		// A row pins the physical object location chosen at creation time. The
+		// binding/config is only a router for that locator; it must never silently
+		// reinterpret old keys after a regional or BYOS topology change.
+		storageBucketLocator: text("storage_bucket_locator").notNull(),
+		storageRegion: text("storage_region").notNull(),
+		storageLocationId: text("storage_location_id"),
+		storageCredentialVersion: integer("storage_credential_version"),
 		url: text("url"),
 		// Durable, hyper-optimized preview. Stored in a separate, never-expiring R2
 		// bucket so card/list previews survive after the full-res original is purged
 		// by the relayapi-media lifecycle rule. thumbnailUrl is a stable public URL.
 		thumbnailKey: text("thumbnail_key"),
+		thumbnailStorageProvider: storageProviderEnum("thumbnail_storage_provider"),
+		thumbnailStorageBucketLocator: text("thumbnail_storage_bucket_locator"),
+		thumbnailStorageRegion: text("thumbnail_storage_region"),
 		thumbnailUrl: text("thumbnail_url"),
 		thumbnailStatus: text("thumbnail_status", {
 			enum: [
@@ -1999,6 +3372,34 @@ export const media = pgTable(
 			foreignColumns: [workspaces.id, workspaces.organizationId],
 			name: "media_workspace_org_fk",
 		}),
+		foreignKey({
+			columns: [
+				table.storageLocationId,
+				table.organizationId,
+				table.storageBucketLocator,
+				table.storageRegion,
+			],
+			foreignColumns: [
+				storageLocations.id,
+				storageLocations.organizationId,
+				storageLocations.bucket,
+				storageLocations.region,
+			],
+			name: "media_storage_location_org_locator_fk",
+		}).onDelete("restrict"),
+		foreignKey({
+			columns: [
+				table.storageLocationId,
+				table.organizationId,
+				table.storageCredentialVersion,
+			],
+			foreignColumns: [
+				storageCredentials.locationId,
+				storageCredentials.organizationId,
+				storageCredentials.version,
+			],
+			name: "media_storage_credential_org_version_fk",
+		}).onDelete("restrict"),
 		check(
 			"media_status_check",
 			sql`${table.status} IN ('pending', 'uploading', 'upload_failed', 'ready', 'deleting', 'deletion_failed')`,
@@ -2016,10 +3417,58 @@ export const media = pgTable(
 				AND (${table.height} IS NULL OR ${table.height} > 0)
 				AND (${table.duration} IS NULL OR ${table.duration} >= 0)`,
 		),
+		check(
+			"media_storage_locator_check",
+			sql`length(btrim(${table.storageBucketLocator})) > 0
+				AND length(${table.storageBucketLocator}) <= 255
+				AND length(btrim(${table.storageRegion})) > 0
+				AND length(${table.storageRegion}) <= 128
+				AND (${table.storageProvider} <> 'r2'
+					OR ${table.storageRegion} IN ('default', 'eu'))`,
+		),
+		check(
+			"media_storage_authority_check",
+			sql`(${table.storageProvider} = 'r2'
+					AND ${table.storageLocationId} IS NULL
+					AND ${table.storageCredentialVersion} IS NULL)
+				OR (${table.storageProvider} = 'byos'
+					AND ${table.storageLocationId} IS NOT NULL
+					AND ${table.storageCredentialVersion} IS NOT NULL
+					AND ${table.storageCredentialVersion} > 0)`,
+		),
+		check(
+			"media_thumbnail_storage_locator_check",
+			sql`(
+					${table.thumbnailKey} IS NULL
+					AND ${table.thumbnailStorageProvider} IS NULL
+					AND ${table.thumbnailStorageBucketLocator} IS NULL
+					AND ${table.thumbnailStorageRegion} IS NULL
+				) OR (
+					${table.thumbnailKey} IS NOT NULL
+					AND ${table.thumbnailStorageProvider} IS NOT NULL
+					AND ${table.thumbnailStorageProvider} = 'r2'
+					AND ${table.thumbnailStorageBucketLocator} IS NOT NULL
+					AND length(btrim(${table.thumbnailStorageBucketLocator})) > 0
+					AND length(${table.thumbnailStorageBucketLocator}) <= 255
+					AND ${table.thumbnailStorageRegion} IS NOT NULL
+					AND ${table.thumbnailStorageRegion} IN ('default', 'eu')
+				)`,
+		),
+		check(
+			"media_thumbnail_projection_check",
+			sql`(${table.thumbnailStatus} <> 'generated'
+					OR (${table.thumbnailKey} IS NOT NULL
+						AND ${table.thumbnailUrl} IS NOT NULL))
+				AND (${table.thumbnailUrl} IS NULL
+					OR ${table.thumbnailStatus} = 'generated')`,
+		),
 		index("media_org_idx").on(table.organizationId),
 		index("media_workspace_idx").on(table.workspaceId),
 		uniqueIndex("media_storage_key_uniq").on(
 			table.storageProvider,
+			sql`COALESCE(${table.storageLocationId}, '')`,
+			table.storageBucketLocator,
+			table.storageRegion,
 			table.storageKey,
 		),
 		index("media_thumbnail_retry_idx").on(
@@ -2136,11 +3585,28 @@ export const webhookDeliveries = pgTable(
 		webhookId: text("webhook_id").notNull(),
 		organizationId: text("organization_id").notNull(),
 		status: text("status", {
-			enum: ["pending", "in_flight", "succeeded", "failed", "unknown"],
+			enum: [
+				"pending",
+				"in_flight",
+				"succeeded",
+				"failed",
+				"unknown",
+				"manual_review",
+				"unresolved",
+			],
 		})
 			.notNull()
 			.default("pending"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
 		attempts: integer("attempts").notNull().default(0),
+		repairAttempts: integer("repair_attempts").notNull().default(0),
+		repairDeadlineAt: timestamp("repair_deadline_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.default(sql`now() + interval '24 hours'`),
 		leaseToken: integer("lease_token").notNull().default(0),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 		claimedAt: timestamp("claimed_at", { withTimezone: true }),
@@ -2150,6 +3616,18 @@ export const webhookDeliveries = pgTable(
 		completedAt: timestamp("completed_at", { withTimezone: true }),
 		statusCode: integer("status_code"),
 		responseTimeMs: integer("response_time_ms"),
+		manualReviewReason: text("manual_review_reason", {
+			enum: ["pre_http_repair_exhausted", "http_outcome_unknown"],
+		}),
+		manualReviewUntil: timestamp("manual_review_until", {
+			withTimezone: true,
+		}),
+		operatorIntervenedAt: timestamp("operator_intervened_at", {
+			withTimezone: true,
+		}),
+		operatorRetryRequestedAt: timestamp("operator_retry_requested_at", {
+			withTimezone: true,
+		}),
 		error: text("error"),
 		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
 			.defaultNow()
@@ -2171,6 +3649,7 @@ export const webhookDeliveries = pgTable(
 			.notNull(),
 	},
 	(table) => [
+		unique("webhook_deliveries_id_org_uniq").on(table.id, table.organizationId),
 		foreignKey({
 			columns: [table.webhookEventId, table.organizationId],
 			foreignColumns: [webhookEvents.id, webhookEvents.organizationId],
@@ -2187,15 +3666,74 @@ export const webhookDeliveries = pgTable(
 		),
 		check(
 			"webhook_deliveries_status_check",
-			sql`${table.status} IN ('pending', 'in_flight', 'succeeded', 'failed', 'unknown')`,
+			sql`${table.status} IN ('pending', 'in_flight', 'succeeded', 'failed', 'unknown', 'manual_review', 'unresolved')`,
 		),
 		check(
 			"webhook_deliveries_counters_nonnegative_check",
-			sql`${table.attempts} >= 0 AND ${table.dispatchAttempts} >= 0 AND ${table.leaseToken} >= 0`,
+			sql`${table.attempts} >= 0 AND ${table.repairAttempts} >= 0 AND ${table.dispatchAttempts} >= 0 AND ${table.leaseToken} >= 0`,
+		),
+		check(
+			"webhook_deliveries_http_attempt_budget_check",
+			sql`${table.attempts} <= 9
+					AND (${table.attempts} <= 8
+						OR ${table.operatorRetryRequestedAt} IS NOT NULL)`,
+		),
+		check(
+			"webhook_deliveries_repair_deadline_check",
+			sql`${table.repairDeadlineAt} > ${table.createdAt}
+					AND (${table.operatorIntervenedAt} IS NULL
+						OR ${table.operatorIntervenedAt} >= ${table.createdAt})
+					AND (${table.operatorRetryRequestedAt} IS NULL
+						OR ${table.operatorRetryRequestedAt} >= ${table.createdAt})`,
+		),
+		check(
+			"webhook_deliveries_operator_intervention_check",
+			sql`${table.operatorRetryRequestedAt} IS NULL
+					OR ${table.operatorIntervenedAt} = ${table.operatorRetryRequestedAt}`,
 		),
 		check(
 			"webhook_deliveries_http_values_check",
 			sql`(${table.statusCode} IS NULL OR (${table.statusCode} >= 100 AND ${table.statusCode} <= 599)) AND (${table.responseTimeMs} IS NULL OR ${table.responseTimeMs} >= 0)`,
+		),
+		check(
+			"webhook_deliveries_terminal_completion_check",
+			sql`(${table.status} IN ('succeeded', 'failed', 'unresolved')
+						AND ${table.completedAt} IS NOT NULL
+						AND ${table.manualReviewReason} IS NULL
+						AND ${table.manualReviewUntil} IS NULL)
+					OR (${table.status} = 'manual_review'
+						AND ${table.completedAt} IS NULL
+						AND ${table.leaseExpiresAt} IS NULL
+						AND (
+							(${table.manualReviewReason} = 'pre_http_repair_exhausted'
+								AND ${table.requestMayHaveBeenSentAt} IS NULL
+								AND ${table.manualReviewUntil} > ${table.repairDeadlineAt}
+								AND ${table.manualReviewUntil} <= ${table.repairDeadlineAt} + interval '90 days')
+							OR (${table.manualReviewReason} = 'http_outcome_unknown'
+								AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+								AND ${table.manualReviewUntil} > ${table.requestMayHaveBeenSentAt}
+								AND ${table.manualReviewUntil} <= ${table.requestMayHaveBeenSentAt} + interval '90 days')
+						))
+					OR (${table.status} NOT IN ('succeeded', 'failed', 'manual_review', 'unresolved')
+						AND ${table.completedAt} IS NULL
+						AND ${table.manualReviewReason} IS NULL
+						AND ${table.manualReviewUntil} IS NULL)`,
+		),
+		check(
+			"webhook_deliveries_unknown_boundary_check",
+			sql`${table.status} <> 'unknown'
+					OR ${table.requestMayHaveBeenSentAt} IS NOT NULL`,
+		),
+		check(
+			"webhook_deliveries_lease_state_check",
+			sql`(${table.status} = 'in_flight'
+						AND ${table.leaseExpiresAt} IS NOT NULL
+						AND ${table.requestMayHaveBeenSentAt} IS NULL)
+					OR (${table.status} = 'unknown'
+						AND ${table.leaseExpiresAt} IS NOT NULL
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL)
+					OR (${table.status} NOT IN ('in_flight', 'unknown')
+						AND ${table.leaseExpiresAt} IS NULL)`,
 		),
 		index("webhook_deliveries_webhook_idx").on(table.webhookId),
 		index("webhook_deliveries_status_idx").on(
@@ -2207,6 +3745,12 @@ export const webhookDeliveries = pgTable(
 			table.nextDispatchAt,
 			table.dispatchLeaseExpiresAt,
 		),
+		index("webhook_deliveries_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(sql`${table.status} IN ('succeeded', 'failed', 'unresolved')`),
+		index("webhook_deliveries_manual_review_expiry_idx")
+			.on(table.manualReviewUntil, table.id)
+			.where(sql`${table.status} = 'manual_review'`),
 	],
 );
 
@@ -2218,12 +3762,19 @@ export const webhookLogs = pgTable(
 			.$defaultFn(() => generateId("whl_")),
 		webhookId: text("webhook_id").notNull(),
 		webhookEventId: text("webhook_event_id").notNull(),
+		deliveryId: text("delivery_id"),
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id),
+		attemptOrdinal: integer("attempt_ordinal").notNull(),
+		attemptKind: text("attempt_kind", {
+			enum: [...WEBHOOK_ATTEMPT_KINDS],
+		}).notNull(),
+		outcome: text("outcome", {
+			enum: [...WEBHOOK_ATTEMPT_OUTCOMES],
+		}).notNull(),
 		statusCode: integer("status_code"),
-		responseTimeMs: integer("response_time_ms"),
-		success: boolean("success").notNull().default(false),
+		responseTimeMs: integer("response_time_ms").notNull(),
 		error: text("error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -2240,11 +3791,45 @@ export const webhookLogs = pgTable(
 			foreignColumns: [webhookEvents.id, webhookEvents.organizationId],
 			name: "webhook_logs_event_org_fk",
 		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.deliveryId, table.organizationId],
+			foreignColumns: [webhookDeliveries.id, webhookDeliveries.organizationId],
+			name: "webhook_logs_delivery_org_fk",
+		}).onDelete("cascade"),
+		check(
+			"webhook_logs_attempt_kind_check",
+			sql`${table.attemptKind} IN ('delivery', 'test')`,
+		),
+		check(
+			"webhook_logs_outcome_check",
+			sql`${table.outcome} IN ('succeeded', 'retry_scheduled', 'failed', 'unknown')`,
+		),
+		check(
+			"webhook_logs_attempt_identity_check",
+			sql`(${table.attemptKind} = 'delivery'
+					AND ${table.deliveryId} IS NOT NULL
+					AND ${table.attemptOrdinal} > 0)
+				OR (${table.attemptKind} = 'test'
+					AND ${table.deliveryId} IS NULL
+					AND ${table.attemptOrdinal} = 1)`,
+		),
 		check(
 			"webhook_logs_http_values_check",
-			sql`(${table.statusCode} IS NULL OR ${table.statusCode} BETWEEN 100 AND 599)
-				AND (${table.responseTimeMs} IS NULL OR ${table.responseTimeMs} >= 0)`,
+			sql`${table.responseTimeMs} >= 0
+				AND ((${table.outcome} = 'succeeded'
+						AND ${table.statusCode} BETWEEN 200 AND 299
+						AND ${table.error} IS NULL)
+					OR (${table.outcome} IN ('retry_scheduled', 'failed')
+						AND ${table.statusCode} BETWEEN 100 AND 599
+						AND ${table.statusCode} NOT BETWEEN 200 AND 299
+						AND ${table.error} IS NOT NULL)
+					OR (${table.outcome} = 'unknown'
+						AND ${table.statusCode} IS NULL
+						AND ${table.error} IS NOT NULL))`,
 		),
+		uniqueIndex("webhook_logs_delivery_attempt_uniq")
+			.on(table.deliveryId, table.attemptOrdinal)
+			.where(sql`${table.deliveryId} IS NOT NULL`),
 		// Replaces the webhook_id-only index: event deletion/retention is the hot
 		// cleanup path, while endpoint deletion is rare and history is bounded.
 		index("webhook_logs_event_created_idx").on(
@@ -2256,6 +3841,7 @@ export const webhookLogs = pgTable(
 			table.createdAt,
 			table.id,
 		),
+		index("webhook_logs_retention_idx").on(table.createdAt, table.id),
 	],
 );
 
@@ -2277,6 +3863,11 @@ export const postAnalytics = pgTable(
 		saves: integer("saves").default(0),
 		clicks: integer("clicks").default(0),
 		views: integer("views").default(0),
+		// Deterministic scheduler-owned identity. Queue redelivery and a crash
+		// between history and freshness writes upsert this same observation.
+		observationWindowStart: timestamp("observation_window_start", {
+			withTimezone: true,
+		}).notNull(),
 		collectedAt: timestamp("collected_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -2296,7 +3887,13 @@ export const postAnalytics = pgTable(
 		index("post_analytics_target_collected_idx").on(
 			table.postTargetId,
 			table.collectedAt,
+			table.id,
 		),
+		uniqueIndex("post_analytics_target_window_uniq").on(
+			table.postTargetId,
+			table.observationWindowStart,
+		),
+		index("post_analytics_retention_idx").on(table.collectedAt, table.id),
 	],
 );
 
@@ -2330,6 +3927,7 @@ export const connectionLogs = pgTable(
 			table.organizationId,
 			table.createdAt,
 		),
+		index("connection_logs_retention_idx").on(table.createdAt, table.id),
 	],
 );
 
@@ -2354,6 +3952,10 @@ export const apiRequestLogs = pgTable(
 	},
 	(table) => [
 		check(
+			"api_request_logs_id_safe_integer_check",
+			sql`${table.id} BETWEEN 1 AND 9007199254740991`,
+		),
+		check(
 			"api_request_logs_http_values_check",
 			sql`${table.statusCode} BETWEEN 100 AND 599 AND ${table.responseTimeMs} >= 0`,
 		),
@@ -2362,6 +3964,7 @@ export const apiRequestLogs = pgTable(
 			table.createdAt,
 		),
 		index("api_request_logs_api_key_idx").on(table.apiKeyId),
+		index("api_request_logs_retention_idx").on(table.createdAt, table.id),
 	],
 );
 
@@ -2383,9 +3986,22 @@ export const queueFailures = pgTable(
 			.array()
 			.notNull()
 			.default(sql`ARRAY[]::text[]`),
+		workspaceIds: text("workspace_ids")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
+		userIds: text("user_ids").array().notNull().default(sql`ARRAY[]::text[]`),
+		contactIds: text("contact_ids")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
+		accountIds: text("account_ids")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
 		operationId: text("operation_id"),
 		failureKind: text("failure_kind", {
-			enum: ["permanent_input", "unknown_external_outcome", "dead_letter"],
+			enum: [...QUEUE_FAILURE_KINDS],
 		}).notNull(),
 		status: text("status", {
 			enum: [
@@ -2399,7 +4015,17 @@ export const queueFailures = pgTable(
 			.notNull()
 			.default("unresolved"),
 		attempts: integer("attempts").notNull(),
-		payload: jsonb("payload").notNull(),
+		payloadCiphertext: text("payload_ciphertext"),
+		payloadKeyId: text("payload_key_id"),
+		payloadExpiresAt: timestamp("payload_expires_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '30 days'`),
+		payloadRedactedAt: timestamp("payload_redacted_at", {
+			withTimezone: true,
+		}),
+		purgeAt: timestamp("purge_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '90 days'`),
 		error: text("error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -2443,6 +4069,22 @@ export const queueFailures = pgTable(
 			sql`(${table.status} IN ('replayed', 'dismissed') AND ${table.resolvedAt} IS NOT NULL)
 				OR (${table.status} NOT IN ('replayed', 'dismissed') AND ${table.resolvedAt} IS NULL)`,
 		),
+		check(
+			"queue_failures_payload_lifecycle_check",
+			sql`(${table.payloadCiphertext} IS NOT NULL
+					AND ${table.payloadKeyId} IS NOT NULL
+					AND ${table.payloadRedactedAt} IS NULL)
+				OR (${table.payloadCiphertext} IS NULL
+					AND ${table.payloadKeyId} IS NULL
+					AND ${table.payloadRedactedAt} IS NOT NULL)`,
+		),
+		check(
+			"queue_failures_retention_clock_check",
+			sql`${table.payloadExpiresAt} > ${table.createdAt}
+				AND ${table.purgeAt} >= ${table.payloadExpiresAt}
+				AND (${table.payloadRedactedAt} IS NULL
+					OR ${table.payloadRedactedAt} >= ${table.createdAt})`,
+		),
 		index("queue_failures_status_created_idx").on(
 			table.status,
 			table.createdAt,
@@ -2452,10 +4094,19 @@ export const queueFailures = pgTable(
 			"gin",
 			table.organizationIds,
 		),
+		index("queue_failures_workspace_ids_idx").using("gin", table.workspaceIds),
+		index("queue_failures_user_ids_idx").using("gin", table.userIds),
+		index("queue_failures_contact_ids_idx").using("gin", table.contactIds),
+		index("queue_failures_account_ids_idx").using("gin", table.accountIds),
 		index("queue_failures_replay_claim_idx").on(
 			table.status,
 			table.replayClaimExpiresAt,
 		),
+		index("queue_failures_payload_expiry_idx").on(
+			table.payloadExpiresAt,
+			table.id,
+		),
+		index("queue_failures_purge_idx").on(table.purgeAt, table.id),
 	],
 );
 
@@ -2463,12 +4114,52 @@ export const emailDeliveries = pgTable(
 	"email_deliveries",
 	{
 		id: text("id").primaryKey(),
+		intent: text("intent", {
+			enum: ["organization", "auth_user"],
+		}).notNull(),
+		organizationId: text("organization_id").references(() => organization.id, {
+			onDelete: "cascade",
+		}),
+		authUserId: text("auth_user_id").references(() => user.id, {
+			onDelete: "cascade",
+		}),
+		subjectUserId: text("subject_user_id").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		// The queue carries only the ledger id. Recipient, subject, and
+		// rendered content stay in this owned, application-encrypted envelope.
+		envelopeCiphertext: text("envelope_ciphertext"),
+		envelopeKeyId: text("envelope_key_id"),
 		status: text("status", {
-			enum: ["pending", "unknown", "sent", "failed"],
+			enum: [
+				"pending",
+				"processing",
+				"unknown",
+				"sent",
+				"failed",
+				"manual_review",
+			],
 		})
 			.notNull()
 			.default("pending"),
-		attempts: integer("attempts").notNull().default(0),
+		providerAttempts: integer("provider_attempts").notNull().default(0),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		deadlineAt: timestamp("deadline_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '23 hours'`),
+		dispatchAttempts: integer("dispatch_attempts").notNull().default(0),
+		dispatchLeaseToken: integer("dispatch_lease_token").notNull().default(0),
+		dispatchLeaseExpiresAt: timestamp("dispatch_lease_expires_at", {
+			withTimezone: true,
+		}),
+		nextDispatchAt: timestamp("next_dispatch_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		queuedAt: timestamp("queued_at", { withTimezone: true }),
 		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
 			withTimezone: true,
 		}),
@@ -2478,30 +4169,105 @@ export const emailDeliveries = pgTable(
 			.defaultNow()
 			.notNull(),
 		completedAt: timestamp("completed_at", { withTimezone: true }),
+		expiresAt: timestamp("expires_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '30 days'`),
+		purgeAt: timestamp("purge_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '90 days'`),
+		redactedAt: timestamp("redacted_at", { withTimezone: true }),
 	},
 	(table) => [
 		check(
+			"email_deliveries_intent_owner_check",
+			sql`(${table.intent} = 'organization'
+					AND ${table.organizationId} IS NOT NULL
+					AND ${table.authUserId} IS NULL)
+				OR (${table.intent} = 'auth_user'
+					AND ${table.organizationId} IS NULL
+					AND ${table.authUserId} IS NOT NULL)`,
+		),
+		check(
 			"email_deliveries_status_check",
-			sql`${table.status} IN ('pending', 'unknown', 'sent', 'failed')`,
+			sql`${table.status} IN ('pending', 'processing', 'unknown', 'sent', 'failed', 'manual_review')`,
 		),
 		check(
 			"email_deliveries_attempts_nonnegative_check",
-			sql`${table.attempts} >= 0`,
+			sql`${table.providerAttempts} >= 0
+				AND ${table.leaseToken} >= 0
+				AND ${table.dispatchAttempts} >= 0
+				AND ${table.dispatchLeaseToken} >= 0`,
+		),
+		check(
+			"email_deliveries_dispatch_lease_check",
+			sql`${table.dispatchLeaseExpiresAt} IS NULL
+				OR ${table.status} IN ('pending', 'unknown')`,
 		),
 		check(
 			"email_deliveries_state_fields_check",
-			sql`(${table.status} = 'pending' AND ${table.completedAt} IS NULL)
+			sql`(${table.status} = 'pending'
+					AND ${table.completedAt} IS NULL
+					AND ${table.leaseExpiresAt} IS NULL
+					AND ${table.requestMayHaveBeenSentAt} IS NULL)
+				OR (${table.status} = 'processing'
+					AND ${table.completedAt} IS NULL
+					AND ${table.leaseExpiresAt} IS NOT NULL)
 				OR (${table.status} = 'unknown'
-					AND ${table.completedAt} IS NULL)
-				OR (${table.status} IN ('sent', 'failed')
+					AND ${table.completedAt} IS NULL
+					AND ${table.leaseExpiresAt} IS NULL
 					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+				)
+				OR (${table.status} IN ('sent', 'failed', 'manual_review')
+					AND ${table.leaseExpiresAt} IS NULL
 					AND ${table.completedAt} IS NOT NULL)`,
 		),
 		check(
 			"email_deliveries_timestamp_order_check",
-			sql`(${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
-				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
+			sql`${table.expiresAt} > ${table.createdAt}
+				AND ${table.deadlineAt} > ${table.createdAt}
+				AND ${table.deadlineAt} <= ${table.expiresAt}
+				AND ${table.purgeAt} >= ${table.expiresAt}
+				AND (${table.queuedAt} IS NULL OR ${table.queuedAt} >= ${table.createdAt})
+				AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
+				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})
+				AND (${table.redactedAt} IS NULL OR ${table.redactedAt} >= ${table.createdAt})`,
 		),
+		check(
+			"email_deliveries_envelope_lifecycle_check",
+			sql`(${table.envelopeCiphertext} IS NOT NULL
+					AND ${table.envelopeKeyId} IS NOT NULL
+					AND ${table.redactedAt} IS NULL)
+				OR (${table.envelopeCiphertext} IS NULL
+					AND ${table.envelopeKeyId} IS NULL
+					AND ${table.redactedAt} IS NOT NULL)`,
+		),
+		index("email_deliveries_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+		),
+		index("email_deliveries_auth_user_created_idx").on(
+			table.authUserId,
+			table.createdAt,
+		),
+		index("email_deliveries_subject_user_idx").on(table.subjectUserId),
+		index("email_deliveries_pending_dispatch_idx")
+			.on(
+				table.nextDispatchAt,
+				table.deadlineAt,
+				table.dispatchLeaseExpiresAt,
+				table.organizationId,
+				table.createdAt,
+				table.id,
+			)
+			.where(sql`${table.status} IN ('pending', 'unknown')`),
+		index("email_deliveries_processing_lease_idx")
+			.on(table.leaseExpiresAt, table.id)
+			.where(sql`${table.status} = 'processing'`),
+		index("email_deliveries_deadline_idx")
+			.on(table.deadlineAt, table.id)
+			.where(sql`${table.status} IN ('pending', 'processing', 'unknown')`),
+		index("email_deliveries_expiry_idx").on(table.expiresAt, table.id),
+		index("email_deliveries_purge_idx").on(table.purgeAt, table.id),
 	],
 );
 
@@ -2574,7 +4340,7 @@ export const idempotencyReceipts = pgTable(
 				AND ${table.expiresAt} > ${table.createdAt}
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
 		),
-		index("idempotency_receipts_expiry_idx").on(table.expiresAt),
+		index("idempotency_receipts_expiry_idx").on(table.expiresAt, table.id),
 		index("idempotency_receipts_state_created_idx").on(
 			table.state,
 			table.createdAt,
@@ -2590,7 +4356,9 @@ export const oneTimeCapabilities = pgTable(
 	"one_time_capabilities",
 	{
 		id: text("id").primaryKey(),
-		kind: text("kind", { enum: ["oauth_state", "websocket_ticket"] }).notNull(),
+		kind: text("kind", {
+			enum: [...ONE_TIME_CAPABILITY_KINDS],
+		}).notNull(),
 		organizationId: text("organization_id").references(() => organization.id, {
 			onDelete: "cascade",
 		}),
@@ -2602,7 +4370,11 @@ export const oneTimeCapabilities = pgTable(
 		claimedAt: timestamp("claimed_at", { withTimezone: true }),
 	},
 	(table) => [
-		index("one_time_capabilities_expiry_idx").on(table.expiresAt),
+		check(
+			"one_time_capabilities_kind_check",
+			sql`${table.kind} IN ('oauth_state', 'websocket_ticket')`,
+		),
+		index("one_time_capabilities_expiry_idx").on(table.expiresAt, table.id),
 		index("one_time_capabilities_org_kind_idx").on(
 			table.organizationId,
 			table.kind,
@@ -2627,10 +4399,14 @@ export const organizationSubscriptions = pgTable(
 			.unique(),
 		// Row existence is settings/storage, not proof of a Stripe trial.
 		status: subscriptionStatusEnum("status").notNull().default("cancelled"),
+		source: text("source", {
+			enum: ["stripe", "complimentary"],
+		})
+			.notNull()
+			.default("stripe"),
+		delinquentAt: timestamp("delinquent_at", { withTimezone: true }),
+		graceEndsAt: timestamp("grace_ends_at", { withTimezone: true }),
 		trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
-		postsIncluded: integer("posts_included").notNull().default(1000),
-		pricePerPostCents: integer("price_per_post_cents").notNull().default(1),
-		monthlyPriceCents: integer("monthly_price_cents").notNull().default(500),
 		currentPeriodStart: timestamp("current_period_start", {
 			withTimezone: true,
 		})
@@ -2638,11 +4414,14 @@ export const organizationSubscriptions = pgTable(
 			.notNull(),
 		currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
 		stripeCustomerId: text("stripe_customer_id"),
+		stripeCheckoutSessionId: text("stripe_checkout_session_id"),
 		stripeSubscriptionId: text("stripe_subscription_id"),
 		stripeMeteredItemId: text("stripe_metered_item_id"),
 		cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
 		aiEnabled: boolean("ai_enabled").notNull().default(false),
-		dailyToolLimit: integer("daily_tool_limit").notNull().default(2),
+		// NULL inherits the current plan default. A concrete value (including
+		// zero) is an organization-specific support/operator override.
+		dailyToolLimitOverride: integer("daily_tool_limit_override"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -2654,15 +4433,37 @@ export const organizationSubscriptions = pgTable(
 		uniqueIndex("org_subs_stripe_sub_id_idx").on(table.stripeSubscriptionId),
 		uniqueIndex("org_subs_stripe_customer_id_idx").on(table.stripeCustomerId),
 		check(
-			"organization_subscriptions_numeric_check",
-			sql`${table.postsIncluded} >= 0
-				AND ${table.pricePerPostCents} >= 0
-				AND ${table.monthlyPriceCents} >= 0
-				AND ${table.dailyToolLimit} >= 0`,
+			"organization_subscriptions_daily_tool_limit_override_check",
+			sql`${table.dailyToolLimitOverride} IS NULL OR ${table.dailyToolLimitOverride} >= 0`,
 		),
 		check(
 			"organization_subscriptions_period_check",
 			sql`${table.currentPeriodEnd} IS NULL OR ${table.currentPeriodEnd} > ${table.currentPeriodStart}`,
+		),
+		check(
+			"organization_subscriptions_source_check",
+			sql`${table.source} IN ('stripe', 'complimentary')`,
+		),
+		check(
+			"organization_subscriptions_stripe_authority_check",
+			sql`(${table.source} = 'complimentary'
+					AND ${table.status} IN ('active', 'cancelled')
+					AND ${table.stripeSubscriptionId} IS NULL
+					AND ${table.stripeMeteredItemId} IS NULL)
+				OR (${table.source} = 'stripe'
+					AND (${table.status} = 'cancelled'
+						OR (${table.status} IN ('active', 'trialing', 'past_due')
+							AND ${table.stripeCustomerId} IS NOT NULL
+							AND ${table.stripeSubscriptionId} IS NOT NULL)))`,
+		),
+		check(
+			"organization_subscriptions_past_due_check",
+			sql`(${table.status} = 'past_due') =
+					(${table.delinquentAt} IS NOT NULL AND ${table.graceEndsAt} IS NOT NULL)
+				AND (${table.status} = 'past_due'
+					OR (${table.delinquentAt} IS NULL AND ${table.graceEndsAt} IS NULL))
+				AND (${table.graceEndsAt} IS NULL
+					OR ${table.graceEndsAt} = ${table.delinquentAt} + INTERVAL '14 days')`,
 		),
 	],
 );
@@ -2729,6 +4530,10 @@ export const subscriptionCheckoutOperations = pgTable(
 			table.organizationId,
 			table.createdAt,
 		),
+		index("subscription_checkout_operations_retention_idx").on(
+			table.updatedAt,
+			table.id,
+		),
 		check(
 			"subscription_checkout_operations_status_check",
 			sql`${table.status} IN ('pending', 'creating', 'unknown', 'created', 'completed', 'blocked', 'failed', 'expired')`,
@@ -2759,14 +4564,18 @@ export const subscriptionCheckoutOperations = pgTable(
 );
 
 /**
- * Durable Stripe webhook inbox. Stripe event IDs never expire locally and are
- * the atomic deduplication key; the lease fields make interrupted processing
- * recoverable without relying on eventually-consistent KV.
+ * Durable Stripe webhook inbox. The raw provider row is the processing fence
+ * for 90 days; a detached SHA-256 receipt preserves replay rejection through
+ * the one-year provider window without retaining the event ID or payload.
  */
 export const stripeEvents = pgTable(
 	"stripe_events",
 	{
 		id: text("id").primaryKey(),
+		// Immutable, set-once tenant attribution. This deliberately has no FK:
+		// the raw provider receipt must survive organization deletion until the
+		// retention worker has written its minimized financial receipt.
+		organizationId: text("organization_id"),
 		type: text("type").notNull(),
 		objectId: text("object_id"),
 		customerId: text("customer_id"),
@@ -2775,7 +4584,11 @@ export const stripeEvents = pgTable(
 		status: text("status").notNull().default("pending"),
 		attempts: integer("attempts").notNull().default(0),
 		leaseToken: integer("lease_token").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
 		lastError: text("last_error"),
+		lastErrorClass: text("last_error_class"),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 		stripeCreatedAt: timestamp("stripe_created_at", {
 			withTimezone: true,
@@ -2784,6 +4597,10 @@ export const stripeEvents = pgTable(
 			.defaultNow()
 			.notNull(),
 		processedAt: timestamp("processed_at", { withTimezone: true }),
+		manualReviewAt: timestamp("manual_review_at", { withTimezone: true }),
+		operatorRetryRequestedAt: timestamp("operator_retry_requested_at", {
+			withTimezone: true,
+		}),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -2798,22 +4615,94 @@ export const stripeEvents = pgTable(
 			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
 		),
 		check(
+			"stripe_events_error_class_check",
+			sql`${table.lastErrorClass} IS NULL
+				OR ${table.lastErrorClass} IN ('transient', 'permanent', 'unresolved', 'retry_exhausted', 'age_exhausted')`,
+		),
+		check(
 			"stripe_events_lease_state_check",
 			sql`(${table.status} = 'processing' AND ${table.leaseExpiresAt} IS NOT NULL)
 				OR (${table.status} <> 'processing' AND ${table.leaseExpiresAt} IS NULL)`,
 		),
 		check(
 			"stripe_events_completion_check",
-			sql`${table.status} <> 'succeeded' OR ${table.processedAt} IS NOT NULL`,
+			sql`(${table.status} = 'succeeded' AND ${table.processedAt} IS NOT NULL AND ${table.manualReviewAt} IS NULL)
+				OR (${table.status} = 'manual_review' AND ${table.processedAt} IS NULL AND ${table.manualReviewAt} IS NOT NULL)
+				OR (${table.status} NOT IN ('succeeded', 'manual_review') AND ${table.processedAt} IS NULL AND ${table.manualReviewAt} IS NULL)`,
+		),
+		check(
+			"stripe_events_operator_retry_check",
+			sql`${table.operatorRetryRequestedAt} IS NULL
+				OR (${table.status} = 'failed'
+					AND ${table.processedAt} IS NULL
+					AND ${table.manualReviewAt} IS NULL
+					AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"stripe_events_terminal_failure_check",
+			sql`NOT (${table.status} = 'failed' AND ${table.lastErrorClass} = 'permanent')
+				OR (${table.payload} = '{}'::jsonb
+					AND ${table.processedAt} IS NULL
+					AND ${table.manualReviewAt} IS NULL
+					AND ${table.operatorRetryRequestedAt} IS NULL
+					AND ${table.leaseExpiresAt} IS NULL)`,
 		),
 		check(
 			"stripe_events_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.receivedAt}
-				AND (${table.processedAt} IS NULL OR ${table.processedAt} >= ${table.receivedAt})`,
+				AND (${table.processedAt} IS NULL OR ${table.processedAt} >= ${table.receivedAt})
+				AND (${table.manualReviewAt} IS NULL OR ${table.manualReviewAt} >= ${table.receivedAt})
+				AND (${table.operatorRetryRequestedAt} IS NULL OR ${table.operatorRetryRequestedAt} >= ${table.receivedAt})`,
 		),
-		index("stripe_events_status_lease_idx").on(
+		index("stripe_events_status_due_idx").on(
 			table.status,
+			table.nextAttemptAt,
+			table.receivedAt,
+			table.id,
+		),
+		index("stripe_events_processing_lease_idx")
+			.on(table.leaseExpiresAt, table.id)
+			.where(sql`${table.status} = 'processing'`),
+		index("stripe_events_retention_idx").on(table.receivedAt, table.id),
+		index("stripe_events_organization_retention_idx").on(
+			table.organizationId,
+			table.receivedAt,
+			table.id,
+		),
+	],
+);
+
+/**
+ * One short-lived provider aggregate lease per organization. Stripe event IDs
+ * deduplicate delivery; this separate fence serializes canonical reads and
+ * applies across all base/add-on events for the same customer.
+ */
+export const stripeOrganizationLeases = pgTable(
+	"stripe_organization_leases",
+	{
+		organizationId: text("organization_id")
+			.primaryKey()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		leaseToken: integer("lease_token").notNull().default(0),
+		ownerEventId: text("owner_event_id"),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		check(
+			"stripe_organization_leases_numeric_check",
+			sql`${table.leaseToken} >= 0`,
+		),
+		check(
+			"stripe_organization_leases_state_check",
+			sql`(${table.ownerEventId} IS NULL AND ${table.leaseExpiresAt} IS NULL)
+				OR (${table.ownerEventId} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL)`,
+		),
+		index("stripe_organization_leases_expiry_idx").on(
 			table.leaseExpiresAt,
+			table.organizationId,
 		),
 	],
 );
@@ -2826,7 +4715,7 @@ export const billingOutbox = pgTable(
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id),
-		kind: text("kind").notNull(),
+		kind: text("kind", { enum: [...BILLING_OUTBOX_KINDS] }).notNull(),
 		payload: jsonb("payload").notNull(),
 		status: text("status").notNull().default("pending"),
 		attempts: integer("attempts").notNull().default(0),
@@ -2836,7 +4725,9 @@ export const billingOutbox = pgTable(
 			.notNull(),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 		lastError: text("last_error"),
+		lastErrorClass: text("last_error_class"),
 		processedAt: timestamp("processed_at", { withTimezone: true }),
+		manualReviewAt: timestamp("manual_review_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -2846,8 +4737,12 @@ export const billingOutbox = pgTable(
 	},
 	(table) => [
 		check(
+			"billing_outbox_kind_check",
+			sql`${table.kind} IN ('auth_cache.refresh', 'payment_failed.notify', 'subscription.cancel')`,
+		),
+		check(
 			"billing_outbox_status_check",
-			sql`${table.status} IN ('pending', 'processing', 'succeeded', 'failed')`,
+			sql`${table.status} IN ('pending', 'processing', 'succeeded', 'failed', 'manual_review')`,
 		),
 		check(
 			"billing_outbox_counters_nonnegative_check",
@@ -2860,13 +4755,26 @@ export const billingOutbox = pgTable(
 		),
 		check(
 			"billing_outbox_completion_check",
-			sql`(${table.status} = 'succeeded' AND ${table.processedAt} IS NOT NULL)
-				OR (${table.status} <> 'succeeded' AND ${table.processedAt} IS NULL)`,
+			sql`(${table.status} = 'succeeded'
+					AND ${table.processedAt} IS NOT NULL
+					AND ${table.manualReviewAt} IS NULL)
+				OR (${table.status} = 'manual_review'
+					AND ${table.processedAt} IS NULL
+					AND ${table.manualReviewAt} IS NOT NULL)
+				OR (${table.status} NOT IN ('succeeded', 'manual_review')
+					AND ${table.processedAt} IS NULL
+					AND ${table.manualReviewAt} IS NULL)`,
+		),
+		check(
+			"billing_outbox_error_class_check",
+			sql`${table.lastErrorClass} IS NULL
+				OR ${table.lastErrorClass} IN ('transient', 'permanent', 'retry_exhausted')`,
 		),
 		check(
 			"billing_outbox_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.createdAt}
-				AND (${table.processedAt} IS NULL OR ${table.processedAt} >= ${table.createdAt})`,
+				AND (${table.processedAt} IS NULL OR ${table.processedAt} >= ${table.createdAt})
+				AND (${table.manualReviewAt} IS NULL OR ${table.manualReviewAt} >= ${table.createdAt})`,
 		),
 		index("billing_outbox_status_due_idx").on(
 			table.status,
@@ -2876,14 +4784,322 @@ export const billingOutbox = pgTable(
 			table.organizationId,
 			table.createdAt,
 		),
+		index("billing_outbox_retention_idx").on(table.updatedAt, table.id),
 	],
 );
 
 // ---------------------------------------------------------------------------
-// Usage authority and compatibility projection.
+// Usage authority.
 // ---------------------------------------------------------------------------
 
-/** Authoritative quota bucket; counters are updated atomically with reservations. */
+/**
+ * Immutable financial/quota authority for one contiguous entitlement window.
+ * A Stripe provider cycle can contain multiple RelayAPI periods after a
+ * mid-cycle plan, pricing, or delinquency transition.
+ */
+export const billingPeriods = pgTable(
+	"billing_periods",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("bp_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "restrict" }),
+		source: text("source", {
+			enum: ["stripe", "complimentary"],
+		}).notNull(),
+		billable: boolean("billable").notNull(),
+		quotaMode: text("quota_mode", {
+			enum: ["hard", "metered", "unlimited"],
+		}).notNull(),
+		providerCycleAnchor: timestamp("provider_cycle_anchor", {
+			withTimezone: true,
+		}).notNull(),
+		periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+		periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+		// Immutable agreement identity. Never infer an ended period's Stripe
+		// target from the organization's current subscription: a customer may
+		// churn, retain a separately-billed add-on, or subscribe again.
+		stripeCustomerId: text("stripe_customer_id"),
+		stripeSubscriptionId: text("stripe_subscription_id"),
+		stripeProductId: text("stripe_product_id"),
+		stripePriceId: text("stripe_price_id"),
+		stripePriceRole: text("stripe_price_role", { enum: ["base"] }),
+		rateCardVersion: text("rate_card_version"),
+		taxBehavior: text("tax_behavior", {
+			enum: ["inclusive", "exclusive", "unspecified"],
+		}),
+		taxCode: text("tax_code"),
+		discountable: boolean("discountable"),
+		cycleAllowance: bigint("cycle_allowance", { mode: "number" }),
+		includedUnits: bigint("included_units", { mode: "number" }),
+		pricePerThousandUnitsCents: integer("price_per_thousand_units_cents"),
+		basePriceCents: integer("base_price_cents").notNull().default(0),
+		currency: varchar("currency", { length: 3 }).notNull().default("usd"),
+		state: text("state", {
+			enum: [
+				"open",
+				"closed",
+				"claimed",
+				"settled",
+				"released",
+				"written_off",
+				"void",
+			],
+		})
+			.notNull()
+			.default("open"),
+		committedUnitsSnapshot: bigint("committed_units_snapshot", {
+			mode: "number",
+		}),
+		effectiveIncludedUnitsSnapshot: bigint(
+			"effective_included_units_snapshot",
+			{ mode: "number" },
+		),
+		overageUnitsSnapshot: bigint("overage_units_snapshot", {
+			mode: "number",
+		}),
+		amountCentsSnapshot: integer("amount_cents_snapshot"),
+		invoiceId: text("invoice_id"),
+		stripeInvoiceId: text("stripe_invoice_id"),
+		releaseCount: integer("release_count").notNull().default(0),
+		revision: integer("revision").notNull().default(0),
+		closedAt: timestamp("closed_at", { withTimezone: true }),
+		claimedAt: timestamp("claimed_at", { withTimezone: true }),
+		settledAt: timestamp("settled_at", { withTimezone: true }),
+		releasedAt: timestamp("released_at", { withTimezone: true }),
+		writtenOffAt: timestamp("written_off_at", { withTimezone: true }),
+		writeOffReason: text("write_off_reason"),
+		writeOffEvidence: jsonb("write_off_evidence"),
+		voidedAt: timestamp("voided_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		unique("billing_periods_id_org_uniq").on(table.id, table.organizationId),
+		unique("billing_periods_id_org_window_uniq").on(
+			table.id,
+			table.organizationId,
+			table.periodStart,
+			table.periodEnd,
+		),
+		uniqueIndex("billing_periods_org_start_live_uniq")
+			.on(table.organizationId, table.periodStart)
+			.where(sql`${table.state} <> 'void'`),
+		index("billing_periods_org_cycle_idx").on(
+			table.organizationId,
+			table.providerCycleAnchor,
+			table.periodStart,
+		),
+		index("billing_periods_state_end_idx").on(
+			table.state,
+			table.periodEnd,
+			table.organizationId,
+			table.id,
+		),
+		index("billing_periods_retention_idx").on(table.periodEnd, table.id),
+		check(
+			"billing_periods_window_check",
+			sql`${table.periodEnd} > ${table.periodStart}
+				AND ${table.providerCycleAnchor} <= ${table.periodStart}`,
+		),
+		check(
+			"billing_periods_source_check",
+			sql`${table.source} IN ('stripe', 'complimentary')`,
+		),
+		check(
+			"billing_periods_stripe_price_role_check",
+			sql`${table.stripePriceRole} IS NULL OR ${table.stripePriceRole} IN ('base')`,
+		),
+		check(
+			"billing_periods_agreement_shape_check",
+			sql`(${table.source} = 'stripe'
+					AND ${table.stripeCustomerId} IS NOT NULL
+					AND ${table.stripeSubscriptionId} IS NOT NULL
+					AND ${table.stripeProductId} IS NOT NULL
+					AND ${table.stripePriceId} IS NOT NULL
+					AND ${table.stripePriceRole} = 'base'
+					AND ${table.rateCardVersion} IS NOT NULL
+					AND ${table.taxBehavior} IN ('inclusive', 'exclusive', 'unspecified')
+					AND ${table.discountable} IS NOT NULL)
+				OR (${table.source} = 'complimentary'
+					AND ${table.stripeCustomerId} IS NULL
+					AND ${table.stripeSubscriptionId} IS NULL
+					AND ${table.stripeProductId} IS NULL
+					AND ${table.stripePriceId} IS NULL
+					AND ${table.stripePriceRole} IS NULL
+					AND ${table.rateCardVersion} IS NULL
+					AND ${table.taxBehavior} IS NULL
+					AND ${table.taxCode} IS NULL
+					AND ${table.discountable} IS NULL)`,
+		),
+		check(
+			"billing_periods_quota_mode_check",
+			sql`${table.quotaMode} IN ('hard', 'metered', 'unlimited')`,
+		),
+		check(
+			"billing_periods_quota_shape_check",
+			sql`(${table.quotaMode} = 'unlimited'
+					AND ${table.cycleAllowance} IS NULL
+					AND ${table.includedUnits} IS NULL)
+				OR (${table.quotaMode} IN ('hard', 'metered')
+					AND ${table.cycleAllowance} IS NOT NULL
+					AND ${table.cycleAllowance} >= 0
+					AND ${table.includedUnits} IS NOT NULL
+					AND ${table.includedUnits} >= 0)`,
+		),
+		check(
+			"billing_periods_billing_shape_check",
+			sql`(${table.billable}
+					AND ${table.source} = 'stripe'
+					AND ${table.quotaMode} = 'metered'
+					AND ${table.pricePerThousandUnitsCents} IS NOT NULL
+					AND ${table.pricePerThousandUnitsCents} >= 0)
+				OR (NOT ${table.billable} AND ${table.pricePerThousandUnitsCents} IS NULL)`,
+		),
+		check("billing_periods_currency_check", sql`${table.currency} = 'usd'`),
+		check(
+			"billing_periods_numeric_check",
+			sql`${table.basePriceCents} >= 0
+				AND ${table.releaseCount} BETWEEN 0 AND 1
+				AND ${table.revision} >= 0
+				AND (${table.cycleAllowance} IS NULL OR ${table.cycleAllowance} <= 9007199254740991)
+				AND (${table.includedUnits} IS NULL OR ${table.includedUnits} <= 9007199254740991)
+				AND (${table.committedUnitsSnapshot} IS NULL OR ${table.committedUnitsSnapshot} BETWEEN 0 AND 9007199254740991)
+				AND (${table.effectiveIncludedUnitsSnapshot} IS NULL OR ${table.effectiveIncludedUnitsSnapshot} BETWEEN 0 AND 9007199254740991)
+				AND (${table.overageUnitsSnapshot} IS NULL OR ${table.overageUnitsSnapshot} BETWEEN 0 AND 9007199254740991)
+				AND (${table.amountCentsSnapshot} IS NULL OR ${table.amountCentsSnapshot} >= 0)`,
+		),
+		check(
+			"billing_periods_state_check",
+			sql`${table.state} IN ('open', 'closed', 'claimed', 'settled', 'released', 'written_off', 'void')`,
+		),
+		check(
+			"billing_periods_state_shape_check",
+			sql`(${table.state} = 'open'
+					AND ${table.closedAt} IS NULL
+					AND ${table.claimedAt} IS NULL
+					AND ${table.settledAt} IS NULL
+					AND ${table.releasedAt} IS NULL
+					AND ${table.writtenOffAt} IS NULL
+					AND ${table.writeOffReason} IS NULL
+					AND ${table.writeOffEvidence} IS NULL
+					AND ${table.voidedAt} IS NULL
+					AND ${table.committedUnitsSnapshot} IS NULL
+					AND ${table.effectiveIncludedUnitsSnapshot} IS NULL
+					AND ${table.overageUnitsSnapshot} IS NULL
+					AND ${table.amountCentsSnapshot} IS NULL
+					AND ${table.invoiceId} IS NULL
+					AND ${table.stripeInvoiceId} IS NULL)
+				OR (${table.state} = 'closed'
+					AND ${table.closedAt} IS NOT NULL
+					AND ${table.claimedAt} IS NULL
+					AND ${table.settledAt} IS NULL
+					AND ${table.releasedAt} IS NULL
+					AND ${table.writtenOffAt} IS NULL
+					AND ${table.writeOffReason} IS NULL
+					AND ${table.writeOffEvidence} IS NULL
+					AND ${table.voidedAt} IS NULL
+					AND ${table.committedUnitsSnapshot} IS NULL
+					AND ${table.effectiveIncludedUnitsSnapshot} IS NULL
+					AND ${table.overageUnitsSnapshot} IS NULL
+					AND ${table.amountCentsSnapshot} IS NULL
+					AND ${table.invoiceId} IS NULL
+					AND ${table.stripeInvoiceId} IS NULL)
+				OR (${table.state} = 'claimed'
+					AND ${table.closedAt} IS NOT NULL
+					AND ${table.claimedAt} IS NOT NULL
+					AND ${table.settledAt} IS NULL
+					AND ${table.releasedAt} IS NULL
+					AND ${table.writtenOffAt} IS NULL
+					AND ${table.writeOffReason} IS NULL
+					AND ${table.writeOffEvidence} IS NULL
+					AND ${table.voidedAt} IS NULL
+					AND ${table.committedUnitsSnapshot} IS NOT NULL
+					AND ${table.effectiveIncludedUnitsSnapshot} IS NOT NULL
+					AND ${table.overageUnitsSnapshot} IS NOT NULL
+					AND ${table.amountCentsSnapshot} IS NOT NULL
+					AND ${table.invoiceId} IS NULL
+					AND ${table.stripeInvoiceId} IS NULL)
+				OR (${table.state} = 'settled'
+					AND ${table.closedAt} IS NOT NULL
+					AND ${table.claimedAt} IS NOT NULL
+					AND ${table.settledAt} IS NOT NULL
+					AND ${table.releasedAt} IS NULL
+					AND ${table.writtenOffAt} IS NULL
+					AND ${table.writeOffReason} IS NULL
+					AND ${table.writeOffEvidence} IS NULL
+					AND ${table.voidedAt} IS NULL
+					AND ${table.committedUnitsSnapshot} IS NOT NULL
+					AND ${table.effectiveIncludedUnitsSnapshot} IS NOT NULL
+					AND ${table.overageUnitsSnapshot} IS NOT NULL
+					AND ${table.amountCentsSnapshot} IS NOT NULL
+					AND (
+						(${table.amountCentsSnapshot} = 0
+							AND ${table.invoiceId} IS NULL
+							AND ${table.stripeInvoiceId} IS NULL)
+						OR (${table.invoiceId} IS NOT NULL
+							AND ${table.stripeInvoiceId} IS NOT NULL)
+					))
+				OR (${table.state} = 'released'
+					AND ${table.closedAt} IS NOT NULL
+					AND ${table.claimedAt} IS NOT NULL
+					AND ${table.settledAt} IS NULL
+					AND ${table.releasedAt} IS NOT NULL
+					AND ${table.writtenOffAt} IS NULL
+					AND ${table.writeOffReason} IS NULL
+					AND ${table.writeOffEvidence} IS NULL
+					AND ${table.voidedAt} IS NULL
+					AND ${table.releaseCount} = 1
+					AND ${table.committedUnitsSnapshot} IS NOT NULL
+					AND ${table.effectiveIncludedUnitsSnapshot} IS NOT NULL
+					AND ${table.overageUnitsSnapshot} IS NOT NULL
+					AND ${table.amountCentsSnapshot} IS NOT NULL
+					AND ${table.invoiceId} IS NULL
+					AND ${table.stripeInvoiceId} IS NULL)
+				OR (${table.state} = 'written_off'
+					AND ${table.closedAt} IS NOT NULL
+					AND ${table.claimedAt} IS NOT NULL
+					AND ${table.settledAt} IS NULL
+					AND ${table.releasedAt} IS NULL
+					AND ${table.writtenOffAt} IS NOT NULL
+					AND length(${table.writeOffReason}) > 0
+					AND ${table.writeOffEvidence} IS NOT NULL
+					AND ${table.voidedAt} IS NULL
+					AND ${table.committedUnitsSnapshot} IS NOT NULL
+					AND ${table.effectiveIncludedUnitsSnapshot} IS NOT NULL
+					AND ${table.overageUnitsSnapshot} IS NOT NULL
+					AND ${table.amountCentsSnapshot} IS NOT NULL
+					AND ${table.invoiceId} IS NULL
+					AND ${table.stripeInvoiceId} IS NULL)
+				OR (${table.state} = 'void'
+					AND ${table.voidedAt} IS NOT NULL
+					AND ${table.closedAt} IS NULL
+					AND ${table.claimedAt} IS NULL
+					AND ${table.settledAt} IS NULL
+					AND ${table.releasedAt} IS NULL
+					AND ${table.writtenOffAt} IS NULL
+					AND ${table.writeOffReason} IS NULL
+					AND ${table.writeOffEvidence} IS NULL
+					AND ${table.committedUnitsSnapshot} IS NULL
+					AND ${table.effectiveIncludedUnitsSnapshot} IS NULL
+					AND ${table.overageUnitsSnapshot} IS NULL
+					AND ${table.amountCentsSnapshot} IS NULL
+					AND ${table.invoiceId} IS NULL
+					AND ${table.stripeInvoiceId} IS NULL)`,
+		),
+	],
+);
+
+/**
+ * Hot-path quota projection. PostgreSQL derives committed/reserved counters
+ * from the authoritative usage_reservations ledger with statement triggers.
+ */
 export const usageBuckets = pgTable(
 	"usage_buckets",
 	{
@@ -2893,12 +5109,22 @@ export const usageBuckets = pgTable(
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id),
+		billingPeriodId: text("billing_period_id"),
 		metric: text("metric").notNull().default("successful_mutation"),
 		periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
 		periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
-		includedUnits: integer("included_units").notNull(),
-		committedUnits: integer("committed_units").notNull().default(0),
-		reservedUnits: integer("reserved_units").notNull().default(0),
+		quotaMode: text("quota_mode", {
+			enum: ["hard", "metered", "unlimited"],
+		})
+			.notNull()
+			.default("hard"),
+		includedUnits: bigint("included_units", { mode: "number" }),
+		committedUnits: bigint("committed_units", { mode: "number" })
+			.notNull()
+			.default(0),
+		reservedUnits: bigint("reserved_units", { mode: "number" })
+			.notNull()
+			.default(0),
 		revision: integer("revision").notNull().default(0),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
@@ -2909,6 +5135,23 @@ export const usageBuckets = pgTable(
 	},
 	(table) => [
 		unique("usage_buckets_id_org_uniq").on(table.id, table.organizationId),
+		foreignKey({
+			columns: [
+				table.billingPeriodId,
+				table.organizationId,
+				table.periodStart,
+				table.periodEnd,
+			],
+			foreignColumns: [
+				billingPeriods.id,
+				billingPeriods.organizationId,
+				billingPeriods.periodStart,
+				billingPeriods.periodEnd,
+			],
+			name: "usage_buckets_billing_period_window_fk",
+		})
+			.onUpdate("no action")
+			.onDelete("restrict"),
 		uniqueIndex("usage_buckets_org_metric_period_uniq").on(
 			table.organizationId,
 			table.metric,
@@ -2920,12 +5163,32 @@ export const usageBuckets = pgTable(
 		),
 		check(
 			"usage_buckets_counters_nonnegative_check",
-			sql`${table.includedUnits} >= 0 AND ${table.committedUnits} >= 0 AND ${table.reservedUnits} >= 0 AND ${table.revision} >= 0`,
+			sql`${table.committedUnits} BETWEEN 0 AND 9007199254740991
+				AND ${table.reservedUnits} BETWEEN 0 AND 9007199254740991
+				AND ${table.revision} >= 0`,
+		),
+		check(
+			"usage_buckets_quota_shape_check",
+			sql`(${table.quotaMode} = 'unlimited' AND ${table.includedUnits} IS NULL)
+				OR (${table.quotaMode} IN ('hard', 'metered')
+					AND ${table.includedUnits} IS NOT NULL
+					AND ${table.includedUnits} BETWEEN 0 AND 9007199254740991)`,
+		),
+		check(
+			"usage_buckets_period_authority_check",
+			sql`${table.billingPeriodId} IS NULL
+				OR (${table.metric} = 'successful_mutation'
+					AND ${table.quotaMode} IN ('hard', 'metered'))`,
+		),
+		check(
+			"usage_buckets_metered_authority_check",
+			sql`${table.quotaMode} <> 'metered' OR ${table.billingPeriodId} IS NOT NULL`,
 		),
 		index("usage_buckets_org_period_end_idx").on(
 			table.organizationId,
 			table.periodEnd,
 		),
+		index("usage_buckets_retention_idx").on(table.periodEnd, table.id),
 	],
 );
 
@@ -2939,17 +5202,39 @@ export const usageReservations = pgTable(
 		organizationId: text("organization_id").notNull(),
 		bucketId: text("bucket_id").notNull(),
 		idempotencyKey: text("idempotency_key").notNull(),
-		units: integer("units").notNull().default(1),
+		// `units` is the immutable reservation size N. A successful bulk request
+		// may commit only K units; the difference N-K is released implicitly.
+		units: bigint("units", { mode: "number" }).notNull().default(1),
+		committedUnits: bigint("committed_units", { mode: "number" }),
 		state: text("state", {
-			enum: ["reserved", "committed", "released"],
+			enum: ["reserved", "parked", "committed", "released"],
 		})
 			.notNull()
 			.default("reserved"),
+		disposition: text("disposition", {
+			enum: [
+				"pending",
+				"pre_boundary",
+				"rejected",
+				"proven_not_applied",
+				"settled",
+				"unknown",
+				"written_off",
+			],
+		})
+			.notNull()
+			.default("pending"),
 		responseStatus: integer("response_status"),
 		source: text("source").notNull().default("api"),
 		reservedAt: timestamp("reserved_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		writeOffReason: text("write_off_reason"),
+		writeOffEvidence: jsonb("write_off_evidence"),
+		writtenOffAt: timestamp("written_off_at", { withTimezone: true }),
 		finalizedAt: timestamp("finalized_at", { withTimezone: true }),
 	},
 	(table) => [
@@ -2962,14 +5247,82 @@ export const usageReservations = pgTable(
 			table.organizationId,
 			table.idempotencyKey,
 		),
-		check("usage_reservations_units_positive_check", sql`${table.units} > 0`),
+		unique("usage_reservations_id_org_uniq").on(table.id, table.organizationId),
+		check(
+			"usage_reservations_units_positive_check",
+			sql`${table.units} BETWEEN 1 AND 9007199254740991`,
+		),
+		check(
+			"usage_reservations_committed_units_check",
+			sql`${table.committedUnits} IS NULL
+				OR ${table.committedUnits} BETWEEN 0 AND LEAST(${table.units}, 9007199254740991)`,
+		),
 		check(
 			"usage_reservations_state_check",
-			sql`${table.state} IN ('reserved', 'committed', 'released')`,
+			sql`${table.state} IN ('reserved', 'parked', 'committed', 'released')`,
 		),
 		check(
 			"usage_reservations_finalization_check",
-			sql`(${table.state} = 'reserved' AND ${table.finalizedAt} IS NULL) OR (${table.state} <> 'reserved' AND ${table.finalizedAt} IS NOT NULL)`,
+			sql`(${table.state} = 'reserved'
+						AND ${table.disposition} = 'pending'
+						AND ${table.committedUnits} IS NULL
+						AND ${table.writeOffReason} IS NULL
+						AND ${table.writeOffEvidence} IS NULL
+						AND ${table.writtenOffAt} IS NULL
+						AND ${table.finalizedAt} IS NULL)
+					OR (${table.state} = 'parked'
+						AND ${table.disposition} = 'unknown'
+						AND ${table.committedUnits} IS NULL
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+						AND ${table.writeOffReason} IS NULL
+						AND ${table.writeOffEvidence} IS NULL
+						AND ${table.writtenOffAt} IS NULL
+						AND ${table.finalizedAt} IS NULL)
+					OR (${table.state} = 'released'
+						AND ${table.disposition} = 'pre_boundary'
+						AND ${table.committedUnits} = 0
+						AND ${table.requestMayHaveBeenSentAt} IS NULL
+						AND ${table.writeOffReason} IS NULL
+						AND ${table.writeOffEvidence} IS NULL
+						AND ${table.writtenOffAt} IS NULL
+						AND ${table.finalizedAt} IS NOT NULL)
+					OR (${table.state} = 'released'
+						AND ${table.disposition} = 'rejected'
+						AND ${table.committedUnits} = 0
+						AND ${table.responseStatus} BETWEEN 400 AND 499
+						AND ${table.writeOffReason} IS NULL
+						AND ${table.writeOffEvidence} IS NULL
+						AND ${table.writtenOffAt} IS NULL
+						AND ${table.finalizedAt} IS NOT NULL)
+					OR (${table.state} = 'released'
+						AND ${table.disposition} = 'proven_not_applied'
+						AND ${table.committedUnits} = 0
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+						AND ${table.responseStatus} BETWEEN 500 AND 599
+						AND ${table.writeOffReason} IS NULL
+						AND ${table.writeOffEvidence} IS NULL
+						AND ${table.writtenOffAt} IS NULL
+						AND ${table.finalizedAt} IS NOT NULL)
+					OR (${table.state} = 'released'
+						AND ${table.disposition} = 'written_off'
+						AND ${table.committedUnits} = 0
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+						AND length(${table.writeOffReason}) > 0
+						AND ${table.writeOffEvidence} IS NOT NULL
+						AND ${table.writtenOffAt} IS NOT NULL
+						AND ${table.finalizedAt} = ${table.writtenOffAt})
+					OR (${table.state} = 'committed'
+						AND ${table.disposition} = 'settled'
+						AND ${table.committedUnits} IS NOT NULL
+						AND ${table.writeOffReason} IS NULL
+						AND ${table.writeOffEvidence} IS NULL
+						AND ${table.writtenOffAt} IS NULL
+						AND ${table.finalizedAt} IS NOT NULL)`,
+		),
+		check(
+			"usage_reservations_boundary_timestamp_check",
+			sql`${table.requestMayHaveBeenSentAt} IS NULL
+					OR ${table.requestMayHaveBeenSentAt} >= ${table.reservedAt}`,
 		),
 		check(
 			"usage_reservations_response_status_check",
@@ -2979,86 +5332,61 @@ export const usageReservations = pgTable(
 			table.bucketId,
 			table.state,
 		),
+		index("usage_reservations_reserved_age_idx")
+			.on(table.reservedAt, table.id)
+			.where(sql`${table.state} = 'reserved'`),
+		index("usage_reservations_parked_age_idx")
+			.on(table.reservedAt, table.id)
+			.where(sql`${table.state} = 'parked'`),
+		index("usage_reservations_retention_idx").on(table.bucketId, table.id),
 	],
 );
 
 /**
- * Legacy compatibility projection for old billing/reporting readers. New live
- * mutation accounting and invoice settlement use usageBuckets/reservations.
+ * Settlement-aware allowance edges for reservations that outlive a billing
+ * period split. The source reservation keeps its original rate attribution;
+ * every later successor can independently hold N while the outcome is
+ * unresolved and permanently debit only the eventual committed K.
  */
-export const usageRecords = pgTable(
-	"usage_records",
+export const usageReservationCarryovers = pgTable(
+	"usage_reservation_carryovers",
 	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("usage_")),
-		organizationId: text("organization_id")
-			.notNull()
-			.references(() => organization.id),
-		periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
-		periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
-		postsCount: integer("posts_count").notNull().default(0),
-		postsIncluded: integer("posts_included").notNull().default(1000),
-		overagePosts: integer("overage_posts").notNull().default(0),
-		overageCostCents: integer("overage_cost_cents").notNull().default(0),
-		apiCallsCount: integer("api_calls_count").notNull().default(0),
-		apiCallsIncluded: integer("api_calls_included").notNull().default(10000),
-		overageCalls: integer("overage_calls").notNull().default(0),
-		overageCallsCostCents: integer("overage_calls_cost_cents")
-			.notNull()
-			.default(0),
+		sourceReservationId: text("source_reservation_id").notNull(),
+		organizationId: text("organization_id").notNull(),
+		successorBucketId: text("successor_bucket_id").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-		// NULL = overage for this period has not yet been billed to Stripe.
-		// Set to the billing timestamp once an overage invoice item is created,
-		// so the monthly invoice cron is idempotent and never double-bills.
-		billedAt: timestamp("billed_at", { withTimezone: true }),
+			.notNull()
+			.defaultNow(),
 	},
 	(table) => [
-		unique("usage_records_id_org_uniq").on(table.id, table.organizationId),
-		uniqueIndex("usage_records_org_period_idx").on(
-			table.organizationId,
-			table.periodStart,
+		primaryKey({
+			name: "usage_reservation_carryovers_pk",
+			columns: [table.sourceReservationId, table.successorBucketId],
+		}),
+		foreignKey({
+			columns: [table.sourceReservationId, table.organizationId],
+			foreignColumns: [usageReservations.id, usageReservations.organizationId],
+			name: "usage_reservation_carryovers_source_org_fk",
+		})
+			.onUpdate("no action")
+			.onDelete("cascade"),
+		foreignKey({
+			columns: [table.successorBucketId, table.organizationId],
+			foreignColumns: [usageBuckets.id, usageBuckets.organizationId],
+			name: "usage_reservation_carryovers_successor_org_fk",
+		})
+			.onUpdate("no action")
+			.onDelete("cascade"),
+		index("usage_reservation_carryovers_successor_idx").on(
+			table.successorBucketId,
+			table.sourceReservationId,
 		),
-		check(
-			"usage_records_period_check",
-			sql`${table.periodEnd} > ${table.periodStart}`,
-		),
-		check(
-			"usage_records_counts_nonnegative_check",
-			sql`${table.postsCount} >= 0 AND ${table.postsIncluded} >= 0 AND ${table.overagePosts} >= 0 AND ${table.overageCostCents} >= 0 AND ${table.apiCallsCount} >= 0 AND ${table.apiCallsIncluded} >= 0 AND ${table.overageCalls} >= 0 AND ${table.overageCallsCostCents} >= 0`,
+		index("usage_reservation_carryovers_source_idx").on(
+			table.sourceReservationId,
+			table.successorBucketId,
 		),
 	],
 );
-
-// ---------------------------------------------------------------------------
-// BYOS (Bring Your Own Storage) configs
-// ---------------------------------------------------------------------------
-
-export const byosConfigs = pgTable("byos_configs", {
-	id: text("id")
-		.primaryKey()
-		.$defaultFn(() => generateId("")),
-	organizationId: text("organization_id")
-		.notNull()
-		.references(() => organization.id)
-		.unique(),
-	endpoint: text("endpoint").notNull(),
-	bucket: text("bucket").notNull(),
-	region: text("region"),
-	accessKeyId: text("access_key_id").notNull(), // encrypted: AES-256-GCM
-	secretAccessKey: text("secret_access_key").notNull(), // encrypted: AES-256-GCM
-	createdAt: timestamp("created_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
 
 // ---------------------------------------------------------------------------
 // Invoices (monthly billing records)
@@ -3077,11 +5405,18 @@ export const invoices = pgTable(
 		periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
 		periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
 		basePriceCents: integer("base_price_cents").notNull().default(0),
-		apiCallsCount: integer("api_calls_count").notNull().default(0),
-		apiCallsIncluded: integer("api_calls_included").notNull().default(10000),
-		overageCalls: integer("overage_calls").notNull().default(0),
+		apiCallsCount: bigint("api_calls_count", { mode: "number" })
+			.notNull()
+			.default(0),
+		apiCallsIncluded: bigint("api_calls_included", { mode: "number" })
+			.notNull()
+			.default(10000),
+		overageCalls: bigint("overage_calls", { mode: "number" })
+			.notNull()
+			.default(0),
 		overageCostCents: integer("overage_cost_cents").notNull().default(0),
 		totalCents: integer("total_cents").notNull().default(0),
+		currency: varchar("currency", { length: 3 }).notNull().default("usd"),
 		stripeInvoiceId: text("stripe_invoice_id").unique(),
 		stripeHostedUrl: text("stripe_hosted_url"),
 		firstPaymentFailedAt: timestamp("first_payment_failed_at", {
@@ -3106,6 +5441,10 @@ export const invoices = pgTable(
 			table.organizationId,
 			table.firstPaymentFailedAt,
 		),
+		index("invoices_retention_idx").on(
+			sql`COALESCE(${table.paidAt}, ${table.finalizedAt}, ${table.periodEnd}, ${table.updatedAt})`,
+			table.id,
+		),
 		check(
 			"invoices_period_order_check",
 			sql`${table.periodEnd} > ${table.periodStart}`,
@@ -3120,87 +5459,23 @@ export const invoices = pgTable(
 				AND ${table.totalCents} >= 0`,
 		),
 		check(
+			"invoices_usage_safe_integer_check",
+			sql`${table.apiCallsCount} <= 9007199254740991
+				AND ${table.apiCallsIncluded} <= 9007199254740991
+				AND ${table.overageCalls} <= 9007199254740991`,
+		),
+		check(
 			"invoices_failure_not_draft_check",
 			sql`${table.firstPaymentFailedAt} IS NULL OR ${table.status} <> 'draft'`,
 		),
+		check("invoices_currency_check", sql`${table.currency} = 'usd'`),
 	],
 );
 
 /**
- * Exactly-once invoice settlement claim for a usage bucket. Multiple bucket
- * settlements may link to one invoice, while UNIQUE(bucket_id) makes a retry
- * resume the original claim instead of billing the same bucket twice.
- */
-export const usageBucketSettlements = pgTable(
-	"usage_bucket_settlements",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("ubs_")),
-		organizationId: text("organization_id").notNull(),
-		bucketId: text("bucket_id").notNull(),
-		settlementKey: text("settlement_key").notNull().unique(),
-		invoiceId: text("invoice_id"),
-		state: text("state", {
-			enum: ["claimed", "settled", "released"],
-		})
-			.notNull()
-			.default("claimed"),
-		committedUnitsSnapshot: integer("committed_units_snapshot").notNull(),
-		amountCents: integer("amount_cents").notNull().default(0),
-		currency: varchar("currency", { length: 3 }).notNull().default("usd"),
-		revision: integer("revision").notNull().default(0),
-		claimedAt: timestamp("claimed_at", { withTimezone: true })
-			.notNull()
-			.defaultNow(),
-		settledAt: timestamp("settled_at", { withTimezone: true }),
-		releasedAt: timestamp("released_at", { withTimezone: true }),
-		updatedAt: timestamp("updated_at", { withTimezone: true })
-			.notNull()
-			.defaultNow(),
-	},
-	(table) => [
-		unique("usage_bucket_settlements_id_org_uniq").on(
-			table.id,
-			table.organizationId,
-		),
-		foreignKey({
-			columns: [table.bucketId, table.organizationId],
-			foreignColumns: [usageBuckets.id, usageBuckets.organizationId],
-			name: "usage_bucket_settlements_bucket_org_fk",
-		}).onDelete("restrict"),
-		foreignKey({
-			columns: [table.invoiceId, table.organizationId],
-			foreignColumns: [invoices.id, invoices.organizationId],
-			name: "usage_bucket_settlements_invoice_org_fk",
-		}).onDelete("restrict"),
-		uniqueIndex("usage_bucket_settlements_bucket_uniq").on(table.bucketId),
-		check(
-			"usage_bucket_settlements_state_check",
-			sql`${table.state} IN ('claimed', 'settled', 'released')`,
-		),
-		check(
-			"usage_bucket_settlements_numeric_check",
-			sql`${table.committedUnitsSnapshot} >= 0 AND ${table.amountCents} >= 0 AND ${table.revision} >= 0`,
-		),
-		check(
-			"usage_bucket_settlements_finalization_check",
-			sql`(${table.state} = 'claimed' AND ${table.invoiceId} IS NULL AND ${table.settledAt} IS NULL AND ${table.releasedAt} IS NULL)
-				OR (${table.state} = 'settled' AND ${table.invoiceId} IS NOT NULL AND ${table.settledAt} IS NOT NULL AND ${table.releasedAt} IS NULL)
-				OR (${table.state} = 'released' AND ${table.invoiceId} IS NULL AND ${table.settledAt} IS NULL AND ${table.releasedAt} IS NOT NULL)`,
-		),
-		index("usage_bucket_settlements_invoice_idx").on(table.invoiceId),
-		index("usage_bucket_settlements_state_idx").on(
-			table.state,
-			table.claimedAt,
-		),
-	],
-);
-
-/**
- * Durable Stripe mutation state. Each operation owns exactly one usage-bucket
- * settlement, so unknown Stripe outcomes can be reconciled without falling
- * back to the legacy usage-record projection.
+ * Durable Stripe mutation state. Each operation owns exactly one billing
+ * period, so unknown Stripe outcomes can be reconciled without a second
+ * settlement lifecycle.
  */
 export const billingOperations = pgTable(
 	"billing_operations",
@@ -3209,13 +5484,18 @@ export const billingOperations = pgTable(
 			.primaryKey()
 			.$defaultFn(() => generateId("bop_")),
 		organizationId: text("organization_id").notNull(),
-		usageBucketSettlementId: text("usage_bucket_settlement_id")
+		billingPeriodId: text("billing_period_id").notNull(),
+		kind: text("kind", { enum: ["cycle", "catchup"] })
 			.notNull()
-			.unique(),
+			.default("cycle"),
 		status: text("status").notNull().default("pending"),
 		stripeCustomerId: text("stripe_customer_id").notNull(),
+		stripeSubscriptionId: text("stripe_subscription_id").notNull(),
+		stripeInvoiceId: text("stripe_invoice_id"),
 		stripeInvoiceItemId: text("stripe_invoice_item_id"),
+		invoiceIdempotencyKey: text("invoice_idempotency_key").unique(),
 		idempotencyKey: text("idempotency_key").notNull().unique(),
+		attemptRevision: integer("attempt_revision").notNull().default(1),
 		amountCents: integer("amount_cents").notNull(),
 		currency: varchar("currency", { length: 3 }).notNull().default("usd"),
 		description: text("description").notNull(),
@@ -3226,6 +5506,10 @@ export const billingOperations = pgTable(
 			.notNull(),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 		lastError: text("last_error"),
+		lastErrorClass: text("last_error_class"),
+		operatorRetryRequestedAt: timestamp("operator_retry_requested_at", {
+			withTimezone: true,
+		}),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -3235,22 +5519,46 @@ export const billingOperations = pgTable(
 		completedAt: timestamp("completed_at", { withTimezone: true }),
 	},
 	(table) => [
+		unique("billing_operations_id_org_uniq").on(table.id, table.organizationId),
+		uniqueIndex("billing_operations_period_kind_uniq").on(
+			table.billingPeriodId,
+			table.kind,
+		),
 		foreignKey({
-			columns: [table.usageBucketSettlementId, table.organizationId],
-			foreignColumns: [
-				usageBucketSettlements.id,
-				usageBucketSettlements.organizationId,
-			],
-			name: "billing_operations_usage_bucket_settlement_org_fk",
+			columns: [table.billingPeriodId, table.organizationId],
+			foreignColumns: [billingPeriods.id, billingPeriods.organizationId],
+			name: "billing_operations_billing_period_org_fk",
 		}).onDelete("restrict"),
 		check(
 			"billing_operations_status_check",
-			sql`${table.status} IN ('pending', 'processing', 'failed', 'unknown', 'succeeded', 'terminal_failed')`,
+			sql`${table.status} IN ('invoice_preparing', 'invoice_unknown', 'pending', 'processing', 'failed', 'unknown', 'succeeded', 'terminal_failed', 'manual_review', 'released', 'written_off')`,
+		),
+		check(
+			"billing_operations_kind_check",
+			sql`${table.kind} IN ('cycle', 'catchup')`,
+		),
+		check(
+			"billing_operations_kind_shape_check",
+			sql`(${table.kind} = 'cycle'
+					AND ${table.stripeInvoiceId} IS NOT NULL
+					AND ${table.invoiceIdempotencyKey} IS NULL
+					AND ${table.status} NOT IN ('invoice_preparing', 'invoice_unknown'))
+				OR (${table.kind} = 'catchup'
+					AND ${table.invoiceIdempotencyKey} IS NOT NULL
+					AND ((${table.status} IN ('invoice_preparing', 'invoice_unknown')
+							AND ${table.stripeInvoiceId} IS NULL)
+						OR (${table.status} IN ('pending', 'processing', 'failed', 'unknown', 'succeeded', 'terminal_failed', 'released')
+							AND ${table.stripeInvoiceId} IS NOT NULL)
+						OR ${table.status} IN ('manual_review', 'written_off')))`,
 		),
 		check(
 			"billing_operations_numeric_check",
-			sql`${table.amountCents} >= 0 AND ${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
+			sql`${table.amountCents} >= 0
+				AND ${table.attemptRevision} > 0
+				AND ${table.attempts} >= 0
+				AND ${table.leaseToken} >= 0`,
 		),
+		check("billing_operations_currency_check", sql`${table.currency} = 'usd'`),
 		check(
 			"billing_operations_lease_state_check",
 			sql`(${table.status} = 'processing' AND ${table.leaseExpiresAt} IS NOT NULL)
@@ -3258,12 +5566,30 @@ export const billingOperations = pgTable(
 		),
 		check(
 			"billing_operations_completion_check",
-			sql`${table.status} <> 'succeeded'
-				OR (${table.stripeInvoiceItemId} IS NOT NULL AND ${table.completedAt} IS NOT NULL)`,
+			sql`(${table.status} = 'succeeded'
+					AND ${table.stripeInvoiceItemId} IS NOT NULL
+					AND ${table.completedAt} IS NOT NULL)
+				OR (${table.status} IN ('terminal_failed', 'manual_review', 'released', 'written_off')
+					AND ${table.completedAt} IS NOT NULL)
+				OR (${table.status} NOT IN ('succeeded', 'terminal_failed', 'manual_review', 'released', 'written_off')
+					AND ${table.completedAt} IS NULL)`,
+		),
+		check(
+			"billing_operations_operator_retry_check",
+			sql`${table.operatorRetryRequestedAt} IS NULL
+				OR (${table.status} = 'unknown'
+					AND ${table.completedAt} IS NULL
+					AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"billing_operations_error_class_check",
+			sql`${table.lastErrorClass} IS NULL
+				OR ${table.lastErrorClass} IN ('transient', 'unknown', 'permanent', 'retry_exhausted', 'age_exhausted')`,
 		),
 		check(
 			"billing_operations_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.createdAt}
+				AND (${table.operatorRetryRequestedAt} IS NULL OR ${table.operatorRetryRequestedAt} >= ${table.createdAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
 		),
 		index("billing_operations_status_due_idx").on(
@@ -3273,6 +5599,115 @@ export const billingOperations = pgTable(
 		index("billing_operations_org_created_idx").on(
 			table.organizationId,
 			table.createdAt,
+		),
+		index("billing_operations_retention_idx").on(table.updatedAt, table.id),
+	],
+);
+
+/**
+ * Revisioned provider attempts for one settlement operation. Economic and
+ * targeting fields are immutable once inserted; retrying an ambiguous request
+ * reuses this row and idempotency key. A corrected payload requires a new
+ * revision after the previous revision has provider evidence that it did not
+ * apply.
+ */
+export const billingOperationAttempts = pgTable(
+	"billing_operation_attempts",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("boa_")),
+		organizationId: text("organization_id").notNull(),
+		billingOperationId: text("billing_operation_id").notNull(),
+		revision: integer("revision").notNull(),
+		status: text("status", {
+			enum: [
+				"prepared",
+				"requesting",
+				"unknown",
+				"succeeded",
+				"rejected",
+				"written_off",
+			],
+		})
+			.notNull()
+			.default("prepared"),
+		stripeCustomerId: text("stripe_customer_id").notNull(),
+		stripeSubscriptionId: text("stripe_subscription_id").notNull(),
+		stripeInvoiceId: text("stripe_invoice_id").notNull(),
+		stripeInvoiceItemId: text("stripe_invoice_item_id"),
+		idempotencyKey: text("idempotency_key").notNull().unique(),
+		amountCents: integer("amount_cents").notNull(),
+		currency: varchar("currency", { length: 3 }).notNull().default("usd"),
+		description: text("description").notNull(),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		providerEvidence: jsonb("provider_evidence"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.billingOperationId, table.organizationId],
+			foreignColumns: [billingOperations.id, billingOperations.organizationId],
+			name: "billing_operation_attempts_operation_org_fk",
+		}).onDelete("restrict"),
+		uniqueIndex("billing_operation_attempts_operation_revision_uniq").on(
+			table.billingOperationId,
+			table.revision,
+		),
+		check(
+			"billing_operation_attempts_status_check",
+			sql`${table.status} IN ('prepared', 'requesting', 'unknown', 'succeeded', 'rejected', 'written_off')`,
+		),
+		check(
+			"billing_operation_attempts_numeric_check",
+			sql`${table.revision} > 0 AND ${table.amountCents} >= 0`,
+		),
+		check(
+			"billing_operation_attempts_currency_check",
+			sql`${table.currency} = 'usd'`,
+		),
+		check(
+			"billing_operation_attempts_state_shape_check",
+			sql`(${table.status} = 'prepared'
+					AND ${table.requestMayHaveBeenSentAt} IS NULL
+					AND ${table.stripeInvoiceItemId} IS NULL
+					AND ${table.providerEvidence} IS NULL
+					AND ${table.resolvedAt} IS NULL)
+				OR (${table.status} = 'requesting'
+					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+					AND ${table.stripeInvoiceItemId} IS NULL
+					AND ${table.providerEvidence} IS NULL
+					AND ${table.resolvedAt} IS NULL)
+				OR (${table.status} = 'unknown'
+					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+					AND ${table.stripeInvoiceItemId} IS NULL
+					AND ${table.resolvedAt} IS NULL)
+				OR (${table.status} = 'succeeded'
+					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+					AND ${table.stripeInvoiceItemId} IS NOT NULL
+					AND ${table.providerEvidence} IS NOT NULL
+					AND ${table.resolvedAt} IS NOT NULL)
+				OR (${table.status} IN ('rejected', 'written_off')
+					AND ${table.providerEvidence} IS NOT NULL
+					AND ${table.resolvedAt} IS NOT NULL)`,
+		),
+		check(
+			"billing_operation_attempts_timestamp_order_check",
+			sql`(${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
+				AND (${table.resolvedAt} IS NULL OR ${table.resolvedAt} >= ${table.createdAt})`,
+		),
+		index("billing_operation_attempts_operation_status_idx").on(
+			table.billingOperationId,
+			table.status,
+		),
+		index("billing_operation_attempts_retention_idx").on(
+			table.createdAt,
+			table.id,
 		),
 	],
 );
@@ -3299,12 +5734,16 @@ export const dunningEvents = pgTable(
 			.notNull()
 			.default("pending"),
 		deliveryIdempotencyKey: text("delivery_idempotency_key").notNull().unique(),
+		dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
 		providerMessageId: text("provider_message_id"),
 		attempts: integer("attempts").notNull().default(0),
 		leaseToken: integer("lease_token").notNull().default(0),
 		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
+		deadlineAt: timestamp("deadline_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '24 hours'`),
 		claimedAt: timestamp("claimed_at", { withTimezone: true }),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 		lastError: text("last_error"),
@@ -3363,6 +5802,10 @@ export const dunningEvents = pgTable(
 			sql`${table.status} IN ('pending', 'processing', 'sent', 'failed', 'terminal_failed')`,
 		),
 		check(
+			"dunning_events_deactivation_status_check",
+			sql`${table.deactivationStatus} IN ('not_applicable', 'pending', 'processing', 'unknown', 'succeeded', 'failed', 'manual_review')`,
+		),
+		check(
 			"dunning_events_counters_nonnegative_check",
 			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
 		),
@@ -3399,8 +5842,239 @@ export const dunningEvents = pgTable(
 		index("dunning_events_invoice_id_idx").on(table.invoiceId),
 		index("dunning_events_status_due_idx").on(
 			table.status,
+			table.dueAt,
 			table.nextAttemptAt,
+			table.organizationId,
 			table.leaseExpiresAt,
+		),
+		index("dunning_events_retention_idx").on(table.updatedAt, table.id),
+	],
+);
+
+/**
+ * Detached, minimized evidence for financial reconciliation and retention.
+ *
+ * This relation deliberately has no foreign keys: tenant erasure removes the
+ * live organization and all operational billing state while these tombstoned
+ * facts remain independently drainable. Provider identifiers are represented
+ * only by SHA-256 digests. UPDATE is rejected by a generated database trigger;
+ * DELETE remains available to the bounded retention worker.
+ */
+export const financialRetentionReceipts = pgTable(
+	"financial_retention_receipts",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("frr_")),
+		sourceKind: text("source_kind", {
+			enum: [...FINANCIAL_RETENTION_SOURCE_KINDS],
+		}).notNull(),
+		sourceId: varchar("source_id", { length: 128 }).notNull(),
+		organizationTombstoneId: text("organization_tombstone_id"),
+		retentionClass: text("retention_class", {
+			enum: [...FINANCIAL_RETENTION_CLASSES],
+		}).notNull(),
+		status: text("status", {
+			enum: [...FINANCIAL_RETENTION_STATUSES],
+		}).notNull(),
+		periodStart: timestamp("period_start", { withTimezone: true }),
+		periodEnd: timestamp("period_end", { withTimezone: true }),
+		amountCents: integer("amount_cents"),
+		currency: varchar("currency", { length: 3 }),
+		quantity: bigint("quantity", { mode: "number" }),
+		includedQuantity: bigint("included_quantity", { mode: "number" }),
+		overageQuantity: bigint("overage_quantity", { mode: "number" }),
+		providerReferenceDigest: varchar("provider_reference_digest", {
+			length: 64,
+		}),
+		retentionAnchorAt: timestamp("retention_anchor_at", {
+			withTimezone: true,
+		}).notNull(),
+		recordedAt: timestamp("recorded_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		retainedUntil: timestamp("retained_until", {
+			withTimezone: true,
+		}).notNull(),
+	},
+	(table) => [
+		uniqueIndex("financial_retention_receipts_tenant_source_uniq")
+			.on(table.sourceKind, table.sourceId, table.organizationTombstoneId)
+			.where(sql`${table.organizationTombstoneId} IS NOT NULL`),
+		uniqueIndex("financial_retention_receipts_global_source_uniq")
+			.on(table.sourceKind, table.sourceId)
+			.where(sql`${table.organizationTombstoneId} IS NULL`),
+		index("financial_retention_receipts_org_expiry_idx").on(
+			table.organizationTombstoneId,
+			table.retainedUntil,
+			table.id,
+		),
+		index("financial_retention_receipts_expiry_idx").on(
+			table.retainedUntil,
+			table.id,
+		),
+		check(
+			"financial_retention_receipts_source_kind_check",
+			sql`${table.sourceKind} IN ('subscription_snapshot', 'invoice', 'usage_bucket', 'billing_period', 'billing_operation', 'phone_billing_operation', 'dunning_event', 'checkout_operation', 'billing_outbox', 'stripe_event_financial', 'stripe_event_global')`,
+		),
+		check(
+			"financial_retention_receipts_retention_class_check",
+			sql`${table.retentionClass} IN ('financial_7_years', 'usage_25_months', 'provider_receipt_1_year')`,
+		),
+		check(
+			"financial_retention_receipts_status_check",
+			sql`${table.status} IN ('active', 'pending', 'succeeded', 'failed', 'unknown', 'manual_review', 'cancelled', 'paid', 'void', 'settled', 'released', 'written_off')`,
+		),
+		check(
+			"financial_retention_receipts_identity_check",
+			sql`length(btrim(${table.sourceId})) BETWEEN 1 AND 128
+				AND (
+					${table.sourceKind} NOT IN ('stripe_event_financial', 'stripe_event_global')
+					OR ${table.sourceId} ~ '^[0-9a-f]{64}$'
+				)
+				AND (
+					(${table.sourceKind} = 'stripe_event_global'
+						AND ${table.organizationTombstoneId} IS NULL)
+					OR (${table.sourceKind} <> 'stripe_event_global'
+						AND ${table.organizationTombstoneId} IS NOT NULL)
+				)`,
+		),
+		check(
+			"financial_retention_receipts_provider_digest_check",
+			sql`${table.providerReferenceDigest} IS NULL
+				OR ${table.providerReferenceDigest} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"financial_retention_receipts_provider_digest_source_check",
+			sql`(${table.sourceKind} = 'usage_bucket'
+					AND ${table.providerReferenceDigest} IS NULL)
+				OR (${table.sourceKind} IN ('billing_period', 'billing_operation', 'phone_billing_operation', 'dunning_event', 'checkout_operation', 'stripe_event_financial', 'stripe_event_global')
+					AND ${table.providerReferenceDigest} IS NOT NULL)
+				OR ${table.sourceKind} IN ('subscription_snapshot', 'invoice', 'billing_outbox')`,
+		),
+		check(
+			"financial_retention_receipts_period_check",
+			sql`(
+					${table.periodStart} IS NULL
+					AND ${table.periodEnd} IS NULL
+				) OR (
+					${table.periodStart} IS NOT NULL
+					AND ${table.periodEnd} IS NOT NULL
+					AND ${table.periodEnd} > ${table.periodStart}
+				)`,
+		),
+		check(
+			"financial_retention_receipts_amount_currency_check",
+			sql`(
+					${table.amountCents} IS NULL
+					AND ${table.currency} IS NULL
+				) OR (
+					${table.amountCents} IS NOT NULL
+					AND ${table.currency} IS NOT NULL
+					AND ${table.amountCents} >= 0
+					AND ${table.currency} ~ '^[a-z]{3}$'
+				)`,
+		),
+		check(
+			"financial_retention_receipts_quantities_check",
+			sql`(${table.quantity} IS NULL OR ${table.quantity} BETWEEN 0 AND 9007199254740991)
+				AND (${table.includedQuantity} IS NULL OR ${table.includedQuantity} BETWEEN 0 AND 9007199254740991)
+				AND (${table.overageQuantity} IS NULL OR ${table.overageQuantity} BETWEEN 0 AND 9007199254740991)`,
+		),
+		check(
+			"financial_retention_receipts_class_check",
+			sql`(${table.sourceKind} = 'usage_bucket'
+					AND ${table.retentionClass} = 'usage_25_months')
+				OR (${table.sourceKind} = 'stripe_event_global'
+					AND ${table.retentionClass} = 'provider_receipt_1_year')
+				OR (${table.sourceKind} NOT IN ('usage_bucket', 'stripe_event_global')
+					AND ${table.retentionClass} = 'financial_7_years')`,
+		),
+		check(
+			"financial_retention_receipts_status_source_check",
+			sql`(${table.sourceKind} = 'subscription_snapshot'
+					AND ${table.status} IN ('active', 'failed', 'cancelled'))
+				OR (${table.sourceKind} = 'invoice'
+					AND ${table.status} IN ('pending', 'paid', 'void'))
+				OR (${table.sourceKind} = 'usage_bucket'
+					AND ${table.status} IN ('pending', 'settled', 'released', 'void', 'written_off'))
+				OR (${table.sourceKind} = 'billing_period'
+					AND ${table.status} IN ('pending', 'settled', 'released', 'void', 'written_off'))
+				OR (${table.sourceKind} = 'billing_operation'
+					AND ${table.status} IN ('pending', 'succeeded', 'failed', 'unknown', 'manual_review', 'released', 'written_off'))
+				OR (${table.sourceKind} = 'phone_billing_operation'
+					AND ${table.status} IN ('pending', 'succeeded', 'unknown', 'manual_review'))
+				OR (${table.sourceKind} = 'dunning_event'
+					AND ${table.status} IN ('pending', 'succeeded', 'failed', 'unknown', 'manual_review'))
+				OR (${table.sourceKind} = 'checkout_operation'
+					AND ${table.status} = 'unknown')
+				OR (${table.sourceKind} = 'billing_outbox'
+					AND ${table.status} = 'manual_review')
+				OR (${table.sourceKind} = 'stripe_event_financial'
+					AND ${table.status} IN ('failed', 'manual_review'))
+				OR (${table.sourceKind} = 'stripe_event_global'
+					AND ${table.status} IN ('pending', 'succeeded', 'failed', 'manual_review'))`,
+		),
+		check(
+			"financial_retention_receipts_value_shape_check",
+			sql`(${table.sourceKind} = 'subscription_snapshot'
+					AND ${table.periodStart} IS NULL
+					AND ${table.periodEnd} IS NULL
+					AND ${table.amountCents} IS NULL
+					AND ${table.currency} IS NULL
+					AND ${table.quantity} IS NULL
+					AND ${table.includedQuantity} IS NULL
+					AND ${table.overageQuantity} IS NULL)
+				OR (${table.sourceKind} = 'invoice'
+					AND ${table.periodStart} IS NOT NULL
+					AND ${table.amountCents} IS NOT NULL
+					AND ${table.quantity} IS NOT NULL
+					AND ${table.includedQuantity} IS NOT NULL
+					AND ${table.overageQuantity} IS NOT NULL)
+				OR (${table.sourceKind} = 'usage_bucket'
+					AND ${table.periodStart} IS NOT NULL
+					AND ${table.amountCents} IS NULL
+					AND ${table.quantity} IS NOT NULL
+					AND ${table.includedQuantity} IS NOT NULL
+					AND ${table.overageQuantity} IS NOT NULL)
+				OR (${table.sourceKind} = 'billing_period'
+					AND ${table.periodStart} IS NOT NULL
+					AND ${table.amountCents} IS NOT NULL
+					AND ${table.quantity} IS NOT NULL
+					AND ${table.includedQuantity} IS NOT NULL
+					AND ${table.overageQuantity} IS NOT NULL)
+				OR (${table.sourceKind} = 'billing_operation'
+					AND ${table.periodStart} IS NOT NULL
+					AND ${table.amountCents} IS NOT NULL
+					AND ${table.quantity} IS NOT NULL
+					AND ${table.includedQuantity} IS NULL
+					AND ${table.overageQuantity} IS NULL)
+				OR (${table.sourceKind} = 'phone_billing_operation'
+					AND ${table.periodStart} IS NULL
+					AND ${table.periodEnd} IS NULL
+					AND ${table.amountCents} IS NULL
+					AND ${table.currency} IS NULL
+					AND ${table.quantity} IS NOT NULL
+					AND ${table.includedQuantity} IS NULL
+					AND ${table.overageQuantity} IS NULL)
+				OR (${table.sourceKind} IN ('dunning_event', 'checkout_operation', 'billing_outbox', 'stripe_event_financial', 'stripe_event_global')
+					AND ${table.periodStart} IS NULL
+					AND ${table.amountCents} IS NULL
+					AND ${table.quantity} IS NULL
+					AND ${table.includedQuantity} IS NULL
+					AND ${table.overageQuantity} IS NULL)`,
+		),
+		check(
+			"financial_retention_receipts_retention_clock_check",
+			sql`${table.retainedUntil} > ${table.recordedAt}
+				AND (
+					(${table.retentionClass} = 'financial_7_years'
+						AND ${table.retainedUntil} = ${table.retentionAnchorAt} + INTERVAL '7 years')
+					OR (${table.retentionClass} = 'usage_25_months'
+						AND ${table.retainedUntil} = ${table.retentionAnchorAt} + INTERVAL '25 months')
+					OR (${table.retentionClass} = 'provider_receipt_1_year'
+						AND ${table.retainedUntil} = ${table.retentionAnchorAt} + INTERVAL '1 year')
+				)`,
 		),
 	],
 );
@@ -3409,23 +6083,40 @@ export const dunningEvents = pgTable(
 // User preferences (timezone, language, etc.)
 // ---------------------------------------------------------------------------
 
-export const userPreferences = pgTable("user_preferences", {
-	id: text("id")
-		.primaryKey()
-		.$defaultFn(() => generateId("upref_")),
-	userId: text("user_id")
-		.notNull()
-		.references(() => user.id, { onDelete: "cascade" })
-		.unique(),
-	timezone: text("timezone").notNull().default("UTC"),
-	language: text("language").notNull().default("en"),
-	createdAt: timestamp("created_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
+export const userPreferences = pgTable(
+	"user_preferences",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("upref_")),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" })
+			.unique(),
+		timezone: text("timezone").notNull().default("UTC"),
+		language: text("language").notNull().default("en"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		check(
+			"user_preferences_timezone_shape_check",
+			sql`length(btrim(${table.timezone})) BETWEEN 1 AND 128`,
+		),
+		check(
+			"user_preferences_language_check",
+			sql`${table.language} IN ('en', 'es', 'fr', 'de', 'ja', 'zh')`,
+		),
+		check(
+			"user_preferences_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}`,
+		),
+	],
+);
 
 // ---------------------------------------------------------------------------
 // Notifications (in-app notifications for users)
@@ -3443,7 +6134,7 @@ export const notifications = pgTable(
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id, { onDelete: "cascade" }),
-		type: text("type").notNull(), // post_failed, post_published, account_disconnected, payment_failed, usage_warning, weekly_digest, marketing
+		type: text("type", { enum: [...NOTIFICATION_TYPES] }).notNull(),
 		title: text("title").notNull(),
 		body: text("body").notNull(),
 		data: jsonb("data"), // arbitrary payload: { postId, accountId, platform, ... }
@@ -3454,6 +6145,10 @@ export const notifications = pgTable(
 			.notNull(),
 	},
 	(table) => [
+		check(
+			"notifications_type_check",
+			sql`${table.type} IN ('post_failed', 'post_published', 'account_disconnected', 'payment_failed', 'usage_warning', 'weekly_digest', 'marketing', 'streak_warning', 'automation_notice')`,
+		),
 		foreignKey({
 			columns: [table.userId, table.organizationId],
 			foreignColumns: [member.userId, member.organizationId],
@@ -3464,6 +6159,7 @@ export const notifications = pgTable(
 		uniqueIndex("notifications_user_occurrence_uniq")
 			.on(table.userId, table.organizationId, table.occurrenceId)
 			.where(sql`${table.occurrenceId} IS NOT NULL`),
+		index("notifications_retention_idx").on(table.createdAt, table.id),
 	],
 );
 
@@ -3531,11 +6227,10 @@ export const notificationPreferences = pgTable(
 // Inbox — Conversations & Messages (unified across all platforms)
 // ---------------------------------------------------------------------------
 
-export const conversationTypeEnum = pgEnum("conversation_type", [
-	"comment_thread",
-	"dm",
-	"review",
-]);
+export const conversationTypeEnum = pgEnum(
+	"conversation_type",
+	INBOX_CONVERSATION_TYPES,
+);
 
 export const conversationStatusEnum = pgEnum("conversation_status", [
 	"open",
@@ -3569,6 +6264,7 @@ export const inboxConversations = pgTable(
 		participantName: text("participant_name"),
 		participantPlatformId: text("participant_platform_id"),
 		participantAvatar: text("participant_avatar"),
+		participantAvatarObjectKey: text("participant_avatar_object_key"),
 		participantMetadata: jsonb("participant_metadata").default({}),
 		// State
 		status: conversationStatusEnum("status").notNull().default("open"),
@@ -3579,15 +6275,29 @@ export const inboxConversations = pgTable(
 		// Preview
 		lastMessageText: text("last_message_text"),
 		lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
-		lastMessageDirection: text("last_message_direction"),
+		lastMessageDirection: text("last_message_direction", {
+			enum: [...INBOX_DIRECTIONS],
+		}),
 		// AI enrichment
 		sentimentAvg: integer("sentiment_avg"),
 		// Contact link
 		contactId: text("contact_id").references(() => contacts.id, {
 			onDelete: "set null",
 		}),
+		// Stable HMAC over organization + internal contact ID. The retained
+		// identity-key fingerprint detects accidental replacement of the key ring
+		// that makes a post-FK-null subject undiscoverable.
+		contactSubjectLocator: text("contact_subject_locator"),
+		contactSubjectIdentityKeyFingerprint: text(
+			"contact_subject_identity_key_fingerprint",
+		),
 		assignedUserId: text("assigned_user_id").references(() => user.id, {
 			onDelete: "set null",
+		}),
+		closedAt: timestamp("closed_at", { withTimezone: true }),
+		contentExpiresAt: timestamp("content_expires_at", { withTimezone: true }),
+		contentRedactedAt: timestamp("content_redacted_at", {
+			withTimezone: true,
 		}),
 		// Timestamps
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -3640,6 +6350,43 @@ export const inboxConversations = pgTable(
 			"inbox_conversations_sentiment_range_check",
 			sql`${table.sentimentAvg} IS NULL OR ${table.sentimentAvg} BETWEEN -100 AND 100`,
 		),
+		check(
+			"inbox_conversations_last_message_direction_check",
+			sql`${table.lastMessageDirection} IS NULL OR ${table.lastMessageDirection} IN ('inbound', 'outbound')`,
+		),
+		check(
+			"inbox_conversations_contact_subject_locator_check",
+			sql`(${table.contactSubjectLocator} IS NULL
+					AND ${table.contactSubjectIdentityKeyFingerprint} IS NULL)
+				OR (${table.contactSubjectLocator} ~ '^[0-9a-f]{64}$'
+					AND ${table.contactSubjectIdentityKeyFingerprint} ~ '^[0-9a-f]{64}$')`,
+		),
+		check(
+			"inbox_conversations_avatar_object_key_check",
+			sql`${table.participantAvatarObjectKey} IS NULL
+				OR (
+					length(${table.participantAvatarObjectKey}) BETWEEN 1 AND 1024
+					AND ${table.participantAvatarObjectKey} !~ '(^/|//|(^|/)\\.\\.?(/|$)|[[:cntrl:]])'
+					AND ${table.participantAvatarObjectKey} !~ '/$'
+					AND ${table.participantAvatarObjectKey} !~ '^(account|user|organization|queue-rescue)/'
+				)`,
+		),
+		check(
+			"inbox_conversations_close_retention_check",
+			sql`(${table.status} = 'archived'
+					AND ${table.closedAt} IS NOT NULL
+					AND ${table.contentExpiresAt} IS NOT NULL
+					AND ${table.contentExpiresAt} >= ${table.closedAt})
+				OR (${table.status} <> 'archived'
+					AND ${table.closedAt} IS NULL
+					AND ${table.contentExpiresAt} IS NULL)`,
+		),
+		check(
+			"inbox_conversations_retention_timestamp_check",
+			sql`(${table.contentRedactedAt} IS NULL
+					OR ${table.contentRedactedAt} >= ${table.createdAt})
+				AND (${table.closedAt} IS NULL OR ${table.closedAt} >= ${table.createdAt})`,
+		),
 		index("inbox_conv_workspace_idx").on(table.workspaceId),
 		index("inbox_conv_org_status_idx").on(table.organizationId, table.status),
 		index("inbox_conv_org_updated_idx").on(
@@ -3661,11 +6408,22 @@ export const inboxConversations = pgTable(
 			table.workspaceId,
 		),
 		index("inbox_conv_contact_idx").on(table.contactId),
+		index("inbox_conv_contact_subject_idx").on(
+			table.organizationId,
+			table.contactSubjectLocator,
+		),
 		index("inbox_conv_assigned_user_idx").on(table.assignedUserId),
-		// Cron archive/sweep scans open conversations by recency.
-		index("inbox_conv_open_last_message_idx")
-			.on(table.lastMessageAt)
+		// Match the exact COALESCE + id ordering used by the bounded stale-close
+		// claim; an index on last_message_at alone cannot serve rows with no
+		// messages or the deterministic keyset order.
+		index("inbox_conv_open_activity_idx")
+			.on(sql`COALESCE(${table.lastMessageAt}, ${table.createdAt})`, table.id)
 			.where(sql`${table.status} = 'open'`),
+		index("inbox_conv_content_retention_due_idx")
+			.on(table.contentExpiresAt, table.id)
+			.where(
+				sql`${table.status} = 'archived' AND ${table.contentRedactedAt} IS NULL`,
+			),
 	],
 );
 
@@ -3688,7 +6446,7 @@ export const inboxMessages = pgTable(
 		authorPlatformId: text("author_platform_id"),
 		authorAvatarUrl: text("author_avatar_url"),
 		text: text("text"),
-		direction: text("direction").notNull(),
+		direction: text("direction", { enum: [...INBOX_DIRECTIONS] }).notNull(),
 		attachments: jsonb("attachments").default([]),
 		// AI enrichment
 		sentimentScore: integer("sentiment_score"),
@@ -3697,12 +6455,19 @@ export const inboxMessages = pgTable(
 		platformData: jsonb("platform_data").default({}),
 		isHidden: boolean("is_hidden").default(false),
 		isLiked: boolean("is_liked").default(false),
+		contentRedactedAt: timestamp("content_redacted_at", {
+			withTimezone: true,
+		}),
 		// Timestamps
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
 	},
 	(table) => [
+		check(
+			"inbox_messages_direction_check",
+			sql`${table.direction} IN ('inbound', 'outbound')`,
+		),
 		foreignKey({
 			columns: [table.conversationId, table.organizationId, table.scopeKey],
 			foreignColumns: [
@@ -3731,6 +6496,11 @@ export const inboxMessages = pgTable(
 			"inbox_messages_sentiment_range_check",
 			sql`${table.sentimentScore} IS NULL OR ${table.sentimentScore} BETWEEN -100 AND 100`,
 		),
+		check(
+			"inbox_messages_content_redaction_check",
+			sql`${table.contentRedactedAt} IS NULL
+				OR ${table.contentRedactedAt} >= ${table.createdAt}`,
+		),
 		index("inbox_msg_conv_created_idx").on(
 			table.conversationId,
 			table.createdAt,
@@ -3746,6 +6516,9 @@ export const inboxMessages = pgTable(
 			table.platformMessageId,
 		),
 		index("inbox_msg_platform_message_id_idx").on(table.platformMessageId),
+		index("inbox_msg_content_retention_pending_idx")
+			.on(table.conversationId, table.id)
+			.where(sql`${table.contentRedactedAt} IS NULL`),
 		// Backs the leading-wildcard ILIKE in inbox message search. Requires the
 		// pg_trgm extension (enabled in the generated migration).
 		index("inbox_msg_text_trgm_idx").using(
@@ -3843,6 +6616,9 @@ export const inboundWebhookEvents = pgTable(
 				AND (${table.redactedAt} IS NULL OR ${table.redactedAt} >= ${table.receivedAt})`,
 		),
 		index("inbound_webhook_events_expiry_idx").on(table.expiresAt, table.id),
+		index("inbound_webhook_events_receipt_retention_idx")
+			.on(table.receivedAt, table.id)
+			.where(sql`${table.redactedAt} IS NOT NULL`),
 	],
 );
 
@@ -3930,6 +6706,9 @@ export const inboxEventEffects = pgTable(
 			table.status,
 			table.leaseExpiresAt,
 		),
+		index("inbox_event_effects_retention_idx")
+			.on(sql`COALESCE(${table.completedAt}, ${table.updatedAt})`, table.id)
+			.where(sql`${table.status} IN ('completed', 'unknown')`),
 	],
 );
 
@@ -3944,7 +6723,7 @@ export const inboxConversationNotes = pgTable(
 			.notNull()
 			.references(() => organization.id),
 		actorType: text("actor_type", {
-			enum: ["dashboard_user", "service"],
+			enum: [...INBOX_NOTE_ACTOR_TYPES],
 		}).notNull(),
 		actorId: text("actor_id").notNull(),
 		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
@@ -4141,6 +6920,9 @@ export const autoPostFeedItems = pgTable(
 			sql`${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt}`,
 		),
 		index("auto_post_feed_items_post_idx").on(table.postId),
+		index("auto_post_feed_items_retention_idx")
+			.on(sql`COALESCE(${table.completedAt}, ${table.createdAt})`, table.id)
+			.where(sql`${table.status} <> 'processing'`),
 	],
 );
 
@@ -4163,19 +6945,279 @@ export const whatsappPhoneNumbers = pgTable(
 		telnyxOrderId: text("telnyx_order_id"),
 		waPhoneNumberId: text("wa_phone_number_id"),
 		status: text("status").notNull().default("purchasing"),
-		// The phone row is also the durable purchase ledger. Search is read-only;
-		// this operation is committed before the first chargeable provider call.
-		provisioningOperationId: text("provisioning_operation_id")
+		verificationMethod: text("verification_method"),
+		stripePhoneSubscriptionId: text("stripe_phone_subscription_id"),
+		stripeSubscriptionItemId: text("stripe_subscription_item_id"),
+		monthlyCostCents: integer("monthly_cost_cents").notNull().default(200),
+		country: text("country").notNull().default("US"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		unique("wa_phone_numbers_id_org_uniq").on(table.id, table.organizationId),
+		uniqueIndex("wa_phone_numbers_telnyx_order_uniq").on(table.telnyxOrderId),
+		uniqueIndex("wa_phone_numbers_provider_number_uniq").on(
+			table.providerNumberId,
+		),
+		uniqueIndex("wa_phone_numbers_meta_number_uniq").on(table.waPhoneNumberId),
+		check(
+			"wa_phone_numbers_status_check",
+			sql`${table.status} IN ('purchasing', 'pending_verification', 'verified', 'active', 'releasing', 'released')`,
+		),
+		check(
+			"wa_phone_numbers_numeric_check",
+			sql`${table.monthlyCostCents} >= 0`,
+		),
+		check(
+			"wa_phone_numbers_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}`,
+		),
+		index("wa_phone_numbers_org_idx").on(table.organizationId),
+		index("wa_phone_numbers_status_idx").on(table.status),
+	],
+);
+
+/**
+ * Organization-scoped serialization authority for the dedicated phone add-on
+ * subscription. Every quantity mutation converges this single desired/applied
+ * pair, preventing concurrent absolute Stripe updates from regressing quantity.
+ */
+export const whatsappPhoneBillingOperations = pgTable(
+	"whatsapp_phone_billing_operations",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("wpb_")),
+		organizationId: text("organization_id")
 			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" })
+			.unique(),
+		state: text("state", {
+			enum: [
+				"pending",
+				"processing",
+				"request_may_have_been_sent",
+				"unknown",
+				"waiting_payment",
+				"applied",
+				"manual_review",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		desiredQuantity: integer("desired_quantity").notNull(),
+		appliedQuantity: integer("applied_quantity").notNull().default(0),
+		stripeCustomerId: text("stripe_customer_id"),
+		stripeCheckoutSessionId: text("stripe_checkout_session_id"),
+		stripeSubscriptionId: text("stripe_subscription_id"),
+		stripeSubscriptionItemId: text("stripe_subscription_item_id"),
+		stripeLatestInvoiceId: text("stripe_latest_invoice_id"),
+		idempotencyKey: text("idempotency_key").notNull().unique(),
+		revision: integer("revision").notNull().default(1),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		attempts: integer("attempts").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		lastError: text("last_error"),
+		appliedAt: timestamp("applied_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		unique("wa_phone_billing_id_org_uniq").on(table.id, table.organizationId),
+		check(
+			"wa_phone_billing_status_check",
+			sql`${table.state} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'waiting_payment', 'applied', 'manual_review')`,
+		),
+		check(
+			"wa_phone_billing_numeric_check",
+			sql`${table.desiredQuantity} >= 0
+				AND ${table.appliedQuantity} >= 0
+				AND ${table.revision} > 0
+				AND ${table.leaseToken} >= 0
+				AND ${table.attempts} >= 0`,
+		),
+		check(
+			"wa_phone_billing_lease_check",
+			sql`(${table.state} IN ('processing', 'request_may_have_been_sent')
+					AND ${table.leaseExpiresAt} IS NOT NULL)
+				OR (${table.state} NOT IN ('processing', 'request_may_have_been_sent')
+					AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"wa_phone_billing_boundary_check",
+			sql`${table.state} <> 'request_may_have_been_sent'
+				OR ${table.requestMayHaveBeenSentAt} IS NOT NULL`,
+		),
+		check(
+			"wa_phone_billing_applied_check",
+			sql`(${table.state} = 'applied'
+					AND ${table.desiredQuantity} = ${table.appliedQuantity}
+					AND ${table.appliedAt} IS NOT NULL)
+				OR (${table.state} <> 'applied' AND ${table.appliedAt} IS NULL)`,
+		),
+		check(
+			"wa_phone_billing_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}
+				AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
+				AND (${table.appliedAt} IS NULL OR ${table.appliedAt} >= ${table.createdAt})`,
+		),
+		index("wa_phone_billing_status_due_idx").on(
+			table.state,
+			table.nextAttemptAt,
+			table.organizationId,
+		),
+		index("wa_phone_billing_lease_idx")
+			.on(table.leaseExpiresAt, table.organizationId)
+			.where(
+				sql`${table.state} IN ('processing', 'request_may_have_been_sent')`,
+			),
+	],
+);
+
+/**
+ * Revisioned economic evidence for the organization phone add-on authority.
+ * Quantity, customer, and idempotency identity are inserted once per revision;
+ * only the provider-observation state advances. A new external payload always
+ * receives a new row and idempotency key after the prior revision is proven
+ * not applied.
+ */
+export const whatsappPhoneBillingAttempts = pgTable(
+	"whatsapp_phone_billing_attempts",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("wpba_")),
+		organizationId: text("organization_id").notNull(),
+		phoneBillingOperationId: text("phone_billing_operation_id").notNull(),
+		revision: integer("revision").notNull(),
+		status: text("status", {
+			enum: [
+				"prepared",
+				"requesting",
+				"unknown",
+				"waiting_payment",
+				"applied",
+				"confirmed_not_applied",
+				"manual_review",
+			],
+		})
+			.notNull()
+			.default("prepared"),
+		desiredQuantity: integer("desired_quantity").notNull(),
+		priorAppliedQuantity: integer("prior_applied_quantity").notNull(),
+		stripeCustomerId: text("stripe_customer_id").notNull(),
+		stripeCheckoutSessionId: text("stripe_checkout_session_id"),
+		stripeSubscriptionId: text("stripe_subscription_id"),
+		stripeSubscriptionItemId: text("stripe_subscription_item_id"),
+		stripeLatestInvoiceId: text("stripe_latest_invoice_id"),
+		idempotencyKey: text("idempotency_key").notNull().unique(),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		providerEvidence:
+			jsonb("provider_evidence").$type<Record<string, unknown>>(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.phoneBillingOperationId, table.organizationId],
+			foreignColumns: [
+				whatsappPhoneBillingOperations.id,
+				whatsappPhoneBillingOperations.organizationId,
+			],
+			name: "wa_phone_billing_attempts_operation_org_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("wa_phone_billing_attempts_operation_revision_uniq").on(
+			table.phoneBillingOperationId,
+			table.revision,
+		),
+		check(
+			"wa_phone_billing_attempts_status_check",
+			sql`${table.status} IN ('prepared', 'requesting', 'unknown', 'waiting_payment', 'applied', 'confirmed_not_applied', 'manual_review')`,
+		),
+		check(
+			"wa_phone_billing_attempts_numeric_check",
+			sql`${table.revision} > 0
+				AND ${table.desiredQuantity} >= 0
+				AND ${table.priorAppliedQuantity} >= 0`,
+		),
+		check(
+			"wa_phone_billing_attempts_state_shape_check",
+			sql`(${table.status} = 'prepared'
+					AND ${table.requestMayHaveBeenSentAt} IS NULL
+					AND ${table.providerEvidence} IS NULL
+					AND ${table.resolvedAt} IS NULL)
+				OR (${table.status} IN ('requesting', 'unknown')
+					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+					AND ${table.resolvedAt} IS NULL)
+				OR (${table.status} = 'waiting_payment'
+					AND ${table.providerEvidence} IS NOT NULL
+					AND ${table.resolvedAt} IS NULL)
+				OR (${table.status} IN ('applied', 'confirmed_not_applied')
+					AND ${table.providerEvidence} IS NOT NULL
+					AND ${table.resolvedAt} IS NOT NULL)
+				OR (${table.status} = 'manual_review'
+					AND ${table.providerEvidence} IS NOT NULL
+					AND ${table.resolvedAt} IS NULL)`,
+		),
+		check(
+			"wa_phone_billing_attempts_timestamp_check",
+			sql`(${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
+				AND (${table.resolvedAt} IS NULL OR ${table.resolvedAt} >= ${table.createdAt})`,
+		),
+		index("wa_phone_billing_attempts_operation_status_idx").on(
+			table.phoneBillingOperationId,
+			table.status,
+		),
+		index("wa_phone_billing_attempts_retention_idx").on(
+			table.createdAt,
+			table.id,
+		),
+	],
+);
+
+/**
+ * One durable, idempotent purchase operation per phone resource. Provider
+ * results live on the phone; claim/retry/request data lives only on this row.
+ */
+export const whatsappPhoneProvisioningOperations = pgTable(
+	"whatsapp_phone_provisioning_operations",
+	{
+		provisioningOperationId: text("id")
+			.primaryKey()
 			.$defaultFn(() => generateId("wpo_")),
-		provisioningOperationKeyHash: varchar("provisioning_operation_key_hash", {
+		phoneNumberId: text("phone_number_id").notNull(),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		provisioningUsageReservationId: text("usage_reservation_id"),
+		provisioningOperationKeyHash: varchar("idempotency_key_hash", {
 			length: 64,
 		}).notNull(),
-		provisioningRequestHash: varchar("provisioning_request_hash", {
+		provisioningRequestHash: varchar("request_hash", {
 			length: 64,
 		}).notNull(),
-		provisioningSourceAccountId: text("provisioning_source_account_id"),
-		provisioningState: text("provisioning_state", {
+		provisioningSourceAccountId: text("source_account_id").notNull(),
+		provisioningSourceWabaId: text("source_waba_id").notNull(),
+		provisioningVerifiedName: text("verified_name"),
+		provisioningState: text("status", {
 			enum: [
 				"pending",
 				"processing",
@@ -4190,7 +7232,7 @@ export const whatsappPhoneNumbers = pgTable(
 		})
 			.notNull()
 			.default("pending"),
-		provisioningPhase: text("provisioning_phase", {
+		provisioningPhase: text("phase", {
 			enum: [
 				"selected",
 				"telnyx_order",
@@ -4201,81 +7243,29 @@ export const whatsappPhoneNumbers = pgTable(
 		})
 			.notNull()
 			.default("selected"),
-		provisioningRequest: jsonb("provisioning_request")
-			.notNull()
-			.default(sql`'{}'::jsonb`),
-		provisioningLeaseToken: integer("provisioning_lease_token")
-			.notNull()
-			.default(0),
-		provisioningLeaseExpiresAt: timestamp("provisioning_lease_expires_at", {
+		provisioningLeaseToken: integer("lease_token").notNull().default(0),
+		provisioningLeaseExpiresAt: timestamp("lease_expires_at", {
 			withTimezone: true,
 		}),
 		provisioningRequestMayHaveBeenSentAt: timestamp(
-			"provisioning_request_may_have_been_sent_at",
+			"request_may_have_been_sent_at",
 			{ withTimezone: true },
 		),
-		provisioningAttempts: integer("provisioning_attempts").notNull().default(0),
-		provisioningNextAttemptAt: timestamp("provisioning_next_attempt_at", {
+		provisioningAttempts: integer("attempts").notNull().default(0),
+		provisioningNextAttemptAt: timestamp("next_attempt_at", {
 			withTimezone: true,
 		})
 			.notNull()
 			.defaultNow(),
-		provisioningLastError: text("provisioning_last_error"),
+		provisioningLastError: text("last_error"),
 		stripeCheckoutSessionId: text("stripe_checkout_session_id"),
 		stripeCheckoutUrl: text("stripe_checkout_url"),
-		// Release is an independent fenced operation. Provider identities and the
-		// source grant are snapshotted before account revocation can clear them.
-		releaseOperationId: text("release_operation_id"),
-		releaseReason: text("release_reason", {
-			enum: ["user_requested", "tenant_deleted"],
-		}),
-		releaseState: text("release_state", {
-			enum: [
-				"pending",
-				"processing",
-				"request_may_have_been_sent",
-				"unknown",
-				"manual_review",
-				"completed",
-				"failed",
-			],
-		}),
-		releasePhase: text("release_phase", {
-			enum: ["meta", "stripe", "telnyx", "completed"],
-		}),
-		releaseMetaStatus: text("release_meta_status", {
-			enum: ["pending", "not_required", "confirmed", "unknown"],
-		}),
-		releaseStripeStatus: text("release_stripe_status", {
-			enum: ["pending", "not_required", "confirmed", "unknown"],
-		}),
-		releaseTelnyxStatus: text("release_telnyx_status", {
-			enum: ["pending", "not_required", "confirmed", "unknown"],
-		}),
-		releaseSourceAccountId: text("release_source_account_id"),
-		releaseSourceTokenVersion: integer("release_source_token_version"),
-		releaseAccessTokenCiphertext: text("release_access_token_ciphertext"),
-		releaseLeaseToken: integer("release_lease_token").notNull().default(0),
-		releaseLeaseExpiresAt: timestamp("release_lease_expires_at", {
+		provisioningDetailExpiresAt: timestamp("detail_expires_at", {
 			withTimezone: true,
 		}),
-		releaseRequestMayHaveBeenSentAt: timestamp(
-			"release_request_may_have_been_sent_at",
-			{ withTimezone: true },
-		),
-		releaseAttempts: integer("release_attempts").notNull().default(0),
-		releaseNextAttemptAt: timestamp("release_next_attempt_at", {
+		provisioningDetailRedactedAt: timestamp("detail_redacted_at", {
 			withTimezone: true,
 		}),
-		releaseLastError: text("release_last_error"),
-		releaseRequestedAt: timestamp("release_requested_at", {
-			withTimezone: true,
-		}),
-		releasedAt: timestamp("released_at", { withTimezone: true }),
-		verificationMethod: text("verification_method"),
-		stripeSubscriptionItemId: text("stripe_subscription_item_id"),
-		monthlyCostCents: integer("monthly_cost_cents").notNull().default(200),
-		country: text("country").notNull().default("US"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -4284,144 +7274,335 @@ export const whatsappPhoneNumbers = pgTable(
 			.notNull(),
 	},
 	(table) => [
-		uniqueIndex("wa_phone_numbers_provisioning_operation_uniq").on(
-			table.provisioningOperationId,
-		),
-		uniqueIndex("wa_phone_numbers_provisioning_key_uniq").on(
+		foreignKey({
+			columns: [table.phoneNumberId, table.organizationId],
+			foreignColumns: [
+				whatsappPhoneNumbers.id,
+				whatsappPhoneNumbers.organizationId,
+			],
+			name: "wa_phone_provisioning_phone_org_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.provisioningUsageReservationId, table.organizationId],
+			foreignColumns: [usageReservations.id, usageReservations.organizationId],
+			name: "wa_phone_provisioning_usage_reservation_org_fk",
+		})
+			.onUpdate("no action")
+			.onDelete("restrict"),
+		uniqueIndex("wa_phone_provisioning_phone_uniq").on(table.phoneNumberId),
+		uniqueIndex("wa_phone_provisioning_usage_reservation_uniq")
+			.on(table.provisioningUsageReservationId)
+			.where(sql`${table.provisioningUsageReservationId} IS NOT NULL`),
+		uniqueIndex("wa_phone_provisioning_org_key_uniq").on(
 			table.organizationId,
 			table.provisioningOperationKeyHash,
 		),
-		uniqueIndex("wa_phone_numbers_telnyx_order_uniq").on(table.telnyxOrderId),
-		uniqueIndex("wa_phone_numbers_release_operation_uniq").on(
-			table.releaseOperationId,
-		),
-		uniqueIndex("wa_phone_numbers_provider_number_uniq").on(
-			table.providerNumberId,
-		),
-		uniqueIndex("wa_phone_numbers_meta_number_uniq").on(table.waPhoneNumberId),
 		check(
-			"wa_phone_numbers_status_check",
-			sql`${table.status} IN ('purchasing', 'pending_verification', 'verified', 'active', 'releasing', 'released')`,
-		),
-		check(
-			"wa_phone_numbers_provisioning_state_check",
+			"wa_phone_provisioning_status_check",
 			sql`${table.provisioningState} IN ('pending', 'processing', 'waiting_external', 'request_may_have_been_sent', 'unknown', 'manual_review', 'completed', 'failed', 'cancelled')`,
 		),
 		check(
-			"wa_phone_numbers_provisioning_phase_check",
+			"wa_phone_provisioning_phase_check",
 			sql`${table.provisioningPhase} IN ('selected', 'telnyx_order', 'billing', 'meta_registration', 'completed')`,
 		),
 		check(
-			"wa_phone_numbers_release_state_check",
-			sql`${table.releaseState} IS NULL OR ${table.releaseState} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'manual_review', 'completed', 'failed')`,
-		),
-		check(
-			"wa_phone_numbers_release_phase_check",
-			sql`${table.releasePhase} IS NULL OR ${table.releasePhase} IN ('meta', 'stripe', 'telnyx', 'completed')`,
-		),
-		check(
-			"wa_phone_numbers_release_provider_status_check",
-			sql`(${table.releaseMetaStatus} IS NULL OR ${table.releaseMetaStatus} IN ('pending', 'not_required', 'confirmed', 'unknown'))
-				AND (${table.releaseStripeStatus} IS NULL OR ${table.releaseStripeStatus} IN ('pending', 'not_required', 'confirmed', 'unknown'))
-				AND (${table.releaseTelnyxStatus} IS NULL OR ${table.releaseTelnyxStatus} IN ('pending', 'not_required', 'confirmed', 'unknown'))`,
-		),
-		check(
-			"wa_phone_numbers_numeric_check",
+			"wa_phone_provisioning_numeric_check",
 			sql`${table.provisioningLeaseToken} >= 0
-				AND ${table.provisioningAttempts} >= 0
-				AND (${table.releaseSourceTokenVersion} IS NULL OR ${table.releaseSourceTokenVersion} >= 0)
-				AND ${table.releaseLeaseToken} >= 0
-				AND ${table.releaseAttempts} >= 0
-				AND ${table.monthlyCostCents} >= 0`,
+				AND ${table.provisioningAttempts} >= 0`,
 		),
 		check(
-			"wa_phone_numbers_provisioning_lease_state_check",
+			"wa_phone_provisioning_lease_state_check",
 			sql`(${table.provisioningState} IN ('processing', 'request_may_have_been_sent')
 					AND ${table.provisioningLeaseExpiresAt} IS NOT NULL)
 				OR (${table.provisioningState} NOT IN ('processing', 'request_may_have_been_sent')
 					AND ${table.provisioningLeaseExpiresAt} IS NULL)`,
 		),
 		check(
-			"wa_phone_numbers_provisioning_boundary_check",
+			"wa_phone_provisioning_boundary_check",
 			sql`${table.provisioningState} <> 'request_may_have_been_sent'
 				OR ${table.provisioningRequestMayHaveBeenSentAt} IS NOT NULL`,
 		),
 		check(
-			"wa_phone_numbers_provisioning_completion_check",
+			"wa_phone_provisioning_completion_check",
 			sql`${table.provisioningState} <> 'completed'
-				OR (${table.provisioningPhase} = 'completed'
-					AND ${table.waPhoneNumberId} IS NOT NULL
-					AND ${table.status} IN ('pending_verification', 'verified', 'active', 'releasing', 'released'))`,
+				OR ${table.provisioningPhase} = 'completed'`,
 		),
 		check(
-			"wa_phone_numbers_release_identity_check",
-			sql`(${table.releaseState} IS NULL
-					AND ${table.releaseOperationId} IS NULL
-					AND ${table.releaseReason} IS NULL
-					AND ${table.releasePhase} IS NULL
-					AND ${table.releaseMetaStatus} IS NULL
-					AND ${table.releaseStripeStatus} IS NULL
-					AND ${table.releaseTelnyxStatus} IS NULL
-					AND ${table.releaseRequestedAt} IS NULL)
-				OR (${table.releaseState} IS NOT NULL
-					AND ${table.releaseOperationId} IS NOT NULL
-					AND ${table.releaseReason} IN ('user_requested', 'tenant_deleted')
-					AND ${table.releasePhase} IS NOT NULL
-					AND ${table.releaseMetaStatus} IS NOT NULL
-					AND ${table.releaseStripeStatus} IS NOT NULL
-					AND ${table.releaseTelnyxStatus} IS NOT NULL
-					AND ${table.releaseRequestedAt} IS NOT NULL
-					AND ${table.releaseNextAttemptAt} IS NOT NULL)`,
+			"wa_phone_provisioning_detail_retention_check",
+			sql`(${table.provisioningState} IN ('completed', 'cancelled')
+					AND ${table.provisioningVerifiedName} IS NULL
+					AND ${table.provisioningDetailExpiresAt} IS NOT NULL
+					AND (${table.provisioningDetailRedactedAt} IS NULL
+						OR (${table.stripeCheckoutUrl} IS NULL
+							AND ${table.provisioningDetailRedactedAt} >= ${table.provisioningDetailExpiresAt})))
+				OR (${table.provisioningState} NOT IN ('completed', 'cancelled')
+					AND length(btrim(${table.provisioningVerifiedName})) > 0
+					AND ${table.provisioningDetailExpiresAt} IS NULL
+					AND ${table.provisioningDetailRedactedAt} IS NULL)`,
 		),
 		check(
-			"wa_phone_numbers_release_source_check",
-			sql`(${table.releaseSourceAccountId} IS NULL) = (${table.releaseSourceTokenVersion} IS NULL)`,
-		),
-		check(
-			"wa_phone_numbers_release_lease_state_check",
-			sql`(${table.releaseState} IN ('processing', 'request_may_have_been_sent')
-					AND ${table.releaseLeaseExpiresAt} IS NOT NULL)
-				OR (COALESCE(${table.releaseState}, '') NOT IN ('processing', 'request_may_have_been_sent')
-					AND ${table.releaseLeaseExpiresAt} IS NULL)`,
-		),
-		check(
-			"wa_phone_numbers_release_boundary_check",
-			sql`${table.releaseState} <> 'request_may_have_been_sent'
-				OR ${table.releaseRequestMayHaveBeenSentAt} IS NOT NULL`,
-		),
-		check(
-			"wa_phone_numbers_release_completion_check",
-			sql`(${table.releaseState} = 'completed'
-					AND ${table.status} = 'released'
-					AND ${table.releasePhase} = 'completed'
-					AND ${table.releaseMetaStatus} IN ('confirmed', 'not_required')
-					AND ${table.releaseStripeStatus} IN ('confirmed', 'not_required')
-					AND ${table.releaseTelnyxStatus} IN ('confirmed', 'not_required')
-					AND ${table.releasedAt} IS NOT NULL)
-				OR (${table.releaseState} IS DISTINCT FROM 'completed'
-					AND ${table.status} <> 'released'
-					AND ${table.releasedAt} IS NULL)`,
-		),
-		check(
-			"wa_phone_numbers_timestamp_order_check",
+			"wa_phone_provisioning_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.createdAt}
-				AND (${table.provisioningRequestMayHaveBeenSentAt} IS NULL OR ${table.provisioningRequestMayHaveBeenSentAt} >= ${table.createdAt})
-				AND (${table.releaseRequestedAt} IS NULL OR ${table.releaseRequestedAt} >= ${table.createdAt})
-				AND (${table.releaseRequestMayHaveBeenSentAt} IS NULL OR ${table.releaseRequestMayHaveBeenSentAt} >= ${table.releaseRequestedAt})
-				AND (${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.releaseRequestedAt})`,
+				AND (${table.provisioningRequestMayHaveBeenSentAt} IS NULL
+					OR ${table.provisioningRequestMayHaveBeenSentAt} >= ${table.createdAt})
+				AND (${table.provisioningDetailExpiresAt} IS NULL
+					OR ${table.provisioningDetailExpiresAt} >= ${table.createdAt})`,
 		),
-		index("wa_phone_numbers_org_idx").on(table.organizationId),
-		index("wa_phone_numbers_status_idx").on(table.status),
-		index("wa_phone_numbers_provisioning_due_idx").on(
+		index("wa_phone_provisioning_status_due_idx").on(
 			table.provisioningState,
 			table.provisioningNextAttemptAt,
 			table.provisioningLeaseExpiresAt,
 		),
-		index("wa_phone_numbers_release_due_idx").on(
+		index("wa_phone_provisioning_org_idx").on(table.organizationId),
+		index("wa_phone_provisioning_detail_expiry_idx")
+			.on(table.provisioningDetailExpiresAt, table.provisioningOperationId)
+			.where(sql`${table.provisioningDetailRedactedAt} IS NULL`),
+		index("wa_phone_provisioning_evidence_retention_idx")
+			.on(table.provisioningDetailExpiresAt, table.provisioningOperationId)
+			.where(
+				sql`${table.provisioningState} IN ('completed', 'cancelled')
+					AND ${table.provisioningDetailRedactedAt} IS NOT NULL`,
+			),
+	],
+);
+
+/**
+ * Independent release operation. Snapshot credentials and provider outcomes
+ * are isolated from the phone entity and shred at terminal completion.
+ */
+export const whatsappPhoneReleaseOperations = pgTable(
+	"whatsapp_phone_release_operations",
+	{
+		releaseOperationId: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("wro_")),
+		phoneNumberId: text("phone_number_id").notNull(),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		releaseUsageReservationId: text("usage_reservation_id"),
+		releaseReason: text("reason", {
+			enum: ["user_requested", "tenant_deleted"],
+		}).notNull(),
+		// Non-cascading credential locators preserve the exact user authority that
+		// admitted a user-requested destructive release. Tenant-deletion cleanup is
+		// system-authorized and intentionally leaves this snapshot null.
+		releaseAuthorityKeyId: text("authority_key_id"),
+		releaseAuthorityPrincipalId: text("authority_principal_id"),
+		releaseAuthorityPrincipalType: text("authority_principal_type", {
+			enum: ["service", "dashboard_user"],
+		}),
+		releaseAuthorityUserId: text("authority_user_id"),
+		releaseAuthorityMemberId: text("authority_member_id"),
+		releaseAuthoritySessionId: text("authority_session_id"),
+		releaseAuthorityWorkspaceId: text("authority_workspace_id"),
+		releaseAuthorityRequiresAllWorkspaceScope: boolean(
+			"authority_requires_all_workspace_scope",
+		),
+		releaseAuthorityCredentialVersion: text("authority_credential_version"),
+		releaseAuthorityAdmittedAt: timestamp("authority_admitted_at", {
+			withTimezone: true,
+		}),
+		releaseAuthorityRevision: integer("authority_revision"),
+		releaseAuthorityRevokedAt: timestamp("authority_revoked_at", {
+			withTimezone: true,
+		}),
+		releasePriorPhoneStatus: text("prior_phone_status", {
+			enum: [
+				"purchasing",
+				"pending_verification",
+				"verified",
+				"active",
+				"releasing",
+			],
+		}).notNull(),
+		releaseState: text("status", {
+			enum: [
+				"pending",
+				"processing",
+				"request_may_have_been_sent",
+				"unknown",
+				"revocation_pending",
+				"manual_review",
+				"completed",
+				"failed",
+				"cancelled",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		releasePhase: text("phase", {
+			enum: ["meta", "stripe", "telnyx", "completed"],
+		})
+			.notNull()
+			.default("meta"),
+		releaseMetaStatus: text("meta_status", {
+			enum: ["pending", "not_required", "confirmed", "unknown"],
+		}).notNull(),
+		releaseStripeStatus: text("stripe_status", {
+			enum: ["pending", "not_required", "confirmed", "unknown"],
+		}).notNull(),
+		releaseTelnyxStatus: text("telnyx_status", {
+			enum: ["pending", "not_required", "confirmed", "unknown"],
+		}).notNull(),
+		releaseSourceAccountId: text("source_account_id"),
+		releaseSourceTokenVersion: integer("source_token_version"),
+		releaseAccessTokenCiphertext: text("access_token_ciphertext"),
+		releaseLeaseToken: integer("lease_token").notNull().default(0),
+		releaseLeaseExpiresAt: timestamp("lease_expires_at", {
+			withTimezone: true,
+		}),
+		releaseRequestMayHaveBeenSentAt: timestamp(
+			"request_may_have_been_sent_at",
+			{ withTimezone: true },
+		),
+		releaseAttempts: integer("attempts").notNull().default(0),
+		releaseNextAttemptAt: timestamp("next_attempt_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.defaultNow(),
+		releaseLastError: text("last_error"),
+		releaseRequestedAt: timestamp("requested_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		releasedAt: timestamp("completed_at", { withTimezone: true }),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.phoneNumberId, table.organizationId],
+			foreignColumns: [
+				whatsappPhoneNumbers.id,
+				whatsappPhoneNumbers.organizationId,
+			],
+			name: "wa_phone_release_phone_org_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.releaseUsageReservationId, table.organizationId],
+			foreignColumns: [usageReservations.id, usageReservations.organizationId],
+			name: "wa_phone_release_usage_reservation_org_fk",
+		})
+			.onUpdate("no action")
+			.onDelete("restrict"),
+		uniqueIndex("wa_phone_release_phone_uniq").on(table.phoneNumberId),
+		uniqueIndex("wa_phone_release_usage_reservation_uniq")
+			.on(table.releaseUsageReservationId)
+			.where(sql`${table.releaseUsageReservationId} IS NOT NULL`),
+		check(
+			"wa_phone_release_reason_check",
+			sql`${table.releaseReason} IN ('user_requested', 'tenant_deleted')`,
+		),
+		check(
+			"wa_phone_release_status_check",
+			sql`${table.releaseState} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'revocation_pending', 'manual_review', 'completed', 'failed', 'cancelled')`,
+		),
+		check(
+			"wa_phone_release_prior_phone_status_check",
+			sql`${table.releasePriorPhoneStatus} IN ('purchasing', 'pending_verification', 'verified', 'active', 'releasing')`,
+		),
+		check(
+			"wa_phone_release_authority_check",
+			sql`(${table.releaseReason} = 'tenant_deleted'
+					AND ${table.releaseAuthorityKeyId} IS NULL
+					AND ${table.releaseAuthorityPrincipalId} IS NULL
+					AND ${table.releaseAuthorityPrincipalType} IS NULL
+					AND ${table.releaseAuthorityUserId} IS NULL
+					AND ${table.releaseAuthorityMemberId} IS NULL
+					AND ${table.releaseAuthoritySessionId} IS NULL
+					AND ${table.releaseAuthorityWorkspaceId} IS NULL
+					AND ${table.releaseAuthorityRequiresAllWorkspaceScope} IS NULL
+					AND ${table.releaseAuthorityCredentialVersion} IS NULL
+					AND ${table.releaseAuthorityAdmittedAt} IS NULL
+					AND ${table.releaseAuthorityRevision} IS NULL
+					AND ${table.releaseAuthorityRevokedAt} IS NULL)
+				OR (${table.releaseReason} = 'user_requested'
+					AND ${table.releaseAuthorityKeyId} IS NOT NULL
+					AND ${table.releaseAuthorityPrincipalId} IS NOT NULL
+					AND ${table.releaseAuthorityPrincipalType} IN ('service', 'dashboard_user')
+					AND (${table.releaseAuthorityPrincipalType} = 'dashboard_user') = (${table.releaseAuthorityUserId} IS NOT NULL)
+					AND (${table.releaseAuthorityPrincipalType} = 'dashboard_user') = (${table.releaseAuthorityMemberId} IS NOT NULL)
+					AND (${table.releaseAuthorityPrincipalType} = 'dashboard_user') = (${table.releaseAuthoritySessionId} IS NOT NULL)
+					AND ${table.releaseAuthorityRequiresAllWorkspaceScope} IS NOT NULL
+					AND (${table.releaseAuthorityWorkspaceId} IS NULL) = ${table.releaseAuthorityRequiresAllWorkspaceScope}
+					AND ${table.releaseAuthorityCredentialVersion} IS NOT NULL
+					AND ${table.releaseAuthorityAdmittedAt} IS NOT NULL
+					AND ${table.releaseAuthorityRevision} > 0)`,
+		),
+		check(
+			"wa_phone_release_phase_check",
+			sql`${table.releasePhase} IN ('meta', 'stripe', 'telnyx', 'completed')`,
+		),
+		check(
+			"wa_phone_release_provider_status_check",
+			sql`${table.releaseMetaStatus} IN ('pending', 'not_required', 'confirmed', 'unknown')
+				AND ${table.releaseStripeStatus} IN ('pending', 'not_required', 'confirmed', 'unknown')
+				AND ${table.releaseTelnyxStatus} IN ('pending', 'not_required', 'confirmed', 'unknown')`,
+		),
+		check(
+			"wa_phone_release_numeric_check",
+			sql`(${table.releaseSourceTokenVersion} IS NULL OR ${table.releaseSourceTokenVersion} >= 0)
+				AND ${table.releaseLeaseToken} >= 0
+				AND ${table.releaseAttempts} >= 0`,
+		),
+		check(
+			"wa_phone_release_source_check",
+			sql`(${table.releaseSourceAccountId} IS NULL
+					AND ${table.releaseSourceTokenVersion} IS NULL
+					AND ${table.releaseAccessTokenCiphertext} IS NULL)
+				OR (${table.releaseSourceAccountId} IS NOT NULL
+					AND ${table.releaseSourceTokenVersion} IS NOT NULL
+					AND ${table.releaseAccessTokenCiphertext} IS NOT NULL)`,
+		),
+		check(
+			"wa_phone_release_lease_state_check",
+			sql`(${table.releaseState} IN ('processing', 'request_may_have_been_sent')
+					AND ${table.releaseLeaseExpiresAt} IS NOT NULL)
+				OR (${table.releaseState} NOT IN ('processing', 'request_may_have_been_sent')
+					AND ${table.releaseLeaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"wa_phone_release_boundary_check",
+			sql`${table.releaseState} <> 'request_may_have_been_sent'
+				OR ${table.releaseRequestMayHaveBeenSentAt} IS NOT NULL`,
+		),
+		check(
+			"wa_phone_release_completion_check",
+			sql`(${table.releaseState} = 'completed'
+					AND ${table.releasePhase} = 'completed'
+					AND ${table.releaseMetaStatus} IN ('confirmed', 'not_required')
+					AND ${table.releaseStripeStatus} IN ('confirmed', 'not_required')
+					AND ${table.releaseTelnyxStatus} IN ('confirmed', 'not_required')
+					AND ${table.releasedAt} IS NOT NULL
+					AND ${table.releaseAccessTokenCiphertext} IS NULL)
+				OR (${table.releaseState} <> 'completed'
+					AND ${table.releasedAt} IS NULL)`,
+		),
+		check(
+			"wa_phone_release_revocation_check",
+			sql`(${table.releaseState} IN ('revocation_pending', 'cancelled')) = (${table.releaseAuthorityRevokedAt} IS NOT NULL)`,
+		),
+		check(
+			"wa_phone_release_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.releaseRequestedAt}
+				AND (${table.releaseAuthorityAdmittedAt} IS NULL OR ${table.releaseAuthorityAdmittedAt} <= ${table.releaseRequestedAt})
+				AND (${table.releaseAuthorityRevokedAt} IS NULL OR ${table.releaseAuthorityRevokedAt} >= ${table.releaseAuthorityAdmittedAt})
+				AND (${table.releaseRequestMayHaveBeenSentAt} IS NULL
+					OR ${table.releaseRequestMayHaveBeenSentAt} >= ${table.releaseRequestedAt})
+				AND (${table.releasedAt} IS NULL
+					OR ${table.releasedAt} >= ${table.releaseRequestedAt})`,
+		),
+		index("wa_phone_release_status_due_idx").on(
 			table.releaseState,
 			table.releaseNextAttemptAt,
 			table.releaseLeaseExpiresAt,
 		),
+		index("wa_phone_release_org_idx").on(table.organizationId),
+		index("wa_phone_release_retention_idx")
+			.on(table.releasedAt, table.releaseOperationId)
+			.where(sql`${table.releaseState} = 'completed'`),
 	],
 );
 
@@ -4446,7 +7627,7 @@ export const customFieldDefinitions = pgTable(
 			.generatedAlwaysAs(workspaceScopeKeySql()),
 		name: text("name").notNull(),
 		slug: text("slug").notNull(),
-		type: text("type").notNull(), // text, number, date, boolean, select
+		type: text("type", { enum: [...CUSTOM_FIELD_TYPES] }).notNull(),
 		options: jsonb("options"), // string[] for select type
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -4474,6 +7655,22 @@ export const customFieldDefinitions = pgTable(
 			table.organizationId,
 			table.scopeKey,
 			table.slug,
+		),
+		check(
+			"custom_field_definitions_type_check",
+			sql`${table.type} IN ('text', 'number', 'date', 'boolean', 'select')`,
+		),
+		check(
+			"custom_field_definitions_options_by_type_check",
+			sql`(${table.type} = 'select'
+					AND ${table.options} IS NOT NULL
+					AND jsonb_typeof(${table.options}) = 'array'
+					AND jsonb_array_length(${table.options}) > 0
+					AND NOT jsonb_path_exists(
+						${table.options},
+						'$[*] ? (@.type() != "string" || @ like_regex "^[[:space:]]*$")'
+					))
+				OR (${table.type} <> 'select' AND ${table.options} IS NULL)`,
 		),
 		index("custom_field_defs_org_idx").on(table.organizationId),
 		index("custom_field_defs_workspace_idx").on(table.workspaceId),
@@ -4551,17 +7748,35 @@ export const contacts = pgTable(
 		scopeKey: text("scope_key")
 			.notNull()
 			.generatedAlwaysAs(workspaceScopeKeySql()),
-		name: text("name"),
-		email: text("email"),
-		emailCanonical: text("email_canonical").generatedAlwaysAs(
-			sql`CASE WHEN "email" IS NULL THEN NULL ELSE lower(btrim("email")) END`,
-		),
-		phone: text("phone"),
+		// Direct identifiers and freeform metadata are AES-256-GCM envelopes.
+		// Equality/substring capabilities use purpose-isolated keyed projections;
+		// plaintext never reaches PostgreSQL.
+		nameCiphertext: text("name_ciphertext"),
+		nameHash: text("name_hash"),
+		nameSearchTokens: text("name_search_tokens")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
+		emailCiphertext: text("email_ciphertext"),
+		emailHash: text("email_hash"),
+		emailSearchTokens: text("email_search_tokens")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
+		phoneCiphertext: text("phone_ciphertext"),
+		phoneHash: text("phone_hash"),
+		phoneSearchTokens: text("phone_search_tokens")
+			.array()
+			.notNull()
+			.default(sql`ARRAY[]::text[]`),
+		metadataCiphertext: text("metadata_ciphertext"),
+		searchIdentityKeyFingerprint: text(
+			"search_identity_key_fingerprint",
+		).notNull(),
 		tags: text("tags").array().notNull().default([]),
 		// Public global preference/projection only. Delivery authority lives in the
 		// canonical per-channel consent state populated by API/automation writes.
 		optedIn: boolean("opted_in").notNull().default(false),
-		metadata: jsonb("metadata"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -4594,9 +7809,74 @@ export const contacts = pgTable(
 			table.createdAt,
 			table.id,
 		),
-		uniqueIndex("contacts_scope_email_canonical_uniq")
-			.on(table.organizationId, table.scopeKey, table.emailCanonical)
-			.where(sql`${table.emailCanonical} IS NOT NULL`),
+		uniqueIndex("contacts_scope_email_hash_uniq")
+			.on(table.organizationId, table.scopeKey, table.emailHash)
+			.where(sql`${table.emailHash} IS NOT NULL`),
+		uniqueIndex("contacts_scope_phone_hash_uniq")
+			.on(table.organizationId, table.scopeKey, table.phoneHash)
+			.where(sql`${table.phoneHash} IS NOT NULL`),
+		index("contacts_scope_name_hash_idx").on(
+			table.organizationId,
+			table.scopeKey,
+			table.nameHash,
+		),
+		index("contacts_name_search_tokens_idx").using(
+			"gin",
+			table.nameSearchTokens,
+		),
+		index("contacts_email_search_tokens_idx").using(
+			"gin",
+			table.emailSearchTokens,
+		),
+		index("contacts_phone_search_tokens_idx").using(
+			"gin",
+			table.phoneSearchTokens,
+		),
+		check(
+			"contacts_name_protected_tuple_check",
+			sql`(${table.nameCiphertext} IS NULL
+					AND ${table.nameHash} IS NULL
+					AND cardinality(${table.nameSearchTokens}) = 0)
+				OR (${table.nameCiphertext} ~ '^enc:v2:[A-Za-z0-9_-]{1,32}:'
+					AND ${table.nameHash} ~ '^[0-9a-f]{64}$'
+					AND cardinality(${table.nameSearchTokens}) BETWEEN 0 AND 765
+					AND (cardinality(${table.nameSearchTokens}) = 0
+						OR array_to_string(${table.nameSearchTokens}, '')
+							~ '^([0-9a-f]{32})+$'))`,
+		),
+		check(
+			"contacts_email_protected_tuple_check",
+			sql`(${table.emailCiphertext} IS NULL
+					AND ${table.emailHash} IS NULL
+					AND cardinality(${table.emailSearchTokens}) = 0)
+				OR (${table.emailCiphertext} ~ '^enc:v2:[A-Za-z0-9_-]{1,32}:'
+					AND ${table.emailHash} ~ '^[0-9a-f]{64}$'
+					AND cardinality(${table.emailSearchTokens}) BETWEEN 0 AND 957
+					AND (cardinality(${table.emailSearchTokens}) = 0
+						OR array_to_string(${table.emailSearchTokens}, '')
+							~ '^([0-9a-f]{32})+$'))`,
+		),
+		check(
+			"contacts_phone_protected_tuple_check",
+			sql`(${table.phoneCiphertext} IS NULL
+					AND ${table.phoneHash} IS NULL
+					AND cardinality(${table.phoneSearchTokens}) = 0)
+				OR (${table.phoneCiphertext} ~ '^enc:v2:[A-Za-z0-9_-]{1,32}:'
+					AND ${table.phoneHash} ~ '^[0-9a-f]{64}$'
+					AND cardinality(${table.phoneSearchTokens}) BETWEEN 1 AND 237
+					AND array_to_string(${table.phoneSearchTokens}, '')
+						~ '^([0-9a-f]{32})+$')`,
+		),
+		check(
+			"contacts_metadata_ciphertext_check",
+			sql`${table.metadataCiphertext} IS NULL
+				OR ${table.metadataCiphertext}
+					~ '^enc:v2:[A-Za-z0-9_-]{1,32}:'`,
+		),
+		check(
+			"contacts_search_identity_key_fingerprint_check",
+			sql`${table.searchIdentityKeyFingerprint} ~ '^[0-9a-f]{64}$'`,
+		),
 	],
 );
 
@@ -4611,7 +7891,9 @@ export const contactChannels = pgTable(
 		contactId: text("contact_id").notNull(),
 		socialAccountId: text("social_account_id").notNull(),
 		platform: platformEnum("platform").notNull(),
-		identifier: text("identifier").notNull(),
+		identifierCiphertext: text("identifier_ciphertext").notNull(),
+		identifierHash: text("identifier_hash").notNull(),
+		identityKeyFingerprint: text("identity_key_fingerprint").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -4645,7 +7927,20 @@ export const contactChannels = pgTable(
 		),
 		uniqueIndex("contact_channels_account_identifier_idx").on(
 			table.socialAccountId,
-			table.identifier,
+			table.identifierHash,
+		),
+		check(
+			"contact_channels_identifier_ciphertext_check",
+			sql`${table.identifierCiphertext}
+				~ '^enc:v2:[A-Za-z0-9_-]{1,32}:'`,
+		),
+		check(
+			"contact_channels_identifier_hash_check",
+			sql`${table.identifierHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"contact_channels_identity_key_fingerprint_check",
+			sql`${table.identityKeyFingerprint} ~ '^[0-9a-f]{64}$'`,
 		),
 	],
 );
@@ -4664,20 +7959,21 @@ export const contactConsentEvents = pgTable(
 			onDelete: "set null",
 		}),
 		workspaceId: text("workspace_id").references(() => workspaces.id, {
-			onDelete: "restrict",
+			onDelete: "set null",
 		}),
 		scopeKey: text("scope_key")
 			.notNull()
 			.generatedAlwaysAs(workspaceScopeKeySql()),
-		ingestionSequence: bigserial("ingestion_sequence", {
-			mode: "bigint",
-		}).notNull(),
+		orderingHlc: bigint("ordering_hlc", { mode: "bigint" }).notNull(),
+		orderingRegion: text("ordering_region").notNull().default("home"),
 		channel: text("channel").notNull(),
 		purpose: text("purpose").notNull(),
 		status: text("status", {
 			enum: ["granted", "denied"],
 		}).notNull(),
+		logicalIdentifierHash: text("logical_identifier_hash").notNull(),
 		identifierHash: text("identifier_hash").notNull(),
+		identifierKeyVersion: text("identifier_key_version").notNull(),
 		identifierMasked: text("identifier_masked"),
 		source: text("source").notNull(),
 		occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
@@ -4698,22 +7994,49 @@ export const contactConsentEvents = pgTable(
 			table.organizationId,
 			table.scopeKey,
 		),
-		unique("contact_consent_events_ingestion_sequence_uniq").on(
-			table.ingestionSequence,
+		unique("contact_consent_events_ordering_tuple_uniq").on(
+			table.orderingHlc,
+			table.orderingRegion,
+			table.id,
 		),
 		unique("contact_consent_events_projection_source_uniq").on(
 			table.id,
 			table.organizationId,
 			table.scopeKey,
-			table.ingestionSequence,
+			table.orderingHlc,
+			table.orderingRegion,
 		),
 		check(
 			"contact_consent_events_status_check",
 			sql`${table.status} IN ('granted', 'denied')`,
 		),
 		check(
-			"contact_consent_events_sequence_positive_check",
-			sql`${table.ingestionSequence} > 0`,
+			"contact_consent_events_channel_canonical_check",
+			sql`${table.channel} <> '' AND ${table.channel} = lower(btrim(${table.channel}))`,
+		),
+		check(
+			"contact_consent_events_purpose_canonical_check",
+			sql`${table.purpose} <> '' AND ${table.purpose} = lower(btrim(${table.purpose}))`,
+		),
+		check(
+			"contact_consent_events_logical_identifier_hash_check",
+			sql`${table.logicalIdentifierHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"contact_consent_events_identifier_hash_check",
+			sql`${table.identifierHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"contact_consent_events_identifier_key_version_check",
+			sql`${table.identifierKeyVersion} ~ '^[A-Za-z0-9_-]{1,32}$' AND ${table.identifierKeyVersion} <> 'identity'`,
+		),
+		check(
+			"contact_consent_events_ordering_hlc_positive_check",
+			sql`${table.orderingHlc} > 0`,
+		),
+		check(
+			"contact_consent_events_ordering_region_check",
+			sql`${table.orderingRegion} ~ '^[a-z0-9][a-z0-9_-]{0,31}$'`,
 		),
 		check(
 			"contact_consent_events_timestamp_order_check",
@@ -4735,12 +8058,33 @@ export const contactConsentEvents = pgTable(
 		),
 		index("contact_consent_events_identifier_idx").on(
 			table.organizationId,
-			table.scopeKey,
 			table.channel,
 			table.purpose,
-			table.identifierHash,
+			table.logicalIdentifierHash,
 			table.occurredAt,
 		),
+		index("contact_consent_events_supersession_idx").on(
+			table.organizationId,
+			table.channel,
+			table.purpose,
+			table.logicalIdentifierHash,
+			table.orderingHlc,
+			table.orderingRegion,
+			table.id,
+		),
+		index("contact_consent_events_org_ordering_idx").on(
+			table.organizationId,
+			table.orderingHlc,
+			table.orderingRegion,
+			table.id,
+		),
+		index("contact_consent_events_retention_idx")
+			.on(table.occurredAt, table.id)
+			.where(
+				sql`${table.contactId} IS NOT NULL
+					OR ${table.identifierMasked} IS NOT NULL
+					OR ${table.evidence} IS NOT NULL`,
+			),
 	],
 );
 
@@ -4755,17 +8099,17 @@ export const contactConsentStates = pgTable(
 			.notNull()
 			.references(() => organization.id),
 		workspaceId: text("workspace_id").references(() => workspaces.id, {
-			onDelete: "restrict",
+			onDelete: "set null",
 		}),
 		scopeKey: text("scope_key")
 			.notNull()
 			.generatedAlwaysAs(workspaceScopeKeySql()),
-		contactId: text("contact_id").references(() => contacts.id, {
-			onDelete: "set null",
-		}),
 		channel: text("channel").notNull(),
 		purpose: text("purpose").notNull(),
+		logicalIdentifierHash: text("logical_identifier_hash").notNull(),
 		identifierHash: text("identifier_hash").notNull(),
+		identifierKeyVersion: text("identifier_key_version").notNull(),
+		identityKeyFingerprint: text("identity_key_fingerprint").notNull(),
 		status: text("status", {
 			enum: ["granted", "denied"],
 		}).notNull(),
@@ -4774,31 +8118,29 @@ export const contactConsentStates = pgTable(
 		policyVersion: text("policy_version"),
 		jurisdiction: text("jurisdiction"),
 		lastEventId: text("last_event_id").notNull(),
-		lastIngestionSequence: bigint("last_ingestion_sequence", {
+		lastOrderingHlc: bigint("last_ordering_hlc", {
 			mode: "bigint",
 		}).notNull(),
+		lastOrderingRegion: text("last_ordering_region").notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
 	},
 	(table) => [
 		foreignKey({
-			columns: [table.contactId, table.organizationId, table.scopeKey],
-			foreignColumns: [contacts.id, contacts.organizationId, contacts.scopeKey],
-			name: "contact_consent_states_contact_org_scope_fk",
-		}),
-		foreignKey({
 			columns: [
 				table.lastEventId,
 				table.organizationId,
 				table.scopeKey,
-				table.lastIngestionSequence,
+				table.lastOrderingHlc,
+				table.lastOrderingRegion,
 			],
 			foreignColumns: [
 				contactConsentEvents.id,
 				contactConsentEvents.organizationId,
 				contactConsentEvents.scopeKey,
-				contactConsentEvents.ingestionSequence,
+				contactConsentEvents.orderingHlc,
+				contactConsentEvents.orderingRegion,
 			],
 			name: "contact_consent_states_projection_source_fk",
 		}),
@@ -4806,78 +8148,67 @@ export const contactConsentStates = pgTable(
 			columns: [table.workspaceId, table.organizationId],
 			foreignColumns: [workspaces.id, workspaces.organizationId],
 			name: "contact_consent_states_workspace_org_fk",
-		}).onDelete("restrict"),
+		}),
 		uniqueIndex("contact_consent_states_identifier_idx").on(
 			table.organizationId,
 			table.channel,
 			table.purpose,
+			table.logicalIdentifierHash,
+		),
+		uniqueIndex("contact_consent_states_versioned_identifier_idx").on(
+			table.organizationId,
+			table.channel,
+			table.purpose,
+			table.identifierKeyVersion,
 			table.identifierHash,
 		),
+		index("contact_consent_states_denied_identifier_idx")
+			.on(
+				table.organizationId,
+				table.channel,
+				table.purpose,
+				table.logicalIdentifierHash,
+			)
+			.where(sql`${table.status} = 'denied'`),
 		check(
-			"contact_consent_states_sequence_positive_check",
-			sql`${table.lastIngestionSequence} > 0`,
+			"contact_consent_states_ordering_hlc_positive_check",
+			sql`${table.lastOrderingHlc} > 0`,
+		),
+		check(
+			"contact_consent_states_ordering_region_check",
+			sql`${table.lastOrderingRegion} ~ '^[a-z0-9][a-z0-9_-]{0,31}$'`,
 		),
 		check(
 			"contact_consent_states_status_check",
 			sql`${table.status} IN ('granted', 'denied')`,
 		),
 		check(
+			"contact_consent_states_channel_canonical_check",
+			sql`${table.channel} <> '' AND ${table.channel} = lower(btrim(${table.channel}))`,
+		),
+		check(
+			"contact_consent_states_purpose_canonical_check",
+			sql`${table.purpose} <> '' AND ${table.purpose} = lower(btrim(${table.purpose}))`,
+		),
+		check(
+			"contact_consent_states_logical_identifier_hash_check",
+			sql`${table.logicalIdentifierHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"contact_consent_states_identifier_hash_check",
+			sql`${table.identifierHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"contact_consent_states_identifier_key_version_check",
+			sql`${table.identifierKeyVersion} ~ '^[A-Za-z0-9_-]{1,32}$' AND ${table.identifierKeyVersion} <> 'identity'`,
+		),
+		check(
+			"contact_consent_states_identity_key_fingerprint_check",
+			sql`${table.identityKeyFingerprint} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
 			"contact_consent_states_timestamp_order_check",
 			sql`${table.occurredAt} <= ${table.updatedAt} + interval '5 minutes'`,
-		),
-		index("contact_consent_states_contact_idx").on(
-			table.contactId,
-			table.channel,
-			table.purpose,
-		),
-	],
-);
-
-/** Identifier-level suppression survives contact deletion and covers raw sends. */
-export const contactSuppressions = pgTable(
-	"contact_suppressions",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("sup_")),
-		organizationId: text("organization_id")
-			.notNull()
-			.references(() => organization.id),
-		workspaceId: text("workspace_id").references(() => workspaces.id, {
-			onDelete: "restrict",
-		}),
-		scopeKey: text("scope_key")
-			.notNull()
-			.generatedAlwaysAs(workspaceScopeKeySql()),
-		channel: text("channel").notNull(),
-		purpose: text("purpose").notNull(),
-		identifierHash: text("identifier_hash").notNull(),
-		sourceEventId: text("source_event_id").notNull(),
-		reason: text("reason"),
-		createdAt: timestamp("created_at", { withTimezone: true })
-			.notNull()
-			.defaultNow(),
-	},
-	(table) => [
-		foreignKey({
-			columns: [table.sourceEventId, table.organizationId, table.scopeKey],
-			foreignColumns: [
-				contactConsentEvents.id,
-				contactConsentEvents.organizationId,
-				contactConsentEvents.scopeKey,
-			],
-			name: "contact_suppressions_event_org_scope_fk",
-		}),
-		foreignKey({
-			columns: [table.workspaceId, table.organizationId],
-			foreignColumns: [workspaces.id, workspaces.organizationId],
-			name: "contact_suppressions_workspace_org_fk",
-		}).onDelete("restrict"),
-		uniqueIndex("contact_suppressions_identifier_idx").on(
-			table.organizationId,
-			table.channel,
-			table.purpose,
-			table.identifierHash,
 		),
 	],
 );
@@ -4990,6 +8321,9 @@ export const broadcasts = pgTable(
 			table.scheduledAt,
 		),
 		index("broadcasts_status_lease_idx").on(table.status, table.leaseExpiresAt),
+		index("broadcasts_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(sql`${table.completedAt} IS NOT NULL`),
 	],
 );
 
@@ -5005,9 +8339,10 @@ export const broadcastRecipients = pgTable(
 		contactId: text("contact_id").references(() => contacts.id, {
 			onDelete: "set null",
 		}),
-		contactIdentifier: text("contact_identifier").notNull(),
+		contactIdentifier: text("contact_identifier"),
 		contactIdentifierHash: text("contact_identifier_hash").notNull(),
 		variables: jsonb("variables"),
+		piiErasedAt: timestamp("pii_erased_at", { withTimezone: true }),
 		status: text("status").notNull().default("pending"),
 		deliveryState: text("delivery_state", {
 			enum: [
@@ -5068,6 +8403,19 @@ export const broadcastRecipients = pgTable(
 			"broadcast_recipients_claim_state_check",
 			sql`${table.status} <> 'sending' OR ${table.claimedAt} IS NOT NULL`,
 		),
+		check(
+			"broadcast_recipients_pii_tuple_check",
+			sql`(${table.contactIdentifier} IS NOT NULL AND ${table.piiErasedAt} IS NULL)
+				OR (${table.contactIdentifier} IS NULL AND ${table.piiErasedAt} IS NOT NULL)`,
+		),
+		check(
+			"broadcast_recipients_sendable_identity_check",
+			sql`(${table.status} = 'pending'
+					OR (${table.status} = 'sending'
+						AND ${table.requestMayHaveBeenSentAt} IS NULL))
+				IS NOT TRUE
+				OR ${table.contactIdentifier} IS NOT NULL`,
+		),
 		index("broadcast_recipients_contact_idx").on(table.contactId),
 		index("broadcast_recipients_identifier_hash_idx").on(
 			table.contactIdentifierHash,
@@ -5077,6 +8425,12 @@ export const broadcastRecipients = pgTable(
 			table.status,
 			table.id,
 		),
+		index("broadcast_recipients_pii_retention_idx")
+			.on(table.broadcastId, table.status, table.id)
+			.where(sql`${table.piiErasedAt} IS NULL`),
+		index("broadcast_recipients_outcome_retention_idx")
+			.on(table.broadcastId, table.status, table.id)
+			.where(sql`${table.piiErasedAt} IS NOT NULL`),
 		uniqueIndex("broadcast_recipients_identity_uniq").on(
 			table.broadcastId,
 			table.organizationId,
@@ -5118,18 +8472,9 @@ export const adObjectiveEnum = pgEnum("ad_objective", [
 	"video_views",
 ]);
 
-export const audienceTypeEnum = pgEnum("audience_type", [
-	"customer_list",
-	"website",
-	"lookalike",
-]);
+export const audienceTypeEnum = pgEnum("audience_type", AD_AUDIENCE_TYPES);
 
-export const ideaMediaTypeEnum = pgEnum("idea_media_type", [
-	"image",
-	"video",
-	"gif",
-	"document",
-]);
+export const ideaMediaTypeEnum = pgEnum("idea_media_type", IDEA_MEDIA_TYPES);
 
 export const ideaActivityActionEnum = pgEnum("idea_activity_action", [
 	"created",
@@ -5168,10 +8513,25 @@ export const adAccounts = pgTable(
 		platform: adPlatformEnum("platform").notNull(),
 		platformAdAccountId: text("platform_ad_account_id").notNull(),
 		name: text("name"),
-		currency: varchar("currency", { length: 3 }).default("USD"),
+		currency: varchar("currency", { length: 3 }),
 		timezone: text("timezone"),
 		status: text("status").default("active"),
 		metadata: jsonb("metadata"),
+		// Read-only provider synchronization. The due clock is independent from
+		// freshness and from the enqueue/consumer lease so overlapping crons and
+		// at-least-once Queue delivery cannot multiply provider reads.
+		lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+		nextSyncAt: timestamp("next_sync_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		syncGeneration: integer("sync_generation").notNull().default(0),
+		syncLeaseExpiresAt: timestamp("sync_lease_expires_at", {
+			withTimezone: true,
+		}),
+		syncStartedAt: timestamp("sync_started_at", { withTimezone: true }),
+		syncAttempts: integer("sync_attempts").notNull().default(0),
+		syncLastError: text("sync_last_error"),
+		syncLastErrorClass: text("sync_last_error_class"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -5215,6 +8575,33 @@ export const adAccounts = pgTable(
 		index("ad_accounts_workspace_idx").on(table.workspaceId),
 		index("ad_accounts_social_account_idx").on(table.socialAccountId),
 		index("ad_accounts_status_idx").on(table.status),
+		index("ad_accounts_sync_due_idx").on(
+			table.status,
+			table.nextSyncAt,
+			table.syncLeaseExpiresAt,
+			table.organizationId,
+			table.id,
+		),
+		check(
+			"ad_accounts_sync_counters_check",
+			sql`${table.syncGeneration} >= 0 AND ${table.syncAttempts} >= 0`,
+		),
+		check(
+			"ad_accounts_sync_claim_check",
+			sql`(${table.syncLeaseExpiresAt} IS NULL AND ${table.syncStartedAt} IS NULL)
+				OR (${table.syncLeaseExpiresAt} IS NOT NULL
+					AND (${table.syncStartedAt} IS NULL
+						OR ${table.syncStartedAt} <= ${table.syncLeaseExpiresAt}))`,
+		),
+		check(
+			"ad_accounts_sync_error_class_check",
+			sql`${table.syncLastErrorClass} IS NULL
+				OR ${table.syncLastErrorClass} IN ('transient', 'rate_limited', 'permanent')`,
+		),
+		check(
+			"ad_accounts_currency_check",
+			sql`${table.currency} IS NULL OR ${table.currency} ~ '^[A-Z]{3}$'`,
+		),
 	],
 );
 
@@ -5242,7 +8629,7 @@ export const adCampaigns = pgTable(
 		status: adStatusEnum("status").notNull().default("draft"),
 		dailyBudgetCents: integer("daily_budget_cents"),
 		lifetimeBudgetCents: integer("lifetime_budget_cents"),
-		currency: varchar("currency", { length: 3 }).default("USD"),
+		currency: varchar("currency", { length: 3 }),
 		startDate: timestamp("start_date", { withTimezone: true }),
 		endDate: timestamp("end_date", { withTimezone: true }),
 		isExternal: boolean("is_external").notNull().default(false),
@@ -5301,8 +8688,12 @@ export const adCampaigns = pgTable(
 		}).onDelete("cascade"),
 		check(
 			"ad_campaigns_budget_check",
-			sql`(${table.dailyBudgetCents} IS NULL OR ${table.dailyBudgetCents} >= 0)
-				AND (${table.lifetimeBudgetCents} IS NULL OR ${table.lifetimeBudgetCents} >= 0)`,
+			sql`(${table.dailyBudgetCents} IS NULL OR ${table.dailyBudgetCents} > 0)
+				AND (${table.lifetimeBudgetCents} IS NULL OR ${table.lifetimeBudgetCents} > 0)`,
+		),
+		check(
+			"ad_campaigns_currency_check",
+			sql`${table.currency} IS NULL OR ${table.currency} ~ '^[A-Z]{3}$'`,
 		),
 		check(
 			"ad_campaigns_date_order_check",
@@ -5374,6 +8765,29 @@ export const ads = pgTable(
 		durationDays: integer("duration_days"),
 		isExternal: boolean("is_external").notNull().default(false),
 		metadata: jsonb("metadata"),
+		// Metrics are a separate read-only poll from the account listing above.
+		// Keeping per-ad due state prevents one large account from replaying every
+		// metrics read when a later database/log write fails.
+		metricsUpdatedAt: timestamp("metrics_updated_at", {
+			withTimezone: true,
+		}),
+		metricsNextPollAt: timestamp("metrics_next_poll_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.defaultNow(),
+		metricsPollGeneration: integer("metrics_poll_generation")
+			.notNull()
+			.default(0),
+		metricsPollLeaseExpiresAt: timestamp("metrics_poll_lease_expires_at", {
+			withTimezone: true,
+		}),
+		metricsPollStartedAt: timestamp("metrics_poll_started_at", {
+			withTimezone: true,
+		}),
+		metricsPollAttempts: integer("metrics_poll_attempts").notNull().default(0),
+		metricsPollLastError: text("metrics_poll_last_error"),
+		metricsPollLastErrorClass: text("metrics_poll_last_error_class"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -5434,8 +8848,8 @@ export const ads = pgTable(
 		}),
 		check(
 			"ads_budget_duration_check",
-			sql`(${table.dailyBudgetCents} IS NULL OR ${table.dailyBudgetCents} >= 0)
-				AND (${table.lifetimeBudgetCents} IS NULL OR ${table.lifetimeBudgetCents} >= 0)
+			sql`(${table.dailyBudgetCents} IS NULL OR ${table.dailyBudgetCents} > 0)
+				AND (${table.lifetimeBudgetCents} IS NULL OR ${table.lifetimeBudgetCents} > 0)
 				AND (${table.durationDays} IS NULL OR ${table.durationDays} > 0)`,
 		),
 		check(
@@ -5453,6 +8867,29 @@ export const ads = pgTable(
 		index("ads_org_status_idx").on(table.organizationId, table.status),
 		index("ads_boost_post_idx").on(table.boostPostTargetId),
 		index("ads_boost_external_post_idx").on(table.boostExternalPostId),
+		index("ads_metrics_poll_due_idx").on(
+			table.metricsNextPollAt,
+			table.metricsPollLeaseExpiresAt,
+			table.organizationId,
+			table.id,
+		),
+		check(
+			"ads_metrics_poll_counters_check",
+			sql`${table.metricsPollGeneration} >= 0 AND ${table.metricsPollAttempts} >= 0`,
+		),
+		check(
+			"ads_metrics_poll_claim_check",
+			sql`(${table.metricsPollLeaseExpiresAt} IS NULL
+					AND ${table.metricsPollStartedAt} IS NULL)
+				OR (${table.metricsPollLeaseExpiresAt} IS NOT NULL
+					AND (${table.metricsPollStartedAt} IS NULL
+						OR ${table.metricsPollStartedAt} <= ${table.metricsPollLeaseExpiresAt}))`,
+		),
+		check(
+			"ads_metrics_poll_error_class_check",
+			sql`${table.metricsPollLastErrorClass} IS NULL
+				OR ${table.metricsPollLastErrorClass} IN ('transient', 'rate_limited', 'permanent')`,
+		),
 	],
 );
 
@@ -5468,6 +8905,7 @@ export const adCreationOperations = pgTable(
 			.primaryKey()
 			.$defaultFn(() => generateId("adop_")),
 		organizationId: text("organization_id").notNull(),
+		usageReservationId: text("usage_reservation_id"),
 		workspaceId: text("workspace_id").references(() => workspaces.id, {
 			onDelete: "restrict",
 		}),
@@ -5476,11 +8914,33 @@ export const adCreationOperations = pgTable(
 			.generatedAlwaysAs(workspaceScopeKeySql()),
 		adAccountId: text("ad_account_id").notNull(),
 		kind: text("kind", {
-			enum: ["create_campaign", "create_ad", "boost_post"],
+			enum: [...AD_CREATION_OPERATION_KINDS],
 		}).notNull(),
 		operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
 		requestHash: varchar("request_hash", { length: 64 }).notNull(),
 		requestPayload: jsonb("request_payload").notNull(),
+		authorityKeyId: text("authority_key_id").notNull(),
+		authorityPrincipalId: text("authority_principal_id").notNull(),
+		authorityPrincipalType: text("authority_principal_type", {
+			enum: ["service", "dashboard_user"],
+		}).notNull(),
+		authorityUserId: text("authority_user_id"),
+		authorityMemberId: text("authority_member_id"),
+		authoritySessionId: text("authority_session_id"),
+		authorityWorkspaceId: text("authority_workspace_id"),
+		authorityRequiresAllWorkspaceScope: boolean(
+			"authority_requires_all_workspace_scope",
+		).notNull(),
+		authorityCredentialVersion: text("authority_credential_version").notNull(),
+		authorityAdmittedAt: timestamp("authority_admitted_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.defaultNow(),
+		authorityRevision: integer("authority_revision").notNull().default(1),
+		authorityRevokedAt: timestamp("authority_revoked_at", {
+			withTimezone: true,
+		}),
 		status: text("status", {
 			enum: [
 				"pending",
@@ -5488,9 +8948,11 @@ export const adCreationOperations = pgTable(
 				"request_may_have_been_sent",
 				"unknown",
 				"reconciling",
+				"revocation_pending",
 				"manual_review",
 				"completed",
 				"failed",
+				"cancelled",
 			],
 		})
 			.notNull()
@@ -5536,6 +8998,16 @@ export const adCreationOperations = pgTable(
 			table.kind,
 			table.operationKeyHash,
 		),
+		foreignKey({
+			columns: [table.usageReservationId, table.organizationId],
+			foreignColumns: [usageReservations.id, usageReservations.organizationId],
+			name: "ad_creation_operations_usage_reservation_org_fk",
+		})
+			.onUpdate("no action")
+			.onDelete("restrict"),
+		uniqueIndex("ad_creation_operations_usage_reservation_uniq")
+			.on(table.usageReservationId)
+			.where(sql`${table.usageReservationId} IS NOT NULL`),
 		foreignKey({
 			columns: [table.workspaceId, table.organizationId],
 			foreignColumns: [workspaces.id, workspaces.organizationId],
@@ -5596,7 +9068,17 @@ export const adCreationOperations = pgTable(
 		),
 		check(
 			"ad_creation_operations_status_check",
-			sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'reconciling', 'manual_review', 'completed', 'failed')`,
+			sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'reconciling', 'revocation_pending', 'manual_review', 'completed', 'failed', 'cancelled')`,
+		),
+		check(
+			"ad_creation_operations_authority_check",
+			sql`${table.authorityPrincipalType} IN ('service', 'dashboard_user')
+					AND (${table.authorityPrincipalType} = 'dashboard_user') = (${table.authorityUserId} IS NOT NULL)
+					AND (${table.authorityPrincipalType} = 'dashboard_user') = (${table.authorityMemberId} IS NOT NULL)
+					AND (${table.authorityPrincipalType} = 'dashboard_user') = (${table.authoritySessionId} IS NOT NULL)
+				AND (${table.authorityWorkspaceId} IS NULL) = ${table.authorityRequiresAllWorkspaceScope}
+				AND ${table.authorityRevision} > 0
+				AND (${table.status} IN ('revocation_pending', 'cancelled')) = (${table.authorityRevokedAt} IS NOT NULL)`,
 		),
 		check(
 			"ad_creation_operations_phase_check",
@@ -5629,7 +9111,9 @@ export const adCreationOperations = pgTable(
 		),
 		check(
 			"ad_creation_operations_timestamp_order_check",
-			sql`${table.updatedAt} >= ${table.createdAt}
+			sql`${table.authorityAdmittedAt} <= ${table.createdAt}
+				AND ${table.updatedAt} >= ${table.createdAt}
+				AND (${table.authorityRevokedAt} IS NULL OR ${table.authorityRevokedAt} >= ${table.authorityAdmittedAt})
 				AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
 		),
@@ -5642,6 +9126,215 @@ export const adCreationOperations = pgTable(
 			table.organizationId,
 			table.createdAt,
 		),
+		index("ad_creation_operations_retention_idx")
+			.on(sql`COALESCE(${table.completedAt}, ${table.updatedAt})`, table.id)
+			.where(
+				sql`${table.status} IN ('completed', 'failed', 'unknown', 'revocation_pending', 'manual_review', 'cancelled')`,
+			),
+	],
+);
+
+/**
+ * Durable authority for mutations of existing paid provider objects. Local ad
+ * state is projected only after a confirmed provider response (or an explicit
+ * operator decision); ambiguous responses remain fenced and discoverable.
+ */
+export const adMutationOperations = pgTable(
+	"ad_mutation_operations",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("admut_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		usageReservationId: text("usage_reservation_id"),
+		targetType: text("target_type", {
+			enum: ["ad", "campaign"],
+		}).notNull(),
+		targetId: text("target_id").notNull(),
+		kind: text("kind", {
+			enum: ["update_ad", "cancel_ad", "update_campaign", "cancel_campaign"],
+		}).notNull(),
+		platform: adPlatformEnum("platform").notNull(),
+		operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+		requestHash: varchar("request_hash", { length: 64 }).notNull(),
+		requestPayload: jsonb("request_payload")
+			.$type<Record<string, unknown>>()
+			.notNull(),
+		requiresLiveAuthority: boolean("requires_live_authority")
+			.notNull()
+			.default(true),
+		authorityKeyId: text("authority_key_id").notNull(),
+		authorityPrincipalId: text("authority_principal_id").notNull(),
+		authorityPrincipalType: text("authority_principal_type", {
+			enum: ["service", "dashboard_user"],
+		}).notNull(),
+		authorityUserId: text("authority_user_id"),
+		authorityMemberId: text("authority_member_id"),
+		authoritySessionId: text("authority_session_id"),
+		authorityWorkspaceId: text("authority_workspace_id"),
+		authorityRequiresAllWorkspaceScope: boolean(
+			"authority_requires_all_workspace_scope",
+		).notNull(),
+		authorityCredentialVersion: text("authority_credential_version").notNull(),
+		authorityAdmittedAt: timestamp("authority_admitted_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.defaultNow(),
+		authorityRevision: integer("authority_revision").notNull().default(1),
+		authorityRevokedAt: timestamp("authority_revoked_at", {
+			withTimezone: true,
+		}),
+		status: text("status", {
+			enum: [
+				"pending",
+				"processing",
+				"request_may_have_been_sent",
+				"unknown",
+				"reconciling",
+				"revocation_pending",
+				"manual_review",
+				"completed",
+				"failed",
+				"cancelled",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		phase: text("phase", {
+			enum: ["provider", "projection", "completed"],
+		})
+			.notNull()
+			.default("provider"),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		providerConfirmedAt: timestamp("provider_confirmed_at", {
+			withTimezone: true,
+		}),
+		attempts: integer("attempts").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		lastError: text("last_error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+	},
+	(table) => [
+		uniqueIndex("ad_mutation_operations_org_key_uniq").on(
+			table.organizationId,
+			table.targetType,
+			table.targetId,
+			table.operationKeyHash,
+		),
+		uniqueIndex("ad_mutation_operations_target_active_uniq")
+			.on(table.organizationId, table.targetType, table.targetId)
+			.where(
+				sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'reconciling', 'revocation_pending', 'manual_review')`,
+			),
+		foreignKey({
+			columns: [table.usageReservationId, table.organizationId],
+			foreignColumns: [usageReservations.id, usageReservations.organizationId],
+			name: "ad_mutation_operations_usage_reservation_org_fk",
+		})
+			.onUpdate("no action")
+			.onDelete("restrict"),
+		uniqueIndex("ad_mutation_operations_usage_reservation_uniq")
+			.on(table.usageReservationId)
+			.where(sql`${table.usageReservationId} IS NOT NULL`),
+		check(
+			"ad_mutation_operations_target_check",
+			sql`${table.targetType} IN ('ad', 'campaign')`,
+		),
+		check(
+			"ad_mutation_operations_kind_check",
+			sql`${table.kind} IN ('update_ad', 'cancel_ad', 'update_campaign', 'cancel_campaign')`,
+		),
+		check(
+			"ad_mutation_operations_target_kind_check",
+			sql`(${table.targetType} = 'ad' AND ${table.kind} IN ('update_ad', 'cancel_ad'))
+				OR (${table.targetType} = 'campaign' AND ${table.kind} IN ('update_campaign', 'cancel_campaign'))`,
+		),
+		check(
+			"ad_mutation_operations_status_check",
+			sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'reconciling', 'revocation_pending', 'manual_review', 'completed', 'failed', 'cancelled')`,
+		),
+		check(
+			"ad_mutation_operations_authority_check",
+			sql`${table.authorityPrincipalType} IN ('service', 'dashboard_user')
+					AND (${table.authorityPrincipalType} = 'dashboard_user') = (${table.authorityUserId} IS NOT NULL)
+					AND (${table.authorityPrincipalType} = 'dashboard_user') = (${table.authorityMemberId} IS NOT NULL)
+					AND (${table.authorityPrincipalType} = 'dashboard_user') = (${table.authoritySessionId} IS NOT NULL)
+				AND (${table.authorityWorkspaceId} IS NULL) = ${table.authorityRequiresAllWorkspaceScope}
+				AND ${table.authorityRevision} > 0
+				AND (${table.status} IN ('revocation_pending', 'cancelled')) = (${table.authorityRevokedAt} IS NOT NULL)`,
+		),
+		check(
+			"ad_mutation_operations_phase_check",
+			sql`${table.phase} IN ('provider', 'projection', 'completed')`,
+		),
+		check(
+			"ad_mutation_operations_counters_check",
+			sql`${table.leaseToken} >= 0 AND ${table.attempts} >= 0`,
+		),
+		check(
+			"ad_mutation_operations_lease_check",
+			sql`(${table.status} IN ('processing', 'request_may_have_been_sent', 'reconciling')
+					AND ${table.leaseExpiresAt} IS NOT NULL)
+				OR (${table.status} NOT IN ('processing', 'request_may_have_been_sent', 'reconciling')
+					AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"ad_mutation_operations_boundary_check",
+			sql`${table.status} <> 'request_may_have_been_sent'
+				OR ${table.requestMayHaveBeenSentAt} IS NOT NULL`,
+		),
+		check(
+			"ad_mutation_operations_projection_check",
+			sql`${table.phase} = 'provider'
+				OR ${table.providerConfirmedAt} IS NOT NULL`,
+		),
+		check(
+			"ad_mutation_operations_completion_check",
+			sql`(${table.status} = 'completed'
+					AND ${table.phase} = 'completed'
+					AND ${table.completedAt} IS NOT NULL)
+				OR (${table.status} <> 'completed'
+					AND ${table.phase} <> 'completed'
+					AND ${table.completedAt} IS NULL)`,
+		),
+		check(
+			"ad_mutation_operations_timestamp_check",
+			sql`${table.authorityAdmittedAt} <= ${table.createdAt}
+				AND ${table.updatedAt} >= ${table.createdAt}
+				AND (${table.authorityRevokedAt} IS NULL OR ${table.authorityRevokedAt} >= ${table.authorityAdmittedAt})
+				AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
+				AND (${table.providerConfirmedAt} IS NULL OR ${table.providerConfirmedAt} >= ${table.createdAt})
+				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
+		),
+		index("ad_mutation_operations_due_idx").on(
+			table.status,
+			table.nextAttemptAt,
+			table.leaseExpiresAt,
+		),
+		index("ad_mutation_operations_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+		),
+		index("ad_mutation_operations_retention_idx")
+			.on(sql`COALESCE(${table.completedAt}, ${table.updatedAt})`, table.id)
+			.where(
+				sql`${table.status} IN ('completed', 'failed', 'unknown', 'revocation_pending', 'manual_review', 'cancelled')`,
+			),
 	],
 );
 
@@ -5690,6 +9383,7 @@ export const adMetrics = pgTable(
 		),
 		uniqueIndex("ad_metrics_ad_date_idx").on(table.adId, table.date),
 		index("ad_metrics_ad_idx").on(table.adId),
+		index("ad_metrics_retention_idx").on(table.date, table.id),
 	],
 );
 
@@ -5793,6 +9487,14 @@ export const adAudienceUsers = pgTable(
 			"ad_audience_users_identifier_present_check",
 			sql`${table.emailHash} IS NOT NULL OR ${table.phoneHash} IS NOT NULL`,
 		),
+		check(
+			"ad_audience_users_email_hash_check",
+			sql`${table.emailHash} IS NULL OR ${table.emailHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"ad_audience_users_phone_hash_check",
+			sql`${table.phoneHash} IS NULL OR ${table.phoneHash} ~ '^[0-9a-f]{64}$'`,
+		),
 		index("ad_audience_users_audience_idx").on(table.audienceId),
 		uniqueIndex("ad_audience_users_email_uniq")
 			.on(table.audienceId, table.emailHash)
@@ -5816,7 +9518,7 @@ export const adSyncLogs = pgTable(
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 		adAccountId: text("ad_account_id").notNull(),
 		platform: adPlatformEnum("platform").notNull(),
-		syncType: text("sync_type").notNull(),
+		syncType: text("sync_type", { enum: [...AD_SYNC_TYPES] }).notNull(),
 		adsCreated: integer("ads_created").notNull().default(0),
 		adsUpdated: integer("ads_updated").notNull().default(0),
 		metricsUpdated: integer("metrics_updated").notNull().default(0),
@@ -5843,11 +9545,18 @@ export const adSyncLogs = pgTable(
 			name: "ad_sync_logs_account_org_scope_platform_fk",
 		}).onDelete("cascade"),
 		check(
+			"ad_sync_logs_type_check",
+			sql`${table.syncType} IN ('external_listing')`,
+		),
+		check(
 			"ad_sync_logs_counts_nonnegative_check",
 			sql`${table.adsCreated} >= 0 AND ${table.adsUpdated} >= 0 AND ${table.metricsUpdated} >= 0`,
 		),
 		index("ad_sync_logs_org_idx").on(table.organizationId, table.startedAt),
 		index("ad_sync_logs_ad_account_idx").on(table.adAccountId),
+		index("ad_sync_logs_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(sql`${table.completedAt} IS NOT NULL`),
 	],
 );
 
@@ -5888,6 +9597,9 @@ export const externalPosts = pgTable(
 		// them as source/fallback data, but render the durable preview below first.
 		thumbnailUrl: text("thumbnail_url"),
 		previewThumbnailKey: text("preview_thumbnail_key"),
+		previewStorageProvider: storageProviderEnum("preview_storage_provider"),
+		previewStorageBucketLocator: text("preview_storage_bucket_locator"),
+		previewStorageRegion: text("preview_storage_region"),
 		previewThumbnailUrl: text("preview_thumbnail_url"),
 		previewStatus: text("preview_status", {
 			enum: [
@@ -5928,6 +9640,24 @@ export const externalPosts = pgTable(
 		metricsUpdatedAt: timestamp("metrics_updated_at", {
 			withTimezone: true,
 		}),
+		// Poll ownership is independent from freshness. Producers reserve due rows
+		// in one UPDATE ... RETURNING statement and consumers fence completion by
+		// generation, so overlapping crons cannot multiply provider reads.
+		metricsNextPollAt: timestamp("metrics_next_poll_at", {
+			withTimezone: true,
+		}).defaultNow(),
+		metricsPollGeneration: integer("metrics_poll_generation")
+			.notNull()
+			.default(0),
+		metricsPollLeaseExpiresAt: timestamp("metrics_poll_lease_expires_at", {
+			withTimezone: true,
+		}),
+		metricsPollStartedAt: timestamp("metrics_poll_started_at", {
+			withTimezone: true,
+		}),
+		metricsPollAttempts: integer("metrics_poll_attempts").notNull().default(0),
+		metricsPollLastError: text("metrics_poll_last_error"),
+		metricsPollLastErrorClass: text("metrics_poll_last_error_class"),
 
 		// Internal notes (same format as posts.notes)
 		notes: text("notes"),
@@ -5984,8 +9714,12 @@ export const externalPosts = pgTable(
 		),
 		// Workspace filtering
 		index("external_posts_workspace_idx").on(table.workspaceId),
-		// Metrics refresh: find recent posts needing metric updates
-		index("external_posts_metrics_updated_idx").on(table.metricsUpdatedAt),
+		// Metrics poll scheduler: due time remains separate from true freshness.
+		index("external_posts_metrics_poll_due_idx").on(
+			table.metricsNextPollAt,
+			table.metricsPollLeaseExpiresAt,
+			table.id,
+		),
 		// Platform filter
 		index("external_posts_org_platform_idx").on(
 			table.organizationId,
@@ -5995,6 +9729,7 @@ export const externalPosts = pgTable(
 			table.socialAccountId,
 			table.publishedAt,
 		),
+		index("external_posts_retention_idx").on(table.publishedAt, table.id),
 		index("external_posts_preview_retry_idx").on(
 			table.previewStatus,
 			table.previewNextRetryAt,
@@ -6006,6 +9741,49 @@ export const externalPosts = pgTable(
 		check(
 			"external_posts_preview_attempts_nonnegative_check",
 			sql`${table.previewAttempts} >= 0`,
+		),
+		check(
+			"external_posts_preview_storage_locator_check",
+			sql`(
+					${table.previewThumbnailKey} IS NULL
+					AND ${table.previewStorageProvider} IS NULL
+					AND ${table.previewStorageBucketLocator} IS NULL
+					AND ${table.previewStorageRegion} IS NULL
+				) OR (
+					${table.previewThumbnailKey} IS NOT NULL
+					AND ${table.previewStorageProvider} IS NOT NULL
+					AND ${table.previewStorageProvider} = 'r2'
+					AND ${table.previewStorageBucketLocator} IS NOT NULL
+					AND length(btrim(${table.previewStorageBucketLocator})) > 0
+					AND length(${table.previewStorageBucketLocator}) <= 255
+					AND ${table.previewStorageRegion} IS NOT NULL
+					AND ${table.previewStorageRegion} IN ('default', 'eu')
+				)`,
+		),
+		check(
+			"external_posts_preview_projection_check",
+			sql`(${table.previewStatus} <> 'generated'
+					OR (${table.previewThumbnailKey} IS NOT NULL
+						AND ${table.previewThumbnailUrl} IS NOT NULL))
+				AND (${table.previewThumbnailUrl} IS NULL
+					OR ${table.previewStatus} = 'generated')`,
+		),
+		check(
+			"external_posts_metrics_poll_claim_check",
+			sql`(${table.metricsPollLeaseExpiresAt} IS NULL
+						AND ${table.metricsPollStartedAt} IS NULL)
+					OR (${table.metricsPollLeaseExpiresAt} IS NOT NULL
+						AND (${table.metricsPollStartedAt} IS NULL
+							OR ${table.metricsPollStartedAt} <= ${table.metricsPollLeaseExpiresAt}))`,
+		),
+		check(
+			"external_posts_metrics_poll_generation_nonnegative_check",
+			sql`${table.metricsPollGeneration} >= 0 AND ${table.metricsPollAttempts} >= 0`,
+		),
+		check(
+			"external_posts_metrics_poll_error_class_check",
+			sql`${table.metricsPollLastErrorClass} IS NULL
+				OR ${table.metricsPollLastErrorClass} IN ('transient', 'rate_limited', 'permanent')`,
 		),
 	],
 );
@@ -6033,6 +9811,11 @@ export const socialAccountSyncState = pgTable(
 		lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
 		lastPostFoundAt: timestamp("last_post_found_at", { withTimezone: true }),
 		nextSyncAt: timestamp("next_sync_at", { withTimezone: true }),
+		pollGeneration: integer("poll_generation").notNull().default(0),
+		pollLeaseExpiresAt: timestamp("poll_lease_expires_at", {
+			withTimezone: true,
+		}),
+		pollStartedAt: timestamp("poll_started_at", { withTimezone: true }),
 
 		// Adaptive polling interval (seconds): 3600 (1h) → 86400 (24h)
 		pollIntervalSec: integer("poll_interval_sec").notNull().default(3600),
@@ -6051,6 +9834,7 @@ export const socialAccountSyncState = pgTable(
 
 		// Error tracking
 		lastError: text("last_error"),
+		lastErrorClass: text("last_error_class"),
 		consecutiveErrors: integer("consecutive_errors").notNull().default(0),
 		lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
 
@@ -6083,17 +9867,39 @@ export const socialAccountSyncState = pgTable(
 		}).onDelete("cascade"),
 		check(
 			"social_account_sync_state_counters_nonnegative_check",
-			sql`${table.pollIntervalSec} > 0
+			sql`${table.pollGeneration} >= 0
+				AND ${table.pollIntervalSec} > 0
 				AND ${table.consecutiveEmptyPolls} >= 0
 				AND ${table.consecutiveErrors} >= 0
 				AND ${table.totalPostsSynced} >= 0
 				AND ${table.totalSyncRuns} >= 0
 				AND (${table.rateLimitRemaining} IS NULL OR ${table.rateLimitRemaining} >= 0)`,
 		),
+		check(
+			"social_account_sync_state_claim_check",
+			sql`(${table.pollLeaseExpiresAt} IS NULL AND ${table.pollStartedAt} IS NULL)
+				OR (${table.pollLeaseExpiresAt} IS NOT NULL
+					AND (${table.pollStartedAt} IS NULL
+						OR ${table.pollStartedAt} <= ${table.pollLeaseExpiresAt}))`,
+		),
+		check(
+			"social_account_sync_state_error_class_check",
+			sql`${table.lastErrorClass} IS NULL
+				OR ${table.lastErrorClass} IN ('transient', 'rate_limited', 'permanent')`,
+		),
 		// Cron query: find accounts due for sync
-		index("sync_state_enabled_next_idx").on(table.enabled, table.nextSyncAt),
+		index("sync_state_enabled_next_idx").on(
+			table.enabled,
+			table.nextSyncAt,
+			table.pollLeaseExpiresAt,
+			table.organizationId,
+			table.id,
+		),
 		// Org filter
 		index("sync_state_org_idx").on(table.organizationId),
+		index("social_account_sync_error_retention_idx")
+			.on(table.lastErrorAt, table.id)
+			.where(sql`${table.lastError} IS NOT NULL`),
 	],
 );
 
@@ -6171,7 +9977,7 @@ export const crossPostActions = pgTable(
 			.default("twitter"),
 
 		actionType: text("action_type", {
-			enum: ["repost", "comment", "quote"],
+			enum: [...CROSS_POST_ACTION_TYPES],
 		}).notNull(),
 		targetAccountId: text("target_account_id").notNull(),
 		targetPlatform: platformEnum("target_platform")
@@ -6195,7 +10001,12 @@ export const crossPostActions = pgTable(
 		})
 			.notNull()
 			.default("pending"),
-		executeAt: timestamp("execute_at", { withTimezone: true }).notNull(),
+		// Product schedule and operational retry timing are deliberately separate:
+		// provider/readiness retries may move next_attempt_at but never scheduled_for.
+		scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
+		nextAttemptAt: timestamp("next_attempt_at", {
+			withTimezone: true,
+		}).notNull(),
 		executedAt: timestamp("executed_at", { withTimezone: true }),
 		resultPostId: text("result_post_id"),
 		error: text("error"),
@@ -6285,17 +10096,24 @@ export const crossPostActions = pgTable(
 		check(
 			"cross_post_actions_timestamp_order_check",
 			sql`(${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
+				AND ${table.nextAttemptAt} >= ${table.scheduledFor}
 				AND (${table.executedAt} IS NULL OR ${table.executedAt} >= ${table.createdAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
 		),
 		index("cross_post_actions_post_idx").on(table.postId),
 		index("cross_post_actions_source_target_idx").on(table.sourceTargetId),
 		index("cross_post_actions_target_account_idx").on(table.targetAccountId),
-		index("cross_post_actions_status_idx").on(
+		index("cross_post_actions_due_idx").on(
 			table.status,
-			table.executeAt,
+			table.nextAttemptAt,
 			table.leaseExpiresAt,
 		),
+		index("cross_post_actions_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(
+				sql`${table.status} IN ('executed', 'failed', 'unknown', 'cancelled')
+					AND ${table.completedAt} IS NOT NULL`,
+			),
 	],
 );
 
@@ -6350,6 +10168,67 @@ export const signatures = pgTable(
 // Short Link Management
 // ---------------------------------------------------------------------------
 
+/**
+ * Immutable provider credentials retained while historical short links still
+ * need analytics or erasure. Rotation creates a new version and retires the
+ * prior version; it never overwrites ciphertext needed by an existing link.
+ */
+export const shortLinkCredentials = pgTable(
+	"short_link_credentials",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("slcred_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		provider: text("provider", {
+			enum: ["dub", "short_io", "bitly"],
+		}).notNull(),
+		version: integer("version").notNull(),
+		apiKeyCiphertext: text("api_key_ciphertext").notNull(),
+		state: text("state", { enum: ["active", "retired"] })
+			.notNull()
+			.default("active"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		retiredAt: timestamp("retired_at", { withTimezone: true }),
+	},
+	(table) => [
+		unique("short_link_credentials_id_org_provider_version_uniq").on(
+			table.id,
+			table.organizationId,
+			table.provider,
+			table.version,
+		),
+		unique("short_link_credentials_org_provider_version_uniq").on(
+			table.organizationId,
+			table.provider,
+			table.version,
+		),
+		uniqueIndex("short_link_credentials_org_active_uniq")
+			.on(table.organizationId)
+			.where(sql`${table.state} = 'active'`),
+		check("short_link_credentials_version_check", sql`${table.version} > 0`),
+		check(
+			"short_link_credentials_ciphertext_check",
+			sql`${table.apiKeyCiphertext} LIKE 'enc:v2:%'
+				AND length(${table.apiKeyCiphertext}) BETWEEN 1 AND 8192`,
+		),
+		check(
+			"short_link_credentials_state_check",
+			sql`${table.state} IN ('active', 'retired')`,
+		),
+		check(
+			"short_link_credentials_state_tuple_check",
+			sql`(${table.state} = 'active' AND ${table.retiredAt} IS NULL)
+				OR (${table.state} = 'retired' AND ${table.retiredAt} IS NOT NULL
+					AND ${table.retiredAt} >= ${table.createdAt})`,
+		),
+	],
+);
+
 export const shortLinkConfigs = pgTable(
 	"short_link_configs",
 	{
@@ -6370,8 +10249,11 @@ export const shortLinkConfigs = pgTable(
 		provider: text("provider", {
 			enum: ["relayapi", "dub", "short_io", "bitly"],
 		}),
-		apiKey: text("api_key"), // encrypted: AES-256-GCM
 		domain: text("domain"), // custom short domain (e.g. "link.mybrand.com")
+		providerConfigVersion: integer("provider_config_version")
+			.notNull()
+			.default(1),
+		credentialVersion: integer("credential_version"),
 
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -6380,7 +10262,30 @@ export const shortLinkConfigs = pgTable(
 			.defaultNow()
 			.notNull(),
 	},
-	(table) => [index("short_link_configs_org_idx").on(table.organizationId)],
+	(table) => [
+		foreignKey({
+			columns: [table.organizationId, table.provider, table.credentialVersion],
+			foreignColumns: [
+				shortLinkCredentials.organizationId,
+				shortLinkCredentials.provider,
+				shortLinkCredentials.version,
+			],
+			name: "short_link_configs_credential_version_fk",
+		}).onDelete("restrict"),
+		check(
+			"short_link_configs_version_check",
+			sql`${table.providerConfigVersion} > 0
+				AND (${table.credentialVersion} IS NULL OR ${table.credentialVersion} > 0)`,
+		),
+		check(
+			"short_link_configs_provider_credential_check",
+			sql`(${table.provider} IS NULL AND ${table.credentialVersion} IS NULL)
+				OR (${table.provider} = 'relayapi' AND ${table.credentialVersion} IS NULL)
+				OR (${table.provider} IN ('dub', 'short_io', 'bitly')
+					AND ${table.credentialVersion} IS NOT NULL)`,
+		),
+		index("short_link_configs_org_idx").on(table.organizationId),
+	],
 );
 
 export const shortLinks = pgTable(
@@ -6400,9 +10305,33 @@ export const shortLinks = pgTable(
 			.generatedAlwaysAs(workspaceScopeKeySql()),
 
 		originalUrl: text("original_url").notNull(),
-		provider: text("provider").notNull().default("relayapi"),
-		shortCode: text("short_code").notNull(),
-		shortUrl: text("short_url").notNull(),
+		provider: text("provider", {
+			enum: ["relayapi", "dub", "short_io", "bitly"],
+		})
+			.notNull()
+			.default("relayapi"),
+		providerConfigVersion: integer("provider_config_version")
+			.notNull()
+			.default(1),
+		credentialVersion: integer("credential_version"),
+		providerRef: jsonb("provider_ref")
+			.$type<Record<string, unknown>>()
+			.notNull(),
+		creationStatus: text("creation_status", {
+			enum: ["pending", "active", "manual_review"],
+		})
+			.notNull()
+			.default("pending"),
+		creationFence: integer("creation_fence").notNull().default(0),
+		creationStartedAt: timestamp("creation_started_at", {
+			withTimezone: true,
+		}),
+		creationCompletedAt: timestamp("creation_completed_at", {
+			withTimezone: true,
+		}),
+		creationLastError: text("creation_last_error"),
+		shortCode: text("short_code"),
+		shortUrl: text("short_url"),
 
 		// Optional association to a post
 		postId: text("post_id").references(() => posts.id, {
@@ -6414,6 +10343,21 @@ export const shortLinks = pgTable(
 		lastClickSyncAt: timestamp("last_click_sync_at", {
 			withTimezone: true,
 		}),
+		nextClickSyncAt: timestamp("next_click_sync_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.defaultNow(),
+		clickSyncGeneration: integer("click_sync_generation").notNull().default(0),
+		clickSyncLeaseExpiresAt: timestamp("click_sync_lease_expires_at", {
+			withTimezone: true,
+		}),
+		clickSyncStartedAt: timestamp("click_sync_started_at", {
+			withTimezone: true,
+		}),
+		clickSyncAttempts: integer("click_sync_attempts").notNull().default(0),
+		clickSyncLastError: text("click_sync_last_error"),
+		clickSyncLastErrorClass: text("click_sync_last_error_class"),
 
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -6435,11 +10379,113 @@ export const shortLinks = pgTable(
 			foreignColumns: [posts.id, posts.organizationId, posts.scopeKey],
 			name: "short_links_post_org_scope_fk",
 		}),
-		uniqueIndex("short_links_provider_code_uniq").on(
-			table.provider,
-			table.shortCode,
+		foreignKey({
+			columns: [table.organizationId, table.provider, table.credentialVersion],
+			foreignColumns: [
+				shortLinkCredentials.organizationId,
+				shortLinkCredentials.provider,
+				shortLinkCredentials.version,
+			],
+			name: "short_links_credential_version_fk",
+		}).onDelete("restrict"),
+		uniqueIndex("short_links_provider_code_uniq")
+			.on(table.provider, table.shortCode)
+			.where(
+				sql`${table.provider} = 'relayapi' AND ${table.shortCode} IS NOT NULL`,
+			),
+		uniqueIndex("short_links_short_url_uniq")
+			.on(table.shortUrl)
+			.where(sql`${table.shortUrl} IS NOT NULL`),
+		check(
+			"short_links_creation_status_check",
+			sql`${table.creationStatus} IN ('pending', 'active', 'manual_review')`,
 		),
-		uniqueIndex("short_links_short_url_uniq").on(table.shortUrl),
+		check(
+			"short_links_provider_ref_check",
+			sql`jsonb_typeof(${table.providerRef}) = 'object'
+				AND octet_length(${table.providerRef}::text) <= 2048
+				AND ${table.providerRef}->>'provider' = ${table.provider}
+				AND (
+					(${table.provider} = 'relayapi'
+						AND jsonb_typeof(${table.providerRef}->'shortCode') = 'string'
+						AND length(${table.providerRef}->>'shortCode') BETWEEN 1 AND 180)
+					OR (${table.provider} = 'dub'
+						AND jsonb_typeof(${table.providerRef}->'externalId') = 'string'
+						AND length(${table.providerRef}->>'externalId') BETWEEN 1 AND 180)
+					OR (${table.provider} IN ('short_io', 'bitly')
+						AND jsonb_typeof(${table.providerRef}->'intentId') = 'string'
+						AND length(${table.providerRef}->>'intentId') BETWEEN 1 AND 180)
+				)
+				AND (
+					NOT (
+						${table.creationStatus} = 'active'
+						OR (${table.creationStatus} = 'manual_review'
+							AND ${table.shortUrl} IS NOT NULL)
+					)
+					OR (${table.provider} = 'relayapi'
+						AND ${table.providerRef}->>'shortCode' = ${table.shortCode})
+					OR (${table.provider} = 'dub')
+					OR (${table.provider} = 'short_io'
+						AND jsonb_typeof(${table.providerRef}->'idString') = 'string'
+						AND length(${table.providerRef}->>'idString') BETWEEN 1 AND 180
+						AND jsonb_typeof(${table.providerRef}->'domainId') = 'number')
+					OR (${table.provider} = 'bitly'
+						AND jsonb_typeof(${table.providerRef}->'bitlink') = 'string'
+						AND length(${table.providerRef}->>'bitlink') BETWEEN 1 AND 512
+						AND jsonb_typeof(${table.providerRef}->'editedOrCustom') = 'boolean')
+				)`,
+		),
+		check(
+			"short_links_creation_state_check",
+			sql`${table.providerConfigVersion} > 0
+				AND ${table.creationFence} >= 0
+				AND (
+					(${table.creationStatus} = 'pending'
+						AND ${table.provider} <> 'relayapi'
+						AND ${table.creationFence} > 0
+						AND ${table.shortCode} IS NULL
+						AND ${table.shortUrl} IS NULL
+						AND ${table.creationStartedAt} IS NOT NULL
+						AND ${table.creationCompletedAt} IS NULL
+						AND ${table.creationLastError} IS NULL)
+					OR (${table.creationStatus} = 'active'
+						AND ${table.shortCode} IS NOT NULL
+						AND ${table.shortUrl} IS NOT NULL
+						AND ${table.shortUrl} ~ '^https?://'
+						AND ${table.creationCompletedAt} IS NOT NULL
+						AND ${table.creationLastError} IS NULL
+						AND (
+							(${table.provider} = 'relayapi'
+								AND ${table.creationFence} = 0
+								AND ${table.creationStartedAt} IS NULL)
+							OR (${table.provider} <> 'relayapi'
+								AND ${table.creationFence} > 0
+								AND ${table.creationStartedAt} IS NOT NULL
+								AND ${table.creationCompletedAt} >= ${table.creationStartedAt})
+						))
+					OR (${table.creationStatus} = 'manual_review'
+						AND ${table.provider} <> 'relayapi'
+						AND ${table.creationFence} > 0
+						AND (
+							(${table.shortCode} IS NULL
+								AND ${table.shortUrl} IS NULL)
+							OR (${table.shortCode} IS NOT NULL
+								AND ${table.shortUrl} IS NOT NULL
+								AND ${table.shortUrl} ~ '^https?://')
+						)
+						AND ${table.creationStartedAt} IS NOT NULL
+						AND ${table.creationCompletedAt} IS NOT NULL
+						AND ${table.creationCompletedAt} >= ${table.creationStartedAt}
+						AND ${table.creationLastError} IS NOT NULL)
+				)`,
+		),
+		check(
+			"short_links_credential_version_check",
+			sql`(${table.provider} = 'relayapi' AND ${table.credentialVersion} IS NULL)
+				OR (${table.provider} IN ('dub', 'short_io', 'bitly')
+					AND ${table.credentialVersion} IS NOT NULL
+					AND ${table.credentialVersion} > 0)`,
+		),
 		check(
 			"short_links_click_count_nonnegative_check",
 			sql`${table.clickCount} >= 0`,
@@ -6449,6 +10495,29 @@ export const shortLinks = pgTable(
 		index("short_links_created_sync_idx").on(
 			table.createdAt,
 			table.lastClickSyncAt,
+		),
+		index("short_links_click_sync_due_idx").on(
+			table.nextClickSyncAt,
+			table.clickSyncLeaseExpiresAt,
+			table.organizationId,
+			table.id,
+		),
+		check(
+			"short_links_click_sync_counters_check",
+			sql`${table.clickSyncGeneration} >= 0 AND ${table.clickSyncAttempts} >= 0`,
+		),
+		check(
+			"short_links_click_sync_claim_check",
+			sql`(${table.clickSyncLeaseExpiresAt} IS NULL
+					AND ${table.clickSyncStartedAt} IS NULL)
+				OR (${table.clickSyncLeaseExpiresAt} IS NOT NULL
+					AND (${table.clickSyncStartedAt} IS NULL
+						OR ${table.clickSyncStartedAt} <= ${table.clickSyncLeaseExpiresAt}))`,
+		),
+		check(
+			"short_links_click_sync_error_class_check",
+			sql`${table.clickSyncLastErrorClass} IS NULL
+				OR ${table.clickSyncLastErrorClass} IN ('transient', 'rate_limited', 'permanent')`,
 		),
 	],
 );
@@ -6650,6 +10719,7 @@ export const ideas = pgTable(
 			table.organizationId,
 			table.scopeKey,
 		),
+		unique("ideas_id_org_uniq").on(table.id, table.organizationId),
 		foreignKey({
 			columns: [table.workspaceId, table.organizationId],
 			foreignColumns: [workspaces.id, workspaces.organizationId],
@@ -6759,6 +10829,9 @@ export const ideaConversionOperations = pgTable(
 			table.status,
 			table.leaseExpiresAt,
 		),
+		index("idea_conversion_operations_retention_idx")
+			.on(sql`COALESCE(${table.completedAt}, ${table.updatedAt})`, table.id)
+			.where(sql`${table.status} IN ('succeeded', 'failed')`),
 	],
 );
 
@@ -6821,14 +10894,11 @@ export const ideaComments = pgTable(
 		id: text("id")
 			.primaryKey()
 			.$defaultFn(() => generateId("idc_")),
-		ideaId: text("idea_id")
-			.notNull()
-			.references(() => ideas.id, { onDelete: "cascade" }),
-		authorId: text("author_id").notNull(),
+		ideaId: text("idea_id").notNull(),
+		organizationId: text("organization_id").notNull(),
+		authorPrincipalId: text("author_principal_id").notNull(),
 		content: text("content").notNull(),
-		parentId: text("parent_id").references((): AnyPgColumn => ideaComments.id, {
-			onDelete: "cascade",
-		}),
+		parentId: text("parent_id"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -6837,8 +10907,40 @@ export const ideaComments = pgTable(
 			.notNull(),
 	},
 	(table) => [
-		index("idea_comments_idea_idx").on(table.ideaId),
-		index("idea_comments_parent_idx").on(table.parentId),
+		unique("idea_comments_id_idea_org_uniq").on(
+			table.id,
+			table.ideaId,
+			table.organizationId,
+		),
+		foreignKey({
+			columns: [table.ideaId, table.organizationId],
+			foreignColumns: [ideas.id, ideas.organizationId],
+			name: "idea_comments_idea_org_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.authorPrincipalId, table.organizationId],
+			foreignColumns: [
+				organizationPrincipals.id,
+				organizationPrincipals.organizationId,
+			],
+			name: "idea_comments_author_principal_org_fk",
+		}),
+		foreignKey({
+			columns: [table.parentId, table.ideaId, table.organizationId],
+			foreignColumns: [table.id, table.ideaId, table.organizationId],
+			name: "idea_comments_parent_idea_org_fk",
+		}).onDelete("cascade"),
+		index("idea_comments_idea_created_idx").on(
+			table.organizationId,
+			table.ideaId,
+			table.createdAt,
+			table.id,
+		),
+		index("idea_comments_parent_idx").on(table.organizationId, table.parentId),
+		index("idea_comments_author_idx").on(
+			table.organizationId,
+			table.authorPrincipalId,
+		),
 	],
 );
 
@@ -6853,12 +10955,9 @@ export const ideaTags = pgTable(
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id, { onDelete: "cascade" }),
-		workspaceId: text("workspace_id").references(() => workspaces.id, {
-			onDelete: "restrict",
-		}),
-		scopeKey: text("scope_key")
-			.notNull()
-			.generatedAlwaysAs(workspaceScopeKeySql()),
+		// Parent-projected scope: the composite idea FK is authoritative. Keeping
+		// only its typed scope key avoids a second workspace ownership source.
+		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 	},
 	(table) => [
 		primaryKey({ columns: [table.ideaId, table.tagId] }),
@@ -6876,15 +10975,9 @@ export const ideaTags = pgTable(
 			"idea_tags_tag_visibility_check",
 			sql`${table.tagScopeKey} = 'org' OR ${table.tagScopeKey} = ${table.scopeKey}`,
 		),
-		foreignKey({
-			columns: [table.workspaceId, table.organizationId],
-			foreignColumns: [workspaces.id, workspaces.organizationId],
-			name: "idea_tags_workspace_org_fk",
-		}),
-		index("idea_tags_org_tag_workspace_idx").on(
+		index("idea_tags_org_tag_idea_idx").on(
 			table.organizationId,
 			table.tagId,
-			table.workspaceId,
 			table.ideaId,
 		),
 	],
@@ -6918,8 +11011,15 @@ export const postTags = pgTable(
 			"post_tags_tag_visibility_check",
 			sql`${table.tagScopeKey} = 'org' OR ${table.tagScopeKey} = ${table.scopeKey}`,
 		),
-		primaryKey({ columns: [table.postId, table.tagId] }),
-		index("post_tags_tag_idx").on(table.tagId),
+		primaryKey({
+			columns: [table.organizationId, table.tagId, table.postId],
+			name: "post_tags_pk",
+		}),
+		index("post_tags_org_post_tag_idx").on(
+			table.organizationId,
+			table.postId,
+			table.tagId,
+		),
 	],
 );
 
@@ -6929,10 +11029,9 @@ export const ideaActivity = pgTable(
 		id: text("id")
 			.primaryKey()
 			.$defaultFn(() => generateId("ida_")),
-		ideaId: text("idea_id")
-			.notNull()
-			.references(() => ideas.id, { onDelete: "cascade" }),
-		actorId: text("actor_id").notNull(),
+		ideaId: text("idea_id").notNull(),
+		organizationId: text("organization_id").notNull(),
+		actorPrincipalId: text("actor_principal_id").notNull(),
 		action: ideaActivityActionEnum("action").notNull(),
 		metadata: jsonb("metadata").$type<Record<string, unknown>>(),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -6940,9 +11039,30 @@ export const ideaActivity = pgTable(
 			.notNull(),
 	},
 	(table) => [
-		index("idea_activity_idea_idx").on(table.ideaId),
-		index("idea_activity_idea_created_idx").on(table.ideaId, table.createdAt),
-		index("idea_activity_actor_idx").on(table.actorId),
+		foreignKey({
+			columns: [table.ideaId, table.organizationId],
+			foreignColumns: [ideas.id, ideas.organizationId],
+			name: "idea_activity_idea_org_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.actorPrincipalId, table.organizationId],
+			foreignColumns: [
+				organizationPrincipals.id,
+				organizationPrincipals.organizationId,
+			],
+			name: "idea_activity_actor_principal_org_fk",
+		}),
+		index("idea_activity_idea_created_idx").on(
+			table.organizationId,
+			table.ideaId,
+			table.createdAt,
+			table.id,
+		),
+		index("idea_activity_actor_idx").on(
+			table.organizationId,
+			table.actorPrincipalId,
+		),
+		index("idea_activity_retention_idx").on(table.createdAt, table.id),
 	],
 );
 
@@ -6966,16 +11086,10 @@ export const automationChannelEnum = pgEnum("automation_channel", [
 	"tiktok",
 ]);
 
-export const automationBindingTypeEnum = pgEnum("automation_binding_type", [
-	"default_reply",
-	"welcome_message",
-	// Retained as a database-only compatibility value during the get_started
-	// rollout. API schemas never accept it and the migration rewrites old rows.
-	"conversation_starter",
-	"get_started",
-	"main_menu",
-	"ice_breaker",
-]);
+export const automationBindingTypeEnum = pgEnum(
+	"automation_binding_type",
+	AUTOMATION_BINDING_TYPES,
+);
 
 export const automationRunStatusEnum = pgEnum("automation_run_status", [
 	"active",
@@ -7075,7 +11189,9 @@ export const automationSecrets = pgTable(
 		automationId: text("automation_id").notNull(),
 		nodeKey: text("node_key").notNull(),
 		actionId: text("action_id").notNull(),
-		kind: text("kind").notNull().default("webhook_out"),
+		kind: text("kind", { enum: [...AUTOMATION_SECRET_KINDS] })
+			.notNull()
+			.default("webhook_out"),
 		ciphertext: text("ciphertext").notNull(),
 		keyId: text("key_id").notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -7086,6 +11202,10 @@ export const automationSecrets = pgTable(
 			.defaultNow(),
 	},
 	(table) => [
+		check(
+			"automation_secrets_kind_check",
+			sql`${table.kind} IN ('webhook_out', 'http_request')`,
+		),
 		foreignKey({
 			columns: [table.automationId, table.organizationId],
 			foreignColumns: [automations.id, automations.organizationId],
@@ -7113,7 +11233,9 @@ export const automationEntrypoints = pgTable(
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 		automationId: text("automation_id").notNull(),
 		channel: automationChannelEnum("channel").notNull(),
-		kind: text("kind").notNull(),
+		kind: text("kind", {
+			enum: [...AUTOMATION_ENTRYPOINT_KINDS],
+		}).notNull(),
 		status: text("status").notNull().default("active"),
 		socialAccountId: text("social_account_id").references(
 			() => socialAccounts.id,
@@ -7169,6 +11291,101 @@ export const automationEntrypoints = pgTable(
 			name: "automation_entrypoints_account_org_scope_fk",
 		}),
 		check(
+			"automation_entrypoints_kind_check",
+			sql`${table.kind} IN ('dm_received', 'comment_created', 'story_reply', 'story_mention', 'live_comment', 'ad_click', 'ref_link_click', 'share_to_dm', 'schedule', 'field_changed', 'tag_applied', 'tag_removed', 'conversion_event', 'webhook_inbound')`,
+		),
+		check(
+			"automation_entrypoints_kind_identity_config_check",
+			sql`jsonb_typeof(${table.config}) = 'object'
+				AND (${table.kind} NOT IN (
+						'ref_link_click',
+						'schedule',
+						'field_changed',
+						'tag_applied',
+						'tag_removed',
+						'conversion_event'
+					)
+					OR ${table.socialAccountId} IS NULL)
+				AND CASE ${table.kind}
+					WHEN 'dm_received' THEN
+						${table.config} - ARRAY['keywords', 'match_mode', 'case_sensitive', 'first_message_only'] = '{}'::jsonb
+						AND (NOT (${table.config} ? 'match_mode') OR ${table.config}->>'match_mode' IN ('exact', 'contains', 'regex'))
+						AND (NOT (${table.config} ? 'case_sensitive') OR jsonb_typeof(${table.config}->'case_sensitive') = 'boolean')
+						AND (NOT (${table.config} ? 'first_message_only') OR jsonb_typeof(${table.config}->'first_message_only') = 'boolean')
+						AND (NOT (${table.config} ? 'keywords') OR jsonb_typeof(${table.config}->'keywords') = 'array')
+					WHEN 'comment_created' THEN
+						${table.config} - ARRAY['keywords', 'match_mode', 'case_sensitive', 'post_ids', 'include_replies'] = '{}'::jsonb
+						AND (NOT (${table.config} ? 'match_mode') OR ${table.config}->>'match_mode' IN ('exact', 'contains', 'regex'))
+						AND (NOT (${table.config} ? 'case_sensitive') OR jsonb_typeof(${table.config}->'case_sensitive') = 'boolean')
+						AND (NOT (${table.config} ? 'post_ids') OR ${table.config}->'post_ids' = 'null'::jsonb OR jsonb_typeof(${table.config}->'post_ids') = 'array')
+						AND (NOT (${table.config} ? 'include_replies') OR jsonb_typeof(${table.config}->'include_replies') = 'boolean')
+						AND (NOT (${table.config} ? 'keywords') OR jsonb_typeof(${table.config}->'keywords') = 'array')
+					WHEN 'story_reply' THEN
+						${table.config} - ARRAY['keywords', 'match_mode', 'case_sensitive', 'story_ids'] = '{}'::jsonb
+						AND (NOT (${table.config} ? 'match_mode') OR ${table.config}->>'match_mode' IN ('exact', 'contains', 'regex'))
+						AND (NOT (${table.config} ? 'case_sensitive') OR jsonb_typeof(${table.config}->'case_sensitive') = 'boolean')
+						AND (NOT (${table.config} ? 'story_ids') OR ${table.config}->'story_ids' = 'null'::jsonb OR jsonb_typeof(${table.config}->'story_ids') = 'array')
+						AND (NOT (${table.config} ? 'keywords') OR jsonb_typeof(${table.config}->'keywords') = 'array')
+					WHEN 'story_mention' THEN
+						${table.config} - ARRAY['keywords', 'match_mode', 'case_sensitive', 'story_ids'] = '{}'::jsonb
+						AND (NOT (${table.config} ? 'match_mode') OR ${table.config}->>'match_mode' IN ('exact', 'contains', 'regex'))
+						AND (NOT (${table.config} ? 'case_sensitive') OR jsonb_typeof(${table.config}->'case_sensitive') = 'boolean')
+						AND (NOT (${table.config} ? 'story_ids') OR ${table.config}->'story_ids' = 'null'::jsonb OR jsonb_typeof(${table.config}->'story_ids') = 'array')
+						AND (NOT (${table.config} ? 'keywords') OR jsonb_typeof(${table.config}->'keywords') = 'array')
+					WHEN 'live_comment' THEN
+						${table.config} - ARRAY['keywords', 'match_mode', 'case_sensitive'] = '{}'::jsonb
+						AND (NOT (${table.config} ? 'match_mode') OR ${table.config}->>'match_mode' IN ('exact', 'contains', 'regex'))
+						AND (NOT (${table.config} ? 'case_sensitive') OR jsonb_typeof(${table.config}->'case_sensitive') = 'boolean')
+						AND (NOT (${table.config} ? 'keywords') OR jsonb_typeof(${table.config}->'keywords') = 'array')
+					WHEN 'ad_click' THEN
+						${table.config} - 'ad_ids' = '{}'::jsonb
+						AND (NOT (${table.config} ? 'ad_ids') OR ${table.config}->'ad_ids' = 'null'::jsonb OR jsonb_typeof(${table.config}->'ad_ids') = 'array')
+					WHEN 'ref_link_click' THEN
+						${table.config} ? 'ref_url_ids'
+						AND ${table.config} - 'ref_url_ids' = '{}'::jsonb
+						AND jsonb_typeof(${table.config}->'ref_url_ids') = 'array'
+						AND ${table.config}->'ref_url_ids' <> '[]'::jsonb
+					WHEN 'share_to_dm' THEN ${table.config} = '{}'::jsonb
+					WHEN 'schedule' THEN
+						${table.config} ?& ARRAY['cron', 'timezone']
+						AND ${table.config} - ARRAY['cron', 'timezone'] = '{}'::jsonb
+						AND jsonb_typeof(${table.config}->'cron') = 'string'
+						AND length(btrim(${table.config}->>'cron')) > 0
+						AND jsonb_typeof(${table.config}->'timezone') = 'string'
+						AND length(btrim(${table.config}->>'timezone')) > 0
+					WHEN 'field_changed' THEN
+						${table.config} ? 'field_keys'
+						AND ${table.config} - ARRAY['field_keys', 'from', 'to'] = '{}'::jsonb
+						AND jsonb_typeof(${table.config}->'field_keys') = 'array'
+						AND ${table.config}->'field_keys' <> '[]'::jsonb
+					WHEN 'tag_applied' THEN
+						${table.config} ? 'tag_ids'
+						AND ${table.config} - 'tag_ids' = '{}'::jsonb
+						AND jsonb_typeof(${table.config}->'tag_ids') = 'array'
+						AND ${table.config}->'tag_ids' <> '[]'::jsonb
+					WHEN 'tag_removed' THEN
+						${table.config} ? 'tag_ids'
+						AND ${table.config} - 'tag_ids' = '{}'::jsonb
+						AND jsonb_typeof(${table.config}->'tag_ids') = 'array'
+						AND ${table.config}->'tag_ids' <> '[]'::jsonb
+					WHEN 'conversion_event' THEN
+						${table.config} ? 'event_names'
+						AND ${table.config} - 'event_names' = '{}'::jsonb
+						AND jsonb_typeof(${table.config}->'event_names') = 'array'
+						AND ${table.config}->'event_names' <> '[]'::jsonb
+					WHEN 'webhook_inbound' THEN
+						${table.config} ?& ARRAY['webhook_slug', 'webhook_secret', 'contact_lookup']
+						AND ${table.config} - ARRAY['webhook_slug', 'webhook_secret', 'contact_lookup', 'payload_mapping'] = '{}'::jsonb
+						AND jsonb_typeof(${table.config}->'webhook_slug') = 'string'
+						AND length(btrim(${table.config}->>'webhook_slug')) > 0
+						AND jsonb_typeof(${table.config}->'webhook_secret') = 'string'
+						AND length(btrim(${table.config}->>'webhook_secret')) > 0
+						AND jsonb_typeof(${table.config}->'contact_lookup') = 'object'
+						AND (NOT (${table.config} ? 'payload_mapping') OR jsonb_typeof(${table.config}->'payload_mapping') = 'object')
+					ELSE false
+				END`,
+		),
+		check(
 			"automation_entrypoints_status_check",
 			sql`${table.status} IN ('active', 'paused', 'disabled')`,
 		),
@@ -7217,7 +11434,8 @@ export const automationEntrypointDailyCounts = pgTable(
 			.references(() => organization.id, { onDelete: "cascade" }),
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 		entrypointId: text("entrypoint_id").notNull(),
-		day: text("day").notNull(),
+		// UTC calendar day, not a timestamp or format-convention string.
+		day: date("day", { mode: "string" }).notNull(),
 		count: integer("count").notNull().default(0),
 		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
@@ -7238,16 +11456,16 @@ export const automationEntrypointDailyCounts = pgTable(
 			table.day,
 		),
 		check(
-			"automation_entrypoint_daily_counts_day_check",
-			sql`${table.day} ~ '^\\d{4}-\\d{2}-\\d{2}$'`,
-		),
-		check(
 			"automation_entrypoint_daily_counts_count_check",
 			sql`${table.count} >= 0`,
 		),
 		index("automation_entrypoint_daily_counts_org_day_idx").on(
 			table.organizationId,
 			table.day,
+		),
+		index("automation_entrypoint_daily_counts_retention_idx").on(
+			table.day,
+			table.id,
 		),
 	],
 );
@@ -7328,7 +11546,10 @@ export const automationWebhookReceipts = pgTable(
 			sql`${table.expiresAt} > ${table.receivedAt}
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.receivedAt})`,
 		),
-		index("automation_webhook_receipts_expiry_idx").on(table.expiresAt),
+		index("automation_webhook_receipts_expiry_idx").on(
+			table.expiresAt,
+			table.id,
+		),
 		index("automation_webhook_receipts_status_due_idx").on(
 			table.status,
 			table.nextAttemptAt,
@@ -7366,9 +11587,24 @@ export const automationBindings = pgTable(
 		syncRevision: integer("sync_revision").notNull().default(0),
 		lastSyncedRevision: integer("last_synced_revision").notNull().default(0),
 		syncAttempts: integer("sync_attempts").notNull().default(0),
-		lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
+		syncDispatchGeneration: integer("sync_dispatch_generation")
+			.notNull()
+			.default(0),
+		syncNextAttemptAt: timestamp("sync_next_attempt_at", {
+			withTimezone: true,
+		}).defaultNow(),
+		syncLeaseExpiresAt: timestamp("sync_lease_expires_at", {
+			withTimezone: true,
+		}),
+		syncStartedAt: timestamp("sync_started_at", { withTimezone: true }),
+		syncRequestMayHaveBeenSentAt: timestamp(
+			"sync_request_may_have_been_sent_at",
+			{ withTimezone: true },
+		),
 		lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
 		syncError: text("sync_error"),
+		syncErrorClass: text("sync_error_class"),
+		syncErrorAt: timestamp("sync_error_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -7418,7 +11654,31 @@ export const automationBindings = pgTable(
 			sql`${table.syncRevision} >= 0
 				AND ${table.lastSyncedRevision} >= 0
 				AND ${table.lastSyncedRevision} <= ${table.syncRevision}
-				AND ${table.syncAttempts} >= 0`,
+				AND ${table.syncAttempts} >= 0
+				AND ${table.syncDispatchGeneration} >= 0`,
+		),
+		check(
+			"automation_bindings_sync_claim_check",
+			sql`(${table.syncLeaseExpiresAt} IS NULL AND ${table.syncStartedAt} IS NULL)
+				OR (${table.syncLeaseExpiresAt} IS NOT NULL
+					AND (${table.syncStartedAt} IS NULL
+						OR ${table.syncStartedAt} <= ${table.syncLeaseExpiresAt}))`,
+		),
+		check(
+			"automation_bindings_sync_error_class_check",
+			sql`${table.syncErrorClass} IS NULL
+				OR ${table.syncErrorClass} IN ('transient', 'permanent', 'unknown')`,
+		),
+		check(
+			"automation_bindings_sync_error_tuple_check",
+			sql`(${table.syncError} IS NULL AND ${table.syncErrorAt} IS NULL)
+				OR (${table.syncError} IS NOT NULL AND ${table.syncErrorAt} IS NOT NULL)`,
+		),
+		check(
+			"automation_bindings_sync_boundary_check",
+			sql`${table.syncRequestMayHaveBeenSentAt} IS NULL
+				OR ${table.syncStartedAt} IS NOT NULL
+				OR ${table.syncErrorClass} = 'unknown'`,
 		),
 		check(
 			"automation_bindings_timestamp_order_check",
@@ -7434,6 +11694,15 @@ export const automationBindings = pgTable(
 			table.status,
 		),
 		index("idx_automation_bindings_automation").on(table.automationId),
+		index("automation_bindings_sync_due_idx").on(
+			table.syncNextAttemptAt,
+			table.syncLeaseExpiresAt,
+			table.organizationId,
+			table.id,
+		),
+		index("automation_bindings_sync_error_retention_idx")
+			.on(table.syncErrorAt, table.id)
+			.where(sql`${table.syncError} IS NOT NULL`),
 	],
 );
 
@@ -7478,6 +11747,19 @@ export const automationRuns = pgTable(
 	(table) => [
 		unique("automation_runs_id_org_scope_uniq").on(
 			table.id,
+			table.organizationId,
+			table.scopeKey,
+		),
+		unique("automation_runs_id_automation_org_scope_uniq").on(
+			table.id,
+			table.automationId,
+			table.organizationId,
+			table.scopeKey,
+		),
+		unique("automation_runs_id_auto_contact_org_scope_uniq").on(
+			table.id,
+			table.automationId,
+			table.contactId,
 			table.organizationId,
 			table.scopeKey,
 		),
@@ -7575,10 +11857,32 @@ export const automationRuns = pgTable(
 			table.automationId,
 			table.triggerOccurrenceId,
 		),
+		index("idx_automation_runs_contact_occurrence")
+			.on(table.organizationId, table.contactId, table.triggerOccurrenceId)
+			.where(sql`${table.triggerOccurrenceId} IS NOT NULL`),
+		index("automation_runs_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(
+				sql`${table.status} IN ('completed', 'exited', 'failed')
+					AND ${table.completedAt} IS NOT NULL`,
+			),
 	],
 );
 
-/** Immutable conversion facts emitted by automation actions. */
+export const AUTOMATION_CONVERSION_DISPATCH_STATUSES = [
+	"pending",
+	"processing",
+	"succeeded",
+	"manual_review",
+] as const;
+
+/**
+ * Conversion facts and their durable internal-trigger handoff.
+ *
+ * The conversion identity/value columns are immutable facts. Dispatch columns
+ * form a fenced outbox on the same lifecycle row so a committed conversion can
+ * never be lost between persistence and downstream automation enrollment.
+ */
 export const automationConversionEvents = pgTable(
 	"automation_conversion_events",
 	{
@@ -7594,38 +11898,117 @@ export const automationConversionEvents = pgTable(
 		eventName: text("event_name").notNull(),
 		value: text("value"),
 		currency: varchar("currency", { length: 3 }),
+		channel: text("channel").notNull(),
+		socialAccountId: text("social_account_id"),
+		conversationId: text("conversation_id"),
+		eventDepth: integer("event_depth").notNull().default(0),
 		metadata: jsonb("metadata"),
+		dispatchStatus: text("dispatch_status", {
+			enum: [...AUTOMATION_CONVERSION_DISPATCH_STATUSES],
+		})
+			.notNull()
+			.default("pending"),
+		dispatchAttempts: integer("dispatch_attempts").notNull().default(0),
+		dispatchLeaseToken: integer("dispatch_lease_token").notNull().default(0),
+		dispatchLeaseExpiresAt: timestamp("dispatch_lease_expires_at", {
+			withTimezone: true,
+		}),
+		nextDispatchAt: timestamp("next_dispatch_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		dispatchDeadlineAt: timestamp("dispatch_deadline_at", {
+			withTimezone: true,
+		})
+			.notNull()
+			.default(sql`CURRENT_TIMESTAMP + interval '7 days'`),
+		dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+		lastDispatchError: text("last_dispatch_error"),
 		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
 	},
 	(table) => [
 		foreignKey({
-			columns: [table.runId, table.organizationId, table.scopeKey],
+			columns: [
+				table.runId,
+				table.automationId,
+				table.contactId,
+				table.organizationId,
+				table.scopeKey,
+			],
 			foreignColumns: [
 				automationRuns.id,
+				automationRuns.automationId,
+				automationRuns.contactId,
 				automationRuns.organizationId,
 				automationRuns.scopeKey,
 			],
-			name: "automation_conversion_events_run_org_scope_fk",
-		}).onDelete("cascade"),
-		foreignKey({
-			columns: [table.automationId, table.organizationId, table.scopeKey],
-			foreignColumns: [
-				automations.id,
-				automations.organizationId,
-				automations.scopeKey,
-			],
-			name: "automation_conversion_events_automation_org_scope_fk",
-		}).onDelete("cascade"),
-		foreignKey({
-			columns: [table.contactId, table.organizationId, table.scopeKey],
-			foreignColumns: [contacts.id, contacts.organizationId, contacts.scopeKey],
-			name: "automation_conversion_events_contact_org_scope_fk",
-		}).onDelete("cascade"),
+			name: "automation_conversion_events_run_auto_contact_org_scope_fk",
+		})
+			.onUpdate("cascade")
+			.onDelete("cascade"),
 		uniqueIndex("automation_conversion_events_occurrence_uniq").on(
 			table.occurrenceId,
 		),
+		check(
+			"automation_conversion_events_channel_check",
+			sql`${table.channel} IN ('instagram', 'facebook', 'whatsapp', 'telegram')`,
+		),
+		check(
+			"automation_conversion_events_dispatch_status_check",
+			sql`${table.dispatchStatus} IN ('pending', 'processing', 'succeeded', 'manual_review')`,
+		),
+		check(
+			"automation_conversion_events_dispatch_counters_check",
+			sql`${table.eventDepth} >= 0
+				AND ${table.dispatchAttempts} >= 0
+				AND ${table.dispatchLeaseToken} >= 0`,
+		),
+		check(
+			"automation_conversion_events_dispatch_state_check",
+			sql`(${table.dispatchStatus} = 'pending'
+						AND ${table.dispatchLeaseExpiresAt} IS NULL
+						AND ${table.dispatchedAt} IS NULL)
+					OR (${table.dispatchStatus} = 'processing'
+						AND ${table.dispatchAttempts} > 0
+						AND ${table.dispatchLeaseExpiresAt} IS NOT NULL
+						AND ${table.dispatchedAt} IS NULL)
+					OR (${table.dispatchStatus} = 'succeeded'
+						AND ${table.dispatchLeaseExpiresAt} IS NULL
+						AND ${table.dispatchedAt} IS NOT NULL
+						AND ${table.lastDispatchError} IS NULL)
+					OR (${table.dispatchStatus} = 'manual_review'
+						AND ${table.dispatchLeaseExpiresAt} IS NULL
+						AND ${table.dispatchedAt} IS NULL
+						AND ${table.lastDispatchError} IS NOT NULL)`,
+		),
+		check(
+			"automation_conversion_events_dispatch_timestamps_check",
+			sql`${table.updatedAt} >= ${table.createdAt}
+				AND ${table.dispatchDeadlineAt} > ${table.createdAt}
+				AND ${table.nextDispatchAt} >= ${table.createdAt}
+				AND (${table.dispatchLeaseExpiresAt} IS NULL
+					OR ${table.dispatchLeaseExpiresAt} >= ${table.createdAt})
+				AND (${table.dispatchedAt} IS NULL
+					OR ${table.dispatchedAt} >= ${table.createdAt})`,
+		),
+		index("automation_conversion_events_dispatch_due_idx")
+			.on(
+				table.dispatchStatus,
+				table.nextDispatchAt,
+				table.dispatchLeaseExpiresAt,
+				table.id,
+			)
+			.where(sql`${table.dispatchStatus} IN ('pending', 'processing')`),
+		index("automation_conversion_events_dispatch_deadline_idx")
+			.on(table.dispatchDeadlineAt, table.id)
+			.where(sql`${table.dispatchStatus} IN ('pending', 'processing')`),
+		index("automation_conversion_events_manual_review_idx")
+			.on(table.updatedAt, table.id)
+			.where(sql`${table.dispatchStatus} = 'manual_review'`),
 		index("automation_conversion_events_org_created_idx").on(
 			table.organizationId,
 			table.createdAt,
@@ -7634,6 +12017,9 @@ export const automationConversionEvents = pgTable(
 			table.contactId,
 			table.createdAt,
 		),
+		index("automation_conversion_events_retention_idx")
+			.on(table.createdAt, table.id)
+			.where(sql`${table.dispatchStatus} = 'succeeded'`),
 	],
 );
 
@@ -7654,16 +12040,13 @@ export const automationNodeExecutions = pgTable(
 		visitOrdinal: integer("visit_ordinal").notNull(),
 		nodeKey: text("node_key").notNull(),
 		status: text("status", {
-			enum: ["claimed", "in_flight", "succeeded", "failed", "unknown"],
+			enum: ["claimed", "succeeded", "failed", "unknown"],
 		})
 			.notNull()
 			.default("claimed"),
 		attempts: integer("attempts").notNull().default(0),
 		leaseToken: integer("lease_token").notNull().default(0),
 		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
-		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
-			withTimezone: true,
-		}),
 		result: jsonb("result"),
 		error: jsonb("error"),
 		claimedAt: timestamp("claimed_at", { withTimezone: true })
@@ -7696,7 +12079,7 @@ export const automationNodeExecutions = pgTable(
 		),
 		check(
 			"automation_node_executions_status_check",
-			sql`${table.status} IN ('claimed', 'in_flight', 'succeeded', 'failed', 'unknown')`,
+			sql`${table.status} IN ('claimed', 'succeeded', 'failed', 'unknown')`,
 		),
 		check(
 			"automation_node_executions_counters_nonnegative_check",
@@ -7706,11 +12089,6 @@ export const automationNodeExecutions = pgTable(
 			"automation_node_executions_state_fields_check",
 			sql`(${table.status} = 'claimed'
 					AND ${table.leaseExpiresAt} IS NOT NULL
-					AND ${table.requestMayHaveBeenSentAt} IS NULL
-					AND ${table.completedAt} IS NULL)
-				OR (${table.status} = 'in_flight'
-					AND ${table.leaseExpiresAt} IS NOT NULL
-					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
 					AND ${table.completedAt} IS NULL)
 				OR (${table.status} IN ('succeeded', 'failed', 'unknown')
 					AND ${table.leaseExpiresAt} IS NULL
@@ -7719,13 +12097,18 @@ export const automationNodeExecutions = pgTable(
 		check(
 			"automation_node_executions_timestamp_order_check",
 			sql`${table.updatedAt} >= ${table.claimedAt}
-				AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.claimedAt})
 				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.claimedAt})`,
 		),
 		index("automation_node_executions_claim_idx").on(
 			table.status,
 			table.leaseExpiresAt,
 		),
+		index("automation_node_executions_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(
+				sql`${table.status} IN ('succeeded', 'failed', 'unknown')
+					AND ${table.completedAt} IS NOT NULL`,
+			),
 	],
 );
 
@@ -7740,7 +12123,9 @@ export const automationEffects = pgTable(
 		organizationId: text("organization_id").notNull(),
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 		effectKey: text("effect_key").notNull(),
-		kind: text("kind").notNull(),
+		kind: text("kind", {
+			enum: [...AUTOMATION_EFFECT_KINDS],
+		}).notNull(),
 		providerIdempotencyKey: text("provider_idempotency_key").notNull(),
 		status: text("status", {
 			enum: ["claimed", "in_flight", "succeeded", "failed", "unknown"],
@@ -7786,22 +12171,27 @@ export const automationEffects = pgTable(
 			sql`${table.status} IN ('claimed', 'in_flight', 'succeeded', 'failed', 'unknown')`,
 		),
 		check(
+			"automation_effects_kind_check",
+			sql`${table.kind} IN ('message_block', 'http_request', 'automation_action')`,
+		),
+		check(
 			"automation_effects_counters_nonnegative_check",
 			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
 		),
 		check(
 			"automation_effects_state_fields_check",
 			sql`(${table.status} = 'claimed'
-					AND ${table.leaseExpiresAt} IS NOT NULL
-					AND ${table.requestMayHaveBeenSentAt} IS NULL
-					AND ${table.completedAt} IS NULL)
-				OR (${table.status} = 'in_flight'
-					AND ${table.leaseExpiresAt} IS NOT NULL
-					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
-					AND ${table.completedAt} IS NULL)
-				OR (${table.status} IN ('succeeded', 'failed', 'unknown')
-					AND ${table.leaseExpiresAt} IS NULL
-					AND ${table.completedAt} IS NOT NULL)`,
+						AND ${table.leaseExpiresAt} IS NOT NULL
+						AND ${table.requestMayHaveBeenSentAt} IS NULL
+						AND ${table.completedAt} IS NULL)
+					OR (${table.status} = 'in_flight'
+						AND ${table.leaseExpiresAt} IS NOT NULL
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+						AND ${table.completedAt} IS NULL)
+					OR (${table.status} IN ('succeeded', 'failed', 'unknown')
+						AND ${table.leaseExpiresAt} IS NULL
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+						AND ${table.completedAt} IS NOT NULL)`,
 		),
 		check(
 			"automation_effects_timestamp_order_check",
@@ -7813,8 +12203,25 @@ export const automationEffects = pgTable(
 			table.status,
 			table.leaseExpiresAt,
 		),
+		index("automation_effects_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(
+				sql`${table.status} IN ('succeeded', 'failed', 'unknown')
+					AND ${table.completedAt} IS NOT NULL`,
+			),
 	],
 );
+
+export const AUTOMATION_STEP_OUTCOMES = [
+	"ok",
+	"wait_input",
+	"wait_delay",
+	"wait_event",
+	"end",
+	"failed",
+	"graph_changed",
+] as const;
+export const AUTOMATION_STEP_FAILURE_OUTCOME = "failed" as const;
 
 // Intentionally ordinary (non-partitioned) for the first production baseline.
 // Add partitioning only after measured volume justifies the operational burden.
@@ -7822,21 +12229,44 @@ export const automationStepRuns = pgTable(
 	"automation_step_runs",
 	{
 		id: bigserial("id", { mode: "bigint" }).primaryKey(),
-		runId: text("run_id")
-			.notNull()
-			.references(() => automationRuns.id, { onDelete: "cascade" }),
+		runId: text("run_id").notNull(),
 		automationId: text("automation_id").notNull(),
+		organizationId: text("organization_id").notNull(),
+		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 		nodeKey: text("node_key").notNull(),
-		nodeKind: text("node_kind").notNull(),
+		nodeKind: text("node_kind", {
+			enum: [...AUTOMATION_NODE_KINDS],
+		}).notNull(),
 		enteredViaPortKey: text("entered_via_port_key"),
 		exitedViaPortKey: text("exited_via_port_key"),
-		outcome: text("outcome").notNull(),
+		outcome: text("outcome", {
+			enum: [...AUTOMATION_STEP_OUTCOMES],
+		}).notNull(),
 		durationMs: integer("duration_ms").notNull().default(0),
 		payload: jsonb("payload"),
 		error: jsonb("error"),
 		executedAt: timestamp("executed_at", { withTimezone: true }).notNull(),
 	},
 	(table) => [
+		foreignKey({
+			columns: [
+				table.runId,
+				table.automationId,
+				table.organizationId,
+				table.scopeKey,
+			],
+			foreignColumns: [
+				automationRuns.id,
+				automationRuns.automationId,
+				automationRuns.organizationId,
+				automationRuns.scopeKey,
+			],
+			name: "automation_step_runs_run_auto_org_scope_fk",
+		}).onDelete("cascade"),
+		check(
+			"automation_step_runs_node_kind_check",
+			sql`${table.nodeKind} IN ('message', 'input', 'delay', 'wait_event', 'condition', 'randomizer', 'action_group', 'http_request', 'start_automation', 'social_profile_check', 'goto', 'end', 'unknown')`,
+		),
 		check(
 			"automation_step_runs_outcome_check",
 			sql`${table.outcome} IN ('ok', 'wait_input', 'wait_delay', 'wait_event', 'end', 'failed', 'graph_changed')`,
@@ -7850,8 +12280,20 @@ export const automationStepRuns = pgTable(
 			sql`${table.executedAt} DESC`,
 		),
 		index("idx_step_runs_auto_time").on(table.automationId, table.executedAt),
+		index("automation_step_runs_org_time_idx").on(
+			table.organizationId,
+			table.executedAt,
+			table.id,
+		),
+		index("automation_step_runs_org_scope_time_idx").on(
+			table.organizationId,
+			table.scopeKey,
+			table.executedAt,
+			table.id,
+		),
 		index("idx_step_runs_node_time").on(table.nodeKey, table.executedAt),
 		index("idx_step_runs_executed_brin").using("brin", table.executedAt),
+		index("automation_step_runs_retention_idx").on(table.executedAt, table.id),
 	],
 );
 
@@ -7864,17 +12306,14 @@ export const automationScheduledJobs = pgTable(
 		occurrenceId: text("occurrence_id")
 			.notNull()
 			.$defaultFn(() => generateId("aso_")),
-		runId: text("run_id").references(() => automationRuns.id, {
-			onDelete: "cascade",
-		}),
-		jobType: text("job_type").notNull(),
-		automationId: text("automation_id").references(() => automations.id, {
-			onDelete: "cascade",
-		}),
-		entrypointId: text("entrypoint_id").references(
-			() => automationEntrypoints.id,
-			{ onDelete: "cascade" },
-		),
+		organizationId: text("organization_id").notNull(),
+		scopeKey: text("scope_key").notNull(),
+		runId: text("run_id"),
+		jobType: text("job_type", {
+			enum: [...AUTOMATION_SCHEDULED_JOB_TYPES],
+		}).notNull(),
+		automationId: text("automation_id").notNull(),
+		entrypointId: text("entrypoint_id"),
 		runAt: timestamp("run_at", { withTimezone: true }).notNull(),
 		status: text("status", {
 			enum: ["pending", "processing", "done", "failed", "unknown"],
@@ -7894,6 +12333,36 @@ export const automationScheduledJobs = pgTable(
 	},
 	(table) => [
 		uniqueIndex("idx_scheduled_jobs_occurrence_uniq").on(table.occurrenceId),
+		foreignKey({
+			columns: [
+				table.runId,
+				table.automationId,
+				table.organizationId,
+				table.scopeKey,
+			],
+			foreignColumns: [
+				automationRuns.id,
+				automationRuns.automationId,
+				automationRuns.organizationId,
+				automationRuns.scopeKey,
+			],
+			name: "automation_scheduled_jobs_run_auto_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [
+				table.entrypointId,
+				table.automationId,
+				table.organizationId,
+				table.scopeKey,
+			],
+			foreignColumns: [
+				automationEntrypoints.id,
+				automationEntrypoints.automationId,
+				automationEntrypoints.organizationId,
+				automationEntrypoints.scopeKey,
+			],
+			name: "automation_scheduled_jobs_entrypoint_auto_org_scope_fk",
+		}).onDelete("cascade"),
 		check(
 			"automation_scheduled_jobs_status_check",
 			sql`${table.status} IN ('pending', 'processing', 'done', 'failed', 'unknown')`,
@@ -7904,7 +12373,40 @@ export const automationScheduledJobs = pgTable(
 		),
 		check(
 			"automation_scheduled_jobs_type_check",
-			sql`${table.jobType} IN ('resume_run', 'input_timeout', 'event_timeout', 'scheduled_trigger', 'webhook_reception_failure')`,
+			sql`${table.jobType} IN ('resume_run', 'input_timeout', 'event_timeout', 'internal_event', 'scheduled_trigger', 'webhook_reception_failure')`,
+		),
+		check(
+			"automation_scheduled_jobs_parent_union_check",
+			sql`(${table.jobType} IN ('resume_run', 'input_timeout', 'event_timeout', 'internal_event')
+					AND ${table.runId} IS NOT NULL
+					AND ${table.entrypointId} IS NULL)
+				OR (${table.jobType} IN ('scheduled_trigger', 'webhook_reception_failure')
+					AND ${table.runId} IS NULL
+					AND ${table.entrypointId} IS NOT NULL)`,
+		),
+		check(
+			"automation_scheduled_jobs_internal_event_payload_check",
+			sql`${table.jobType} <> 'internal_event'
+				OR (
+					jsonb_typeof(${table.payload}) = 'object'
+					AND ${table.payload}->>'version' = '1'
+					AND ${table.payload}->>'kind' IN ('tag_applied', 'tag_removed', 'field_changed')
+					AND length(btrim(${table.payload}->>'action_id')) BETWEEN 1 AND 512
+					AND jsonb_typeof(${table.payload}->'event_depth') = 'number'
+					AND (${table.payload}->>'event_depth')::integer BETWEEN 1 AND 5
+					AND (
+						(
+							${table.payload}->>'kind' IN ('tag_applied', 'tag_removed')
+							AND length(btrim(${table.payload}->>'tag_id')) BETWEEN 1 AND 512
+						)
+						OR (
+							${table.payload}->>'kind' = 'field_changed'
+							AND length(btrim(${table.payload}->>'field_key')) BETWEEN 1 AND 512
+							AND ${table.payload} ? 'field_value_before'
+							AND ${table.payload} ? 'field_value_after'
+						)
+					)
+				)`,
 		),
 		check(
 			"automation_scheduled_jobs_lease_state_check",
@@ -7915,7 +12417,11 @@ export const automationScheduledJobs = pgTable(
 		),
 		check(
 			"automation_scheduled_jobs_unknown_boundary_check",
-			sql`${table.status} <> 'unknown' OR ${table.effectStartedAt} IS NOT NULL`,
+			sql`(${table.effectStartedAt} IS NULL
+					OR ${table.jobType} = 'webhook_reception_failure')
+				AND (${table.status} <> 'unknown'
+					OR (${table.jobType} = 'webhook_reception_failure'
+						AND ${table.effectStartedAt} IS NOT NULL))`,
 		),
 		index("idx_scheduled_jobs_sweep").on(
 			table.status,
@@ -7925,6 +12431,15 @@ export const automationScheduledJobs = pgTable(
 		index("idx_scheduled_jobs_run").on(table.runId),
 		index("idx_scheduled_jobs_automation").on(table.automationId),
 		index("idx_scheduled_jobs_entrypoint").on(table.entrypointId),
+		index("idx_scheduled_jobs_org_status_due").on(
+			table.organizationId,
+			table.status,
+			table.runAt,
+			table.id,
+		),
+		index("automation_scheduled_jobs_retention_idx")
+			.on(table.runAt, table.id)
+			.where(sql`${table.status} IN ('done', 'failed', 'unknown')`),
 	],
 );
 
@@ -7996,7 +12511,9 @@ export const segments = pgTable(
 			.generatedAlwaysAs(workspaceScopeKeySql()),
 		name: text("name").notNull(),
 		description: text("description"),
-		filter: jsonb("filter").notNull(), // e.g. {all:[{tag:'vip'}, {field:'country', op:'eq', v:'IT'}]}
+		// Static segments have no filter. Dynamic filters are validated by the API
+		// and evaluated from contact/custom-field state rather than materialized.
+		filter: jsonb("filter"),
 		isDynamic: boolean("is_dynamic").notNull().default(true),
 		memberCount: integer("member_count").notNull().default(0),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -8013,6 +12530,12 @@ export const segments = pgTable(
 			table.organizationId,
 			table.scopeKey,
 		),
+		unique("segments_static_membership_parent_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.isDynamic,
+		),
 		foreignKey({
 			columns: [table.workspaceId, table.organizationId],
 			foreignColumns: [workspaces.id, workspaces.organizationId],
@@ -8021,6 +12544,29 @@ export const segments = pgTable(
 		check(
 			"segments_member_count_nonnegative_check",
 			sql`${table.memberCount} >= 0`,
+		),
+		check(
+			"segments_filter_mode_check",
+			sql`(NOT ${table.isDynamic} AND ${table.filter} IS NULL)
+				OR (${table.isDynamic}
+					AND ${table.filter} IS NOT NULL
+					AND jsonb_typeof(${table.filter}) = 'object'
+					AND (${table.filter} - 'all' - 'any' - 'none') = '{}'::jsonb
+					AND (
+						CASE WHEN jsonb_typeof(${table.filter} -> 'all') = 'array'
+							THEN jsonb_array_length(${table.filter} -> 'all') ELSE 0 END
+						+ CASE WHEN jsonb_typeof(${table.filter} -> 'any') = 'array'
+							THEN jsonb_array_length(${table.filter} -> 'any') ELSE 0 END
+						+ CASE WHEN jsonb_typeof(${table.filter} -> 'none') = 'array'
+							THEN jsonb_array_length(${table.filter} -> 'none') ELSE 0 END
+					) BETWEEN 1 AND 50
+					AND (${table.filter} -> 'all' IS NULL OR jsonb_typeof(${table.filter} -> 'all') = 'array')
+					AND (${table.filter} -> 'any' IS NULL OR jsonb_typeof(${table.filter} -> 'any') = 'array')
+					AND (${table.filter} -> 'none' IS NULL OR jsonb_typeof(${table.filter} -> 'none') = 'array'))`,
+		),
+		check(
+			"segments_dynamic_member_count_zero_check",
+			sql`NOT ${table.isDynamic} OR ${table.memberCount} = 0`,
 		),
 		index("segments_org_idx").on(table.organizationId),
 		index("segments_workspace_idx").on(table.workspaceId),
@@ -8036,6 +12582,9 @@ export const contactSegmentMemberships = pgTable(
 			.notNull()
 			.references(() => organization.id),
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
+		// Projected from segments.is_dynamic. The false CHECK plus composite FK
+		// makes this relation structurally incapable of storing dynamic matches.
+		segmentIsDynamic: boolean("segment_is_dynamic").notNull().default(false),
 		source: text("source").notNull().default("manual"),
 		createdByUserId: text("created_by_user_id").references(() => user.id, {
 			onDelete: "set null",
@@ -8051,9 +12600,19 @@ export const contactSegmentMemberships = pgTable(
 			name: "contact_segment_memberships_contact_org_scope_fk",
 		}).onDelete("cascade"),
 		foreignKey({
-			columns: [table.segmentId, table.organizationId, table.scopeKey],
-			foreignColumns: [segments.id, segments.organizationId, segments.scopeKey],
-			name: "contact_segment_memberships_segment_org_scope_fk",
+			columns: [
+				table.segmentId,
+				table.organizationId,
+				table.scopeKey,
+				table.segmentIsDynamic,
+			],
+			foreignColumns: [
+				segments.id,
+				segments.organizationId,
+				segments.scopeKey,
+				segments.isDynamic,
+			],
+			name: "contact_segment_memberships_static_segment_fk",
 		}).onDelete("cascade"),
 		primaryKey({
 			columns: [table.contactId, table.segmentId],
@@ -8062,6 +12621,10 @@ export const contactSegmentMemberships = pgTable(
 		index("contact_segment_memberships_org_idx").on(table.organizationId),
 		index("contact_segment_memberships_segment_idx").on(table.segmentId),
 		index("contact_segment_memberships_contact_idx").on(table.contactId),
+		check(
+			"contact_segment_memberships_static_only_check",
+			sql`${table.segmentIsDynamic} = false`,
+		),
 	],
 );
 
@@ -8106,6 +12669,107 @@ export const subscriptionLists = pgTable(
 	],
 );
 
+export const contactSubscriptionSourceEnum = pgEnum(
+	"contact_subscription_source",
+	["automation", "manual", "import", "api"],
+);
+
+export const contactSubscriptionEventTypeEnum = pgEnum(
+	"contact_subscription_event_type",
+	CONTACT_SUBSCRIPTION_EVENT_TYPES,
+);
+
+/**
+ * Append-only evidence for every subscription-list state authority change.
+ *
+ * `contact_id` deliberately is not a foreign key to the live contact row:
+ * contact merges delete the source row but must not rewrite or cascade-delete
+ * its history. Privacy erasure explicitly drains the complete merge lineage.
+ */
+export const contactSubscriptionEvents = pgTable(
+	"contact_subscription_events",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("subevt_")),
+		ingestionSequence: bigserial("ingestion_sequence", {
+			mode: "bigint",
+		}).notNull(),
+		organizationId: text("organization_id").notNull(),
+		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
+		contactId: text("contact_id").notNull(),
+		listId: text("list_id").notNull(),
+		type: contactSubscriptionEventTypeEnum("type").notNull(),
+		source: contactSubscriptionSourceEnum("source").notNull(),
+		actorId: text("actor_id"),
+		mergedFromContactId: text("merged_from_contact_id"),
+		occurredAt: timestamp("occurred_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.listId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				subscriptionLists.id,
+				subscriptionLists.organizationId,
+				subscriptionLists.scopeKey,
+			],
+			name: "contact_subscription_events_list_org_scope_fk",
+		}).onDelete("cascade"),
+		unique("contact_subscription_events_ingestion_sequence_uniq").on(
+			table.ingestionSequence,
+		),
+		unique("contact_subscription_events_projection_source_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.listId,
+			table.contactId,
+			table.type,
+			table.source,
+			table.occurredAt,
+			table.ingestionSequence,
+		),
+		check(
+			"contact_subscription_events_sequence_positive_check",
+			sql`${table.ingestionSequence} > 0`,
+		),
+		check(
+			"contact_subscription_events_merge_origin_check",
+			sql`${table.mergedFromContactId} IS NULL
+				OR ${table.mergedFromContactId} <> ${table.contactId}`,
+		),
+		check(
+			"contact_subscription_events_timestamp_order_check",
+			sql`${table.occurredAt} <= ${table.createdAt} + interval '5 minutes'`,
+		),
+		index("contact_subscription_events_org_list_occurred_idx").on(
+			table.organizationId,
+			table.listId,
+			table.occurredAt,
+			table.id,
+		),
+		index("contact_subscription_events_org_contact_occurred_idx").on(
+			table.organizationId,
+			table.contactId,
+			table.occurredAt,
+			table.id,
+		),
+		index("contact_subscription_events_merge_lineage_idx")
+			.on(table.organizationId, table.mergedFromContactId, table.contactId)
+			.where(sql`${table.mergedFromContactId} IS NOT NULL`),
+	],
+);
+
+/**
+ * Indexed current-state projection. The wide source foreign key is
+ * intentional: the state, source, clock, tenant/scope identity, and sequence
+ * must all come from one exact immutable event.
+ */
 export const contactSubscriptions = pgTable(
 	"contact_subscriptions",
 	{
@@ -8113,11 +12777,19 @@ export const contactSubscriptions = pgTable(
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 		contactId: text("contact_id").notNull(),
 		listId: text("list_id").notNull(),
+		state: contactSubscriptionEventTypeEnum("state").notNull(),
 		subscribedAt: timestamp("subscribed_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
 		unsubscribedAt: timestamp("unsubscribed_at", { withTimezone: true }),
-		source: text("source"), // 'automation' | 'manual' | 'import' | 'api'
+		source: contactSubscriptionSourceEnum("source").notNull(),
+		lastEventId: text("last_event_id").notNull(),
+		lastEventSequence: bigint("last_event_sequence", {
+			mode: "bigint",
+		}).notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
 	},
 	(table) => [
 		foreignKey({
@@ -8134,15 +12806,75 @@ export const contactSubscriptions = pgTable(
 			],
 			name: "contact_subscriptions_list_org_scope_fk",
 		}).onDelete("cascade"),
-		primaryKey({ columns: [table.contactId, table.listId] }),
-		index("contact_subscriptions_list_idx").on(table.listId),
+		foreignKey({
+			columns: [
+				table.lastEventId,
+				table.organizationId,
+				table.scopeKey,
+				table.listId,
+				table.contactId,
+				table.state,
+				table.source,
+				table.updatedAt,
+				table.lastEventSequence,
+			],
+			foreignColumns: [
+				contactSubscriptionEvents.id,
+				contactSubscriptionEvents.organizationId,
+				contactSubscriptionEvents.scopeKey,
+				contactSubscriptionEvents.listId,
+				contactSubscriptionEvents.contactId,
+				contactSubscriptionEvents.type,
+				contactSubscriptionEvents.source,
+				contactSubscriptionEvents.occurredAt,
+				contactSubscriptionEvents.ingestionSequence,
+			],
+			name: "contact_subscriptions_projection_source_fk",
+		}),
+		check(
+			"contact_subscriptions_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.subscribedAt}
+				AND (${table.unsubscribedAt} IS NULL
+					OR (${table.unsubscribedAt} >= ${table.subscribedAt}
+						AND ${table.updatedAt} >= ${table.unsubscribedAt}))`,
+		),
+		check(
+			"contact_subscriptions_state_check",
+			sql`(${table.state} = 'subscribed' AND ${table.unsubscribedAt} IS NULL)
+				OR (${table.state} = 'unsubscribed' AND ${table.unsubscribedAt} IS NOT NULL)`,
+		),
+		check(
+			"contact_subscriptions_sequence_positive_check",
+			sql`${table.lastEventSequence} > 0`,
+		),
+		primaryKey({
+			columns: [table.organizationId, table.listId, table.contactId],
+			name: "contact_subscriptions_pk",
+		}),
+		index("contact_subscriptions_org_contact_list_idx").on(
+			table.organizationId,
+			table.contactId,
+			table.listId,
+		),
+		index("contact_subscriptions_org_list_updated_idx").on(
+			table.organizationId,
+			table.listId,
+			table.updatedAt,
+			table.contactId,
+		),
+		index("contact_subscriptions_org_list_active_idx")
+			.on(table.organizationId, table.listId, table.updatedAt, table.contactId)
+			.where(sql`${table.unsubscribedAt} IS NULL`),
+		index("contact_subscriptions_org_list_unsubscribed_idx")
+			.on(table.organizationId, table.listId, table.updatedAt, table.contactId)
+			.where(sql`${table.unsubscribedAt} IS NOT NULL`),
 	],
 );
 
 // ---------------------------------------------------------------------------
 // AI Knowledge Base (powers ai_agent nodes)
-// Note: embeddings stored as real[] for Hyperdrive compatibility without pgvector.
-// Migrate to pgvector + `vector(1536)` in a focused follow-up once extension is enabled.
+// `vector` is a baseline-required extension. The public provider registry is
+// closed so every row can use the single HNSW cosine index below.
 // ---------------------------------------------------------------------------
 
 export const aiKnowledgeBases = pgTable(
@@ -8162,12 +12894,15 @@ export const aiKnowledgeBases = pgTable(
 			.generatedAlwaysAs(workspaceScopeKeySql()),
 		name: text("name").notNull(),
 		description: text("description"),
+		embeddingProvider: text("embedding_provider")
+			.notNull()
+			.default(AI_EMBEDDING_PROVIDER),
 		embeddingModel: text("embedding_model")
 			.notNull()
-			.default("text-embedding-3-small"),
+			.default(AI_EMBEDDING_MODEL),
 		embeddingDimensions: integer("embedding_dimensions")
 			.notNull()
-			.default(1536),
+			.default(AI_EMBEDDING_DIMENSIONS),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -8187,8 +12922,8 @@ export const aiKnowledgeBases = pgTable(
 			name: "ai_knowledge_bases_workspace_org_fk",
 		}).onDelete("restrict"),
 		check(
-			"ai_knowledge_bases_dimensions_positive_check",
-			sql`${table.embeddingDimensions} > 0`,
+			"ai_knowledge_bases_embedding_registry_check",
+			sql`${table.embeddingProvider} = ${ddlTextLiteral(AI_EMBEDDING_PROVIDER)} AND ${table.embeddingModel} = ${ddlTextLiteral(AI_EMBEDDING_MODEL)} AND ${table.embeddingDimensions} = ${ddlIntegerLiteral(AI_EMBEDDING_DIMENSIONS)}`,
 		),
 		index("ai_knowledge_bases_org_idx").on(table.organizationId),
 	],
@@ -8203,12 +12938,39 @@ export const aiKnowledgeDocuments = pgTable(
 		kbId: text("kb_id").notNull(),
 		organizationId: text("organization_id").notNull(),
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
-		sourceType: text("source_type").notNull(), // 'url' | 'file' | 'text'
-		sourceRef: text("source_ref").notNull(),
+		sourceType: text("source_type", {
+			enum: [...AI_KNOWLEDGE_SOURCE_TYPES],
+		}).notNull(),
+		sourceUrl: text("source_url"),
+		sourceMediaId: text("source_media_id"),
+		sourceText: text("source_text"),
 		title: text("title"),
-		status: text("status").notNull().default("pending"), // pending | processing | ready | failed
+		status: text("status", {
+			enum: [
+				"pending",
+				"in_flight",
+				"ready",
+				"retryable_failure",
+				"terminal_failure",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		attemptId: text("attempt_id"),
+		attemptCount: integer("attempt_count").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		deadlineAt: timestamp("deadline_at", { withTimezone: true })
+			.notNull()
+			.default(sql`now() + interval '24 hours'`),
+		claimedAt: timestamp("claimed_at", { withTimezone: true }),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 		lastCrawledAt: timestamp("last_crawled_at", { withTimezone: true }),
-		error: text("error"),
+		contentHash: text("content_hash"),
+		lastErrorCode: text("last_error_code"),
+		lastError: text("last_error"),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -8231,11 +12993,57 @@ export const aiKnowledgeDocuments = pgTable(
 			],
 			name: "ai_knowledge_documents_kb_org_scope_fk",
 		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.sourceMediaId, table.organizationId, table.scopeKey],
+			foreignColumns: [media.id, media.organizationId, media.scopeKey],
+			name: "ai_knowledge_documents_media_org_scope_fk",
+		}).onDelete("restrict"),
+		check(
+			"ai_knowledge_documents_source_type_check",
+			sql`${table.sourceType} IN ('url', 'media', 'text')`,
+		),
+		check(
+			"ai_knowledge_documents_source_check",
+			sql`(${table.sourceType} = 'url' AND ${table.sourceUrl} IS NOT NULL AND ${table.sourceMediaId} IS NULL AND ${table.sourceText} IS NULL) OR (${table.sourceType} = 'media' AND ${table.sourceUrl} IS NULL AND ${table.sourceMediaId} IS NOT NULL AND ${table.sourceText} IS NULL) OR (${table.sourceType} = 'text' AND ${table.sourceUrl} IS NULL AND ${table.sourceMediaId} IS NULL AND ${table.sourceText} IS NOT NULL)`,
+		),
 		check(
 			"ai_knowledge_documents_status_check",
-			sql`${table.status} IN ('pending', 'processing', 'ready', 'failed')`,
+			sql`${table.status} IN ('pending', 'in_flight', 'ready', 'retryable_failure', 'terminal_failure')`,
+		),
+		check(
+			"ai_knowledge_documents_attempt_count_check",
+			sql`${table.attemptCount} BETWEEN 0 AND ${ddlIntegerLiteral(AI_KNOWLEDGE_DOCUMENT_MAX_ATTEMPTS)}`,
+		),
+		check(
+			"ai_knowledge_documents_deadline_check",
+			sql`${table.deadlineAt} > ${table.createdAt}`,
+		),
+		check(
+			"ai_knowledge_documents_lease_check",
+			sql`(${table.status} = 'in_flight' AND ${table.attemptId} IS NOT NULL AND ${table.claimedAt} IS NOT NULL AND ${table.leaseExpiresAt} > ${table.claimedAt}) OR (${table.status} <> 'in_flight' AND ${table.attemptId} IS NULL AND ${table.claimedAt} IS NULL AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"ai_knowledge_documents_terminal_check",
+			sql`(${table.status} = 'pending' AND ${table.completedAt} IS NULL AND ${table.lastErrorCode} IS NULL AND ${table.lastError} IS NULL AND ${table.contentHash} IS NULL)
+				OR (${table.status} = 'in_flight' AND ${table.completedAt} IS NULL AND ${table.lastErrorCode} IS NULL AND ${table.lastError} IS NULL)
+				OR (${table.status} = 'retryable_failure' AND ${table.completedAt} IS NULL AND ${table.lastErrorCode} IS NOT NULL AND ${table.lastError} IS NOT NULL)
+				OR (${table.status} = 'ready' AND ${table.completedAt} IS NOT NULL AND ${table.lastCrawledAt} IS NOT NULL AND ${table.contentHash} IS NOT NULL AND ${table.lastErrorCode} IS NULL AND ${table.lastError} IS NULL)
+				OR (${table.status} = 'terminal_failure' AND ${table.completedAt} IS NOT NULL AND ${table.lastErrorCode} IS NOT NULL AND ${table.lastError} IS NOT NULL)`,
+		),
+		check(
+			"ai_knowledge_documents_content_hash_check",
+			sql`${table.contentHash} IS NULL OR ${table.contentHash} ~ '^[0-9a-f]{64}$'`,
 		),
 		index("ai_knowledge_documents_kb_idx").on(table.kbId),
+		index("ai_knowledge_documents_due_idx").on(
+			table.status,
+			table.nextAttemptAt,
+			table.id,
+		),
+		index("ai_knowledge_documents_deadline_idx").on(table.deadlineAt, table.id),
+		index("ai_knowledge_documents_failure_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(sql`${table.status} = 'terminal_failure'`),
 	],
 );
 
@@ -8250,7 +13058,10 @@ export const aiKnowledgeChunks = pgTable(
 		organizationId: text("organization_id").notNull(),
 		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
 		content: text("content").notNull(),
-		embedding: real("embedding").array(), // 1536-dim float array; swap to pgvector in follow-up
+		contentHash: text("content_hash").notNull(),
+		embedding: vector("embedding", {
+			dimensions: AI_EMBEDDING_DIMENSIONS,
+		}).notNull(),
 		chunkIndex: integer("chunk_index").notNull(),
 		tokenCount: integer("token_count"),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -8284,8 +13095,16 @@ export const aiKnowledgeChunks = pgTable(
 			"ai_knowledge_chunks_counts_nonnegative_check",
 			sql`${table.chunkIndex} >= 0 AND (${table.tokenCount} IS NULL OR ${table.tokenCount} >= 0)`,
 		),
+		check(
+			"ai_knowledge_chunks_content_hash_check",
+			sql`${table.contentHash} ~ '^[0-9a-f]{64}$'`,
+		),
 		index("ai_knowledge_chunks_doc_idx").on(table.documentId),
 		index("ai_knowledge_chunks_kb_idx").on(table.kbId),
+		index("ai_knowledge_chunks_embedding_hnsw_idx").using(
+			"hnsw",
+			table.embedding.op("vector_cosine_ops"),
+		),
 	],
 );
 
@@ -8306,14 +13125,40 @@ export const aiAgents = pgTable(
 			.generatedAlwaysAs(workspaceScopeKeySql()),
 		name: text("name").notNull(),
 		persona: text("persona"),
-		guardrails: text("guardrails"),
-		model: text("model").notNull().default("claude-haiku-4-5"),
+		guardrails: jsonb("guardrails")
+			.$type<{
+				version: 1;
+				blockedTopics: string[];
+				fallbackMessage: string;
+			}>()
+			.notNull()
+			.default({
+				version: 1,
+				blockedTopics: [],
+				fallbackMessage:
+					"I can’t help with that request. A team member can take over.",
+			}),
+		provider: text("provider").notNull().default(AI_INFERENCE_PROVIDER),
+		model: text("model").notNull().default(AI_INFERENCE_MODEL),
 		kbId: text("kb_id").references(() => aiKnowledgeBases.id, {
 			onDelete: "set null",
 		}),
-		handoffStrategy: jsonb("handoff_strategy"), // { keywords: [], confidenceThreshold: 0.6, assignTo: userId }
-		temperature: real("temperature").default(0.7),
-		maxTokens: integer("max_tokens").default(1024),
+		handoffStrategy: jsonb("handoff_strategy")
+			.$type<{
+				version: 1;
+				keywords: string[];
+				confidenceThreshold: number;
+			}>()
+			.notNull()
+			.default({
+				version: 1,
+				keywords: [],
+				confidenceThreshold: 0.6,
+			}),
+		handoffPrincipalId: text("handoff_principal_id"),
+		temperature: real("temperature").notNull().default(0.7),
+		maxTokens: integer("max_tokens").notNull().default(1024),
+		enabled: boolean("enabled").notNull().default(true),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -8341,9 +13186,49 @@ export const aiAgents = pgTable(
 			],
 			name: "ai_agents_kb_org_scope_fk",
 		}),
+		foreignKey({
+			columns: [table.handoffPrincipalId, table.organizationId],
+			foreignColumns: [
+				organizationPrincipals.id,
+				organizationPrincipals.organizationId,
+			],
+			name: "ai_agents_handoff_principal_org_fk",
+		}).onDelete("restrict"),
 		check(
 			"ai_agents_parameters_check",
-			sql`(${table.temperature} IS NULL OR (${table.temperature} >= 0 AND ${table.temperature} <= 2)) AND (${table.maxTokens} IS NULL OR ${table.maxTokens} > 0)`,
+			sql`${table.temperature} >= 0 AND ${table.temperature} <= 2 AND ${table.maxTokens} BETWEEN 1 AND 8192`,
+		),
+		check(
+			"ai_agents_model_registry_check",
+			sql`${table.provider} = ${ddlTextLiteral(AI_INFERENCE_PROVIDER)} AND ${table.model} = ${ddlTextLiteral(AI_INFERENCE_MODEL)}`,
+		),
+		check(
+			"ai_agents_guardrails_shape_check",
+			sql`jsonb_typeof(${table.guardrails}) = 'object'
+				AND (${table.guardrails} - 'version' - 'blockedTopics' - 'fallbackMessage') = '{}'::jsonb
+				AND ${table.guardrails}->>'version' = '1'
+				AND jsonb_typeof(${table.guardrails}->'blockedTopics') = 'array'
+				AND jsonb_array_length(${table.guardrails}->'blockedTopics') <= 100
+				AND NOT jsonb_path_exists(
+					${table.guardrails}->'blockedTopics',
+					'$[*] ? (@.type() != "string" || @ like_regex "^$" || @ like_regex "^.{121}" flag "s")'
+				)
+				AND jsonb_typeof(${table.guardrails}->'fallbackMessage') = 'string'
+				AND length(${table.guardrails}->>'fallbackMessage') BETWEEN 1 AND 1000`,
+		),
+		check(
+			"ai_agents_handoff_shape_check",
+			sql`jsonb_typeof(${table.handoffStrategy}) = 'object'
+				AND (${table.handoffStrategy} - 'version' - 'keywords' - 'confidenceThreshold') = '{}'::jsonb
+				AND ${table.handoffStrategy}->>'version' = '1'
+				AND jsonb_typeof(${table.handoffStrategy}->'keywords') = 'array'
+				AND jsonb_array_length(${table.handoffStrategy}->'keywords') <= 100
+				AND NOT jsonb_path_exists(
+					${table.handoffStrategy}->'keywords',
+					'$[*] ? (@.type() != "string" || @ like_regex "^$" || @ like_regex "^.{121}" flag "s")'
+				)
+				AND jsonb_typeof(${table.handoffStrategy}->'confidenceThreshold') = 'number'
+				AND (${table.handoffStrategy}->>'confidenceThreshold')::real BETWEEN 0 AND 1`,
 		),
 		index("ai_agents_org_idx").on(table.organizationId),
 	],
@@ -8352,92 +13237,6 @@ export const aiAgents = pgTable(
 // ---------------------------------------------------------------------------
 // Growth tools (Ref URLs, QR codes, Landing pages)
 // ---------------------------------------------------------------------------
-
-export const refUrls = pgTable(
-	"ref_urls",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("ref_")),
-		organizationId: text("organization_id")
-			.notNull()
-			.references(() => organization.id),
-		workspaceId: text("workspace_id").references(() => workspaces.id, {
-			onDelete: "restrict",
-		}),
-		scopeKey: text("scope_key")
-			.notNull()
-			.generatedAlwaysAs(workspaceScopeKeySql()),
-		slug: text("slug").notNull(),
-		automationId: text("automation_id").references(() => automations.id, {
-			onDelete: "set null",
-		}),
-		uses: integer("uses").notNull().default(0),
-		enabled: boolean("enabled").notNull().default(true),
-		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-	},
-	(table) => [
-		unique("ref_urls_id_org_scope_uniq").on(
-			table.id,
-			table.organizationId,
-			table.scopeKey,
-		),
-		foreignKey({
-			columns: [table.workspaceId, table.organizationId],
-			foreignColumns: [workspaces.id, workspaces.organizationId],
-			name: "ref_urls_workspace_org_fk",
-		}).onDelete("restrict"),
-		foreignKey({
-			columns: [table.automationId, table.organizationId, table.scopeKey],
-			foreignColumns: [
-				automations.id,
-				automations.organizationId,
-				automations.scopeKey,
-			],
-			name: "ref_urls_automation_org_scope_fk",
-		}),
-		uniqueIndex("ref_urls_org_scope_slug_uniq").on(
-			table.organizationId,
-			table.scopeKey,
-			table.slug,
-		),
-		check("ref_urls_uses_nonnegative_check", sql`${table.uses} >= 0`),
-		index("ref_urls_automation_idx").on(table.automationId),
-	],
-);
-
-export const qrCodes = pgTable(
-	"qr_codes",
-	{
-		id: text("id")
-			.primaryKey()
-			.$defaultFn(() => generateId("qr_")),
-		organizationId: text("organization_id")
-			.notNull()
-			.references(() => organization.id),
-		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
-		refUrlId: text("ref_url_id").notNull(),
-		imageR2Key: text("image_r2_key"),
-		scanCount: integer("scan_count").notNull().default(0),
-		createdAt: timestamp("created_at", { withTimezone: true })
-			.defaultNow()
-			.notNull(),
-	},
-	(table) => [
-		foreignKey({
-			columns: [table.refUrlId, table.organizationId, table.scopeKey],
-			foreignColumns: [refUrls.id, refUrls.organizationId, refUrls.scopeKey],
-			name: "qr_codes_ref_url_org_scope_fk",
-		}).onDelete("cascade"),
-		check(
-			"qr_codes_scan_count_nonnegative_check",
-			sql`${table.scanCount} >= 0`,
-		),
-		index("qr_codes_org_idx").on(table.organizationId),
-	],
-);
 
 export const landingPages = pgTable(
 	"landing_pages",
@@ -8456,12 +13255,12 @@ export const landingPages = pgTable(
 			.generatedAlwaysAs(workspaceScopeKeySql()),
 		slug: text("slug").notNull(),
 		title: text("title").notNull(),
-		config: jsonb("config").notNull(), // page config: blocks, theme, form fields, cta
+		config: jsonb("config").notNull(),
 		automationId: text("automation_id").references(() => automations.id, {
 			onDelete: "set null",
 		}),
-		visits: integer("visits").notNull().default(0),
-		conversions: integer("conversions").notNull().default(0),
+		visits: bigint("visits", { mode: "number" }).notNull().default(0),
+		conversions: bigint("conversions", { mode: "number" }).notNull().default(0),
 		enabled: boolean("enabled").notNull().default(true),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.defaultNow()
@@ -8496,9 +13295,538 @@ export const landingPages = pgTable(
 			table.slug,
 		),
 		check(
+			"landing_pages_slug_format_check",
+			sql`${table.slug} ~ '^[a-z0-9][a-z0-9_-]{0,99}$'`,
+		),
+		check(
+			"landing_pages_config_version_check",
+			sql`jsonb_typeof(${table.config}) = 'object'
+				AND ${table.config} ->> 'version' = '1'`,
+		),
+		check(
 			"landing_pages_counts_nonnegative_check",
-			sql`${table.visits} >= 0 AND ${table.conversions} >= 0 AND ${table.conversions} <= ${table.visits}`,
+			sql`${table.visits} BETWEEN 0 AND 9007199254740991
+				AND ${table.conversions} BETWEEN 0 AND 9007199254740991`,
+		),
+		check(
+			"landing_pages_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}`,
 		),
 		index("landing_pages_automation_idx").on(table.automationId),
+	],
+);
+
+export const refUrls = pgTable(
+	"ref_urls",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("ref_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		slug: text("slug").notNull(),
+		destinationType: text("destination_type", {
+			enum: [...REF_URL_DESTINATION_TYPES],
+		}).notNull(),
+		destinationUrl: text("destination_url"),
+		landingPageId: text("landing_page_id"),
+		automationId: text("automation_id").references(() => automations.id, {
+			onDelete: "set null",
+		}),
+		uses: bigint("uses", { mode: "number" }).notNull().default(0),
+		enabled: boolean("enabled").notNull().default(true),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		unique("ref_urls_id_org_scope_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ref_urls_workspace_org_fk",
+		}).onDelete("restrict"),
+		foreignKey({
+			columns: [table.automationId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				automations.id,
+				automations.organizationId,
+				automations.scopeKey,
+			],
+			name: "ref_urls_automation_org_scope_fk",
+		}),
+		foreignKey({
+			columns: [table.landingPageId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				landingPages.id,
+				landingPages.organizationId,
+				landingPages.scopeKey,
+			],
+			name: "ref_urls_landing_page_org_scope_fk",
+		}).onDelete("restrict"),
+		uniqueIndex("ref_urls_org_scope_slug_uniq").on(
+			table.organizationId,
+			table.scopeKey,
+			table.slug,
+		),
+		check(
+			"ref_urls_slug_format_check",
+			sql`${table.slug} ~ '^[a-z0-9][a-z0-9_-]{0,99}$'`,
+		),
+		check(
+			"ref_urls_destination_type_check",
+			sql`${table.destinationType} IN ('https_url', 'landing_page')`,
+		),
+		check(
+			"ref_urls_destination_union_check",
+			sql`(${table.destinationType} = 'https_url'
+					AND ${table.destinationUrl} IS NOT NULL
+					AND ${table.destinationUrl} ~ '^https://'
+					AND ${table.landingPageId} IS NULL)
+				OR (${table.destinationType} = 'landing_page'
+					AND ${table.destinationUrl} IS NULL
+					AND ${table.landingPageId} IS NOT NULL)`,
+		),
+		check(
+			"ref_urls_uses_safe_integer_check",
+			sql`${table.uses} BETWEEN 0 AND 9007199254740991`,
+		),
+		check(
+			"ref_urls_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}`,
+		),
+		index("ref_urls_automation_idx").on(table.automationId),
+		index("ref_urls_landing_page_idx").on(table.landingPageId),
+	],
+);
+
+export const qrCodes = pgTable(
+	"qr_codes",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("qr_")),
+		publicId: text("public_id")
+			.notNull()
+			.unique()
+			.$defaultFn(() => generateId("qrp_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
+		refUrlId: text("ref_url_id").notNull(),
+		label: text("label").notNull(),
+		campaignKey: text("campaign_key"),
+		scanCount: bigint("scan_count", { mode: "number" }).notNull().default(0),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		unique("qr_codes_id_org_scope_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+		),
+		foreignKey({
+			columns: [table.refUrlId, table.organizationId, table.scopeKey],
+			foreignColumns: [refUrls.id, refUrls.organizationId, refUrls.scopeKey],
+			name: "qr_codes_ref_url_org_scope_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("qr_codes_ref_url_label_uniq").on(
+			table.refUrlId,
+			sql`lower(${table.label})`,
+		),
+		check(
+			"qr_codes_scan_count_safe_integer_check",
+			sql`${table.scanCount} BETWEEN 0 AND 9007199254740991`,
+		),
+		check(
+			"qr_codes_public_id_format_check",
+			sql`${table.publicId} ~ '^qrp_[0-9a-f]{32}$'`,
+		),
+		check(
+			"qr_codes_label_check",
+			sql`length(btrim(${table.label})) BETWEEN 1 AND 120`,
+		),
+		check(
+			"qr_codes_campaign_key_check",
+			sql`${table.campaignKey} IS NULL OR ${table.campaignKey} ~ '^[a-z0-9][a-z0-9_-]{0,99}$'`,
+		),
+		check(
+			"qr_codes_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.createdAt}`,
+		),
+		index("qr_codes_org_scope_created_idx").on(
+			table.organizationId,
+			table.scopeKey,
+			table.createdAt,
+			table.id,
+		),
+		index("qr_codes_ref_url_idx").on(table.refUrlId),
+	],
+);
+
+/**
+ * Immutable public-growth occurrence plus its durable automation-dispatch
+ * state. One row is the idempotency fence for aggregate counters and the
+ * outbox work item, so a request can never commit a count without its event.
+ */
+export const publicGrowthEvents = pgTable(
+	"public_growth_events",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("pge_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		scopeKey: text("scope_key").notNull().default(ORGANIZATION_SCOPE_KEY),
+		eventType: text("event_type", {
+			enum: [...PUBLIC_GROWTH_EVENT_TYPES],
+		}).notNull(),
+		refUrlId: text("ref_url_id"),
+		qrCodeId: text("qr_code_id"),
+		landingPageId: text("landing_page_id"),
+		contactId: text("contact_id"),
+		contactOrganizationId: text("contact_organization_id"),
+		contactScopeKey: text("contact_scope_key"),
+		automationId: text("automation_id"),
+		automationOrganizationId: text("automation_organization_id"),
+		automationScopeKey: text("automation_scope_key"),
+		idempotencyHash: varchar("idempotency_hash", { length: 64 }).notNull(),
+		status: text("status", {
+			enum: ["pending", "processing", "retry", "succeeded", "failed"],
+		})
+			.notNull()
+			.default("pending"),
+		attempts: integer("attempts").notNull().default(0),
+		leaseToken: integer("lease_token").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+		lastError: text("last_error"),
+		occurredAt: timestamp("occurred_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.refUrlId, table.organizationId, table.scopeKey],
+			foreignColumns: [refUrls.id, refUrls.organizationId, refUrls.scopeKey],
+			name: "public_growth_events_ref_url_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.qrCodeId, table.organizationId, table.scopeKey],
+			foreignColumns: [qrCodes.id, qrCodes.organizationId, qrCodes.scopeKey],
+			name: "public_growth_events_qr_code_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.landingPageId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				landingPages.id,
+				landingPages.organizationId,
+				landingPages.scopeKey,
+			],
+			name: "public_growth_events_landing_page_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [
+				table.contactId,
+				table.contactOrganizationId,
+				table.contactScopeKey,
+			],
+			foreignColumns: [contacts.id, contacts.organizationId, contacts.scopeKey],
+			name: "public_growth_events_contact_org_scope_fk",
+		}).onDelete("set null"),
+		foreignKey({
+			columns: [
+				table.automationId,
+				table.automationOrganizationId,
+				table.automationScopeKey,
+			],
+			foreignColumns: [
+				automations.id,
+				automations.organizationId,
+				automations.scopeKey,
+			],
+			name: "public_growth_events_automation_org_scope_fk",
+		}).onDelete("set null"),
+		uniqueIndex("public_growth_events_idempotency_uniq").on(
+			table.organizationId,
+			table.eventType,
+			sql`COALESCE(${table.refUrlId}, ${table.qrCodeId}, ${table.landingPageId})`,
+			table.idempotencyHash,
+		),
+		check(
+			"public_growth_events_type_check",
+			sql`${table.eventType} IN ('ref_visit', 'qr_scan', 'landing_view', 'landing_conversion')`,
+		),
+		check(
+			"public_growth_events_target_union_check",
+			sql`(${table.eventType} = 'ref_visit'
+					AND ${table.refUrlId} IS NOT NULL
+					AND ${table.qrCodeId} IS NULL
+					AND ${table.landingPageId} IS NULL)
+				OR (${table.eventType} = 'qr_scan'
+					AND ${table.refUrlId} IS NULL
+					AND ${table.qrCodeId} IS NOT NULL
+					AND ${table.landingPageId} IS NULL)
+				OR (${table.eventType} IN ('landing_view', 'landing_conversion')
+					AND ${table.refUrlId} IS NULL
+					AND ${table.qrCodeId} IS NULL
+					AND ${table.landingPageId} IS NOT NULL)`,
+		),
+		check(
+			"public_growth_events_contact_scope_check",
+			sql`(${table.contactId} IS NULL
+					AND ${table.contactOrganizationId} IS NULL
+					AND ${table.contactScopeKey} IS NULL)
+				OR (${table.contactId} IS NOT NULL
+					AND ${table.contactOrganizationId} = ${table.organizationId}
+					AND ${table.contactScopeKey} = ${table.scopeKey})`,
+		),
+		check(
+			"public_growth_events_automation_scope_check",
+			sql`(${table.automationId} IS NULL
+					AND ${table.automationOrganizationId} IS NULL
+					AND ${table.automationScopeKey} IS NULL)
+				OR (${table.automationId} IS NOT NULL
+					AND ${table.automationOrganizationId} = ${table.organizationId}
+					AND ${table.automationScopeKey} = ${table.scopeKey})`,
+		),
+		check(
+			"public_growth_events_idempotency_hash_check",
+			sql`${table.idempotencyHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"public_growth_events_status_check",
+			sql`${table.status} IN ('pending', 'processing', 'retry', 'succeeded', 'failed')`,
+		),
+		check(
+			"public_growth_events_counters_check",
+			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
+		),
+		check(
+			"public_growth_events_lease_state_check",
+			sql`(${table.status} = 'processing' AND ${table.leaseExpiresAt} IS NOT NULL)
+				OR (${table.status} <> 'processing' AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"public_growth_events_terminal_state_check",
+			sql`(${table.status} IN ('succeeded', 'failed') AND ${table.completedAt} IS NOT NULL)
+				OR (${table.status} NOT IN ('succeeded', 'failed') AND ${table.completedAt} IS NULL)`,
+		),
+		check(
+			"public_growth_events_timestamp_order_check",
+			sql`${table.updatedAt} >= ${table.occurredAt}
+				AND ${table.nextAttemptAt} >= ${table.occurredAt}
+				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.occurredAt})`,
+		),
+		index("public_growth_events_due_dispatch_idx")
+			.on(table.nextAttemptAt, table.organizationId, table.occurredAt, table.id)
+			.where(sql`${table.status} IN ('pending', 'retry')`),
+		index("public_growth_events_stale_lease_idx")
+			.on(
+				table.leaseExpiresAt,
+				table.organizationId,
+				table.occurredAt,
+				table.id,
+			)
+			.where(sql`${table.status} = 'processing'`),
+		index("public_growth_events_ref_target_idx")
+			.on(table.refUrlId, table.organizationId, table.scopeKey)
+			.where(sql`${table.refUrlId} IS NOT NULL`),
+		index("public_growth_events_qr_target_idx")
+			.on(table.qrCodeId, table.organizationId, table.scopeKey)
+			.where(sql`${table.qrCodeId} IS NOT NULL`),
+		index("public_growth_events_landing_target_idx")
+			.on(table.landingPageId, table.organizationId, table.scopeKey)
+			.where(sql`${table.landingPageId} IS NOT NULL`),
+		index("public_growth_events_automation_idx")
+			.on(
+				table.automationId,
+				table.automationOrganizationId,
+				table.automationScopeKey,
+			)
+			.where(sql`${table.automationId} IS NOT NULL`),
+		index("public_growth_events_contact_idx").on(
+			table.organizationId,
+			table.contactId,
+			table.contactScopeKey,
+			table.occurredAt,
+		),
+		index("public_growth_events_retention_idx")
+			.on(table.completedAt, table.id)
+			.where(sql`${table.status} IN ('succeeded', 'failed')`),
+	],
+);
+
+// ---------------------------------------------------------------------------
+// Async tools
+// PostgreSQL is the durable lifecycle authority. Queue carries only this row's
+// identifier; request/result detail is encrypted by the application and is
+// shredded on the fixed terminal retention clock.
+// ---------------------------------------------------------------------------
+
+export const toolJobs = pgTable(
+	"tool_jobs",
+	{
+		id: text("id").primaryKey(),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		kind: text("kind", { enum: [...TOOL_JOB_KINDS] }).notNull(),
+		status: text("status", {
+			enum: ["pending", "processing", "completed", "failed", "manual_review"],
+		})
+			.notNull()
+			.default("pending"),
+		requestCiphertext: text("request_ciphertext"),
+		resultCiphertext: text("result_ciphertext"),
+		errorCiphertext: text("error_ciphertext"),
+		errorCode: text("error_code"),
+		usageReservationId: text("usage_reservation_id").notNull(),
+		attempts: integer("attempts").notNull().default(0),
+		leaseToken: integer("lease_token").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		lastEnqueuedAt: timestamp("last_enqueued_at", { withTimezone: true }),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+		purgeAt: timestamp("purge_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.usageReservationId, table.organizationId],
+			foreignColumns: [usageReservations.id, usageReservations.organizationId],
+			name: "tool_jobs_usage_reservation_org_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("tool_jobs_usage_reservation_uniq").on(
+			table.usageReservationId,
+		),
+		check(
+			"tool_jobs_kind_check",
+			sql`${table.kind} IN ('download', 'transcript')`,
+		),
+		check(
+			"tool_jobs_status_check",
+			sql`${table.status} IN ('pending', 'processing', 'completed', 'failed', 'manual_review')`,
+		),
+		check(
+			"tool_jobs_counters_check",
+			sql`${table.attempts} BETWEEN 0 AND 3 AND ${table.leaseToken} >= 0`,
+		),
+		check(
+			"tool_jobs_lease_check",
+			sql`(${table.status} = 'processing' AND ${table.leaseExpiresAt} IS NOT NULL)
+				OR (${table.status} <> 'processing' AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"tool_jobs_payload_state_check",
+			sql`(${table.status} = 'pending'
+						AND ${table.requestMayHaveBeenSentAt} IS NULL
+						AND ${table.requestCiphertext} IS NOT NULL
+						AND ${table.resultCiphertext} IS NULL
+						AND ${table.errorCiphertext} IS NULL
+						AND ${table.errorCode} IS NULL
+						AND ${table.completedAt} IS NULL)
+					OR (${table.status} = 'processing'
+						AND ${table.requestCiphertext} IS NOT NULL
+						AND ${table.resultCiphertext} IS NULL
+						AND ${table.errorCiphertext} IS NULL
+					AND ${table.errorCode} IS NULL
+					AND ${table.completedAt} IS NULL)
+					OR (${table.status} = 'completed'
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+						AND ${table.requestCiphertext} IS NULL
+						AND ${table.resultCiphertext} IS NOT NULL
+					AND ${table.errorCiphertext} IS NULL
+						AND ${table.errorCode} IS NULL
+						AND ${table.completedAt} IS NOT NULL)
+					OR (${table.status} = 'manual_review'
+						AND ${table.requestMayHaveBeenSentAt} IS NOT NULL
+						AND ${table.requestCiphertext} IS NOT NULL
+						AND ${table.resultCiphertext} IS NULL
+						AND ${table.errorCiphertext} IS NOT NULL
+						AND ${table.errorCode} = 'PROVIDER_OUTCOME_UNKNOWN'
+						AND ${table.completedAt} IS NOT NULL)
+					OR (${table.status} = 'failed'
+					AND ${table.requestCiphertext} IS NULL
+					AND ${table.resultCiphertext} IS NULL
+					AND ${table.errorCiphertext} IS NOT NULL
+					AND ${table.errorCode} IS NOT NULL
+					AND ${table.completedAt} IS NOT NULL)`,
+		),
+		check(
+			"tool_jobs_ciphertext_check",
+			sql`(${table.requestCiphertext} IS NULL OR ${table.requestCiphertext} LIKE 'enc:v2:%')
+				AND (${table.resultCiphertext} IS NULL OR ${table.resultCiphertext} LIKE 'enc:v2:%')
+				AND (${table.errorCiphertext} IS NULL OR ${table.errorCiphertext} LIKE 'enc:v2:%')`,
+		),
+		check(
+			"tool_jobs_timestamps_check",
+			sql`${table.deadlineAt} > ${table.createdAt}
+					AND ${table.purgeAt} > ${table.createdAt}
+					AND ${table.nextAttemptAt} >= ${table.createdAt}
+					AND (${table.lastEnqueuedAt} IS NULL OR ${table.lastEnqueuedAt} >= ${table.createdAt})
+					AND (${table.requestMayHaveBeenSentAt} IS NULL OR ${table.requestMayHaveBeenSentAt} >= ${table.createdAt})
+					AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
+		),
+		index("tool_jobs_due_idx")
+			.on(table.nextAttemptAt, table.id)
+			.where(sql`${table.status} = 'pending'`),
+		index("tool_jobs_pending_deadline_idx")
+			.on(table.deadlineAt, table.id)
+			.where(sql`${table.status} = 'pending'`),
+		index("tool_jobs_stale_lease_idx")
+			.on(table.leaseExpiresAt, table.id)
+			.where(
+				sql`${table.status} = 'processing' AND ${table.requestMayHaveBeenSentAt} IS NULL`,
+			),
+		index("tool_jobs_armed_lease_idx")
+			.on(table.leaseExpiresAt, table.deadlineAt, table.id)
+			.where(
+				sql`${table.status} = 'processing' AND ${table.requestMayHaveBeenSentAt} IS NOT NULL`,
+			),
+		index("tool_jobs_org_created_idx").on(
+			table.organizationId,
+			table.createdAt,
+			table.id,
+		),
+		index("tool_jobs_purge_idx").on(table.purgeAt, table.id),
 	],
 );

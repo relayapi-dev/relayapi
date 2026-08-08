@@ -80,13 +80,10 @@ wrangler secret put KEY         # Set secret
 }
 ```
 
-**Usage**:
-```typescript
-const token = env.GITHUB_TOKEN;  // From wrangler secret
-await sandbox.exec('git clone ...', {
-  env: { GIT_TOKEN: token }
-});
-```
+Do not forward a long-lived Worker secret into a sandbox. Prefer an authenticated
+application proxy. If a Git process must authenticate directly, issue a
+short-lived, repository-scoped job token and expose it only to that one clone
+process through a trusted `GIT_ASKPASS` helper; see [patterns.md](./patterns.md).
 
 ## Preview URL Setup
 

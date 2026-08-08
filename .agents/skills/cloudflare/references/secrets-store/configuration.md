@@ -94,14 +94,10 @@ wrangler secrets-store store delete <store-id> --remote
 wrangler secrets-store secret create <store-id> \
   --name MY_SECRET --scopes workers --remote
 
-# Create (piped)
-cat secret.txt | wrangler secrets-store secret create <store-id> \
-  --name MY_SECRET --scopes workers --remote
-
 # List/get/update/delete
 wrangler secrets-store secret list <store-id> --remote
 wrangler secrets-store secret get <store-id> --name MY_SECRET --remote
-wrangler secrets-store secret update <store-id> --name MY_SECRET --new-value "val" --remote
+wrangler secrets-store secret update <store-id> --secret-id <secret-id> --remote
 wrangler secrets-store secret delete <store-id> --name MY_SECRET --remote
 
 # Duplicate
@@ -162,23 +158,18 @@ Deploy options:
 ### GitHub Actions
 
 ```yaml
-- name: Create secret
-  env:
-    CLOUDFLARE_API_TOKEN: ${{ secrets.CF_TOKEN }}
-  run: |
-    echo "${{ secrets.API_KEY }}" | \
-    npx wrangler secrets-store secret create $STORE_ID \
-      --name API_KEY --scopes workers --remote
-
 - name: Deploy
   run: npx wrangler deploy
 ```
+
+Do not expand a CI secret into YAML or a shell pipeline. Provision it through
+the Cloudflare dashboard or a deployment helper that reads the CI secret from
+process memory, never logs it, and submits it in the API request body.
 
 ### GitLab CI
 
 ```yaml
 script:
-  - echo "$API_KEY_VALUE" | npx wrangler secrets-store secret create $STORE_ID --name API_KEY --scopes workers --remote
   - npx wrangler deploy
 ```
 

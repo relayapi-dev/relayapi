@@ -1,5 +1,10 @@
 import type { Database } from "@relayapi/db";
 import { AwsClient } from "aws4fetch";
+import {
+	headStoredObject,
+	presignStoredObject,
+	storageLocatorForMedia,
+} from "../services/storage-locator";
 import type { Env } from "../types";
 import { mediaPublicHost } from "./deployment-mode";
 import { validateStoredMediaObject } from "./media-storage-policy";
@@ -206,7 +211,17 @@ async function presignRelayMediaValue<T>(
 					.map(async ([storageKey, reference]) => {
 						const expected = policy.readyMediaByStorageKey.get(storageKey);
 						if (!expected) return;
-						const object = await env.MEDIA_BUCKET.head(storageKey);
+						const locator = storageLocatorForMedia({
+							organizationId,
+							storageProvider: expected.storageProvider,
+							storageBucketLocator: expected.storageBucketLocator,
+							storageRegion: expected.storageRegion,
+							storageLocationId: expected.storageLocationId,
+							storageCredentialVersion:
+								expected.storageCredentialVersion,
+							storageKey,
+						});
+						const object = await headStoredObject(db, env, locator);
 						if (!object) {
 							throw new RelayMediaPolicyError({
 								url: reference.url,
@@ -214,7 +229,12 @@ async function presignRelayMediaValue<T>(
 								reason: "not_ready_or_not_owned",
 							});
 						}
-						const actual = validateStoredMediaObject(object);
+						const actual = validateStoredMediaObject({
+							size: object.size,
+							httpMetadata: {
+								contentType: object.contentType ?? undefined,
+							},
+						});
 						if (!actual.ok) {
 							throw new RelayMediaPolicyError({
 								url: reference.url,
@@ -238,25 +258,45 @@ async function presignRelayMediaValue<T>(
 	}
 
 	const client = getCachedR2Client(env);
-	if (!client) {
-		if (
-			rejectInvalid &&
-			policy.references.some(
-				(reference) =>
-					reference.storageKey &&
-					policy.readyStorageKeys.has(reference.storageKey),
-			)
-		) {
-			throw new RelayMediaSigningUnavailableError();
-		}
-		return value;
+	const hasReadyR2Reference = policy.references.some((reference) => {
+		if (!reference.storageKey) return false;
+		return (
+			policy.readyMediaByStorageKey.get(reference.storageKey)
+				?.storageProvider === "r2"
+		);
+	});
+	if (!client && rejectInvalid && hasReadyR2Reference) {
+		throw new RelayMediaSigningUnavailableError();
 	}
 
 	const presignedByKey = new Map<string, Promise<string>>();
 	const presignKey = (storageKey: string): Promise<string> => {
 		let result = presignedByKey.get(storageKey);
 		if (!result) {
-			result = presignViewUrlWithCache(env, client, storageKey, expiresIn);
+			const row = policy.readyMediaByStorageKey.get(storageKey);
+			if (!row) return Promise.resolve(storageKey);
+			result =
+				row.storageProvider === "byos"
+					? presignStoredObject(
+							db,
+							env,
+							{
+								provider: "byos",
+								organizationId,
+								locationId: row.storageLocationId!,
+								credentialVersion: row.storageCredentialVersion!,
+								bucket: row.storageBucketLocator,
+								region: row.storageRegion,
+								key: storageKey,
+							},
+							"GET",
+							expiresIn,
+						)
+					: client
+						? presignViewUrlWithCache(env, client, storageKey, expiresIn)
+						: Promise.resolve(
+								`https://${mediaPublicHost(env)}/${storageKey}`,
+							);
 			presignedByKey.set(storageKey, result);
 		}
 		return result;

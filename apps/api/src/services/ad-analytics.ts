@@ -44,15 +44,37 @@ export async function fetchAndStoreAdMetrics(
 			socialAccounts,
 			eq(adAccounts.socialAccountId, socialAccounts.id),
 		)
-		.where(eq(ads.id, adId))
+		.where(
+			and(
+				eq(ads.id, adId),
+				eq(adAccounts.status, "active"),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
 		.limit(1);
 
-	if (!ad || !ad.ad.platformAdId) return [];
+	if (!ad || !ad.ad.platformAdId) {
+		throw new AdPlatformError(
+			"INVALID_STATE",
+			"Ad metrics source is missing, inactive, or disconnected",
+		);
+	}
 
 	const accessToken = await resolveAdsAccessToken(ad.socialAccount, env);
+	if (!accessToken) {
+		throw new AdPlatformError(
+			"INVALID_STATE",
+			"Ad metrics source has no active provider credential",
+		);
+	}
 
 	const adapter = getAdPlatformAdapter(ad.adAccount.platform);
-	if (!adapter) return [];
+	if (!adapter) {
+		throw new AdPlatformError(
+			"UNSUPPORTED_PLATFORM",
+			`No metrics adapter for ${ad.adAccount.platform}`,
+		);
+	}
 
 	const result = await adapter.getAdMetrics(accessToken, ad.ad.platformAdId, {
 		startDate,
@@ -245,7 +267,13 @@ export async function getAdAnalyticsLive(
 				eq(socialAccounts.organizationId, organizationId),
 			),
 		)
-		.where(and(...conditions))
+		.where(
+			and(
+				...conditions,
+				eq(adAccounts.status, "active"),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
 		.limit(1);
 
 	if (!ad || !ad.ad.platformAdId) {

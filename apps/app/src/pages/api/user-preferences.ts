@@ -41,34 +41,56 @@ export const PUT: APIRoute = async (context) => {
 
 	const userId = user.id as string;
 	const db = context.locals.db;
-	const body = await context.request.json();
+	const body = (await context.request.json()) as Record<string, unknown>;
 
 	const update: Record<string, unknown> = { updatedAt: new Date() };
 
-	if (body.timezone && isValidTimezone(body.timezone)) {
+	if (body.timezone !== undefined) {
+		if (typeof body.timezone !== "string" || !isValidTimezone(body.timezone)) {
+			return Response.json(
+				{ error: "timezone must be a valid IANA timezone" },
+				{ status: 400 },
+			);
+		}
 		update.timezone = body.timezone;
 	}
-	if (body.language && VALID_LANGUAGES.has(body.language)) {
+	if (body.language !== undefined) {
+		if (
+			typeof body.language !== "string" ||
+			!VALID_LANGUAGES.has(body.language)
+		) {
+			return Response.json(
+				{ error: "language is not supported" },
+				{ status: 400 },
+			);
+		}
 		update.language = body.language;
 	}
-
-	const [existing] = await db
-		.select({ id: userPreferences.id })
-		.from(userPreferences)
-		.where(eq(userPreferences.userId, userId))
-		.limit(1);
-
-	if (existing) {
-		await db
-			.update(userPreferences)
-			.set(update)
-			.where(eq(userPreferences.userId, userId));
-	} else {
-		await db.insert(userPreferences).values({
-			userId,
-			...update,
-		});
+	if (update.timezone === undefined && update.language === undefined) {
+		return Response.json(
+			{ error: "timezone or language is required" },
+			{ status: 400 },
+		);
 	}
 
-	return Response.json({ ok: true });
+	const [saved] = await db
+		.insert(userPreferences)
+		.values({
+			userId,
+			timezone:
+				typeof update.timezone === "string" ? update.timezone : "UTC",
+			language:
+				typeof update.language === "string" ? update.language : "en",
+			updatedAt: update.updatedAt as Date,
+		})
+		.onConflictDoUpdate({
+			target: userPreferences.userId,
+			set: update,
+		})
+		.returning({
+			timezone: userPreferences.timezone,
+			language: userPreferences.language,
+		});
+
+	return Response.json(saved);
 };

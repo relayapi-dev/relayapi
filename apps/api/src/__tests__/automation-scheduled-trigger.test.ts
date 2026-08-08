@@ -32,6 +32,7 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -154,6 +155,7 @@ async function makeEntrypoint(
 		.insert(automationEntrypoints)
 		.values({
 			organizationId: orgId,
+			scopeKey: `ws/${workspaceId}`,
 			automationId,
 			channel: "instagram",
 			kind: "schedule",
@@ -171,12 +173,12 @@ async function makeEntrypoint(
 async function makeTaggedContact(tag: string) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: `tagged-${tag}`,
 			tags: [tag],
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -295,6 +297,8 @@ describe("scheduled_trigger dispatch", () => {
 		const skipCt = await makeTaggedContact("regular");
 
 		await db.insert(automationScheduledJobs).values({
+			organizationId: auto.organizationId,
+			scopeKey: auto.scopeKey,
 			jobType: "scheduled_trigger",
 			automationId: auto.id,
 			entrypointId: ep.id,
@@ -323,6 +327,8 @@ describe("scheduled_trigger dispatch", () => {
 		const [job] = await db
 			.insert(automationScheduledJobs)
 			.values({
+				organizationId: auto.organizationId,
+				scopeKey: auto.scopeKey,
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,
@@ -352,6 +358,8 @@ describe("scheduled_trigger dispatch", () => {
 		);
 
 		await db.insert(automationScheduledJobs).values({
+			organizationId: auto.organizationId,
+			scopeKey: auto.scopeKey,
 			jobType: "scheduled_trigger",
 			automationId: auto.id,
 			entrypointId: ep.id,
@@ -391,6 +399,8 @@ describe("scheduled_trigger dispatch", () => {
 		const [job] = await db
 			.insert(automationScheduledJobs)
 			.values({
+				organizationId: auto.organizationId,
+				scopeKey: auto.scopeKey,
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,
@@ -423,6 +433,8 @@ describe("scheduled_trigger dispatch", () => {
 		);
 
 		await db.insert(automationScheduledJobs).values({
+			organizationId: auto.organizationId,
+			scopeKey: auto.scopeKey,
 			jobType: "scheduled_trigger",
 			automationId: auto.id,
 			entrypointId: ep.id,
@@ -463,6 +475,8 @@ describe("scheduled_trigger dispatch", () => {
 		// exists guard must skip the second insert.
 		await db.insert(automationScheduledJobs).values([
 			{
+				organizationId: auto.organizationId,
+				scopeKey: auto.scopeKey,
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,
@@ -470,6 +484,8 @@ describe("scheduled_trigger dispatch", () => {
 				status: "pending",
 			},
 			{
+				organizationId: auto.organizationId,
+				scopeKey: auto.scopeKey,
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,

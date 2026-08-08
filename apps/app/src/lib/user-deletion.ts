@@ -3,16 +3,30 @@ import {
 	apikey,
 	session as authSession,
 	type createDb,
+	emailDeliveries,
 	inviteTokens,
+	invitation,
 	media,
 	member,
 	organization,
+	organizationPrincipals,
 	posts,
+	queueFailures,
 	user,
+	verification,
 } from "@relayapi/db";
 import { APIError } from "better-auth/api";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { clearClientCache } from "./relay";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
+import {
+	type AvatarObjectBucket,
+	deleteAvatarObjectPrefix,
+	userAvatarPrefix,
+} from "./avatar-object-keys";
+import {
+	deleteUserQueueRescueEvidence,
+	type QueueRescueErasureBucket,
+} from "./queue-rescue-erasure";
+import { clearClientCache } from "./relay-client-cache";
 
 type Database = ReturnType<typeof createDb>;
 
@@ -39,23 +53,29 @@ function hasRole(value: string, role: string): boolean {
 export async function deleteUserAtomically(
 	db: Database,
 	kv: KeyCache | undefined,
+	avatarsBucket: AvatarObjectBucket | undefined,
+	queueRescueBucket: QueueRescueErasureBucket | undefined,
 	userId: string,
 ): Promise<void> {
-	if (!kv) {
+	if (!kv || !avatarsBucket || !queueRescueBucket) {
 		throw new APIError("SERVICE_UNAVAILABLE", {
 			code: "IDENTITY_DELETION_UNAVAILABLE",
 			message: "Identity deletion is temporarily unavailable.",
 		});
 	}
 
-	const revokedKeys = await db.transaction(async (tx) => {
+	const deletion = await db.transaction(async (tx) => {
 		const deletingUsers = await tx
-			.select({ id: user.id })
+			.select({ id: user.id, email: user.email })
 			.from(user)
 			.where(eq(user.id, userId))
 			.limit(1)
 			.for("update");
-		if (deletingUsers.length === 0) return [];
+		if (deletingUsers.length === 0) {
+			return { revokedKeys: [], organizationIds: [] };
+		}
+		const deletingUser = deletingUsers[0];
+		if (!deletingUser) return { revokedKeys: [], organizationIds: [] };
 
 		const memberships = await tx
 			.select({ organizationId: member.organizationId, role: member.role })
@@ -123,21 +143,27 @@ export async function deleteUserAtomically(
 			}
 		}
 
-		const principalKeys = await tx
+		const dashboardKeys = await tx
 			.select({
 				id: apikey.id,
 				key: apikey.key,
 				organizationId: apikey.organizationId,
-				metadata: apikey.metadata,
+				principalId: apikey.principalId,
 			})
 			.from(apikey)
-			.where(eq(apikey.referenceId, userId))
+			.where(
+				and(
+					eq(apikey.referenceId, userId),
+					sql`EXISTS (
+						SELECT 1
+						FROM ${organizationPrincipals} AS principal_row
+						WHERE principal_row.id = ${apikey.principalId}
+							AND principal_row.organization_id = ${apikey.organizationId}
+							AND principal_row.kind = 'member'
+					)`,
+				),
+			)
 			.for("update");
-
-		const dashboardKeys = principalKeys.filter((row) => {
-			const metadata = row.metadata as Record<string, unknown> | null;
-			return metadata?.principal_type === "dashboard_user";
-		});
 
 		// Keep every database row intact until all external invalidations succeed.
 		// A partial KV failure is safe: invalidated entries can be repopulated from
@@ -155,14 +181,18 @@ export async function deleteUserAtomically(
 		);
 
 		if (dashboardKeys.length > 0) {
-			await tx
-				.delete(apikey)
-				.where(
-					and(
-						eq(apikey.referenceId, userId),
-						sql`${apikey.metadata}->>'principal_type' = 'dashboard_user'`,
-					),
-				);
+			await tx.delete(apikey).where(
+				and(
+					eq(apikey.referenceId, userId),
+					sql`EXISTS (
+							SELECT 1
+							FROM ${organizationPrincipals} AS principal_row
+							WHERE principal_row.id = ${apikey.principalId}
+								AND principal_row.organization_id = ${apikey.organizationId}
+								AND principal_row.kind = 'member'
+						)`,
+				),
+			);
 		}
 
 		// A non-dashboard key is organization-owned. Detach only its creator
@@ -178,8 +208,8 @@ export async function deleteUserAtomically(
 		await tx.delete(inviteTokens).where(eq(inviteTokens.createdBy, userId));
 		await tx
 			.update(inviteTokens)
-			.set({ usedBy: null })
-			.where(eq(inviteTokens.usedBy, userId));
+			.set({ redeemedByUserId: null })
+			.where(eq(inviteTokens.redeemedByUserId, userId));
 		await tx
 			.update(media)
 			.set({ uploadedBy: null })
@@ -188,21 +218,107 @@ export async function deleteUserAtomically(
 			.update(posts)
 			.set({ createdBy: null })
 			.where(eq(posts.createdBy, userId));
+		await tx
+			.update(emailDeliveries)
+			.set({
+				subjectUserId: null,
+				envelopeCiphertext: null,
+				envelopeKeyId: null,
+				status: sql`CASE
+					WHEN ${emailDeliveries.status} IN ('sent', 'failed', 'manual_review')
+						THEN ${emailDeliveries.status}
+					ELSE 'failed'
+				END`,
+				leaseExpiresAt: null,
+				dispatchLeaseExpiresAt: null,
+				error: "recipient_identity_erased",
+				completedAt: sql`COALESCE(${emailDeliveries.completedAt}, now())`,
+				redactedAt: new Date(),
+			})
+			.where(eq(emailDeliveries.subjectUserId, userId));
+		await tx
+			.update(queueFailures)
+			.set({
+				userIds: sql`array_remove(${queueFailures.userIds}, ${userId})`,
+				payloadCiphertext: null,
+				payloadKeyId: null,
+				payloadRedactedAt: sql`COALESCE(${queueFailures.payloadRedactedAt}, now())`,
+				status: sql`CASE
+					WHEN ${queueFailures.status} IN ('replayed', 'dismissed')
+						THEN ${queueFailures.status}
+					ELSE 'dismissed'
+				END`,
+				error: "subject_identity_erased",
+				resolvedAt: sql`CASE
+					WHEN ${queueFailures.status} IN ('replayed', 'dismissed')
+						THEN ${queueFailures.resolvedAt}
+					ELSE COALESCE(${queueFailures.resolvedAt}, now())
+				END`,
+				replayClaimToken: null,
+				replayClaimExpiresAt: null,
+			})
+			.where(sql`${queueFailures.userIds} @> ARRAY[${userId}]::text[]`);
 
 		// Better Auth normally issues these as separate committed statements. Keep
 		// them in this transaction so a later FK or owner-invariant failure restores
 		// the complete login identity.
 		await tx.delete(authSession).where(eq(authSession.userId, userId));
 		await tx.delete(account).where(eq(account.userId, userId));
+		// Better Auth uses the affected user ID as the value for reset/delete
+		// capabilities and embeds the canonical email in email-verification
+		// identifiers. Remove both locator forms in the same identity transaction;
+		// unrelated OAuth state and rate-limit rows keep their ordinary TTL.
+		const canonicalDeletingEmail = deletingUser.email?.toLowerCase();
+		if (canonicalDeletingEmail) {
+			await tx
+				.delete(invitation)
+				.where(eq(sql`lower(${invitation.email})`, canonicalDeletingEmail));
+		}
+		await tx
+			.delete(verification)
+			.where(
+				canonicalDeletingEmail
+					? or(
+							eq(verification.value, userId),
+							eq(
+								sql`lower(${verification.identifier})`,
+								canonicalDeletingEmail,
+							),
+							sql`lower(${verification.identifier}) LIKE ${`%:${canonicalDeletingEmail}`}`,
+						)
+					: eq(verification.value, userId),
+			);
 		await tx.delete(user).where(eq(user.id, userId));
-		return dashboardKeys;
+		return {
+			revokedKeys: dashboardKeys,
+			organizationIds: [
+				...new Set(memberships.map(({ organizationId }) => organizationId)),
+			],
+		};
 	});
 
 	for (const organizationId of new Set(
-		revokedKeys.flatMap((key) =>
+		deletion.revokedKeys.flatMap((key) =>
 			key.organizationId ? [key.organizationId] : [],
 		),
 	)) {
 		clearClientCache(organizationId, userId);
+	}
+	try {
+		await deleteAvatarObjectPrefix(avatarsBucket, userAvatarPrefix(userId));
+	} catch {
+		console.error("[identity-deletion] User avatar cleanup failed");
+	}
+	try {
+		await deleteUserQueueRescueEvidence(
+			queueRescueBucket,
+			deletion.organizationIds,
+			userId,
+		);
+	} catch {
+		// PostgreSQL identity deletion is already committed. Do not misreport it as
+		// failed; encrypted rescue evidence still has a non-extendable 30-day R2
+		// lifecycle and a later bucket scan can finish the minimization.
+		console.error("[identity-deletion] Queue rescue user cleanup failed");
 	}
 }

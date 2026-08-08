@@ -1,4 +1,7 @@
-import { runWithTransaction } from "@better-auth/core/context";
+import {
+	getCurrentAdapter,
+	runWithTransaction,
+} from "@better-auth/core/context";
 
 type TransactionAdapter = Parameters<typeof runWithTransaction>[0];
 
@@ -26,9 +29,20 @@ export function wrapEndpointInTransaction<
 	afterCommit?: (context: Context, result: Result) => Promise<void>,
 ): ((context: Context) => Promise<Result>) & EndpointMetadata {
 	const wrapped = async (context: Context): Promise<Result> => {
-		const result = await runWithTransaction(context.context.adapter, () =>
-			endpoint(context),
-		);
+		const baseAdapter = context.context.adapter;
+		const result = await runWithTransaction(baseAdapter, async () => {
+			// Most Better Auth helpers consult AsyncLocalStorage, but a few plugin
+			// paths call ctx.context.adapter directly. Point both access paths at the
+			// same transaction adapter for the complete endpoint lifetime.
+			context.context.adapter = (await getCurrentAdapter(
+				baseAdapter,
+			)) as TransactionAdapter;
+			try {
+				return await endpoint(context);
+			} finally {
+				context.context.adapter = baseAdapter;
+			}
+		});
 		try {
 			await afterCommit?.(context, result);
 		} catch {

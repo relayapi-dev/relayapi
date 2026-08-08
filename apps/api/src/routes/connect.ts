@@ -1,4 +1,5 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import { DASHBOARD_SESSION_AUTHORITY_HEADER } from "@relayapi/config";
 import {
 	createDb,
 	type Database,
@@ -23,6 +24,7 @@ import { appPublicOrigin } from "../lib/deployment-mode";
 import { sha256Hex } from "../lib/durable-operation";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
 import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
+import { isDefinitiveProviderMutationRejection } from "../lib/mutation-provider-boundary";
 import {
 	assertWriteAccess,
 	resolveOperationalCreateScope,
@@ -33,6 +35,10 @@ import {
 	assertWorkspaceScope,
 	canAccessWorkspaceScope,
 } from "../lib/workspace-scope";
+import {
+	returnMutationInputNotApplied as connectionInputNotApplied,
+	markMutationInputNotApplied,
+} from "../middleware/mutation-validation";
 import type { Platform } from "../schemas/common";
 import { ErrorResponse } from "../schemas/common";
 import {
@@ -108,9 +114,30 @@ import { logConnectionEvent } from "./connections";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
+function connectionAuthoritySessionId(
+	c: Parameters<typeof assertWriteAccess>[0],
+): string | null {
+	if (c.get("principalType") !== "dashboard_user") return null;
+	return c.req.header(DASHBOARD_SESSION_AUTHORITY_HEADER)?.trim() || null;
+}
+
 app.use("*", async (c, next) => {
 	const denied = assertWriteAccess(c);
 	if (denied) return denied;
+	if (
+		c.get("principalType") === "dashboard_user" &&
+		connectionAuthoritySessionId(c) === null
+	) {
+		return c.json(
+			{
+				error: {
+					code: "SESSION_NO_LONGER_AUTHORIZED",
+					message: "The initiating dashboard session is no longer authorized.",
+				},
+			},
+			401,
+		);
+	}
 	return next();
 });
 
@@ -125,7 +152,7 @@ const startOAuth = createRoute({
 	tags: ["Connect"],
 	summary: "Start OAuth flow",
 	description:
-		"Returns an auth_url and binds the initiating API key plus its workspace grant to one-time OAuth state. workspace_id is required only when Require Workspace ID is enabled.",
+		"Returns an auth_url and binds the initiating API key, exact dashboard session (when applicable), and workspace grant to one-time OAuth state. workspace_id is required only when Require Workspace ID is enabled.",
 	security: [{ Bearer: [] }],
 	request: { params: StartOAuthParams, query: StartOAuthQuery },
 	responses: {
@@ -147,7 +174,7 @@ const completeOAuth = createRoute({
 	tags: ["Connect"],
 	summary: "Complete OAuth callback",
 	description:
-		"Exchange an OAuth code and save the account after revalidating both the flow's initial workspace grant and the initiating API key's live authorization. Reconnects never move an existing identity implicitly.",
+		"Exchange an OAuth code and save the account after revalidating the flow's initial workspace grant, initiating API key, and exact dashboard session (when applicable). Reconnects never move an existing identity implicitly.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: CompleteOAuthParams,
@@ -161,6 +188,10 @@ const completeOAuth = createRoute({
 		201: {
 			description: "Account connected",
 			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Invalid, expired, or mismatched OAuth state",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -358,7 +389,7 @@ const getPendingData = createRoute({
 	tags: ["Connect"],
 	summary: "Fetch pending OAuth data",
 	description:
-		"One-time use, expires after 10 minutes, and may only be polled by the API key that initiated the headless OAuth flow.",
+		"One-time use, expires after 10 minutes, and may only be polled by the API key and exact dashboard session (when applicable) that initiated the headless OAuth flow.",
 	security: [{ Bearer: [] }],
 	request: { query: PendingDataQuery },
 	responses: {
@@ -675,6 +706,7 @@ function accountWorkspaceConflictResponse(
 	error: unknown,
 ): Response | undefined {
 	if (isAccountWorkspaceAccessError(error)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -686,6 +718,7 @@ function accountWorkspaceConflictResponse(
 		);
 	}
 	if (!isAccountWorkspaceConflictError(error)) return undefined;
+	markMutationInputNotApplied(c);
 	return c.json(
 		{
 			error: {
@@ -754,10 +787,18 @@ const SECONDARY_SELECTION_PLATFORMS = new Set([
 	"snapchat",
 ]);
 
+const PROVEN_NOT_APPLIED_OAUTH_ERRORS = new Set([
+	"OAUTH_NOT_SUPPORTED",
+	"MISSING_CREDENTIALS",
+	"ACCOUNT_WORKSPACE_CONFLICT",
+	"WORKSPACE_ACCESS_DENIED",
+]);
+
 type PendingSecondaryScope = {
 	initiator_key_id: string;
 	initial_workspace_scope: "all" | string[];
 	workspace_id: string | null;
+	authority_session_ciphertext: string | null;
 };
 
 function pendingSecondaryKey(
@@ -772,23 +813,37 @@ async function authorizePendingSecondary(
 	c: Parameters<typeof assertWriteAccess>[0],
 	data: PendingSecondaryScope,
 ): Promise<
-	| { ok: true; initialWorkspaceScope: "all" | string[] }
+	| {
+			ok: true;
+			initialWorkspaceScope: "all" | string[];
+			authoritySessionId: string | null;
+	  }
 	| { ok: false; response: Response }
 > {
+	const authoritySessionId = data.authority_session_ciphertext
+		? await maybeDecrypt(
+				data.authority_session_ciphertext,
+				c.env.ENCRYPTION_KEY,
+			)
+		: null;
 	if (
 		data.initiator_key_id !== c.get("keyId") ||
+		authoritySessionId !== connectionAuthoritySessionId(c) ||
 		!("initial_workspace_scope" in data)
 	) {
 		return {
 			ok: false,
-			response: c.json(
-				{
-					error: {
-						code: "NO_PENDING_DATA",
-						message: "No pending OAuth selection was found.",
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{
+						error: {
+							code: "NO_PENDING_DATA",
+							message: "No pending OAuth selection was found.",
+						},
 					},
-				},
-				404,
+					404,
+				),
 			),
 		};
 	}
@@ -798,34 +853,41 @@ async function authorizePendingSecondary(
 	if (initialWorkspaceScope === null) {
 		return {
 			ok: false,
-			response: c.json(
-				{
-					error: {
-						code: "NO_PENDING_DATA",
-						message: "No pending OAuth selection was found.",
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{
+						error: {
+							code: "NO_PENDING_DATA",
+							message: "No pending OAuth selection was found.",
+						},
 					},
-				},
-				404,
+					404,
+				),
 			),
 		};
 	}
 	if (!canAccessWorkspaceScope(initialWorkspaceScope, data.workspace_id)) {
 		return {
 			ok: false,
-			response: c.json(
-				{
-					error: {
-						code: "WORKSPACE_ACCESS_DENIED",
-						message:
-							"The initiating API key did not authorize this connection scope.",
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{
+						error: {
+							code: "WORKSPACE_ACCESS_DENIED",
+							message:
+								"The initiating API key did not authorize this connection scope.",
+						},
 					},
-				},
-				403,
+					403,
+				),
 			),
 		};
 	}
 	const validation = await validatePersistedOperationalScope(c.get("db"), {
 		apiKeyId: data.initiator_key_id,
+		authoritySessionId,
 		organizationId: c.get("orgId"),
 		workspaceId: data.workspace_id,
 		resourceName: "connected account",
@@ -833,13 +895,16 @@ async function authorizePendingSecondary(
 	if (!validation.ok) {
 		return {
 			ok: false,
-			response: c.json(
-				{ error: { code: validation.code, message: validation.message } },
-				validation.status,
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{ error: { code: validation.code, message: validation.message } },
+					validation.status,
+				),
 			),
 		};
 	}
-	return { ok: true, initialWorkspaceScope };
+	return { ok: true, initialWorkspaceScope, authoritySessionId };
 }
 
 export type OAuthExchangeResult =
@@ -858,6 +923,7 @@ export async function exchangeAndSaveAccount(params: {
 	env: Env;
 	orgId: string;
 	initiatorKeyId: string;
+	authoritySessionId: string | null;
 	authorizedWorkspaceScope: "all" | string[];
 	/** Scope accepted at authenticated initiation and carried by one-time state. */
 	workspaceId?: string | null;
@@ -888,6 +954,7 @@ export async function exchangeAndSaveAccount(params: {
 		env,
 		orgId,
 		initiatorKeyId,
+		authoritySessionId,
 		authorizedWorkspaceScope,
 		workspaceId = null,
 		platform,
@@ -1227,10 +1294,12 @@ export async function exchangeAndSaveAccount(params: {
 	const tokenExpiresAt = tokens.expires_in
 		? new Date(Date.now() + tokens.expires_in * 1000)
 		: null;
+	const db = createDb(env.HYPERDRIVE.connectionString);
 
 	// Multi-select platforms: store token for secondary selection step
 	if (SECONDARY_SELECTION_PLATFORMS.has(platform)) {
 		const connectToken = crypto.randomUUID();
+		const pendingKey = pendingSecondaryKey(orgId, platform, connectToken);
 		// SECURITY: Encrypt access token AND refresh token before storing in KV
 		// (consistent with DB encryption at rest). The refresh_token and expires_at
 		// MUST be carried through to the select handler — without them the saved
@@ -1244,21 +1313,66 @@ export async function exchangeAndSaveAccount(params: {
 			tokens.refresh_token,
 			env.ENCRYPTION_KEY,
 		);
-		await env.KV.put(
-			pendingSecondaryKey(orgId, platform, connectToken),
-			JSON.stringify({
-				connection_operation_id: connectionOperationId,
-				initiator_key_id: initiatorKeyId,
-				initial_workspace_scope: authorizedWorkspaceScope,
-				workspace_id: workspaceId,
-				workspace_id_was_explicit: workspaceWasExplicit,
-				access_token: encryptedToken,
-				refresh_token: encryptedRefreshToken,
-				profile_id: profileId,
-				expires_at: tokenExpiresAt?.toISOString() ?? null,
-			}),
-			{ expirationTtl: 600 },
+		const authoritySessionCiphertext = await maybeEncrypt(
+			authoritySessionId,
+			env.ENCRYPTION_KEY,
 		);
+		const pendingPayload = JSON.stringify({
+			connection_operation_id: connectionOperationId,
+			initiator_key_id: initiatorKeyId,
+			authority_session_ciphertext: authoritySessionCiphertext,
+			initial_workspace_scope: authorizedWorkspaceScope,
+			workspace_id: workspaceId,
+			workspace_id_was_explicit: workspaceWasExplicit,
+			access_token: encryptedToken,
+			refresh_token: encryptedRefreshToken,
+			profile_id: profileId,
+			expires_at: tokenExpiresAt?.toISOString() ?? null,
+		});
+		try {
+			const admission = await db.transaction(async (tx) => {
+				const validation = await validatePersistedOperationalScope(tx, {
+					apiKeyId: initiatorKeyId,
+					authoritySessionId,
+					organizationId: orgId,
+					workspaceId,
+					resourceName: "connected account",
+				});
+				if (!validation.ok) return validation;
+				if (
+					!canAccessWorkspaceScope(authorizedWorkspaceScope, workspaceId) ||
+					!canAccessWorkspaceScope(
+						validation.authorization.workspaceScope,
+						workspaceId,
+					)
+				) {
+					return {
+						ok: false as const,
+						code: "WORKSPACE_ACCESS_DENIED",
+						message:
+							"The initiating credential no longer has access to this workspace.",
+					};
+				}
+
+				// Keep the PostgreSQL share locks until the encrypted KV write
+				// completes. Revocation therefore linearizes either before this
+				// write (and rejects it) or after the pending credential exists.
+				await env.KV.put(pendingKey, pendingPayload, { expirationTtl: 600 });
+				return { ok: true as const };
+			});
+			if (!admission.ok) {
+				return {
+					status: "error",
+					code: admission.code,
+					message: admission.message,
+				};
+			}
+		} catch (error) {
+			// A commit failure after KV.put must not leave an uncommitted
+			// pending credential reachable. Retrieval also revalidates authority.
+			await env.KV.delete(pendingKey).catch(() => undefined);
+			throw error;
+		}
 		return { status: "pending_selection", platform, connectToken };
 	}
 
@@ -1266,8 +1380,6 @@ export async function exchangeAndSaveAccount(params: {
 	console.log(
 		`[oauth][${platform}] Upserting account: orgId=${orgId}, profileId=${profileId}`,
 	);
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
 	const encKey = env.ENCRYPTION_KEY;
 	// Record the Instagram connection method so the token-refresh cron can pick
 	// the correct refresh grant. Instagram via Facebook Login stores a Facebook
@@ -1287,6 +1399,7 @@ export async function exchangeAndSaveAccount(params: {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, encKey, {
 					apiKeyId: initiatorKeyId,
+					authoritySessionId,
 					authorizedWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -1506,7 +1619,7 @@ app.openapi(connectBeehiiv, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		// Validate credentials by fetching publication info
@@ -1517,6 +1630,7 @@ app.openapi(connectBeehiiv, async (c) => {
 			},
 		);
 		if (!res.ok) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1537,6 +1651,7 @@ app.openapi(connectBeehiiv, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1605,13 +1720,14 @@ app.openapi(connectConvertKit, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		const res = await fetch("https://api.kit.com/v4/account", {
 			headers: { "X-Kit-Api-Key": api_key },
 		});
 		if (!res.ok) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1640,6 +1756,7 @@ app.openapi(connectConvertKit, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1704,11 +1821,12 @@ app.openapi(connectMailchimp, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		const datacenter = getMailchimpDatacenter(api_key);
 		if (!datacenter) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1724,6 +1842,7 @@ app.openapi(connectMailchimp, async (c) => {
 			headers: { Authorization: authHeader },
 		});
 		if (!res.ok) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: { code: "AUTH_FAILED", message: "Invalid Mailchimp API key." },
@@ -1746,6 +1865,7 @@ app.openapi(connectMailchimp, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1810,13 +1930,14 @@ app.openapi(connectListMonk, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		const cleanUrl = instance_url.replace(/\/$/, "");
 
 		// SSRF protection: block private/reserved IPs and non-HTTPS URLs
 		if (await isBlockedUrlWithDns(cleanUrl)) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1831,6 +1952,7 @@ app.openapi(connectListMonk, async (c) => {
 		try {
 			const parsed = new URL(cleanUrl);
 			if (parsed.protocol !== "https:") {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -1842,6 +1964,7 @@ app.openapi(connectListMonk, async (c) => {
 				);
 			}
 		} catch {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1859,6 +1982,7 @@ app.openapi(connectListMonk, async (c) => {
 			redirect: "error",
 		});
 		if (!res.ok) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1878,6 +2002,7 @@ app.openapi(connectListMonk, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1936,7 +2061,7 @@ app.openapi(connectBluesky, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		// Bluesky: Create an authenticated session using handle + app password
@@ -1954,6 +2079,9 @@ app.openapi(connectBluesky, async (c) => {
 		);
 
 		if (!res.ok) {
+			if (isDefinitiveProviderMutationRejection(res.status)) {
+				markMutationInputNotApplied(c);
+			}
 			return c.json(
 				{
 					error: {
@@ -1983,6 +2111,7 @@ app.openapi(connectBluesky, async (c) => {
 				upsert: async (tx) =>
 					upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 						apiKeyId: c.get("keyId"),
+						authoritySessionId: connectionAuthoritySessionId(c),
 						authorizedWorkspaceScope: c.get("workspaceScope"),
 						insert: {
 							organizationId: orgId,
@@ -2052,11 +2181,12 @@ app.openapi(initTelegram, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 	const { code, expiresAt } = await issueTelegramConnectionChallenge(
 		c.get("db"),
 		c.get("orgId"),
 		c.get("keyId"),
+		connectionAuthoritySessionId(c),
 		c.get("workspaceScope"),
 		scope.workspaceId,
 	);
@@ -2112,6 +2242,7 @@ app.openapi(getPendingData, async (c) => {
 		Record<string, unknown> & {
 			organization_id?: string;
 			initiator_key_id?: string;
+			authority_session_ciphertext?: string | null;
 			initial_workspace_scope?: "all" | string[];
 			workspace_id?: string | null;
 		}
@@ -2121,6 +2252,7 @@ app.openapi(getPendingData, async (c) => {
 		!data ||
 		data.organization_id !== c.get("orgId") ||
 		data.initiator_key_id !== c.get("keyId") ||
+		!("authority_session_ciphertext" in data) ||
 		!("initial_workspace_scope" in data) ||
 		!("workspace_id" in data)
 	) {
@@ -2142,8 +2274,23 @@ app.openapi(getPendingData, async (c) => {
 			404 as never,
 		);
 	}
+	const authoritySessionId = data.authority_session_ciphertext
+		? await maybeDecrypt(
+				data.authority_session_ciphertext,
+				c.env.ENCRYPTION_KEY,
+			)
+		: null;
+	if (authoritySessionId !== connectionAuthoritySessionId(c)) {
+		return c.json(
+			{
+				error: { code: "NOT_FOUND", message: "Token not found or expired" },
+			} as never,
+			404 as never,
+		);
+	}
 	const validation = await validatePersistedOperationalScope(c.get("db"), {
 		apiKeyId: data.initiator_key_id,
+		authoritySessionId,
 		organizationId: c.get("orgId"),
 		workspaceId: data.workspace_id ?? null,
 		resourceName: "connected account",
@@ -2163,6 +2310,7 @@ app.openapi(getPendingData, async (c) => {
 	const {
 		organization_id: _organizationId,
 		initiator_key_id: _initiatorKeyId,
+		authority_session_ciphertext: _authoritySessionCiphertext,
 		initial_workspace_scope: _initialWorkspaceScope,
 		...response
 	} = data;
@@ -2205,12 +2353,13 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 		body.workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	const appId = c.env.WHATSAPP_APP_ID;
 	const appSecret = c.env.WHATSAPP_APP_SECRET;
 
 	if (!appId || !appSecret) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2237,6 +2386,12 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	};
 
 	if (!tokenRes.ok || !tokenData.access_token) {
+		if (
+			!tokenRes.ok &&
+			isDefinitiveProviderMutationRejection(tokenRes.status)
+		) {
+			markMutationInputNotApplied(c);
+		}
 		return c.json(
 			{
 				error: {
@@ -2355,6 +2510,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -2435,7 +2591,7 @@ app.openapi(whatsappCredentials, async (c) => {
 		body.workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	let account: ConnectedSocialAccount;
 	let persistedWebhook: PersistedWebhookEvent;
@@ -2447,6 +2603,7 @@ app.openapi(whatsappCredentials, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -2609,6 +2766,7 @@ app.openapi(selectFacebookPage, async (c) => {
 	>(pendingSecondaryKey(orgId, "facebook", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2622,7 +2780,7 @@ app.openapi(selectFacebookPage, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 	// SECURITY: Decrypt token from KV
 	const decryptedFbToken =
 		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
@@ -2637,6 +2795,7 @@ app.openapi(selectFacebookPage, async (c) => {
 		const page = allPages.find((p) => p.id === body.page_id);
 
 		if (!page) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -2680,6 +2839,7 @@ app.openapi(selectFacebookPage, async (c) => {
 						c.env.ENCRYPTION_KEY,
 						{
 							apiKeyId: pendingData.initiator_key_id,
+							authoritySessionId: authorization.authoritySessionId,
 							authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 							insert: {
 								organizationId: orgId,
@@ -2883,6 +3043,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 	>(pendingSecondaryKey(orgId, "linkedin", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2896,7 +3057,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 	// SECURITY: Decrypt the one-time KV payload; the account writer seals it to
 	// the stable database id inside the transaction.
 	const decryptedLiSetToken =
@@ -2927,6 +3088,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -3075,6 +3237,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 	>(pendingSecondaryKey(orgId, "pinterest", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3088,7 +3251,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 
 	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
 	const decryptedPinSetToken =
@@ -3141,6 +3304,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -3320,6 +3484,7 @@ app.openapi(selectGBPLocation, async (c) => {
 	>(pendingSecondaryKey(orgId, "googlebusiness", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3334,9 +3499,10 @@ app.openapi(selectGBPLocation, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 
 	if (!pendingData.google_account_name) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3375,6 +3541,7 @@ app.openapi(selectGBPLocation, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -3522,6 +3689,7 @@ app.openapi(selectSnapchatProfile, async (c) => {
 	>(pendingSecondaryKey(orgId, "snapchat", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3535,7 +3703,7 @@ app.openapi(selectSnapchatProfile, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 
 	// SECURITY: Decrypt the one-time KV payload; the account writer seals it.
 	const decryptedSnapSetToken =
@@ -3563,6 +3731,7 @@ app.openapi(selectSnapchatProfile, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -3726,6 +3895,7 @@ app.openapi(startOAuth, async (c) => {
 		payload: {
 			org_id: orgId,
 			initiator_key_id: c.get("keyId"),
+			authority_session_id: connectionAuthoritySessionId(c),
 			initial_workspace_scope: c.get("workspaceScope"),
 			workspace_id: scope.workspaceId,
 			workspace_id_was_explicit: query.workspace_id !== undefined,
@@ -3777,6 +3947,7 @@ app.openapi(completeOAuth, async (c) => {
 			new URL(instanceAppOrigin).hostname,
 		)
 	) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3793,19 +3964,23 @@ app.openapi(completeOAuth, async (c) => {
 	const oauthRedirectUri = `${apiBaseUrl}/connect/oauth/callback`;
 	const oauthConfig = OAUTH_CONFIGS[platform as Platform];
 
-	// Retrieve code_verifier and method from KV state if available
+	// Dashboard completions must consume the one-time state so the provider code
+	// remains bound to the exact initiating session. Service credentials retain
+	// the published direct-completion flow; PKCE and Instagram still require state.
 	let codeVerifier: string | undefined;
 	let method: string | undefined;
 	let connectionOperationId: string | undefined;
 	let workspaceId: string | null = null;
 	let workspaceWasExplicit = false;
 	let initiatorKeyId = c.get("keyId");
+	let authoritySessionId = connectionAuthoritySessionId(c);
 	let authorizedWorkspaceScope: "all" | string[] = c.get("workspaceScope");
 
 	if (body.state) {
 		const stateData = await claimOneTimeCapability<{
 			org_id: string;
 			initiator_key_id: string;
+			authority_session_id: string | null;
 			initial_workspace_scope: "all" | string[];
 			workspace_id: string | null;
 			workspace_id_was_explicit?: boolean;
@@ -3819,12 +3994,14 @@ app.openapi(completeOAuth, async (c) => {
 		if (
 			stateData?.org_id === orgId &&
 			stateData?.platform === platform &&
-			stateData.initiator_key_id === c.get("keyId")
+			stateData.initiator_key_id === c.get("keyId") &&
+			stateData.authority_session_id === connectionAuthoritySessionId(c)
 		) {
 			if (
 				body.workspace_id !== undefined &&
 				body.workspace_id !== stateData.workspace_id
 			) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -3837,11 +4014,12 @@ app.openapi(completeOAuth, async (c) => {
 				);
 			}
 			const denied = assertWorkspaceScope(c, stateData.workspace_id);
-			if (denied) return denied as never;
+			if (denied) return connectionInputNotApplied(c, denied) as never;
 			const initialWorkspaceScope = parseApiKeyWorkspaceScope({
 				workspace_scope: stateData.initial_workspace_scope,
 			});
 			if (initialWorkspaceScope === null) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -3854,11 +4032,13 @@ app.openapi(completeOAuth, async (c) => {
 			}
 			const validation = await validatePersistedOperationalScope(c.get("db"), {
 				apiKeyId: stateData.initiator_key_id,
+				authoritySessionId: stateData.authority_session_id,
 				organizationId: orgId,
 				workspaceId: stateData.workspace_id,
 				resourceName: "connected account",
 			});
 			if (!validation.ok) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: { code: validation.code, message: validation.message },
@@ -3868,6 +4048,7 @@ app.openapi(completeOAuth, async (c) => {
 			}
 			workspaceId = stateData.workspace_id;
 			initiatorKeyId = stateData.initiator_key_id;
+			authoritySessionId = stateData.authority_session_id;
 			authorizedWorkspaceScope = initialWorkspaceScope;
 			workspaceWasExplicit =
 				stateData.workspace_id_was_explicit ?? stateData.workspace_id !== null;
@@ -3875,6 +4056,7 @@ app.openapi(completeOAuth, async (c) => {
 				stateData.redirect_url &&
 				stateData.redirect_url !== customerRedirectUrl
 			) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -3890,6 +4072,7 @@ app.openapi(completeOAuth, async (c) => {
 			method = stateData.method ?? undefined;
 			connectionOperationId = stateData.connection_operation_id;
 		} else {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -3900,7 +4083,20 @@ app.openapi(completeOAuth, async (c) => {
 				400 as never,
 			);
 		}
+	} else if (c.get("principalType") === "dashboard_user") {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "STATE_REQUIRED",
+					message:
+						"state is required to complete a dashboard OAuth flow securely.",
+				},
+			} as never,
+			400 as never,
+		);
 	} else if (oauthConfig?.requiresPkce) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3918,14 +4114,16 @@ app.openapi(completeOAuth, async (c) => {
 			body.workspace_id,
 			"connected account",
 		);
-		if (!scope.ok) return scope.response as never;
+		if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 		workspaceId = scope.workspaceId;
 		workspaceWasExplicit = body.workspace_id !== undefined;
 		initiatorKeyId = c.get("keyId");
+		authoritySessionId = connectionAuthoritySessionId(c);
 		authorizedWorkspaceScope = c.get("workspaceScope");
 	}
 
 	if (platform === "instagram" && !body.state) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3938,6 +4136,7 @@ app.openapi(completeOAuth, async (c) => {
 	}
 
 	if (platform === "instagram" && !method && body.state) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3949,11 +4148,48 @@ app.openapi(completeOAuth, async (c) => {
 		);
 	}
 
+	const selectedOAuthConfig =
+		platform === "instagram" && method === "direct"
+			? INSTAGRAM_DIRECT_CONFIG
+			: oauthConfig;
+	if (!selectedOAuthConfig) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "OAUTH_NOT_SUPPORTED",
+					message: `OAuth is not configured for ${platform}.`,
+				},
+			} as never,
+			400 as never,
+		);
+	}
+	if (
+		!selectedOAuthConfig.getClientId(c.env) ||
+		!selectedOAuthConfig.getClientSecret(c.env)
+	) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "MISSING_CREDENTIALS",
+					message: `OAuth credentials not configured for ${platform}.`,
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	// Provider/token mutation boundary: ambiguous provider and save outcomes park.
+	// A typed workspace rejection still proves that the requested RelayAPI account
+	// connection rolled back (K=0), even though the provider may have minted a
+	// single-use token. That deliberate under-charge policy is owner-reviewable.
 	try {
 		const result = await exchangeAndSaveAccount({
 			env: c.env,
 			orgId,
 			initiatorKeyId,
+			authoritySessionId,
 			authorizedWorkspaceScope,
 			workspaceId,
 			workspaceWasExplicit,
@@ -3967,6 +4203,9 @@ app.openapi(completeOAuth, async (c) => {
 		});
 
 		if (result.status === "error") {
+			if (PROVEN_NOT_APPLIED_OAUTH_ERRORS.has(result.code)) {
+				markMutationInputNotApplied(c);
+			}
 			const statusCode =
 				result.code === "INTERNAL_ERROR"
 					? 500

@@ -138,8 +138,8 @@ cloudflared tunnel run my-tunnel
 
 ### Cloudflare Config (Token-Based)
 ```bash
-# No config file needed
-cloudflared tunnel --no-autoupdate run --token <TOKEN>
+# No config file needed. Supply the token from a protected secret file.
+cloudflared tunnel --no-autoupdate run --token-file /run/secrets/cloudflared-token
 ```
 
 Configure routes in dashboard: **Zero Trust** > **Networks** > **Tunnels** > [Tunnel] > **Public Hostname**
@@ -150,7 +150,7 @@ Configure routes in dashboard: **Zero Trust** > **Networks** > **Tunnels** > [Tu
 ## Environment Variables
 
 ```bash
-TUNNEL_TOKEN=<token>                    # Token for config source: cloudflare
+TUNNEL_TOKEN_FILE=/run/secrets/cloudflared-token # Protected token file for remote config
 TUNNEL_ORIGIN_CERT=/path/to/cert.pem   # Override cert path (local config)
 NO_AUTOUPDATE=true                      # Disable auto-updates
 TUNNEL_LOGLEVEL=debug                   # Log level

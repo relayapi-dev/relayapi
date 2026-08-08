@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { parsePostgresUrl } from "../src/cloudflare.js";
-import { validateConfig, validateLock } from "../src/config.js";
+import {
+	validateConfig,
+	validateHyperdriveCaCertificateId,
+	validateLock,
+	withResolvedHyperdriveCaCertificateId,
+} from "../src/config.js";
 import type { SelfHostConfig } from "../src/types.js";
 import { compareVersions } from "../src/upgrade.js";
 
@@ -13,8 +18,10 @@ const baseConfig = {
 		rootDomain: "example.com",
 		apiHostname: "api.example.com",
 		appHostname: "app.example.com",
+		publicHostname: "go.example.com",
 		mediaHostname: "media.example.com",
 		thumbnailHostname: "thumbs.example.com",
+		r2Jurisdiction: "default",
 	},
 	features: { email: false, ai: true, downloader: false },
 } satisfies SelfHostConfig;
@@ -22,6 +29,69 @@ const baseConfig = {
 describe("self-host configuration", () => {
 	test("accepts a minimal non-secret operator config", () => {
 		expect(validateConfig(baseConfig)).toEqual(baseConfig);
+	});
+
+	test("upgrades an older config to explicit public-host and R2 defaults", () => {
+		const legacy = structuredClone(baseConfig) as unknown as Record<
+			string,
+			unknown
+		>;
+		const cloudflare = legacy.cloudflare as Record<string, unknown>;
+		delete cloudflare.publicHostname;
+		delete cloudflare.r2Jurisdiction;
+		expect(validateConfig(legacy).cloudflare).toMatchObject({
+			publicHostname: "go.example.com",
+			r2Jurisdiction: "default",
+		});
+	});
+
+	test("validates and canonicalizes Hyperdrive CA certificate intent", () => {
+		const certificateId = "A1111111-B222-4C33-8D44-E55555555555";
+		expect(validateHyperdriveCaCertificateId(certificateId)).toBe(
+			certificateId.toLowerCase(),
+		);
+		expect(
+			validateConfig({
+				...baseConfig,
+				cloudflare: {
+					...baseConfig.cloudflare,
+					hyperdriveCaCertificateId: certificateId,
+				},
+			}).cloudflare.hyperdriveCaCertificateId,
+		).toBe(certificateId.toLowerCase());
+		expect(() => validateHyperdriveCaCertificateId("certificate-name")).toThrow(
+			"Cloudflare certificate UUID",
+		);
+	});
+
+	test("adopts legacy Hyperdrive CA intent once and rejects a conflicting pin", () => {
+		const certificateId = "11111111-2222-4333-8444-555555555555";
+		const resolved = withResolvedHyperdriveCaCertificateId(
+			baseConfig,
+			certificateId,
+		);
+		expect(resolved.cloudflare.hyperdriveCaCertificateId).toBe(certificateId);
+		expect(baseConfig.cloudflare).not.toHaveProperty(
+			"hyperdriveCaCertificateId",
+		);
+		expect(() =>
+			withResolvedHyperdriveCaCertificateId(
+				resolved,
+				"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+			),
+		).toThrow("conflicts with relayapi.selfhost.json");
+	});
+
+	test("rejects unsupported R2 jurisdictions before provisioning", () => {
+		expect(() =>
+			validateConfig({
+				...baseConfig,
+				cloudflare: {
+					...baseConfig.cloudflare,
+					r2Jurisdiction: "fedramp",
+				},
+			}),
+		).toThrow('must be "default" or "eu"');
 	});
 
 	test("rejects a hostname outside the configured zone", () => {

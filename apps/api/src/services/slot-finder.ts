@@ -5,6 +5,10 @@ import {
 } from "@relayapi/db";
 import { and, eq, gte, inArray, lte } from "drizzle-orm";
 import { getCachedBestTimes, type BestTimeSlot } from "./best-time-cache";
+import {
+	listQueueSchedules,
+	type StoredQueueSchedule,
+} from "./queue-schedules";
 import type { Env } from "../types";
 
 export interface SlotCandidate {
@@ -22,19 +26,12 @@ export interface FindSlotOptions {
 	excludeTimes?: Date[];
 }
 
-interface StoredSchedule {
-	id: string;
-	name: string;
-	slots: Array<{ day_of_week: number; time: string; timezone: string }>;
-	is_default: boolean;
-}
-
 /**
  * Calculate the next N upcoming slot times from a schedule's slots.
  * Reused from queue.ts logic.
  */
 function calculateUpcomingSlots(
-	slots: StoredSchedule["slots"],
+	slots: StoredQueueSchedule["slots"],
 	count: number,
 	now: Date,
 ): Date[] {
@@ -105,11 +102,6 @@ function calculateUpcomingSlots(
 	return upcoming.slice(0, count);
 }
 
-async function getSchedules(kv: KVNamespace, orgId: string): Promise<StoredSchedule[]> {
-	const data = await kv.get<StoredSchedule[]>(`queue-schedule:${orgId}`, "json");
-	return data ?? [];
-}
-
 /**
  * Find the best available posting slots for an organization.
  */
@@ -126,8 +118,9 @@ export async function findBestSlots(
 		excludeTimes = [],
 	} = options;
 
-	// Load queue schedule from KV
-	const schedules = await getSchedules(env.KV, orgId);
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	// PostgreSQL owns schedule state; KV is only a short-lived cache.
+	const schedules = await listQueueSchedules(db, env.KV, orgId);
 	const schedule = schedules.find((s) => s.is_default) ?? schedules[0];
 	const queueSlots = schedule?.slots ?? [];
 
@@ -177,7 +170,6 @@ export async function findBestSlots(
 	windowStart.setMinutes(windowStart.getMinutes() - 5);
 	windowEnd.setMinutes(windowEnd.getMinutes() + 5);
 
-	const db = createDb(env.HYPERDRIVE.connectionString);
 	const scheduledPosts = await db
 		.select({ scheduledAt: posts.scheduledAt })
 		.from(posts)

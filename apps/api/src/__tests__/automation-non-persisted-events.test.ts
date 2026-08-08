@@ -53,11 +53,12 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -424,7 +425,7 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 		});
 
 		const clickerId = `igad_${generateId("").slice(-8)}`;
-		await recordContactConsent(db, {
+		await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 			organizationId: orgId,
 			workspaceId,
 			contactId: null,
@@ -496,7 +497,7 @@ describe("G2: standalone ad_click / referral creates a valid run", () => {
 		});
 
 		const clickerId = `fbad_${generateId("").slice(-8)}`;
-		await recordContactConsent(db, {
+		await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 			organizationId: orgId,
 			workspaceId,
 			contactId: null,
@@ -711,11 +712,11 @@ describe("G3: start_automation forwards socialAccountId to the child run", () =>
 
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "start_automation-parent-contact",
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 

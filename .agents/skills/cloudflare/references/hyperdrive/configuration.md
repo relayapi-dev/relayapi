@@ -4,27 +4,15 @@ See [README.md](./README.md) for overview.
 
 ## Create Config
 
-**PostgreSQL:**
+Create PostgreSQL and MySQL configurations in **Workers & Pages → Hyperdrive**
+in the Cloudflare dashboard. Its masked form accepts the database connection
+details without placing passwords or credentialed URLs in shell history or
+process argv. After creation, non-secret cache settings can be changed safely:
+
 ```bash
-# Basic
-npx wrangler hyperdrive create my-db \
-  --connection-string="postgres://user:pass@host:5432/db"
-
-# Custom cache
-npx wrangler hyperdrive create my-db \
-  --connection-string="postgres://..." \
-  --max-age=120 --swr=30
-
-# No cache
-npx wrangler hyperdrive create my-db \
-  --connection-string="postgres://..." \
-  --caching-disabled=true
-```
-
-**MySQL:**
-```bash
-npx wrangler hyperdrive create my-db \
-  --connection-string="mysql://user:pass@host:3306/db"
+npx wrangler hyperdrive update <ID> --max-age=120 --swr=30
+# Or disable caching:
+npx wrangler hyperdrive update <ID> --caching-disabled=true
 ```
 
 ## wrangler.jsonc
@@ -36,8 +24,7 @@ npx wrangler hyperdrive create my-db \
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "<HYPERDRIVE_ID>",
-      "localConnectionString": "postgres://user:pass@localhost:5432/dev"
+      "id": "<HYPERDRIVE_ID>"
     }
   ]
 }
@@ -121,11 +108,9 @@ cloudflared tunnel create my-db-tunnel
 # 4. Create Access app (db-tunnel.example.com)
 #    Policy: Service Auth token from step 3
 
-# 5. Create Hyperdrive
-npx wrangler hyperdrive create my-private-db \
-  --host=db-tunnel.example.com \
-  --user=dbuser --password=dbpass --database=prod \
-  --access-client-id=<ID> --access-client-secret=<SECRET>
+# 5. Create Hyperdrive in the Cloudflare dashboard. Enter the database password
+#    and Access service-token secret in the masked form fields; do not pass
+#    either credential through shell argv or paste a credentialed URL into logs.
 ```
 
 **⚠️ Don't specify `--port` with Tunnel** - port configured in tunnel service settings.
@@ -134,22 +119,17 @@ npx wrangler hyperdrive create my-private-db \
 
 **Option 1: Local (RECOMMENDED):**
 ```bash
-# Env var (takes precedence)
-export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgres://user:pass@localhost:5432/dev"
+# This ignored mode-0600 file is provisioned by your secret manager and exports
+# CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE. Never print or
+# commit it, and do not type a credentialed URL into a shell command.
+. /secure/hyperdrive-local-env
 npx wrangler dev
-
-# wrangler.jsonc
-{"hyperdrive": [{"binding": "HYPERDRIVE", "localConnectionString": "postgres://..."}]}
 ```
 
 **Remote DB locally:**
-```bash
-# PostgreSQL
-export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgres://user:pass@remote:5432/db?sslmode=require"
-
-# MySQL
-export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="mysql://user:pass@remote:3306/db?sslMode=REQUIRED"
-```
+Use the same secret-manager-provisioned environment file with the appropriate
+TLS-enabled PostgreSQL or MySQL URL. Prefer a local tunnel and loopback URL over
+opening a remote database directly.
 
 **Option 2: Remote execution:**
 ```bash

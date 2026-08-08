@@ -19,12 +19,12 @@ Worker → Edge (setup) → Pool (near DB) → Origin
 
 ## Quick Start
 
-```bash
-# Create config
-npx wrangler hyperdrive create my-db \
-  --connection-string="postgres://user:pass@host:5432/db"
+Create `my-db` in **Workers & Pages → Hyperdrive** in the Cloudflare dashboard.
+Enter the connection string in the masked form so database credentials never
+appear in shell history or process argv.
 
-# wrangler.jsonc
+```jsonc
+// wrangler.jsonc
 {
   "compatibility_flags": ["nodejs_compat"],
   "hyperdrive": [{"binding": "HYPERDRIVE", "id": "<ID>"}]

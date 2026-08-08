@@ -44,7 +44,7 @@ For high-confidence numbers, use `confidence(level: 0.95)` to get estimate bound
 
 **Cause:** Token lacks required permission or wrong scope.
 
-**Solution:** Account-scoped queries need **Account Analytics: Read**. Zone-scoped queries need **Zone Analytics: Read**. Verify: `curl -s https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $TOKEN"`
+**Solution:** Account-scoped queries need **Account Analytics: Read**. Zone-scoped queries need **Zone Analytics: Read**. Verify: `curl -s https://api.cloudflare.com/client/v4/user/tokens/verify --header @/secure/bearer-auth-header`
 
 ### "field not found" / "Cannot query field"
 

@@ -28,6 +28,7 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 // ---------------------------------------------------------------------------
 // Unit tests — resolveInputResume (pure function)
@@ -379,11 +380,11 @@ async function createAutomation(graph: Graph, channel = "telegram") {
 async function createContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "input-resume-test-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;

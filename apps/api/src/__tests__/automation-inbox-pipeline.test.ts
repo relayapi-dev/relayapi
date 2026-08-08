@@ -45,11 +45,15 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import {
+	protectedContactChannelFixture,
+	protectedContactFixture,
+} from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -284,21 +288,22 @@ async function createWelcomeBinding(automationId: string) {
 async function createContactWithChannel(identifier: string) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: `contact-${identifier}`,
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
-	await db.insert(contactChannels).values({
+	await db.insert(contactChannels).values(await protectedContactChannelFixture({
 		organizationId: orgId,
+		workspaceId,
 		contactId: ct.id,
 		socialAccountId,
 		platform: "telegram",
 		identifier,
-	});
-	await recordContactConsent(db, {
+	}));
+	await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 		organizationId: orgId,
 		workspaceId,
 		contactId: ct.id,
@@ -382,21 +387,22 @@ function buildInstagramQuickReplyMessage(params: {
 async function createIgContactWithChannel(identifier: string) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: `ig-contact-${identifier}`,
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("ig contact insert failed");
-	await db.insert(contactChannels).values({
+	await db.insert(contactChannels).values(await protectedContactChannelFixture({
 		organizationId: orgId,
+		workspaceId,
 		contactId: ct.id,
 		socialAccountId: igSocialAccountId,
 		platform: "instagram",
 		identifier,
-	});
-	await recordContactConsent(db, {
+	}));
+	await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 		organizationId: orgId,
 		workspaceId,
 		contactId: ct.id,
@@ -1162,29 +1168,31 @@ describe("3.7 multi-account: run pins socialAccountId of triggering account (F2)
 		const customerId = `multi_${generateId("").slice(-8)}`;
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "multi-account contact",
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
-		await db.insert(contactChannels).values({
+		await db.insert(contactChannels).values(await protectedContactChannelFixture({
 			organizationId: orgId,
+			workspaceId,
 			contactId: ct.id,
 			socialAccountId: igSocialAccountId,
 			platform: "instagram",
 			identifier: customerId,
-		});
+		}));
 		// Sleep 5ms to ensure the B channel is strictly newer than A.
 		await new Promise((r) => setTimeout(r, 5));
-		await db.insert(contactChannels).values({
+		await db.insert(contactChannels).values(await protectedContactChannelFixture({
 			organizationId: orgId,
+			workspaceId,
 			contactId: ct.id,
 			socialAccountId: igSaB.id,
 			platform: "instagram",
 			identifier: customerId,
-		});
+		}));
 
 		// Inbound arrives on account A (igPlatformAccountId / igSocialAccountId).
 		const msg: InboxQueueMessage = {

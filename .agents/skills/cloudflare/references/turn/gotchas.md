@@ -64,7 +64,7 @@ const iceServers = [{ urls: 'turn:turn.cloudflare.com:3478' }];
 urls: ['turn:turn.cloudflare.com:53']
 
 // ✅ GOOD: Filter port 53
-urls: urls.filter(url => !url.includes(':53'))
+urls: urls.filter(url => !/:53(?:\?|$)/.test(url)) // Keeps port 5349
 ```
 
 ### Not handling credential expiry
@@ -98,14 +98,10 @@ pc.addEventListener('iceconnectionstatechange', async () => {
 ### Exposing TURN key secret client-side
 
 ```typescript
-// ❌ BAD: Secret exposed to client
-const secret = 'your-turn-key-secret';
-const response = await fetch(`https://rtc.live.cloudflare.com/v1/turn/...`, {
-  headers: { 'Authorization': `Bearer ${secret}` }
-});
+// ❌ BAD: Generating credentials in browser code exposes the long-term TURN key.
 
-// ✅ GOOD: Generate credentials server-side
-const response = await fetch('/api/turn-credentials');
+// ✅ GOOD: Call an authenticated, authorized, and rate-limited application endpoint.
+const response = await fetch('/api/turn-credentials', { method: 'POST' });
 ```
 
 ## ICE Restart Required Scenarios
@@ -204,7 +200,7 @@ setInterval(async () => {
 **Solution**: Filter port 53 URLs server-side:
 
 ```typescript
-const filtered = urls.filter(url => !url.includes(':53'));
+const filtered = urls.filter(url => !/:53(?:\?|$)/.test(url)); // Keeps port 5349
 ```
 
 ### Issue: Hardcoded IPs stop working

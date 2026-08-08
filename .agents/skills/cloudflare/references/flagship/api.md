@@ -151,10 +151,15 @@ Before making any REST API calls (create, read, update, delete, toggle flags), v
 Check with:
 
 ```bash
-echo "CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-(not set)}"
-echo "CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-(not set)}"
-echo "FLAGSHIP_APP_ID=${FLAGSHIP_APP_ID:-(not set)}"
+node <<'NODE'
+for (const name of ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'FLAGSHIP_APP_ID']) {
+  console.log(`${name}=${process.env[name] ? 'set' : 'missing'}`);
+}
+NODE
 ```
+
+This reports presence only. Never print the variable values, including in CI or
+debug traces.
 
 **If any are missing, ask the user to provide them before proceeding.**
 

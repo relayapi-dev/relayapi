@@ -1,5 +1,14 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import {
+	BASELINE_GENERATION,
+	MAINTENANCE_SMOKE_HASH_DOMAIN,
+} from "@relayapi/config";
+import { createHash } from "node:crypto";
 import { defineConfig } from "vitest/config";
+
+const maintenanceSmokeHash = createHash("sha256")
+	.update(`${MAINTENANCE_SMOKE_HASH_DOMAIN}workerd-smoke-token`)
+	.digest("hex");
 
 export default defineConfig({
 	logLevel: "error",
@@ -13,7 +22,11 @@ export default defineConfig({
 				compatibilityDate: "2026-03-13",
 				compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
 				bindings: {
+					BASELINE_GENERATION: String(BASELINE_GENERATION),
+					ENCRYPTION_KEY: `test=${"a".repeat(64)}`,
+					MAINTENANCE_SMOKE_BYPASS_SHA256: maintenanceSmokeHash,
 					PERF_LOGS: "0",
+					PUBLIC_LINK_BASE_URL: "https://go.relayapi.dev",
 					R2_EVENT_ACCOUNT_ID: "3496f40fcd55a91da50ded8abea2cf7a",
 					R2_MEDIA_BUCKET_NAME: "relayapi-media",
 				},

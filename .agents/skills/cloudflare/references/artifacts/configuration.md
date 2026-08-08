@@ -46,13 +46,13 @@ For external systems, configure the namespace-scoped base URL and gateway JWT:
 
 ```bash
 export ARTIFACTS_NAMESPACE="default"
-export ARTIFACTS_JWT="<YOUR_GATEWAY_JWT>"
 export ARTIFACTS_BASE_URL="https://artifacts.cloudflare.net/v1/api/namespaces/$ARTIFACTS_NAMESPACE"
 ```
 
 Some environments also expose an `/edge/v1/api/...` base path. Verify the correct host and base path in the live docs for your Artifacts environment.
 
-Use environment variables or your secret manager. Do not hardcode gateway JWTs or repo tokens.
+The gateway JWT is supplied through `/secure/bearer-auth-header` as described by
+the root skill. Do not hardcode gateway JWTs or repo tokens.
 
 ## Repo Tokens
 
@@ -73,13 +73,17 @@ Verify the current token behavior and auth guidance in `https://developers.cloud
 
 Artifacts is designed to work with standard git-over-HTTPS clients once you have a repo `remote` and an access token.
 
-Prefer header-based auth for local tooling so the full token stays out of the remote URL:
+Use Git's credential-helper/askpass mechanism so the token stays out of both the
+remote URL and process argv. The helper should read a short-lived token from the
+process environment without logging it:
 
 ```bash
-git -c http.extraHeader="Authorization: Bearer $ARTIFACTS_TOKEN" clone "$ARTIFACTS_REMOTE" artifacts-clone
+GIT_ASKPASS=/secure/path/artifacts-askpass GIT_TERMINAL_PROMPT=0 \
+  git clone "$ARTIFACTS_REMOTE" artifacts-clone
 ```
 
-Use a Basic-auth remote only for short-lived commands that need a self-contained URL.
+Never construct a Basic-auth remote or an `http.extraHeader` argv value containing
+the token.
 
 ## Retrieval Checklist
 

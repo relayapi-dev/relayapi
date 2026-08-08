@@ -126,7 +126,6 @@ export async function bootstrapSelfHostedAdmin(): Promise<void> {
 				organizationId,
 				status: "cancelled",
 				aiEnabled: process.env.SELF_HOSTED_FEATURE_AI === "1",
-				dailyToolLimit: 2,
 			})
 			.onConflictDoNothing({
 				target: organizationSubscriptions.organizationId,

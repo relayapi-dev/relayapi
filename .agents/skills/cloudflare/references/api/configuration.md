@@ -2,23 +2,11 @@
 
 ## Environment Variables
 
-### Set Variables
+### Supply Variables
 
-| Platform | Command |
-|----------|---------|
-| Linux/macOS | `export CLOUDFLARE_API_TOKEN='token'` |
-| PowerShell | `$env:CLOUDFLARE_API_TOKEN = 'token'` |
-| Windows CMD | `set CLOUDFLARE_API_TOKEN=token` |
-
-**Security:** Never commit tokens. Use `.env` files (gitignored) or secret managers.
-
-### .env File Pattern
-
-```bash
-# .env (add to .gitignore)
-CLOUDFLARE_API_TOKEN=your-token-here
-CLOUDFLARE_ACCOUNT_ID=your-account-id
-```
+Inject `CLOUDFLARE_API_TOKEN` into the SDK process directly from a secret
+manager. Do not type it in a shell assignment, put it in command argv, print it,
+or commit it. `CLOUDFLARE_ACCOUNT_ID` is not secret and may use ordinary config.
 
 ```typescript
 // TypeScript
@@ -126,8 +114,7 @@ const fastClient = new Cloudflare({ maxRetries: 0 });
 ```bash
 # Configure authentication
 wrangler login
-# Or
-export CLOUDFLARE_API_TOKEN='token'
+# For non-interactive use, inject CLOUDFLARE_API_TOKEN with the CI secret manager.
 
 # Common commands that use API
 wrangler deploy              # Uploads worker via API

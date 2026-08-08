@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { AUTOMATION_BINDING_TYPES } from "@relayapi/db";
 
 export const DefaultReplyConfig = z.object({}).strict();
 export const WelcomeMessageConfig = z.object({}).strict();
@@ -47,21 +48,16 @@ export const IceBreakerConfig = z
 	})
 	.strict();
 
-export const BindingConfigByType: Record<string, z.ZodSchema> = {
+export const BindingTypeSchema = z.enum(AUTOMATION_BINDING_TYPES);
+export type BindingType = z.infer<typeof BindingTypeSchema>;
+
+export const BindingConfigByType = {
 	default_reply: DefaultReplyConfig,
 	welcome_message: WelcomeMessageConfig,
 	get_started: GetStartedConfig,
 	main_menu: MainMenuConfig,
 	ice_breaker: IceBreakerConfig,
-};
-
-export const BindingTypeSchema = z.enum([
-	"default_reply",
-	"welcome_message",
-	"get_started",
-	"main_menu",
-	"ice_breaker",
-]);
+} satisfies Record<BindingType, z.ZodSchema>;
 
 export const BindingCreateSchema = z
 	.object({

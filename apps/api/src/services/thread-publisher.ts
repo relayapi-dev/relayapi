@@ -387,16 +387,13 @@ export async function publishThreadPosition(
 			const claimedAt = new Date();
 			const leaseExpiresAt = new Date(claimedAt.getTime() + 5 * 60 * 1000);
 			const claimedTarget = await db.transaction(async (tx) => {
-				const rows = await tx
-					.update(postTargets)
-					.set({
-						status: "publishing",
-						deliveryState: "in_flight",
-						attemptId,
-						claimedAt,
-						leaseExpiresAt,
-						updatedAt: claimedAt,
+				const [claimable] = await tx
+					.select({
+						id: postTargets.id,
+						attemptId: postTargets.attemptId,
+						publishOperationId: postTargets.publishOperationId,
 					})
+					.from(postTargets)
 					.where(
 						and(
 							eq(postTargets.id, target.id),
@@ -414,17 +411,80 @@ export async function publishThreadPosition(
 							executionFence,
 						),
 					)
-					.returning({ id: postTargets.id });
-				if (!rows[0]) return false;
+					.for("update")
+					.limit(1);
+				if (!claimable) return null;
+				if (claimable.attemptId) {
+					const [superseded] = await tx
+						.update(publishAttempts)
+						.set({
+							state: "failed",
+							completedAt: claimedAt,
+							leaseExpiresAt: claimedAt,
+							error: "Superseded before the provider request boundary",
+						})
+						.where(
+							and(
+								eq(publishAttempts.id, claimable.attemptId),
+								eq(publishAttempts.postTargetId, claimable.id),
+								eq(
+									publishAttempts.publishOperationId,
+									claimable.publishOperationId,
+								),
+								eq(publishAttempts.state, "in_flight"),
+							),
+						)
+						.returning({ id: publishAttempts.id });
+					if (!superseded) {
+						throw new Error(
+							"Claimable thread target is missing its in-flight attempt",
+						);
+					}
+				}
 				await tx.insert(publishAttempts).values({
 					id: attemptId,
-					publishOperationId: target.publishOperationId,
-					postTargetId: target.id,
+					publishOperationId: claimable.publishOperationId,
+					postTargetId: claimable.id,
 					state: "in_flight",
 					claimedAt,
 					leaseExpiresAt,
 				});
-				return true;
+				const [claimed] = await tx
+					.update(postTargets)
+					.set({
+						status: "publishing",
+						deliveryState: "in_flight",
+						attemptId,
+						claimedAt,
+						leaseExpiresAt,
+						updatedAt: claimedAt,
+					})
+					.where(
+						and(
+							eq(postTargets.id, claimable.id),
+							eq(postTargets.publishOperationId, claimable.publishOperationId),
+							or(
+								eq(postTargets.deliveryState, "queued"),
+								and(
+									eq(postTargets.deliveryState, "in_flight"),
+									isNull(postTargets.requestMayHaveBeenSentAt),
+									or(
+										isNull(postTargets.leaseExpiresAt),
+										lt(postTargets.leaseExpiresAt, claimedAt),
+									),
+								),
+							),
+							executionFence,
+						),
+					)
+					.returning({
+						id: postTargets.id,
+						publishOperationId: postTargets.publishOperationId,
+					});
+				if (!claimed) {
+					throw new Error("Locked thread target claim was not persisted");
+				}
+				return claimed;
 			});
 			if (!claimedTarget) {
 				// The initial target snapshot predates this claim. Re-read only on a
@@ -678,7 +738,7 @@ export async function publishThreadPosition(
 
 				// Publish
 				const result: PublishResult = await publisher.publish({
-					operation_id: target.publishOperationId,
+					operation_id: claimedTarget.publishOperationId,
 					content: post.content ?? "",
 					media: resolvedMediaItems,
 					target_options: targetOpts,

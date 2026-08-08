@@ -24,6 +24,14 @@ export class MissingContentLengthError extends Error {
 	}
 }
 
+/** URL policy rejected the destination before an outbound request was sent. */
+export class BlockedPublicUrlError extends Error {
+	constructor() {
+		super("Blocked public URL");
+		this.name = "BlockedPublicUrlError";
+	}
+}
+
 export interface BoundedReadableBody {
 	body: ReadableStream<Uint8Array>;
 	/** Resolves to the bytes actually consumed when the stream reaches EOF. */
@@ -547,7 +555,7 @@ export async function fetchPublicUrl(
 		!isRelayR2PresignedUrl(urlString) &&
 		(await isBlockedUrlWithDns(urlString, { signal }))
 	) {
-		throw new Error("Blocked public URL");
+		throw new BlockedPublicUrlError();
 	}
 
 	const { maxBytes, ...fetchInit } = init;

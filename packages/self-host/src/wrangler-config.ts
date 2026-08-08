@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { BASELINE_GENERATION } from "../../config/src/index.js";
 import { cloudflareQueueName, RESOURCE_NAMES } from "./constants.js";
 import type { SelfHostConfig } from "./types.js";
 
@@ -18,9 +19,25 @@ const consumer = (
 	options: Record<string, number | string> = {},
 ) => ({ queue: cloudflareQueueName(queue), ...options });
 
+function r2Binding(
+	binding: string,
+	bucketName: string,
+	jurisdiction: SelfHostConfig["cloudflare"]["r2Jurisdiction"],
+) {
+	return {
+		binding,
+		bucket_name: bucketName,
+		// Cloudflare's Wrangler schema accepts only named restrictions here.
+		// The global/default choice is fixed at bucket creation and represented
+		// on a Worker binding by omitting `jurisdiction`.
+		...(jurisdiction === "default" ? {} : { jurisdiction }),
+	};
+}
+
 export function apiWranglerConfig(
 	config: SelfHostConfig,
 	sourceRoot: string,
+	maintenanceSmokeBypassSha256?: string,
 ): Record<string, unknown> {
 	if (!config.resources)
 		throw new Error("Cloudflare resources are not configured");
@@ -33,19 +50,36 @@ export function apiWranglerConfig(
 		minify: true,
 		placement: { mode: "smart" },
 		observability,
-		routes: [{ pattern: config.cloudflare.apiHostname, custom_domain: true }],
+		routes: [
+			{ pattern: config.cloudflare.apiHostname, custom_domain: true },
+			{ pattern: config.cloudflare.publicHostname, custom_domain: true },
+		],
 		vars: {
 			DEPLOYMENT_MODE: "self_hosted",
 			SELF_HOSTED_FEATURE_AI: config.features.ai ? "1" : "0",
 			SELF_HOSTED_FEATURE_EMAIL: config.features.email ? "1" : "0",
 			SELF_HOSTED_FEATURE_DOWNLOADER: config.features.downloader ? "1" : "0",
 			PERF_LOGS: "0",
+			BASELINE_GENERATION: String(BASELINE_GENERATION),
 			API_BASE_URL: `https://${config.cloudflare.apiHostname}`,
+			PUBLIC_LINK_BASE_URL: `https://${config.cloudflare.publicHostname}`,
 			APP_BASE_URL: `https://${config.cloudflare.appHostname}`,
 			MEDIA_PUBLIC_HOST: config.cloudflare.mediaHostname,
 			THUMBNAIL_PUBLIC_HOST: config.cloudflare.thumbnailHostname,
 			R2_EVENT_ACCOUNT_ID: config.cloudflare.accountId,
 			R2_MEDIA_BUCKET_NAME: RESOURCE_NAMES.buckets.media,
+			R2_MEDIA_BUCKET_JURISDICTION: config.cloudflare.r2Jurisdiction,
+			R2_THUMBNAIL_BUCKET_NAME: RESOURCE_NAMES.buckets.thumbnails,
+			R2_THUMBNAIL_BUCKET_JURISDICTION: config.cloudflare.r2Jurisdiction,
+			AI_EMBEDDING_PROVIDER: "openai",
+			AI_EMBEDDING_MODEL: "text-embedding-3-small",
+			AI_INFERENCE_PROVIDER: "workers_ai",
+			AI_INFERENCE_MODEL: "@cf/zai-org/glm-4.7-flash",
+			...(maintenanceSmokeBypassSha256
+				? {
+						MAINTENANCE_SMOKE_BYPASS_SHA256: maintenanceSmokeBypassSha256,
+					}
+				: {}),
 		},
 		...(config.features.ai ? { ai: { binding: "AI" } } : {}),
 		durable_objects: {
@@ -54,16 +88,26 @@ export function apiWranglerConfig(
 		migrations: [{ tag: "v1", new_sqlite_classes: ["RealtimeDO"] }],
 		kv_namespaces: [{ binding: "KV", id: config.resources.kvNamespaceId }],
 		r2_buckets: [
-			{ binding: "MEDIA_BUCKET", bucket_name: RESOURCE_NAMES.buckets.media },
-			{ binding: "AVATAR_BUCKET", bucket_name: RESOURCE_NAMES.buckets.avatars },
-			{
-				binding: "THUMBNAIL_BUCKET",
-				bucket_name: RESOURCE_NAMES.buckets.thumbnails,
-			},
-			{
-				binding: "QUEUE_RESCUE_BUCKET",
-				bucket_name: RESOURCE_NAMES.buckets.queueRescue,
-			},
+			r2Binding(
+				"MEDIA_BUCKET",
+				RESOURCE_NAMES.buckets.media,
+				config.cloudflare.r2Jurisdiction,
+			),
+			r2Binding(
+				"AVATAR_BUCKET",
+				RESOURCE_NAMES.buckets.avatars,
+				config.cloudflare.r2Jurisdiction,
+			),
+			r2Binding(
+				"THUMBNAIL_BUCKET",
+				RESOURCE_NAMES.buckets.thumbnails,
+				config.cloudflare.r2Jurisdiction,
+			),
+			r2Binding(
+				"QUEUE_RESCUE_BUCKET",
+				RESOURCE_NAMES.buckets.queueRescue,
+				config.cloudflare.r2Jurisdiction,
+			),
 		],
 		images: { binding: "IMAGES" },
 		media: { binding: "MEDIA" },
@@ -73,9 +117,8 @@ export function apiWranglerConfig(
 				"*/1 * * * *",
 				"*/5 * * * *",
 				"*/30 * * * *",
-				"0 0 1 * *",
 				"0 9 * * *",
-				"0 9 * * 1",
+				"0 9 * * MON",
 			],
 		},
 		ratelimits: [
@@ -88,6 +131,16 @@ export function apiWranglerConfig(
 				name: "PRO_RATE_LIMITER",
 				namespace_id: "2002",
 				simple: { limit: 1000, period: 60 },
+			},
+			{
+				name: "FREE_KEY_BURST_LIMITER",
+				namespace_id: "2003",
+				simple: { limit: 50, period: 60 },
+			},
+			{
+				name: "PRO_KEY_BURST_LIMITER",
+				namespace_id: "2004",
+				simple: { limit: 500, period: 60 },
 			},
 		],
 		queues: {
@@ -141,6 +194,7 @@ export function apiWranglerConfig(
 				}),
 				consumer("tools", {
 					max_batch_size: 5,
+					max_batch_timeout: 1,
 					max_retries: 3,
 					max_concurrency: 3,
 					dead_letter_queue: cloudflareQueueName("tools-dlq"),
@@ -184,7 +238,7 @@ export function apiWranglerConfig(
 				consumer("queue-rescue", {
 					max_batch_size: 10,
 					max_batch_timeout: 5,
-					max_retries: 100,
+					max_retries: 40,
 					max_concurrency: 2,
 				}),
 			],
@@ -195,6 +249,7 @@ export function apiWranglerConfig(
 export function appWranglerConfig(
 	config: SelfHostConfig,
 	sourceRoot: string,
+	maintenanceSmokeBypassSha256?: string,
 ): Record<string, unknown> {
 	if (!config.resources)
 		throw new Error("Cloudflare resources are not configured");
@@ -212,30 +267,45 @@ export function appWranglerConfig(
 		observability,
 		routes: [{ pattern: config.cloudflare.appHostname, custom_domain: true }],
 		vars: {
-			IDENTITY_DELETION_CONTRACT_VERSION: "0005",
+			IDENTITY_DELETION_CONTRACT_VERSION: "identity-deletion-v1",
+			BASELINE_GENERATION: String(BASELINE_GENERATION),
 			DEPLOYMENT_MODE: "self_hosted",
 			SELF_HOSTED_FEATURE_AI: config.features.ai ? "1" : "0",
 			SELF_HOSTED_FEATURE_EMAIL: config.features.email ? "1" : "0",
 			API_BASE_URL: `https://${config.cloudflare.apiHostname}`,
 			BETTER_AUTH_URL: `https://${config.cloudflare.appHostname}`,
+			...(maintenanceSmokeBypassSha256
+				? {
+						MAINTENANCE_SMOKE_BYPASS_SHA256: maintenanceSmokeBypassSha256,
+					}
+				: {}),
 		},
 		kv_namespaces: [{ binding: "KV", id: config.resources.kvNamespaceId }],
 		hyperdrive: [{ binding: "HYPERDRIVE", id: config.resources.hyperdriveId }],
 		r2_buckets: [
-			{
-				binding: "AVATARS_BUCKET",
-				bucket_name: RESOURCE_NAMES.buckets.avatars,
-			},
-			{
-				binding: "PUBLIC_ASSETS",
-				bucket_name: RESOURCE_NAMES.buckets.publicAssets,
-			},
+			r2Binding(
+				"AVATARS_BUCKET",
+				RESOURCE_NAMES.buckets.avatars,
+				config.cloudflare.r2Jurisdiction,
+			),
+			r2Binding(
+				"PUBLIC_ASSETS",
+				RESOURCE_NAMES.buckets.publicAssets,
+				config.cloudflare.r2Jurisdiction,
+			),
+			r2Binding(
+				"QUEUE_RESCUE_BUCKET",
+				RESOURCE_NAMES.buckets.queueRescue,
+				config.cloudflare.r2Jurisdiction,
+			),
 		],
 		images: { binding: "IMAGES" },
-		queues: {
-			producers: [
-				{ binding: "EMAIL_QUEUE", queue: cloudflareQueueName("email") },
-			],
-		},
+		services: [
+			{
+				binding: "EMAIL_INTENTS",
+				service: RESOURCE_NAMES.workers.api,
+				entrypoint: "EmailIntentEntrypoint",
+			},
+		],
 	};
 }

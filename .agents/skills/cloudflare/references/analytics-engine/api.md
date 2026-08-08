@@ -54,7 +54,7 @@ export default {
 
 ```bash
 curl -X POST https://api.cloudflare.com/client/v4/accounts/{account_id}/analytics_engine/sql \
-  -H "Authorization: Bearer $TOKEN" \
+  --header @/secure/bearer-auth-header \
   -d "SELECT blob1 AS endpoint, COUNT(*) AS requests FROM dataset WHERE timestamp >= NOW() - INTERVAL '1' HOUR GROUP BY blob1"
 ```
 

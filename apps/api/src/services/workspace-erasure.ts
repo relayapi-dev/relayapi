@@ -1,12 +1,15 @@
 import {
 	accountRevocationJobs,
+	assertKvPrivacyStoreKey,
 	createDb,
 	externalPosts,
 	media,
-	qrCodes,
-	refUrls,
+	shortLinkCredentials,
+	shortLinks,
 	socialAccounts,
 	whatsappPhoneNumbers,
+	whatsappPhoneProvisioningOperations,
+	whatsappPhoneReleaseOperations,
 	workspaceErasureJobs,
 	workspaceErasureSteps,
 	workspaces,
@@ -26,9 +29,21 @@ import {
 } from "drizzle-orm";
 import { buildAccountCacheKeys } from "../lib/delete-account";
 import { purgePresignedViewCache } from "../lib/r2-presign";
-import { thumbnailKeyFor } from "../lib/thumbnails";
+import { thumbnailKeyFor, thumbnailStorageTarget } from "../lib/thumbnails";
+import { deleteQueueRescueSubjectPage } from "../queues/queue-rescue";
 import type { Env } from "../types";
+import { externalPreviewStorageKey } from "./external-post-sync/previews";
+import { enqueueShortLinkProviderCleanup } from "./external-subject-cleanup";
 import { stagePhoneRelease } from "./phone-number-operations";
+import { findActiveErasureHold } from "./privacy-retention-policy";
+import { pruneOrphanedShortLinkCredentials } from "./short-link-configuration";
+import type { ProviderRef } from "./short-link-providers";
+import { invalidateRelayApiShortLinkCaches } from "./short-link-providers/relayapi";
+import {
+	deleteStoredObject,
+	storageLocatorForMedia,
+	storageLocatorForThumbnailObject,
+} from "./storage-locator";
 
 const JOB_LEASE_MS = 10 * 60_000;
 const WAIT_MS = 60_000;
@@ -43,6 +58,15 @@ export const WORKSPACE_ERASURE_STEP_KEYS = [
 	"revoke_external_resources",
 	"purge_scoped_data",
 	"write_tombstone",
+] as const;
+
+/**
+ * Workspace-located tombstones that must outlive the workspace row. Deleting
+ * one in the generic table sweep would abandon the external deletion intent
+ * that makes database erasure truthful.
+ */
+export const WORKSPACE_ERASURE_SURVIVOR_TABLES = [
+	"external_subject_cleanup_jobs",
 ] as const;
 
 /**
@@ -62,25 +86,23 @@ export const WORKSPACE_PURGE_TABLES = [
 	"auto_post_rules",
 	"automation_bindings",
 	"broadcasts",
-	"contact_consent_states",
-	"contact_suppressions",
-	"contact_consent_events",
 	"content_templates",
 	"custom_field_definitions",
 	"external_posts",
+	"invite_token_workspaces",
 	"idea_media",
-	"idea_tags",
 	"ideas",
 	"idea_groups",
 	"inbox_conversations",
 	"contacts",
+	"ref_urls",
 	"landing_pages",
 	"media",
-	"ref_urls",
 	"automations",
 	"segments",
 	"short_links",
 	"posts",
+	"principal_workspace_grants",
 	"signatures",
 	"telegram_connection_challenges",
 	"social_accounts",
@@ -112,9 +134,58 @@ type StepResult =
 	| { kind: "manual_review"; reason: string };
 
 interface PurgeCursor {
-	phase?: "qr_codes" | "account_dependents" | "tables";
+	phase?:
+		| "account_dependents"
+		| "workspace_media"
+		| "queue_rescue"
+		| "shared_receipts"
+		| "consent_authority"
+		| "tables";
 	table_index?: number;
 	dependent_index?: number;
+	r2_cursor?: string;
+}
+
+async function minimizeWorkspaceSharedReceipts(
+	db: ErasureDb,
+	job: WorkspaceJob,
+): Promise<number> {
+	const rows = await db.execute<{ id: string }>(sql`
+		WITH candidates AS (
+			SELECT failure.id
+			  FROM public.queue_failures AS failure
+			 WHERE failure.organization_ids @> ARRAY[${job.organizationId}]::text[]
+			   AND failure.workspace_ids @> ARRAY[${job.workspaceId}]::text[]
+			 ORDER BY failure.id
+			 LIMIT ${DELETE_BATCH_SIZE}
+			 FOR UPDATE OF failure SKIP LOCKED
+		)
+		UPDATE public.queue_failures AS failure
+		   SET workspace_ids = array_remove(failure.workspace_ids, ${job.workspaceId}),
+		       payload_ciphertext = NULL,
+		       payload_key_id = NULL,
+		       payload_redacted_at = COALESCE(failure.payload_redacted_at, NOW()),
+		       user_ids = ARRAY[]::text[],
+		       contact_ids = ARRAY[]::text[],
+		       account_ids = ARRAY[]::text[],
+		       status = CASE
+		           WHEN failure.status IN ('replayed', 'dismissed')
+		             THEN failure.status
+		           ELSE 'dismissed'
+		       END,
+		       resolved_at = CASE
+		           WHEN failure.status IN ('replayed', 'dismissed')
+		             THEN failure.resolved_at
+		           ELSE COALESCE(failure.resolved_at, NOW())
+		       END,
+		       replay_claim_token = NULL,
+		       replay_claim_expires_at = NULL,
+		       error = 'workspace_erased'
+		  FROM candidates
+		 WHERE failure.id = candidates.id
+		RETURNING failure.id
+	`);
+	return rows.length;
 }
 
 interface RevokeCursor {
@@ -273,33 +344,29 @@ async function stageWorkspaceAccountRevocations(
 	organizationId: string,
 	workspaceId: string,
 ): Promise<number> {
-	const unstaged = await db
-		.select({
-			id: socialAccounts.id,
-			platform: socialAccounts.platform,
-			accessToken: socialAccounts.accessToken,
-			refreshToken: socialAccounts.refreshToken,
-			tokenVersion: socialAccounts.tokenVersion,
-		})
-		.from(socialAccounts)
-		.leftJoin(
-			accountRevocationJobs,
-			eq(accountRevocationJobs.accountId, socialAccounts.id),
-		)
-		.where(
-			and(
-				eq(socialAccounts.organizationId, organizationId),
-				eq(socialAccounts.workspaceId, workspaceId),
-				ne(socialAccounts.lifecycleStatus, "disconnected"),
-				isNull(accountRevocationJobs.id),
-			),
-		)
-		.orderBy(socialAccounts.id)
-		.limit(EXTERNAL_BATCH_SIZE);
-	if (unstaged.length === 0) return 0;
+	return db.transaction(async (tx) => {
+		const unstaged = await tx
+			.select({
+				id: socialAccounts.id,
+				platform: socialAccounts.platform,
+				accessToken: socialAccounts.accessToken,
+				refreshToken: socialAccounts.refreshToken,
+				tokenVersion: socialAccounts.tokenVersion,
+			})
+			.from(socialAccounts)
+			.where(
+				and(
+					eq(socialAccounts.organizationId, organizationId),
+					eq(socialAccounts.workspaceId, workspaceId),
+					ne(socialAccounts.lifecycleStatus, "disconnected"),
+				),
+			)
+			.orderBy(socialAccounts.id)
+			.limit(EXTERNAL_BATCH_SIZE)
+			.for("update");
+		if (unstaged.length === 0) return 0;
 
-	const now = new Date();
-	await db.transaction(async (tx) => {
+		const now = new Date();
 		await tx
 			.insert(accountRevocationJobs)
 			.values(
@@ -314,14 +381,35 @@ async function stageWorkspaceAccountRevocations(
 					nextAttemptAt: now,
 				})),
 			)
-			.onConflictDoNothing({ target: accountRevocationJobs.accountId });
+			.onConflictDoUpdate({
+				target: accountRevocationJobs.accountId,
+				set: {
+					accessTokenCiphertext: sql`excluded.access_token_ciphertext`,
+					refreshTokenCiphertext: sql`excluded.refresh_token_ciphertext`,
+					sourceTokenVersion: sql`excluded.source_token_version`,
+					status: "pending",
+					attempts: 0,
+					leaseToken: 0,
+					nextAttemptAt: now,
+					leaseExpiresAt: null,
+					requestMayHaveBeenSentAt: null,
+					lastError: null,
+					providerResponse: null,
+					completedAt: null,
+					updatedAt: now,
+				},
+			});
 		await tx
 			.update(socialAccounts)
 			.set({
-				lifecycleStatus: "disconnecting",
+				lifecycleStatus: "disconnected",
+				accessToken: null,
+				refreshToken: null,
+				metadata: sql`${socialAccounts.metadata} - 'meta_ads_user_access_token' - 'meta_ads_user_access_token_expires_at' - 'facebook_user_id'`,
 				disconnectRequestedAt: now,
 				disconnectReason: "workspace_deleted",
 				tokenExpiresAt: null,
+				disconnectedAt: now,
 				updatedAt: now,
 			})
 			.where(
@@ -335,8 +423,8 @@ async function stageWorkspaceAccountRevocations(
 					ne(socialAccounts.lifecycleStatus, "disconnected"),
 				),
 			);
+		return unstaged.length;
 	});
-	return unstaged.length;
 }
 
 async function stageWorkspacePhoneReleaseBatch(
@@ -348,18 +436,41 @@ async function stageWorkspacePhoneReleaseBatch(
 		.select({ id: whatsappPhoneNumbers.id })
 		.from(whatsappPhoneNumbers)
 		.innerJoin(
+			whatsappPhoneProvisioningOperations,
+			and(
+				eq(
+					whatsappPhoneProvisioningOperations.phoneNumberId,
+					whatsappPhoneNumbers.id,
+				),
+				eq(whatsappPhoneProvisioningOperations.organizationId, organizationId),
+			),
+		)
+		.innerJoin(
 			socialAccounts,
 			and(
-				eq(socialAccounts.id, whatsappPhoneNumbers.provisioningSourceAccountId),
+				eq(
+					socialAccounts.id,
+					whatsappPhoneProvisioningOperations.provisioningSourceAccountId,
+				),
 				eq(socialAccounts.organizationId, organizationId),
 			),
+		)
+		.leftJoin(
+			whatsappPhoneReleaseOperations,
+			eq(whatsappPhoneReleaseOperations.phoneNumberId, whatsappPhoneNumbers.id),
 		)
 		.where(
 			and(
 				eq(whatsappPhoneNumbers.organizationId, organizationId),
 				eq(socialAccounts.workspaceId, workspaceId),
 				ne(whatsappPhoneNumbers.status, "released"),
-				isNull(whatsappPhoneNumbers.releaseState),
+				or(
+					isNull(whatsappPhoneReleaseOperations.releaseOperationId),
+					and(
+						eq(whatsappPhoneReleaseOperations.releaseReason, "user_requested"),
+						ne(whatsappPhoneReleaseOperations.releaseState, "completed"),
+					),
+				),
 			),
 		)
 		.orderBy(whatsappPhoneNumbers.id)
@@ -417,11 +528,18 @@ async function getWorkspaceExternalState(
 				.select({ value: count() })
 				.from(whatsappPhoneNumbers)
 				.innerJoin(
+					whatsappPhoneProvisioningOperations,
+					eq(
+						whatsappPhoneProvisioningOperations.phoneNumberId,
+						whatsappPhoneNumbers.id,
+					),
+				)
+				.innerJoin(
 					socialAccounts,
 					and(
 						eq(
 							socialAccounts.id,
-							whatsappPhoneNumbers.provisioningSourceAccountId,
+							whatsappPhoneProvisioningOperations.provisioningSourceAccountId,
 						),
 						eq(socialAccounts.organizationId, organizationId),
 					),
@@ -437,13 +555,27 @@ async function getWorkspaceExternalState(
 				.select({ value: count() })
 				.from(whatsappPhoneNumbers)
 				.innerJoin(
+					whatsappPhoneProvisioningOperations,
+					eq(
+						whatsappPhoneProvisioningOperations.phoneNumberId,
+						whatsappPhoneNumbers.id,
+					),
+				)
+				.innerJoin(
 					socialAccounts,
 					and(
 						eq(
 							socialAccounts.id,
-							whatsappPhoneNumbers.provisioningSourceAccountId,
+							whatsappPhoneProvisioningOperations.provisioningSourceAccountId,
 						),
 						eq(socialAccounts.organizationId, organizationId),
+					),
+				)
+				.innerJoin(
+					whatsappPhoneReleaseOperations,
+					eq(
+						whatsappPhoneReleaseOperations.phoneNumberId,
+						whatsappPhoneNumbers.id,
 					),
 				)
 				.where(
@@ -451,8 +583,8 @@ async function getWorkspaceExternalState(
 						eq(whatsappPhoneNumbers.organizationId, organizationId),
 						eq(socialAccounts.workspaceId, workspaceId),
 						or(
-							eq(whatsappPhoneNumbers.releaseState, "manual_review"),
-							eq(whatsappPhoneNumbers.releaseState, "unknown"),
+							eq(whatsappPhoneReleaseOperations.releaseState, "manual_review"),
+							eq(whatsappPhoneReleaseOperations.releaseState, "unknown"),
 						),
 					),
 				),
@@ -474,9 +606,19 @@ async function deleteReleasedWorkspacePhones(
 		.select({ id: whatsappPhoneNumbers.id })
 		.from(whatsappPhoneNumbers)
 		.innerJoin(
+			whatsappPhoneProvisioningOperations,
+			eq(
+				whatsappPhoneProvisioningOperations.phoneNumberId,
+				whatsappPhoneNumbers.id,
+			),
+		)
+		.innerJoin(
 			socialAccounts,
 			and(
-				eq(socialAccounts.id, whatsappPhoneNumbers.provisioningSourceAccountId),
+				eq(
+					socialAccounts.id,
+					whatsappPhoneProvisioningOperations.provisioningSourceAccountId,
+				),
 				eq(socialAccounts.organizationId, organizationId),
 			),
 		)
@@ -506,20 +648,30 @@ async function processWorkspaceExternalResources(
 	job: WorkspaceJob,
 	step: WorkspaceStep,
 ): Promise<StepResult> {
-	const stagedAccounts = await stageWorkspaceAccountRevocations(
-		db,
-		job.organizationId,
-		job.workspaceId,
-	);
+	// Capture every phone's exact release credential before account revocation
+	// shreds the source account ciphertext. Returning after each phone batch also
+	// keeps this ordering correct if the configured batch size is ever lower than
+	// the number of workspace-owned phones.
 	const stagedPhones = await stageWorkspacePhoneReleaseBatch(
 		db,
 		job.organizationId,
 		job.workspaceId,
 	);
-	if (stagedAccounts > 0 || stagedPhones > 0) {
+	if (stagedPhones > 0) {
 		return {
 			kind: "pending",
-			reason: "External revocation work was durably staged",
+			reason: "Phone release work was durably staged before account revocation",
+		};
+	}
+	const stagedAccounts = await stageWorkspaceAccountRevocations(
+		db,
+		job.organizationId,
+		job.workspaceId,
+	);
+	if (stagedAccounts > 0) {
+		return {
+			kind: "pending",
+			reason: "External account revocation work was durably staged",
 		};
 	}
 
@@ -575,53 +727,40 @@ async function processWorkspaceExternalResources(
 
 	await Promise.all([
 		env.AVATAR_BUCKET.delete(
-			accounts.map((account) => `avatars/${account.id}`),
+			accounts.map(
+				(account) => `account/${encodeURIComponent(account.id)}/avatar`,
+			),
 		),
-		env.MEDIA_BUCKET.delete(accounts.map((account) => `avatars/${account.id}`)),
+		env.MEDIA_BUCKET.delete(
+			accounts.map(
+				(account) => `account/${encodeURIComponent(account.id)}/avatar`,
+			),
+		),
 		...accounts.flatMap((account) =>
 			buildAccountCacheKeys({
 				accountId: account.id,
 				platform: account.platform,
 				platformAccountId: account.platformAccountId,
 				webhookAccountId: account.webhookAccountId,
-			}).map((key) => env.KV.delete(key)),
+			}).map((key) =>
+				env.KV.delete(
+					assertKvPrivacyStoreKey(
+						[
+							"kv:platform-account",
+							"kv:ig-sender-id",
+							"kv:sync-dedup",
+							"kv:inbox-posts",
+						],
+						key,
+					),
+				),
+			),
 		),
 	]);
 	return {
 		kind: "pending",
 		cursor: { account_after: accounts.at(-1)?.id },
 	};
-}
-
-async function deleteQrCodeObjectBatch(
-	db: ErasureDb,
-	env: Env,
-	job: WorkspaceJob,
-): Promise<number> {
-	const rows = await db
-		.select({ id: qrCodes.id, imageR2Key: qrCodes.imageR2Key })
-		.from(qrCodes)
-		.innerJoin(refUrls, eq(refUrls.id, qrCodes.refUrlId))
-		.where(
-			and(
-				eq(refUrls.organizationId, job.organizationId),
-				eq(refUrls.workspaceId, job.workspaceId),
-			),
-		)
-		.orderBy(qrCodes.id)
-		.limit(DELETE_BATCH_SIZE);
-	if (rows.length === 0) return 0;
-	const keys = rows.flatMap(({ imageR2Key }) =>
-		imageR2Key ? [imageR2Key] : [],
-	);
-	if (keys.length > 0) await env.MEDIA_BUCKET.delete(keys);
-	await db.delete(qrCodes).where(
-		inArray(
-			qrCodes.id,
-			rows.map(({ id }) => id),
-		),
-	);
-	return rows.length;
 }
 
 async function deleteAccountDependentBatch(
@@ -659,8 +798,15 @@ async function deleteMediaBatch(
 		.select({
 			id: media.id,
 			storageProvider: media.storageProvider,
+			storageBucketLocator: media.storageBucketLocator,
+			storageRegion: media.storageRegion,
+			storageLocationId: media.storageLocationId,
+			storageCredentialVersion: media.storageCredentialVersion,
 			storageKey: media.storageKey,
 			thumbnailKey: media.thumbnailKey,
+			thumbnailStorageProvider: media.thumbnailStorageProvider,
+			thumbnailStorageBucketLocator: media.thumbnailStorageBucketLocator,
+			thumbnailStorageRegion: media.thumbnailStorageRegion,
 		})
 		.from(media)
 		.where(
@@ -673,23 +819,35 @@ async function deleteMediaBatch(
 		.limit(DELETE_BATCH_SIZE);
 	if (rows.length === 0) return 0;
 
-	const originalKeys = rows.flatMap((row) =>
-		row.storageProvider === "r2" ? [row.storageKey] : [],
-	);
-	const thumbnailKeys = rows.flatMap((row) => {
-		if (row.thumbnailKey) return [row.thumbnailKey];
-		return row.storageProvider === "r2"
-			? [thumbnailKeyFor(row.storageKey)]
-			: [];
-	});
+	const currentThumbnailTarget = thumbnailStorageTarget(env);
 	await Promise.all([
-		originalKeys.length > 0
-			? env.MEDIA_BUCKET.delete(originalKeys)
-			: Promise.resolve(),
-		thumbnailKeys.length > 0
-			? env.THUMBNAIL_BUCKET.delete(thumbnailKeys)
-			: Promise.resolve(),
-		...originalKeys.map((key) => purgePresignedViewCache(env, key)),
+		...rows.map((row) =>
+			deleteStoredObject(
+				db,
+				env,
+				storageLocatorForMedia({
+					...row,
+					organizationId: job.organizationId,
+				}),
+			),
+		),
+		...rows.map((row) =>
+			deleteStoredObject(
+				db,
+				env,
+				storageLocatorForThumbnailObject({
+					organizationId: job.organizationId,
+					thumbnailKey: row.thumbnailKey ?? thumbnailKeyFor(row.storageKey),
+					thumbnailStorageProvider:
+						row.thumbnailStorageProvider ?? currentThumbnailTarget.provider,
+					thumbnailStorageBucketLocator:
+						row.thumbnailStorageBucketLocator ?? currentThumbnailTarget.bucket,
+					thumbnailStorageRegion:
+						row.thumbnailStorageRegion ?? currentThumbnailTarget.region,
+				}),
+			),
+		),
+		...rows.map(({ storageKey }) => purgePresignedViewCache(env, storageKey)),
 	]);
 	await db.delete(media).where(
 		inArray(
@@ -709,6 +867,9 @@ async function deleteExternalPostsBatch(
 		.select({
 			id: externalPosts.id,
 			previewThumbnailKey: externalPosts.previewThumbnailKey,
+			previewStorageProvider: externalPosts.previewStorageProvider,
+			previewStorageBucketLocator: externalPosts.previewStorageBucketLocator,
+			previewStorageRegion: externalPosts.previewStorageRegion,
 		})
 		.from(externalPosts)
 		.where(
@@ -721,12 +882,29 @@ async function deleteExternalPostsBatch(
 		.limit(DELETE_BATCH_SIZE);
 	if (rows.length === 0) return 0;
 
-	const previewKeys = rows.flatMap((row) =>
-		row.previewThumbnailKey ? [row.previewThumbnailKey] : [],
+	const currentThumbnailTarget = thumbnailStorageTarget(env);
+	await Promise.all(
+		rows.map((row) =>
+			deleteStoredObject(
+				db,
+				env,
+				storageLocatorForThumbnailObject({
+					organizationId: job.organizationId,
+					thumbnailKey:
+						row.previewThumbnailKey ??
+						thumbnailKeyFor(
+							externalPreviewStorageKey(job.organizationId, row.id),
+						),
+					thumbnailStorageProvider:
+						row.previewStorageProvider ?? currentThumbnailTarget.provider,
+					thumbnailStorageBucketLocator:
+						row.previewStorageBucketLocator ?? currentThumbnailTarget.bucket,
+					thumbnailStorageRegion:
+						row.previewStorageRegion ?? currentThumbnailTarget.region,
+				}),
+			),
+		),
 	);
-	if (previewKeys.length > 0) {
-		await env.THUMBNAIL_BUCKET.delete(previewKeys);
-	}
 	await db.delete(externalPosts).where(
 		and(
 			eq(externalPosts.organizationId, job.organizationId),
@@ -739,6 +917,83 @@ async function deleteExternalPostsBatch(
 	return rows.length;
 }
 
+async function deleteWorkspaceShortLinksBatch(
+	db: ErasureDb,
+	env: Env,
+	job: WorkspaceJob,
+): Promise<number> {
+	const deleted = await db.transaction(async (tx) => {
+		const candidates = await tx
+			.select({
+				id: shortLinks.id,
+				provider: shortLinks.provider,
+				providerRef: shortLinks.providerRef,
+				shortCode: shortLinks.shortCode,
+				credentialCiphertext: shortLinkCredentials.apiKeyCiphertext,
+			})
+			.from(shortLinks)
+			.leftJoin(
+				shortLinkCredentials,
+				and(
+					eq(shortLinkCredentials.organizationId, shortLinks.organizationId),
+					eq(shortLinkCredentials.provider, shortLinks.provider),
+					eq(shortLinkCredentials.version, shortLinks.credentialVersion),
+				),
+			)
+			.where(
+				and(
+					eq(shortLinks.organizationId, job.organizationId),
+					eq(shortLinks.workspaceId, job.workspaceId),
+				),
+			)
+			.orderBy(shortLinks.id)
+			.limit(DELETE_BATCH_SIZE)
+			.for("update", { of: shortLinks });
+		if (candidates.length === 0) return [];
+		for (const candidate of candidates) {
+			if (candidate.provider === "relayapi") continue;
+			if (!candidate.credentialCiphertext) {
+				throw new Error(
+					"Historical short-link credential is missing during workspace erasure",
+				);
+			}
+			await enqueueShortLinkProviderCleanup(tx, {
+				subjectKind: "workspace",
+				subjectId: job.workspaceId,
+				organizationId: job.organizationId,
+				workspaceId: job.workspaceId,
+				provider: candidate.provider,
+				providerRef: candidate.providerRef as ProviderRef,
+				credentialCiphertext: candidate.credentialCiphertext,
+			});
+		}
+		const removed = await tx
+			.delete(shortLinks)
+			.where(
+				and(
+					eq(shortLinks.organizationId, job.organizationId),
+					inArray(
+						shortLinks.id,
+						candidates.map((candidate) => candidate.id),
+					),
+				),
+			)
+			.returning({
+				provider: shortLinks.provider,
+				shortCode: shortLinks.shortCode,
+			});
+		await pruneOrphanedShortLinkCredentials(tx, job.organizationId);
+		return removed;
+	});
+	await invalidateRelayApiShortLinkCaches(
+		env.KV,
+		deleted.flatMap((row) =>
+			row.provider === "relayapi" && row.shortCode ? [row.shortCode] : [],
+		),
+	);
+	return deleted.length;
+}
+
 async function deleteWorkspaceTableBatch(
 	db: ErasureDb,
 	env: Env,
@@ -748,6 +1003,9 @@ async function deleteWorkspaceTableBatch(
 	if (table === "media") return deleteMediaBatch(db, env, job);
 	if (table === "external_posts") {
 		return deleteExternalPostsBatch(db, env, job);
+	}
+	if (table === "short_links") {
+		return deleteWorkspaceShortLinksBatch(db, env, job);
 	}
 	const rows = await db.execute<{ deleted: number }>(sql`
 		WITH candidates AS (
@@ -767,6 +1025,92 @@ async function deleteWorkspaceTableBatch(
 	return rows.length;
 }
 
+/**
+ * Workspace erasure removes contact-level evidence without resurrecting sends
+ * that the recipient denied. Granted projections can disappear with their
+ * workspace; denied projections retain only the organization-scoped logical
+ * identity needed for the absolute send veto. Consent events remain as
+ * minimized audit evidence and lose all directly identifying payload fields.
+ *
+ * workspace_id is left in place until the final workspace DELETE applies both
+ * SET NULL actions in one statement, keeping the state -> source-event scope
+ * identity coherent.
+ */
+async function minimizeWorkspaceConsentAuthority(
+	db: ErasureDb,
+	job: WorkspaceJob,
+): Promise<{ changed: number; complete: boolean }> {
+	return db.transaction(async (tx) => {
+		const deletedGrants = await tx.execute<{ id: string }>(sql`
+			WITH candidates AS (
+				SELECT state.id
+				FROM public.contact_consent_states AS state
+				WHERE state.organization_id = ${job.organizationId}
+				  AND state.workspace_id = ${job.workspaceId}
+				  AND state.status = 'granted'
+				ORDER BY state.id
+				LIMIT ${DELETE_BATCH_SIZE}
+				FOR UPDATE SKIP LOCKED
+			)
+			DELETE FROM public.contact_consent_states AS state
+			USING candidates
+			WHERE state.id = candidates.id
+			RETURNING state.id
+		`);
+		const minimizedDenials = await tx.execute<{ id: string }>(sql`
+			WITH candidates AS (
+				SELECT state.id
+				FROM public.contact_consent_states AS state
+				WHERE state.organization_id = ${job.organizationId}
+				  AND state.workspace_id = ${job.workspaceId}
+				  AND state.status = 'denied'
+				  AND state.source <> 'redacted'
+				ORDER BY state.id
+				LIMIT ${DELETE_BATCH_SIZE}
+				FOR UPDATE SKIP LOCKED
+			)
+			UPDATE public.contact_consent_states AS state
+			SET source = 'redacted',
+				updated_at = now()
+			FROM candidates
+			WHERE state.id = candidates.id
+			RETURNING state.id
+		`);
+		const minimizedEvents = await tx.execute<{ id: string }>(sql`
+			WITH candidates AS (
+				SELECT event.id
+				FROM public.contact_consent_events AS event
+				WHERE event.organization_id = ${job.organizationId}
+				  AND event.workspace_id = ${job.workspaceId}
+				  AND (
+					event.contact_id IS NOT NULL
+					OR event.identifier_masked IS NOT NULL
+					OR event.evidence IS NOT NULL
+				  )
+				ORDER BY event.id
+				LIMIT ${DELETE_BATCH_SIZE}
+				FOR UPDATE SKIP LOCKED
+			)
+			UPDATE public.contact_consent_events AS event
+			SET contact_id = NULL,
+				identifier_masked = NULL,
+				evidence = NULL
+			FROM candidates
+			WHERE event.id = candidates.id
+			RETURNING event.id
+		`);
+		const counts = [
+			deletedGrants.length,
+			minimizedDenials.length,
+			minimizedEvents.length,
+		];
+		return {
+			changed: counts.reduce((sum, value) => sum + value, 0),
+			complete: counts.every((value) => value < DELETE_BATCH_SIZE),
+		};
+	});
+}
+
 async function processWorkspacePurge(
 	db: ErasureDb,
 	env: Env,
@@ -774,18 +1118,7 @@ async function processWorkspacePurge(
 	step: WorkspaceStep,
 ): Promise<StepResult> {
 	const cursor = parseCursor<PurgeCursor>(step.cursor);
-	const phase = cursor.phase ?? "qr_codes";
-	if (phase === "qr_codes") {
-		const deleted = await deleteQrCodeObjectBatch(db, env, job);
-		return {
-			kind: "pending",
-			rowsDeleted: deleted,
-			cursor: {
-				phase: deleted < DELETE_BATCH_SIZE ? "account_dependents" : phase,
-				dependent_index: 0,
-			},
-		};
-	}
+	const phase = cursor.phase ?? "account_dependents";
 	if (phase === "account_dependents") {
 		const dependents = ["connection_logs"] as const;
 		const index = cursor.dependent_index ?? 0;
@@ -793,7 +1126,7 @@ async function processWorkspacePurge(
 		if (!table) {
 			return {
 				kind: "pending",
-				cursor: { phase: "tables", table_index: 0 },
+				cursor: { phase: "workspace_media" },
 			};
 		}
 		const deleted = await deleteAccountDependentBatch(db, job, table);
@@ -804,6 +1137,61 @@ async function processWorkspacePurge(
 				phase,
 				dependent_index: deleted < DELETE_BATCH_SIZE ? index + 1 : index,
 			},
+		};
+	}
+
+	if (phase === "workspace_media") {
+		const page = await env.MEDIA_BUCKET.list({
+			prefix: `${encodeURIComponent(job.organizationId)}/workspaces/${encodeURIComponent(job.workspaceId)}/`,
+			limit: 500,
+			...(cursor.r2_cursor ? { cursor: cursor.r2_cursor } : {}),
+		});
+		if (page.objects.length > 0) {
+			await env.MEDIA_BUCKET.delete(page.objects.map(({ key }) => key));
+		}
+		return {
+			kind: "pending",
+			rowsDeleted: page.objects.length,
+			cursor: page.truncated
+				? { phase, r2_cursor: page.cursor }
+				: { phase: "queue_rescue" },
+		};
+	}
+
+	if (phase === "queue_rescue") {
+		const page = await deleteQueueRescueSubjectPage(
+			env.QUEUE_RESCUE_BUCKET,
+			job.organizationId,
+			{ kind: "workspace", id: job.workspaceId },
+			{ cursor: cursor.r2_cursor, limit: 500 },
+		);
+		return {
+			kind: "pending",
+			rowsDeleted: page.deleted,
+			cursor: page.complete
+				? { phase: "shared_receipts" }
+				: { phase, r2_cursor: page.cursor },
+		};
+	}
+
+	if (phase === "shared_receipts") {
+		const changed = await minimizeWorkspaceSharedReceipts(db, job);
+		return {
+			kind: "pending",
+			rowsDeleted: changed,
+			cursor:
+				changed < DELETE_BATCH_SIZE
+					? { phase: "consent_authority" }
+					: { phase },
+		};
+	}
+
+	if (phase === "consent_authority") {
+		const result = await minimizeWorkspaceConsentAuthority(db, job);
+		return {
+			kind: "pending",
+			rowsDeleted: result.changed,
+			cursor: result.complete ? { phase: "tables", table_index: 0 } : { phase },
 		};
 	}
 
@@ -938,6 +1326,19 @@ async function processClaimedWorkspaceJob(
 	await ensureWorkspaceErasureSteps(db, job);
 
 	for (let unit = 0; unit < MAX_WORK_UNITS_PER_JOB; unit += 1) {
+		// Placement fences the top-level lease and every processing step in the
+		// same transaction. This read closes the smaller race where a worker was
+		// claimed just before that transaction became visible; no new destructive
+		// unit begins after an active hold is observable.
+		if (
+			await findActiveErasureHold(db, {
+				kind: "workspace",
+				organizationId: job.organizationId,
+				workspaceId: job.workspaceId,
+			})
+		) {
+			return;
+		}
 		const steps = await db
 			.select()
 			.from(workspaceErasureSteps)
@@ -1079,6 +1480,7 @@ export async function processWorkspaceErasureJobs(env: Env): Promise<void> {
 				status: "processing",
 				leaseToken: sql`${workspaceErasureJobs.leaseToken} + 1`,
 				leaseExpiresAt: new Date(claimedAt.getTime() + JOB_LEASE_MS),
+				operatorRetryRequestedAt: null,
 				lastError: null,
 				updatedAt: claimedAt,
 			})

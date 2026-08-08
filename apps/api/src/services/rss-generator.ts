@@ -1,13 +1,16 @@
+import { getBillingPolicy } from "@relayapi/config";
 import {
 	autoPostFeedItems,
 	autoPostRules,
 	createDb,
+	organizationSubscriptions,
 	posts,
 	postTargets,
 	publishOutbox,
 	socialAccounts,
 } from "@relayapi/db";
 import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { isSelfHosted } from "../lib/deployment-mode";
 import type { Env } from "../types";
 import {
 	canonicalFeedItemIdentity,
@@ -16,6 +19,7 @@ import {
 	rssFeedItemOperationId,
 } from "./feed-parser";
 import { dispatchPublishOutbox, publishOutboxRow } from "./publish-outbox";
+import { lockOrganizationSubscription } from "./subscription-authority";
 import {
 	enqueuePersistedWebhookEvent,
 	persistWebhookEventInTransaction,
@@ -26,10 +30,63 @@ const MAX_ITEMS_PER_POLL = 5;
 
 type ClaimedRule = typeof autoPostRules.$inferSelect;
 
+type AutoPostSubscriptionAuthority = Pick<
+	typeof organizationSubscriptions.$inferSelect,
+	| "status"
+	| "source"
+	| "stripeSubscriptionId"
+	| "trialEndsAt"
+	| "delinquentAt"
+	| "graceEndsAt"
+>;
+
+/**
+ * Keep background RSS admission on the same entitlement policy as API feature
+ * gates. A stored subscription status alone is not authority: Stripe trials
+ * need a live subscription and future end, and past-due access expires at the
+ * exact grace boundary.
+ */
+export function isHostedAutoPostEligible(
+	subscription: AutoPostSubscriptionAuthority,
+	now = new Date(),
+): boolean {
+	return getBillingPolicy(subscription, now).entitlement === "pro";
+}
+
+function hostedAutoPostEligibility(now: Date) {
+	return sql`EXISTS (
+		SELECT 1
+		FROM ${organizationSubscriptions}
+		WHERE ${organizationSubscriptions.organizationId} = ${autoPostRules.organizationId}
+			AND (
+				(${organizationSubscriptions.source} = 'complimentary'
+					AND ${organizationSubscriptions.status} = 'active')
+				OR (${organizationSubscriptions.source} = 'stripe'
+					AND ${organizationSubscriptions.stripeSubscriptionId} IS NOT NULL
+					AND (
+						${organizationSubscriptions.status} = 'active'
+						OR (${organizationSubscriptions.status} = 'past_due'
+							AND ${organizationSubscriptions.delinquentAt} IS NOT NULL
+							AND ${organizationSubscriptions.graceEndsAt} IS NOT NULL
+							AND ${organizationSubscriptions.delinquentAt} <= ${now}
+							AND ${organizationSubscriptions.graceEndsAt} > ${now})
+						OR (${organizationSubscriptions.status} = 'trialing'
+							AND ${organizationSubscriptions.trialEndsAt} IS NOT NULL
+							AND ${organizationSubscriptions.trialEndsAt} > ${now})
+					)
+				)
+			)
+	)`;
+}
+
 async function claimDueRules(
 	db: ReturnType<typeof createDb>,
 	now: Date,
+	selfHosted: boolean,
 ): Promise<ClaimedRule[]> {
+	const hostedEligibility = selfHosted
+		? undefined
+		: hostedAutoPostEligibility(now);
 	const candidates = await db
 		.select()
 		.from(autoPostRules)
@@ -44,6 +101,7 @@ async function claimDueRules(
 					isNull(autoPostRules.lastProcessedAt),
 					sql`${autoPostRules.lastProcessedAt} + (${autoPostRules.pollingIntervalMinutes} * interval '1 minute') <= ${now.toISOString()}`,
 				),
+				...(hostedEligibility ? [hostedEligibility] : []),
 			),
 		)
 		.limit(10);
@@ -65,6 +123,7 @@ async function claimDueRules(
 						isNull(autoPostRules.leaseExpiresAt),
 						lte(autoPostRules.leaseExpiresAt, now),
 					),
+					...(hostedEligibility ? [hostedEligibility] : []),
 				),
 			)
 			.returning();
@@ -75,11 +134,12 @@ async function claimDueRules(
 
 export async function processAutoPostRules(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const rules = await claimDueRules(db, new Date());
+	const selfHosted = isSelfHosted(env);
+	const rules = await claimDueRules(db, new Date(), selfHosted);
 
 	for (const rule of rules) {
 		try {
-			await processRule(db, env, rule);
+			await processRule(db, env, rule, selfHosted);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const consecutiveErrors = rule.consecutiveErrors + 1;
@@ -151,6 +211,7 @@ async function processRule(
 	db: ReturnType<typeof createDb>,
 	env: Env,
 	rule: ClaimedRule,
+	selfHosted: boolean,
 ): Promise<void> {
 	const items = await parseFeed(rule.feedUrl);
 	const identified = await Promise.all(
@@ -235,6 +296,29 @@ async function processRule(
 			entry.canonicalFeedItemId,
 		);
 		const result = await db.transaction(async (tx) => {
+			if (!selfHosted) {
+				const subscription = await lockOrganizationSubscription(
+					tx,
+					rule.organizationId,
+					"share",
+				);
+				if (!isHostedAutoPostEligible(subscription, new Date())) {
+					// A downgrade can race the pre-LIMIT claim. Keep the rule active so
+					// it resumes automatically on the next Pro period, but surrender this
+					// lease without creating a post, target, or durable publish command.
+					await tx
+						.update(autoPostRules)
+						.set({ leaseExpiresAt: null, updatedAt: new Date() })
+						.where(
+							and(
+								eq(autoPostRules.id, rule.id),
+								eq(autoPostRules.status, "active"),
+								eq(autoPostRules.leaseToken, rule.leaseToken),
+							),
+						);
+					return { kind: "ineligible" as const };
+				}
+			}
 			await assertAndRenewRuleLease(tx, rule, now);
 			const [ledger] = await tx
 				.insert(autoPostFeedItems)
@@ -250,7 +334,7 @@ async function processRule(
 				})
 				.onConflictDoNothing()
 				.returning({ id: autoPostFeedItems.id });
-			if (!ledger) return null;
+			if (!ledger) return { kind: "duplicate" as const };
 
 			const [createdPost] = await tx
 				.insert(posts)
@@ -314,10 +398,11 @@ async function processRule(
 					occurrenceId: `auto-post:${operationId}:created`,
 				},
 			);
-			return { post: createdPost, webhook };
+			return { kind: "committed" as const, post: createdPost, webhook };
 		});
 
-		if (result) {
+		if (result.kind === "ineligible") return;
+		if (result.kind === "committed") {
 			await enqueuePersistedWebhookEvent(env, db, result.webhook);
 		}
 	}

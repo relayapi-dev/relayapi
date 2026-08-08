@@ -6,6 +6,7 @@ import { canRequestTenantDeletion } from "../routes/organizations";
 import {
 	requestTenantDeletion,
 	TENANT_PURGE_TABLES,
+	TENANT_RETAINED_TABLES,
 	TenantDeletionNotFoundError,
 	tenantDeletionStepKeys,
 } from "../services/tenant-deletion";
@@ -14,6 +15,7 @@ describe("organization deletion tenant authority", () => {
 	it("allows an owner to delete their own organization", () => {
 		expect(
 			canRequestTenantDeletion({
+				principalType: "dashboard_user",
 				callerOrganizationId: "org_a",
 				targetOrganizationId: "org_a",
 				membershipRole: "owner",
@@ -25,6 +27,7 @@ describe("organization deletion tenant authority", () => {
 	it("does not let an organization admin delete the tenant", () => {
 		expect(
 			canRequestTenantDeletion({
+				principalType: "dashboard_user",
 				callerOrganizationId: "org_a",
 				targetOrganizationId: "org_a",
 				membershipRole: "admin",
@@ -36,6 +39,7 @@ describe("organization deletion tenant authority", () => {
 	it("does not treat ownership in one tenant as authority over another", () => {
 		expect(
 			canRequestTenantDeletion({
+				principalType: "dashboard_user",
 				callerOrganizationId: "org_a",
 				targetOrganizationId: "org_b",
 				membershipRole: "owner",
@@ -47,12 +51,27 @@ describe("organization deletion tenant authority", () => {
 	it("allows a system administrator to delete a different tenant", () => {
 		expect(
 			canRequestTenantDeletion({
+				principalType: "dashboard_user",
 				callerOrganizationId: "org_admin",
 				targetOrganizationId: "org_customer",
 				membershipRole: null,
 				globalRole: "admin",
 			}),
 		).toBe(true);
+	});
+
+	it("does not let a service key inherit its creator's owner or system-admin authority", () => {
+		for (const globalRole of [null, "admin"] as const) {
+			expect(
+				canRequestTenantDeletion({
+					principalType: "service",
+					callerOrganizationId: "org_a",
+					targetOrganizationId: "org_a",
+					membershipRole: "owner",
+					globalRole,
+				}),
+			).toBe(false);
+		}
 	});
 });
 
@@ -69,13 +88,12 @@ describe("organization deletion ownership boundary", () => {
 			const table = getTableConfig(value);
 			return [{ key: `${table.schema ?? "public"}.${table.name}`, table }];
 		});
+		const retained = new Set(
+			TENANT_RETAINED_TABLES.map((entry) => `${entry.schema}.${entry.table}`),
+		);
 		const expected = tables
 			.filter(({ key, table }) => {
-				if (
-					key === "auth.organization" ||
-					key === "public.tenant_deletion_jobs" ||
-					key === "public.tenant_deletion_steps"
-				) {
+				if (key === "auth.organization" || retained.has(key)) {
 					return false;
 				}
 				return table.columns.some(
@@ -88,8 +106,12 @@ describe("organization deletion ownership boundary", () => {
 			.sort();
 
 		expect([...configured.keys()].sort()).toEqual(expected);
-		expect(configured.has("public.tenant_deletion_jobs")).toBe(false);
-		expect(configured.has("public.tenant_deletion_steps")).toBe(false);
+		for (const key of retained) {
+			expect(configured.has(key)).toBe(false);
+		}
+		expect(
+			TENANT_RETAINED_TABLES.map(({ reason }) => reason.trim()).every(Boolean),
+		).toBe(true);
 
 		for (const { key: childKey, table } of tables) {
 			for (const foreignKey of table.foreignKeys) {
@@ -122,30 +144,62 @@ describe("organization deletion ownership boundary", () => {
 		expect(source).not.toContain("ANY(organization_ids)");
 	});
 
-	it("uses the database-enforceable member-to-advisory-to-organization lock order", async () => {
+	it("uses the actor-to-members-to-organizations-to-credential lock order", async () => {
 		const source = await Bun.file(
 			`${new URL("../../../../", import.meta.url).pathname}apps/api/src/services/tenant-deletion.ts`,
 		).text();
-		const memberLock = source.indexOf("const lockedMemberships = await tx");
+		const actorLock = source.indexOf("await authorityFence.lockActorUser(tx)");
+		const memberLock = source.indexOf(
+			"const lockedMemberships = await tx",
+			actorLock,
+		);
 		const ownerAdvisoryLock = source.indexOf(
 			"select pg_advisory_xact_lock(hashtext(",
 			memberLock,
 		);
 		const organizationLock = source.indexOf(
-			"const [org] = await tx",
+			"const lockedOrganizations = await tx",
 			ownerAdvisoryLock,
 		);
 		const membershipRecheck = source.indexOf(
 			"const currentMemberships = await tx",
 			organizationLock,
 		);
+		const exactAuthority = source.indexOf(
+			"await authorityFence.authorize(tx)",
+			membershipRecheck,
+		);
 
-		expect(memberLock).toBeGreaterThan(-1);
+		expect(actorLock).toBeGreaterThan(-1);
+		expect(memberLock).toBeGreaterThan(actorLock);
 		expect(ownerAdvisoryLock).toBeGreaterThan(memberLock);
 		expect(organizationLock).toBeGreaterThan(ownerAdvisoryLock);
 		expect(membershipRecheck).toBeGreaterThan(organizationLock);
+		expect(exactAuthority).toBeGreaterThan(membershipRecheck);
 		expect(source).toContain('isolationLevel: "read committed"');
 		expect(source).toContain("TenantMembershipSetChangedError");
+	});
+
+	it("fails closed on security-critical cache invalidation before lifecycle commit", async () => {
+		const serviceSource = await Bun.file(
+			`${new URL("../../../../", import.meta.url).pathname}apps/api/src/services/tenant-deletion.ts`,
+		).text();
+		const routeSource = await Bun.file(
+			`${new URL("../../../../", import.meta.url).pathname}apps/api/src/routes/organizations.ts`,
+		).text();
+		const invalidation = serviceSource.indexOf(
+			"await beforeCommitInvalidation?.(result)",
+		);
+		const lifecycleFence = serviceSource.indexOf(
+			'lifecycleStatus: "deleting"',
+			invalidation,
+		);
+		expect(invalidation).toBeGreaterThan(-1);
+		expect(lifecycleFence).toBeGreaterThan(invalidation);
+		expect(routeSource).toContain("await Promise.all([");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: matching source text
+		expect(routeSource).toContain("`org-summary:${targetOrganizationId}`");
+		expect(routeSource).not.toContain("Promise.allSettled(invalidations)");
 	});
 
 	it("retries before mutation when the locked membership set changes", async () => {
@@ -200,7 +254,11 @@ describe("organization deletion ownership boundary", () => {
 		};
 
 		await expect(
-			requestTenantDeletion(db as never, "org_1", "user_1"),
+			requestTenantDeletion(db as never, "org_1", {
+				organizationIds: ["org_1"],
+				lockActorUser: async () => {},
+				authorize: async () => "user_1",
+			}),
 		).rejects.toBeInstanceOf(TenantDeletionNotFoundError);
 		expect(transactionCalls).toBe(2);
 		expect(advisoryLocks).toBe(2);
@@ -286,7 +344,12 @@ describe("organization deletion ownership boundary", () => {
 			{
 				child: schema.contactSegmentMemberships,
 				parent: schema.segments,
-				columns: ["segment_id", "organization_id", "scope_key"],
+				columns: [
+					"segment_id",
+					"organization_id",
+					"scope_key",
+					"segment_is_dynamic",
+				],
 				onDelete: "cascade",
 			},
 			{
@@ -388,6 +451,25 @@ describe("organization deletion ownership boundary", () => {
 		);
 	});
 
+	it("stages subscription cancellation once and drains it independently of held purge", async () => {
+		const repoRoot = new URL("../../../../", import.meta.url).pathname;
+		const [tenantDeletionSource, billingOutboxSource] = await Promise.all([
+			Bun.file(`${repoRoot}apps/api/src/services/tenant-deletion.ts`).text(),
+			Bun.file(`${repoRoot}apps/api/src/services/billing-outbox.ts`).text(),
+		]);
+
+		expect(tenantDeletionSource).toContain("stageSubscriptionCancellation(");
+		expect(tenantDeletionSource).toContain(
+			"Waiting for subscription cancellation outbox",
+		);
+		expect(tenantDeletionSource).not.toContain("stripe.subscriptions.cancel(");
+		expect(billingOutboxSource).toContain('"subscription.cancel"');
+		expect(billingOutboxSource).toContain(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: matching source text
+			"`tenant-delete:${organizationId}:subscription-cancel`",
+		);
+	});
+
 	it("invalidates every deterministic tenant KV record at the deletion fence", async () => {
 		const repoRoot = new URL("../../../../", import.meta.url).pathname;
 		const [routeSource, deletionSource] = await Promise.all([
@@ -397,25 +479,82 @@ describe("organization deletion ownership boundary", () => {
 
 		expect(routeSource).toContain("queue-schedule:");
 		expect(routeSource).toContain("org-settings:");
-		expect(routeSource).toContain("result.accountCacheKeys.map");
+		expect(routeSource).toContain("pending.accountCacheKeys.map");
+		expect(routeSource).toContain("org-summary:");
 		expect(deletionSource).toContain("buildAccountCacheKeys");
+		expect(deletionSource).toContain("beforeCommitInvalidation");
 	});
 
 	it("stages workspace-owned phone resources through their exact source account", async () => {
 		const repoRoot = new URL("../../../../", import.meta.url).pathname;
-		const source = await Bun.file(
-			`${repoRoot}apps/api/src/services/phone-number-operations.ts`,
-		).text();
+		const [source, workspaceErasure] = await Promise.all([
+			Bun.file(
+				`${repoRoot}apps/api/src/services/phone-number-operations.ts`,
+			).text(),
+			Bun.file(`${repoRoot}apps/api/src/services/workspace-erasure.ts`).text(),
+		]);
 		const helper = source.slice(
 			source.indexOf("export async function stageWorkspacePhoneReleases"),
 			source.indexOf("interface ReleaseClaim"),
 		);
+		const tenantHelper = source.slice(
+			source.indexOf("export async function stageTenantPhoneReleases"),
+			source.indexOf("export async function stageWorkspacePhoneReleases"),
+		);
 
 		expect(helper).toContain("provisioningSourceAccountId");
 		expect(helper).toContain("socialAccounts.workspaceId");
-		expect(helper).toContain("isNull(whatsappPhoneNumbers.releaseState)");
+		expect(helper).toContain(
+			"isNull(whatsappPhoneReleaseOperations.releaseOperationId)",
+		);
+		expect(helper).toContain(
+			'eq(whatsappPhoneReleaseOperations.releaseReason, "user_requested")',
+		);
+		expect(helper).toContain(
+			'ne(whatsappPhoneReleaseOperations.releaseState, "completed")',
+		);
 		expect(helper).not.toContain(".limit(MAX_NUMBERS_PER_ORG)");
 		expect(helper).not.toContain("whatsappPhoneNumbers.workspaceId");
 		expect(helper).not.toContain("whatsappPhoneNumbers.socialAccountId");
+		expect(tenantHelper).toContain(
+			'eq(whatsappPhoneReleaseOperations.releaseReason, "user_requested")',
+		);
+		expect(tenantHelper).not.toContain(
+			'ne(whatsappPhoneReleaseOperations.releaseReason, "tenant_deleted")',
+		);
+		const dueAndCount = source.slice(
+			source.indexOf("export async function processDuePhoneReleases"),
+			source.indexOf(
+				"export async function redactExpiredPhoneProvisioningDetails",
+			),
+		);
+		expect(dueAndCount).not.toContain(
+			"whatsappPhoneReleaseOperations.releaseReason",
+		);
+		const batchHelper = workspaceErasure.slice(
+			workspaceErasure.indexOf(
+				"async function stageWorkspacePhoneReleaseBatch",
+			),
+			workspaceErasure.indexOf("async function getWorkspaceExternalState"),
+		);
+		expect(batchHelper).toContain(
+			'eq(whatsappPhoneReleaseOperations.releaseReason, "user_requested")',
+		);
+		expect(batchHelper).toContain(
+			'ne(whatsappPhoneReleaseOperations.releaseState, "completed")',
+		);
+
+		const processor = workspaceErasure.slice(
+			workspaceErasure.indexOf(
+				"async function processWorkspaceExternalResources",
+			),
+			workspaceErasure.indexOf("async function deleteAccountDependentBatch"),
+		);
+		const phoneStage = processor.indexOf("stageWorkspacePhoneReleaseBatch(");
+		const phoneBatchReturn = processor.indexOf("if (stagedPhones > 0)");
+		const accountStage = processor.indexOf("stageWorkspaceAccountRevocations(");
+		expect(phoneStage).toBeGreaterThanOrEqual(0);
+		expect(phoneBatchReturn).toBeGreaterThan(phoneStage);
+		expect(accountStage).toBeGreaterThan(phoneBatchReturn);
 	});
 });

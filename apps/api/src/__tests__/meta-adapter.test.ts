@@ -116,6 +116,60 @@ describe("meta ad adapter listAudiences", () => {
 });
 
 describe("meta paid-object crash recovery", () => {
+	it("forwards explicit standard-campaign targeting instead of replacing it with US", async () => {
+		const originalFetch = globalThis.fetch;
+		const requestBodies: Record<string, unknown>[] = [];
+		globalThis.fetch = (async (_url: string | URL, init?: RequestInit) => {
+			requestBodies.push(
+				JSON.parse(String(init?.body)) as Record<string, unknown>,
+			);
+			return Response.json({ id: "adset_1" });
+		}) as typeof fetch;
+
+		try {
+			await metaAdAdapter.creation.createAdSet("tok", "act_123", {
+				campaignId: "campaign_1",
+				name: "Launch",
+				mode: "standard",
+				targeting: {
+					ageMin: 25,
+					locations: [{ countries: ["GB", "DE"] }],
+				},
+			});
+			expect(requestBodies[0]?.targeting).toEqual({
+				age_min: 25,
+				geo_locations: { countries: ["GB", "DE"] },
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("rejects targeting fields the adapter cannot project instead of dropping them", () => {
+		const canonicalizeTargeting = metaAdAdapter.canonicalizeTargeting;
+		if (!canonicalizeTargeting) {
+			throw new Error("Meta adapter must expose targeting canonicalization");
+		}
+		expect(() =>
+			canonicalizeTargeting({
+				locations: [{ countries: ["GB"], cities: ["London"], radiusMiles: 10 }],
+				languages: ["en"],
+				platformSpecific: { optimization: "custom" },
+			}),
+		).toThrow(
+			"Meta targeting does not yet support: locations.cities, locations.radius_miles, languages, platform_specific",
+		);
+		expect(() => canonicalizeTargeting({ locations: [{}] })).toThrow(
+			"Meta targeting locations currently require at least one country",
+		);
+		try {
+			canonicalizeTargeting({ languages: ["en"] });
+			throw new Error("expected targeting rejection");
+		} catch (error) {
+			expect(error).toMatchObject({ code: "UNSUPPORTED_TARGETING" });
+		}
+	});
+
 	it("finds a correlated object with bounded cursor pagination", async () => {
 		const originalFetch = globalThis.fetch;
 		const calls: string[] = [];
@@ -226,6 +280,125 @@ describe("meta paid-object crash recovery", () => {
 			expect(calls.every((call) => call.url.includes("fields=status"))).toBe(
 				true,
 			);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+describe("meta mutation acknowledgements", () => {
+	it("revalidates after the ad-set lookup and blocks a stale-token budget write", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: Array<{ url: string; method?: string }> = [];
+		globalThis.fetch = Object.assign(
+			async (url: string | URL, init?: RequestInit) => {
+				calls.push({ url: url.toString(), method: init?.method });
+				return Response.json({ adset_id: "adset_1" });
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+
+		try {
+			await expect(
+				metaAdAdapter.updateAd(
+					"stale-token",
+					"ad_1",
+					{ dailyBudgetCents: 500 },
+					async () => {
+						throw new Error("provider authority ended during lookup");
+					},
+				),
+			).rejects.toThrow("provider authority ended during lookup");
+			expect(calls).toHaveLength(1);
+			expect(calls[0]).toMatchObject({ method: undefined });
+			expect(calls[0]?.url).toContain("/ad_1?fields=adset_id");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("uses the freshly revalidated token for the ad-set budget write", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: Array<{ url: string; method?: string }> = [];
+		let refreshes = 0;
+		globalThis.fetch = Object.assign(
+			async (url: string | URL, init?: RequestInit) => {
+				calls.push({ url: url.toString(), method: init?.method });
+				return calls.length === 1
+					? Response.json({ adset_id: "adset_1" })
+					: Response.json({ success: true });
+			},
+			{ preconnect: originalFetch.preconnect },
+		) as typeof fetch;
+
+		try {
+			await metaAdAdapter.updateAd(
+				"stale-token",
+				"ad_1",
+				{ dailyBudgetCents: 500 },
+				async () => {
+					refreshes += 1;
+					return "rotated-token";
+				},
+			);
+			expect(refreshes).toBe(1);
+			expect(calls).toHaveLength(2);
+			expect(calls[0]?.url).toContain("access_token=stale-token");
+			expect(calls[1]).toMatchObject({ method: "POST" });
+			expect(calls[1]?.url).toContain("/adset_1?access_token=rotated-token");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("accepts an explicit true acknowledgement", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = Object.assign(
+			async () => Response.json({ success: true }),
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		try {
+			await expect(
+				metaAdAdapter.pauseAd("tok", "ad_1"),
+			).resolves.toBeUndefined();
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("rejects an explicit false acknowledgement from a successful HTTP response", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = Object.assign(
+			async () => Response.json({ success: false }),
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		try {
+			const attempt = metaAdAdapter.resumeCampaign("tok", "campaign_1");
+			await expect(attempt).rejects.toMatchObject({
+				name: "AdPlatformError",
+				code: "META_MUTATION_NOT_ACKNOWLEDGED",
+				platformError: { success: false },
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("rejects a 200 response that omits the mutation acknowledgement", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = Object.assign(async () => Response.json({}), {
+			preconnect: originalFetch.preconnect,
+		});
+
+		try {
+			const attempt = metaAdAdapter.deleteAudience("tok", "audience_1");
+			await expect(attempt).rejects.toMatchObject({
+				name: "AdPlatformError",
+				code: "META_MUTATION_NOT_ACKNOWLEDGED",
+				platformError: {},
+			});
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

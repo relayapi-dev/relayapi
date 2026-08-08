@@ -121,7 +121,7 @@ Send logs to external storage (S3, R2, GCS, Azure, Datadog, etc.). Requires Busi
 **Via API**:
 ```bash
 curl -X POST "https://api.cloudflare.com/client/v4/accounts/{account_id}/logpush/jobs" \
-  -H "Authorization: Bearer <API_TOKEN>" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{
     "name": "workers-logs-to-s3",

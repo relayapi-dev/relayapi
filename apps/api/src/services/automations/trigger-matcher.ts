@@ -20,6 +20,8 @@ import {
 	type Database,
 } from "@relayapi/db";
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { decryptContactRow } from "../contact-protection";
+import { getContactSegmentIds } from "../segment-memberships";
 import { evaluateFilterGroup } from "./filter-eval";
 import { EnrollmentBlockedError, enrollContact } from "./runner";
 import { testSafeAutomationRegex } from "./safe-regex";
@@ -98,6 +100,8 @@ export type Db = Database;
 export type MatchAndEnrollOptions = {
 	/** Restrict matching to one already-authorized entrypoint. */
 	pinnedEntrypointId?: string;
+	/** Restrict matching to one already-authorized automation owner. */
+	pinnedAutomationId?: string;
 	/** Additional run context supplied by internal trigger adapters. */
 	contextOverrides?: Record<string, unknown>;
 	/** Persist an immediate resume job instead of walking the graph inline. */
@@ -327,24 +331,37 @@ export async function matchAndEnroll(
 		),
 	});
 	if (!contactRow) return { matched: false, reason: "no_candidates" };
+	const keyConfig =
+		typeof env.ENCRYPTION_KEY === "string"
+			? env.ENCRYPTION_KEY
+			: (() => {
+					throw new Error("ENCRYPTION_KEY is required");
+				})();
+	const plaintextContactRow = await decryptContactRow(keyConfig, contactRow);
 
-	// Durable webhook receipts and scheduled occurrences may retry after the run
-	// was committed but before their owning job acknowledged success. Resolve
-	// that exact entrypoint occurrence before active-status/re-entry filtering;
-	// otherwise the already-created run itself makes the replay look blocked.
-	if (event.triggerOccurrenceId && pinnedEntrypointId) {
+	// Durable receipts/jobs may retry after the run was committed but before
+	// their owner acknowledged success. Resolve the occurrence before
+	// active-status/re-entry filtering. This also matters for unpinned internal
+	// events: without the lookup, a retry could skip the first automation because
+	// its new run is active and incorrectly enroll a lower-ranked candidate.
+	if (event.triggerOccurrenceId) {
 		const existingOccurrence = await db.query.automationRuns.findFirst({
 			where: and(
 				eq(automationRuns.organizationId, event.organizationId),
 				eq(automationRuns.contactId, event.contactId),
-				eq(automationRuns.entrypointId, pinnedEntrypointId),
 				eq(automationRuns.triggerOccurrenceId, event.triggerOccurrenceId),
+				pinnedEntrypointId
+					? eq(automationRuns.entrypointId, pinnedEntrypointId)
+					: undefined,
+				options.pinnedAutomationId
+					? eq(automationRuns.automationId, options.pinnedAutomationId)
+					: undefined,
 			),
 		});
-		if (existingOccurrence) {
+		if (existingOccurrence?.entrypointId) {
 			return {
 				matched: true,
-				entrypointId: pinnedEntrypointId,
+				entrypointId: existingOccurrence.entrypointId,
 				automationId: existingOccurrence.automationId,
 				runId: existingOccurrence.id,
 			};
@@ -384,6 +401,9 @@ export async function matchAndEnroll(
 				eq(automations.status, "active"),
 				eq(automations.organizationId, event.organizationId),
 				eq(automations.scopeKey, contactRow.scopeKey),
+				options.pinnedAutomationId
+					? eq(automations.id, options.pinnedAutomationId)
+					: undefined,
 				pinnedEntrypointId
 					? eq(automationEntrypoints.id, pinnedEntrypointId)
 					: undefined,
@@ -405,27 +425,36 @@ export async function matchAndEnroll(
 
 	const tagList: string[] = contactRow?.tags ?? [];
 	const fieldsMap: Record<string, unknown> = {};
+	let segmentIds: string[] = [];
 	if (contactRow) {
-		const fieldRows = await db
-			.select({
-				slug: customFieldDefinitions.slug,
-				value: customFieldValues.value,
-			})
-			.from(customFieldValues)
-			.leftJoin(
-				customFieldDefinitions,
-				eq(customFieldValues.definitionId, customFieldDefinitions.id),
-			)
-			.where(
-				and(
-					eq(customFieldValues.contactId, event.contactId),
-					eq(customFieldValues.organizationId, event.organizationId),
+		const [fieldRows, segmentIdsMap] = await Promise.all([
+			db
+				.select({
+					slug: customFieldDefinitions.slug,
+					value: customFieldValues.value,
+				})
+				.from(customFieldValues)
+				.leftJoin(
+					customFieldDefinitions,
+					eq(customFieldValues.definitionId, customFieldDefinitions.id),
+				)
+				.where(
+					and(
+						eq(customFieldValues.contactId, event.contactId),
+						eq(customFieldValues.organizationId, event.organizationId),
+					),
 				),
-			);
+			getContactSegmentIds(db, event.organizationId, [event.contactId]),
+		]);
 		for (const fr of fieldRows) {
 			if (fr.slug) fieldsMap[fr.slug] = fr.value;
 		}
+		segmentIds = segmentIdsMap.get(event.contactId) ?? [];
 	}
+	const contactWithSegments = {
+		...(plaintextContactRow as unknown as Record<string, unknown>),
+		segment_ids: segmentIds,
+	};
 
 	// 2. Per-kind config + filter evaluation.
 	type Candidate = (typeof rows)[number];
@@ -437,7 +466,7 @@ export async function matchAndEnroll(
 		const filters = row.entrypoint.filters as Record<string, unknown> | null;
 		if (filters) {
 			const ok = evaluateFilterGroup(filters as never, {
-				contact: (contactRow as Record<string, unknown> | undefined) ?? null,
+				contact: contactWithSegments,
 				tags: tagList,
 				fields: fieldsMap,
 				state: (event.payload as Record<string, unknown> | undefined) ?? {},
@@ -597,7 +626,7 @@ export async function matchAndEnroll(
 			// Reuse the contact row + custom fields we already loaded above for
 			// filter evaluation so enrollContact doesn't re-query them.
 			prehydrated: {
-				contact: (contactRow as Record<string, unknown> | undefined) ?? null,
+				contact: contactWithSegments,
 				tags: tagList,
 				fields: fieldsMap as Record<string, string>,
 			},

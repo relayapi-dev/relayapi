@@ -2,6 +2,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { autoPostRules, socialAccounts } from "@relayapi/db";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
+import { withCredentialMutationAuthority } from "../lib/credential-mutation-authority";
 import { inheritOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -9,6 +10,7 @@ import {
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import {
 	AutoPostRuleListResponse,
 	AutoPostRuleResponse,
@@ -560,11 +562,30 @@ app.openapi(updateRuleRoute, async (c) => {
 		updates.appendFeedUrl = body.append_feed_url;
 	if (body.account_ids !== undefined) updates.accountIds = body.account_ids;
 
-	const [updated] = await db
-		.update(autoPostRules)
-		.set(updates)
-		.where(eq(autoPostRules.id, id))
-		.returning();
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
+		const [saved] = await tx
+			.update(autoPostRules)
+			.set(updates)
+			.where(
+				and(
+					eq(autoPostRules.id, id),
+					eq(autoPostRules.organizationId, orgId),
+					existing.workspaceId === null
+						? sql`${autoPostRules.workspaceId} IS NULL`
+						: eq(autoPostRules.workspaceId, existing.workspaceId),
+				),
+			)
+			.returning();
+		return saved;
+	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const updated = authority.value;
 
 	const rule = updated ?? existing;
 
@@ -625,16 +646,35 @@ app.openapi(activateRuleRoute, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
-	const [updated] = await db
-		.update(autoPostRules)
-		.set({
-			status: "active",
-			consecutiveErrors: 0,
-			lastError: null,
-			updatedAt: new Date(),
-		})
-		.where(eq(autoPostRules.id, id))
-		.returning();
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
+		const [activated] = await tx
+			.update(autoPostRules)
+			.set({
+				status: "active",
+				consecutiveErrors: 0,
+				lastError: null,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(autoPostRules.id, id),
+					eq(autoPostRules.organizationId, orgId),
+					existing.workspaceId === null
+						? sql`${autoPostRules.workspaceId} IS NULL`
+						: eq(autoPostRules.workspaceId, existing.workspaceId),
+				),
+			)
+			.returning();
+		return activated;
+	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const updated = authority.value;
 
 	return c.json(serializeRule(updated ?? existing) as never, 200);
 });

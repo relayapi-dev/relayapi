@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { is, SQL } from "drizzle-orm";
 import {
 	getTableConfig,
@@ -7,6 +6,7 @@ import {
 	PgTable,
 } from "drizzle-orm/pg-core";
 import postgres from "postgres";
+import { REQUIRED_DATABASE_EXTENSION_VERSIONS } from "../src/database-prerequisites";
 import {
 	AUTH_IDENTITY_INVARIANT_CONTRACTS,
 	ORGANIZATION_PROVISIONING_CONTRACT,
@@ -17,7 +17,30 @@ import {
 	workspaceRequirementTriggerName,
 } from "../src/provisioning-contracts";
 import * as schema from "../src/schema";
+import { USAGE_BUCKET_PROJECTION_CONTRACT } from "../src/usage-projection-contract";
+import { renderAuthIdentityInvariantSql } from "./render-auth-identity-invariant-sql";
+import {
+	AUTOMATION_CONVERSION_EVENT_FACT_CONTRACT,
+	renderAutomationConversionEventInvariantSql,
+} from "./render-automation-conversion-event-invariant-sql";
+import {
+	REQUIRED_BASELINE_EXTENSION_SCHEMAS,
+	REQUIRED_BASELINE_EXTENSIONS,
+	REQUIRED_BASELINE_SCHEMAS,
+} from "./render-baseline-preamble-sql";
+import {
+	CONTACT_SUBSCRIPTION_EVENT_APPEND_ONLY_CONTRACT,
+	renderContactSubscriptionEventInvariantSql,
+} from "./render-contact-subscription-event-invariant-sql";
 import { renderCustomMigrationSql } from "./render-custom-migration-sql";
+import {
+	FINANCIAL_RETENTION_RECEIPT_IMMUTABILITY_CONTRACT,
+	renderFinancialRetentionReceiptInvariantSql,
+} from "./render-financial-retention-receipt-invariant-sql";
+import {
+	OPERATOR_RESOLUTION_EVIDENCE_APPEND_ONLY_CONTRACT,
+	renderOperatorResolutionEvidenceInvariantSql,
+} from "./render-operator-resolution-evidence-invariant-sql";
 
 const connectionString = (
 	globalThis as typeof globalThis & {
@@ -60,6 +83,12 @@ type ActualCatalogRow = {
 	generated_expression: string | null;
 	generated_kind: "" | "s";
 	identity_kind: "" | "a" | "d";
+};
+
+type ExtensionCatalogRow = {
+	extension_name: string;
+	extension_schema: string;
+	extension_version: string;
 };
 
 type IndexColumnDefinition = {
@@ -218,6 +247,8 @@ type ExpectedDatabaseTrigger = {
 	triggerType: number;
 	watchedColumns: string[];
 	arguments: string[];
+	oldTransitionTable?: string;
+	newTransitionTable?: string;
 	isConstraintTrigger?: boolean;
 	isDeferrable?: boolean;
 	isInitiallyDeferred?: boolean;
@@ -234,6 +265,30 @@ type SegmentMemberCountCoverageRow = {
 	mismatched: number;
 };
 
+type NonDrizzleRelationRow = {
+	schema_name: string;
+	relation_name: string;
+	relation_kind: "v" | "m";
+};
+
+type RowPolicyRow = {
+	schema_name: string;
+	table_name: string;
+	policy_name: string;
+};
+
+export function nonDrizzleDdlRegistry() {
+	return {
+		routines: expectedGeneratedFunctions().map(
+			(contract) => `${contract.functionSchema}.${contract.functionName}()`,
+		),
+		triggers: expectedDatabaseTriggers().map(databaseTriggerKey),
+		views: [] as string[],
+		materializedViews: [] as string[],
+		policies: [] as string[],
+	};
+}
+
 type ExpectedEnum = {
 	schemaName: string;
 	typeName: string;
@@ -248,6 +303,8 @@ const TRIGGER_TYPE_BEFORE = 2;
 const TRIGGER_TYPE_INSERT = 4;
 const TRIGGER_TYPE_DELETE = 8;
 const TRIGGER_TYPE_UPDATE = 16;
+const BEFORE_INSERT_ROW =
+	TRIGGER_TYPE_ROW | TRIGGER_TYPE_BEFORE | TRIGGER_TYPE_INSERT;
 const BEFORE_INSERT_OR_UPDATE_ROW =
 	TRIGGER_TYPE_ROW |
 	TRIGGER_TYPE_BEFORE |
@@ -258,6 +315,16 @@ const AFTER_INSERT_OR_UPDATE_ROW =
 	TRIGGER_TYPE_ROW | TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE;
 const BEFORE_DELETE_ROW =
 	TRIGGER_TYPE_ROW | TRIGGER_TYPE_BEFORE | TRIGGER_TYPE_DELETE;
+const BEFORE_UPDATE_ROW =
+	TRIGGER_TYPE_ROW | TRIGGER_TYPE_BEFORE | TRIGGER_TYPE_UPDATE;
+const BEFORE_DELETE_OR_UPDATE_ROW =
+	TRIGGER_TYPE_ROW |
+	TRIGGER_TYPE_BEFORE |
+	TRIGGER_TYPE_DELETE |
+	TRIGGER_TYPE_UPDATE;
+const AFTER_DELETE_ROW = TRIGGER_TYPE_ROW | TRIGGER_TYPE_DELETE;
+const AFTER_DELETE_OR_UPDATE_ROW =
+	TRIGGER_TYPE_ROW | TRIGGER_TYPE_DELETE | TRIGGER_TYPE_UPDATE;
 const BEFORE_INSERT_DELETE_OR_UPDATE_ROW =
 	TRIGGER_TYPE_ROW |
 	TRIGGER_TYPE_BEFORE |
@@ -269,6 +336,9 @@ const AFTER_INSERT_DELETE_OR_UPDATE_ROW =
 	TRIGGER_TYPE_INSERT |
 	TRIGGER_TYPE_DELETE |
 	TRIGGER_TYPE_UPDATE;
+const AFTER_INSERT_STATEMENT = TRIGGER_TYPE_INSERT;
+const AFTER_UPDATE_STATEMENT = TRIGGER_TYPE_UPDATE;
+const AFTER_DELETE_STATEMENT = TRIGGER_TYPE_DELETE;
 
 function uniqueValues(values: readonly string[]): string[] {
 	return [...new Set(values)];
@@ -321,6 +391,22 @@ function expectedDatabaseTriggers(): ExpectedDatabaseTrigger[] {
 		},
 		{
 			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeMemberUser.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeMemberUser.tableSchema,
+			tableName: AUTH_IDENTITY_INVARIANT_CONTRACTS.activeMemberUser.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeMemberUser.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.activeMemberUser.functionName,
+			triggerType: BEFORE_INSERT_ROW,
+			watchedColumns: [
+				...AUTH_IDENTITY_INVARIANT_CONTRACTS.activeMemberUser.watchedColumns,
+			],
+			arguments: [],
+		},
+		{
+			triggerName:
 				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberOwnerAndCredentialExit
 					.triggerName,
 			tableSchema:
@@ -360,6 +446,115 @@ function expectedDatabaseTriggers(): ExpectedDatabaseTrigger[] {
 					.functionName,
 			triggerType: BEFORE_DELETE_ROW,
 			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userBanCredentialRotation.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userBanCredentialRotation.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userBanCredentialRotation.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userBanCredentialRotation
+					.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.userBanCredentialRotation
+					.functionName,
+			triggerType: BEFORE_INSERT_OR_UPDATE_ROW,
+			watchedColumns: [
+				...AUTH_IDENTITY_INVARIANT_CONTRACTS.userBanCredentialRotation
+					.watchedColumns,
+			],
+			arguments: [],
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.administratorImpersonationRevocation
+					.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.administratorImpersonationRevocation
+					.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.administratorImpersonationRevocation
+					.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.administratorImpersonationRevocation
+					.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.administratorImpersonationRevocation
+					.functionName,
+			triggerType: AFTER_DELETE_OR_UPDATE_ROW,
+			watchedColumns: [
+				...AUTH_IDENTITY_INVARIANT_CONTRACTS
+					.administratorImpersonationRevocation.watchedColumns,
+			],
+			arguments: [],
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS
+					.originatingSessionImpersonationRevocation.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS
+					.originatingSessionImpersonationRevocation.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS
+					.originatingSessionImpersonationRevocation.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS
+					.originatingSessionImpersonationRevocation.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS
+					.originatingSessionImpersonationRevocation.functionName,
+			triggerType: AFTER_DELETE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberInvitationAuthorityInvalidation
+					.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberInvitationAuthorityInvalidation
+					.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberInvitationAuthorityInvalidation
+					.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberInvitationAuthorityInvalidation
+					.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.memberInvitationAuthorityInvalidation
+					.functionName,
+			triggerType: BEFORE_DELETE_OR_UPDATE_ROW,
+			watchedColumns: [
+				...AUTH_IDENTITY_INVARIANT_CONTRACTS
+					.memberInvitationAuthorityInvalidation.watchedColumns,
+			],
+			arguments: [],
+		},
+		{
+			triggerName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.invitationIssuerCredentialFence
+					.triggerName,
+			tableSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.invitationIssuerCredentialFence
+					.tableSchema,
+			tableName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.invitationIssuerCredentialFence
+					.tableName,
+			functionSchema:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.invitationIssuerCredentialFence
+					.functionSchema,
+			functionName:
+				AUTH_IDENTITY_INVARIANT_CONTRACTS.invitationIssuerCredentialFence
+					.functionName,
+			triggerType: BEFORE_INSERT_OR_UPDATE_ROW,
+			watchedColumns: [
+				...AUTH_IDENTITY_INVARIANT_CONTRACTS.invitationIssuerCredentialFence
+					.watchedColumns,
+			],
 			arguments: [],
 		},
 	];
@@ -423,6 +618,97 @@ function expectedDatabaseTriggers(): ExpectedDatabaseTrigger[] {
 		watchedColumns: ["segment_id"],
 		arguments: [],
 	});
+	const operatorEvidence = OPERATOR_RESOLUTION_EVIDENCE_APPEND_ONLY_CONTRACT;
+	expected.push({
+		triggerName: operatorEvidence.triggerName,
+		tableSchema: operatorEvidence.tableSchema,
+		tableName: operatorEvidence.tableName,
+		functionSchema: operatorEvidence.functionSchema,
+		functionName: operatorEvidence.functionName,
+		triggerType: BEFORE_DELETE_OR_UPDATE_ROW,
+		watchedColumns: [],
+		arguments: [],
+	});
+	const subscriptionEvent = CONTACT_SUBSCRIPTION_EVENT_APPEND_ONLY_CONTRACT;
+	expected.push({
+		triggerName: subscriptionEvent.triggerName,
+		tableSchema: subscriptionEvent.tableSchema,
+		tableName: subscriptionEvent.tableName,
+		functionSchema: subscriptionEvent.functionSchema,
+		functionName: subscriptionEvent.functionName,
+		triggerType: BEFORE_UPDATE_ROW,
+		watchedColumns: [],
+		arguments: [],
+	});
+	const financialReceipt = FINANCIAL_RETENTION_RECEIPT_IMMUTABILITY_CONTRACT;
+	expected.push({
+		triggerName: financialReceipt.triggerName,
+		tableSchema: financialReceipt.tableSchema,
+		tableName: financialReceipt.tableName,
+		functionSchema: financialReceipt.functionSchema,
+		functionName: financialReceipt.functionName,
+		triggerType: BEFORE_UPDATE_ROW,
+		watchedColumns: [],
+		arguments: [],
+	});
+	const conversionFact = AUTOMATION_CONVERSION_EVENT_FACT_CONTRACT;
+	expected.push({
+		triggerName: conversionFact.triggerName,
+		tableSchema: conversionFact.tableSchema,
+		tableName: conversionFact.tableName,
+		functionSchema: conversionFact.functionSchema,
+		functionName: conversionFact.functionName,
+		triggerType: BEFORE_UPDATE_ROW,
+		watchedColumns: [],
+		arguments: [],
+	});
+	const usageProjection = USAGE_BUCKET_PROJECTION_CONTRACT;
+	expected.push(
+		{
+			triggerName: usageProjection.triggers.insert.name,
+			tableSchema: usageProjection.tableSchema,
+			tableName: usageProjection.reservationTable,
+			functionSchema: usageProjection.projectionFunctionSchema,
+			functionName: usageProjection.projectionFunctionName,
+			triggerType: AFTER_INSERT_STATEMENT,
+			watchedColumns: [],
+			arguments: [],
+			newTransitionTable: usageProjection.triggers.insert.newTransitionTable,
+		},
+		{
+			triggerName: usageProjection.triggers.update.name,
+			tableSchema: usageProjection.tableSchema,
+			tableName: usageProjection.reservationTable,
+			functionSchema: usageProjection.projectionFunctionSchema,
+			functionName: usageProjection.projectionFunctionName,
+			triggerType: AFTER_UPDATE_STATEMENT,
+			watchedColumns: [],
+			arguments: [],
+			oldTransitionTable: usageProjection.triggers.update.oldTransitionTable,
+			newTransitionTable: usageProjection.triggers.update.newTransitionTable,
+		},
+		{
+			triggerName: usageProjection.triggers.delete.name,
+			tableSchema: usageProjection.tableSchema,
+			tableName: usageProjection.reservationTable,
+			functionSchema: usageProjection.projectionFunctionSchema,
+			functionName: usageProjection.projectionFunctionName,
+			triggerType: AFTER_DELETE_STATEMENT,
+			watchedColumns: [],
+			arguments: [],
+			oldTransitionTable: usageProjection.triggers.delete.oldTransitionTable,
+		},
+		{
+			triggerName: usageProjection.triggers.bucketGuard.name,
+			tableSchema: usageProjection.tableSchema,
+			tableName: usageProjection.bucketTable,
+			functionSchema: usageProjection.guardFunctionSchema,
+			functionName: usageProjection.guardFunctionName,
+			triggerType: BEFORE_INSERT_OR_UPDATE_ROW,
+			watchedColumns: ["reserved_units", "committed_units"],
+			arguments: [],
+		},
+	);
 
 	return expected;
 }
@@ -486,10 +772,7 @@ function expectedGeneratedFunctions(): ExpectedGeneratedFunction[] {
 			contract.functionName,
 		),
 	}));
-	const identityMigrationSql = readFileSync(
-		new URL("../drizzle/0005_atomic_identity_deletion.sql", import.meta.url),
-		"utf8",
-	);
+	const identityInvariantSql = renderAuthIdentityInvariantSql();
 	const identityContracts = Object.values(
 		AUTH_IDENTITY_INVARIANT_CONTRACTS,
 	).map((contract) => ({
@@ -497,12 +780,84 @@ function expectedGeneratedFunctions(): ExpectedGeneratedFunction[] {
 		functionName: contract.functionName,
 		functionConfig: ["search_path=pg_catalog, auth"],
 		functionSource: extractGeneratedFunctionSource(
-			identityMigrationSql,
+			identityInvariantSql,
 			contract.functionSchema,
 			contract.functionName,
 		),
 	}));
-	return [...generatedContracts, ...identityContracts];
+	const operatorEvidence = OPERATOR_RESOLUTION_EVIDENCE_APPEND_ONLY_CONTRACT;
+	const operatorEvidenceSql = renderOperatorResolutionEvidenceInvariantSql();
+	const subscriptionEvent = CONTACT_SUBSCRIPTION_EVENT_APPEND_ONLY_CONTRACT;
+	const subscriptionEventSql = renderContactSubscriptionEventInvariantSql();
+	const financialReceipt = FINANCIAL_RETENTION_RECEIPT_IMMUTABILITY_CONTRACT;
+	const financialReceiptSql = renderFinancialRetentionReceiptInvariantSql();
+	const conversionFact = AUTOMATION_CONVERSION_EVENT_FACT_CONTRACT;
+	const conversionFactSql = renderAutomationConversionEventInvariantSql();
+	const usageProjection = USAGE_BUCKET_PROJECTION_CONTRACT;
+	return [
+		...generatedContracts,
+		...identityContracts,
+		{
+			functionSchema: operatorEvidence.functionSchema,
+			functionName: operatorEvidence.functionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			functionSource: extractGeneratedFunctionSource(
+				operatorEvidenceSql,
+				operatorEvidence.functionSchema,
+				operatorEvidence.functionName,
+			),
+		},
+		{
+			functionSchema: subscriptionEvent.functionSchema,
+			functionName: subscriptionEvent.functionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			functionSource: extractGeneratedFunctionSource(
+				subscriptionEventSql,
+				subscriptionEvent.functionSchema,
+				subscriptionEvent.functionName,
+			),
+		},
+		{
+			functionSchema: financialReceipt.functionSchema,
+			functionName: financialReceipt.functionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			functionSource: extractGeneratedFunctionSource(
+				financialReceiptSql,
+				financialReceipt.functionSchema,
+				financialReceipt.functionName,
+			),
+		},
+		{
+			functionSchema: conversionFact.functionSchema,
+			functionName: conversionFact.functionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			functionSource: extractGeneratedFunctionSource(
+				conversionFactSql,
+				conversionFact.functionSchema,
+				conversionFact.functionName,
+			),
+		},
+		{
+			functionSchema: usageProjection.projectionFunctionSchema,
+			functionName: usageProjection.projectionFunctionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			functionSource: extractGeneratedFunctionSource(
+				renderedSql,
+				usageProjection.projectionFunctionSchema,
+				usageProjection.projectionFunctionName,
+			),
+		},
+		{
+			functionSchema: usageProjection.guardFunctionSchema,
+			functionName: usageProjection.guardFunctionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			functionSource: extractGeneratedFunctionSource(
+				renderedSql,
+				usageProjection.guardFunctionSchema,
+				usageProjection.guardFunctionName,
+			),
+		},
+	];
 }
 
 function databaseTriggerKey(
@@ -516,26 +871,6 @@ function databaseTriggerKey(
 
 function actualDatabaseTriggerKey(trigger: DatabaseContractTriggerRow): string {
 	return `${trigger.table_schema}.${trigger.table_name}.${trigger.trigger_name}`;
-}
-
-function isRelayApiGeneratedTrigger(row: DatabaseContractTriggerRow): boolean {
-	const generatedFunctionNames = new Set<string>([
-		ORGANIZATION_PROVISIONING_CONTRACT.functionName,
-		PARENT_IDENTITY_PROJECTION_FUNCTION.functionName,
-		WORKSPACE_REQUIREMENT_CONTRACT.functionName,
-		SEGMENT_MEMBER_COUNT_CONTRACT.functionName,
-		...Object.values(AUTH_IDENTITY_INVARIANT_CONTRACTS).map(
-			(contract) => contract.functionName,
-		),
-	]);
-	return (
-		row.trigger_name.startsWith("project_") ||
-		row.trigger_name.startsWith("zz_require_workspace_") ||
-		row.trigger_name.startsWith("provision_organization_defaults") ||
-		row.trigger_name.startsWith("maintain_segment_member_count") ||
-		((row.function_schema === "public" || row.function_schema === "auth") &&
-			generatedFunctionNames.has(row.function_name))
-	);
 }
 
 const dialect = new PgDialect();
@@ -1255,6 +1590,9 @@ async function verify(): Promise<void> {
 	try {
 		const failures: string[] = [];
 		const expected = expectedCatalog();
+		const requiredDatabaseSchemas = [
+			...new Set(["public", ...REQUIRED_BASELINE_SCHEMAS]),
+		];
 		const expectedDeclaredIndexes = declaredIndexesFromSchema();
 		const expectedDeclaredConstraints =
 			await canonicalizeExpectedCheckConstraints(sql, expectedConstraints());
@@ -1262,7 +1600,7 @@ async function verify(): Promise<void> {
 
 		const [
 			requiredSchemas,
-			extension,
+			extensions,
 			catalogRows,
 			automationTable,
 			primaryKey,
@@ -1275,22 +1613,25 @@ async function verify(): Promise<void> {
 			generatedFunctions,
 			organizationProvisioningCoverage,
 			databaseContractTriggers,
+			nonDrizzleRelations,
+			rowPolicies,
 			segmentMemberCountCoverage,
 		] = await Promise.all([
 			sql<{ schema_name: string }[]>`
 					SELECT schema_name
 					FROM information_schema.schemata
-					WHERE schema_name IN ('auth', 'public')
+					WHERE schema_name IN ${sql(requiredDatabaseSchemas)}
 					ORDER BY schema_name
 				`,
-			sql<{ extversion: string; extension_schema: string }[]>`
+			sql<ExtensionCatalogRow[]>`
 					SELECT
-						extension_row.extversion,
-						namespace_row.nspname AS extension_schema
+						extension_row.extname AS extension_name,
+						namespace_row.nspname AS extension_schema,
+						extension_row.extversion AS extension_version
 					FROM pg_extension extension_row
 					JOIN pg_namespace namespace_row
 						ON namespace_row.oid = extension_row.extnamespace
-					WHERE extension_row.extname = 'pg_trgm'
+					WHERE extension_row.extname IN ${sql(REQUIRED_BASELINE_EXTENSIONS)}
 				`,
 			sql<ActualCatalogRow[]>`
 					SELECT
@@ -1546,18 +1887,15 @@ async function verify(): Promise<void> {
 						ON function_namespace.oid = function_row.pronamespace
 					JOIN pg_language language_row
 						ON language_row.oid = function_row.prolang
-					WHERE function_namespace.nspname IN ('auth', 'public')
-						AND (
-							starts_with(function_row.proname, 'provision_organization_defaults')
-							OR starts_with(function_row.proname, 'project_')
-							OR starts_with(function_row.proname, 'enforce_workspace_requirement')
-							OR starts_with(function_row.proname, 'maintain_segment_member_count')
-							OR function_row.proname IN (
-								'enforce_active_organization_owner',
-								'enforce_organization_owner_invariant',
-								'delete_dashboard_principals_before_user'
+						WHERE function_namespace.nspname !~ '^pg_'
+							AND function_namespace.nspname <> 'information_schema'
+							AND NOT EXISTS (
+								SELECT 1
+								FROM pg_catalog.pg_depend dependency
+								WHERE dependency.classid = 'pg_proc'::regclass
+									AND dependency.objid = function_row.oid
+									AND dependency.deptype = 'e'
 							)
-						)
 					ORDER BY
 						function_namespace.nspname,
 						function_row.proname,
@@ -1624,9 +1962,44 @@ async function verify(): Promise<void> {
 					JOIN pg_namespace function_namespace
 						ON function_namespace.oid = function_row.pronamespace
 					WHERE NOT trigger_row.tgisinternal
-						AND table_namespace.nspname IN ('auth', 'public')
-					ORDER BY table_namespace.nspname, table_row.relname, trigger_row.tgname
-				`,
+						AND table_namespace.nspname !~ '^pg_'
+						AND table_namespace.nspname <> 'information_schema'
+						ORDER BY table_namespace.nspname, table_row.relname, trigger_row.tgname
+					`,
+			sql<NonDrizzleRelationRow[]>`
+						SELECT
+							namespace_row.nspname AS schema_name,
+							relation_row.relname AS relation_name,
+							relation_row.relkind::text AS relation_kind
+						FROM pg_catalog.pg_class relation_row
+						JOIN pg_catalog.pg_namespace namespace_row
+							ON namespace_row.oid = relation_row.relnamespace
+						WHERE namespace_row.nspname !~ '^pg_'
+							AND namespace_row.nspname <> 'information_schema'
+							AND relation_row.relkind IN ('v', 'm')
+							AND NOT EXISTS (
+								SELECT 1
+								FROM pg_catalog.pg_depend dependency
+								WHERE dependency.classid = 'pg_class'::regclass
+									AND dependency.objid = relation_row.oid
+									AND dependency.deptype = 'e'
+							)
+						ORDER BY namespace_row.nspname, relation_row.relname
+					`,
+			sql<RowPolicyRow[]>`
+						SELECT
+							namespace_row.nspname AS schema_name,
+							relation_row.relname AS table_name,
+							policy_row.polname AS policy_name
+						FROM pg_catalog.pg_policy policy_row
+						JOIN pg_catalog.pg_class relation_row
+							ON relation_row.oid = policy_row.polrelid
+						JOIN pg_catalog.pg_namespace namespace_row
+							ON namespace_row.oid = relation_row.relnamespace
+						WHERE namespace_row.nspname !~ '^pg_'
+							AND namespace_row.nspname <> 'information_schema'
+						ORDER BY namespace_row.nspname, relation_row.relname, policy_row.polname
+					`,
 			sql<SegmentMemberCountCoverageRow[]>`
 					SELECT count(*)::integer AS mismatched
 					FROM public.segments segment_row
@@ -1639,25 +2012,47 @@ async function verify(): Promise<void> {
 		]);
 
 		const foundSchemas = new Set(requiredSchemas.map((row) => row.schema_name));
-		for (const requiredSchema of ["auth", "public"]) {
+		for (const requiredSchema of requiredDatabaseSchemas) {
 			if (!foundSchemas.has(requiredSchema)) {
 				failures.push(`missing required schema ${requiredSchema}`);
 			}
 		}
 
-		if (extension.length !== 1) {
-			failures.push("required pg_trgm extension is not installed");
-		} else if (extension[0]?.extension_schema !== "public") {
-			failures.push("required pg_trgm extension is not installed in public");
+		const extensionStates = new Map(
+			extensions.map((row) => [
+				row.extension_name,
+				{
+					schema: row.extension_schema,
+					version: row.extension_version,
+				},
+			]),
+		);
+		for (const extensionName of REQUIRED_BASELINE_EXTENSIONS) {
+			const actualState = extensionStates.get(extensionName);
+			const expectedSchema = REQUIRED_BASELINE_EXTENSION_SCHEMAS[extensionName];
+			const expectedVersion =
+				REQUIRED_DATABASE_EXTENSION_VERSIONS[extensionName];
+			if (!actualState) {
+				failures.push(`required ${extensionName} extension is not installed`);
+			} else if (actualState.schema !== expectedSchema) {
+				failures.push(
+					`required ${extensionName} extension is not installed in ${expectedSchema}`,
+				);
+			} else if (
+				expectedVersion !== undefined &&
+				actualState.version !== expectedVersion
+			) {
+				failures.push(
+					`required ${extensionName} extension is at version ${actualState.version}, expected ${expectedVersion}`,
+				);
+			}
 		}
 
 		const expectedTriggers = expectedDatabaseTriggers();
 		const expectedTriggerKeys = new Set(
 			expectedTriggers.map(databaseTriggerKey),
 		);
-		const generatedTriggerRows = databaseContractTriggers.filter(
-			isRelayApiGeneratedTrigger,
-		);
+		const generatedTriggerRows = databaseContractTriggers;
 		for (const expectedTrigger of expectedTriggers) {
 			const expectedKey = databaseTriggerKey(expectedTrigger);
 			const matches = generatedTriggerRows.filter(
@@ -1685,8 +2080,10 @@ async function verify(): Promise<void> {
 				actualTrigger.initially_deferred !==
 					(expectedTrigger.isInitiallyDeferred ?? false) ||
 				actualTrigger.has_parent_trigger ||
-				actualTrigger.old_transition_table !== null ||
-				actualTrigger.new_transition_table !== null
+				actualTrigger.old_transition_table !==
+					(expectedTrigger.oldTransitionTable ?? null) ||
+				actualTrigger.new_transition_table !==
+					(expectedTrigger.newTransitionTable ?? null)
 			) {
 				failures.push(
 					`${expectedKey} has unexpected constraint, deferral, inheritance, or transition-table metadata`,
@@ -1828,7 +2225,6 @@ async function verify(): Promise<void> {
 				`${segmentCoverage.mismatched} segments have a stale member_count`,
 			);
 		}
-
 		failures.push(...compareCatalog(expected, groupActualCatalog(catalogRows)));
 
 		const actualIndexMap = new Map(
@@ -2043,6 +2439,37 @@ async function verify(): Promise<void> {
 			}
 		}
 
+		const registry = nonDrizzleDdlRegistry();
+		const actualViews = nonDrizzleRelations
+			.filter((row) => row.relation_kind === "v")
+			.map((row) => `${row.schema_name}.${row.relation_name}`)
+			.sort();
+		const actualMaterializedViews = nonDrizzleRelations
+			.filter((row) => row.relation_kind === "m")
+			.map((row) => `${row.schema_name}.${row.relation_name}`)
+			.sort();
+		const actualPolicies = rowPolicies
+			.map((row) => `${row.schema_name}.${row.table_name}.${row.policy_name}`)
+			.sort();
+		for (const [kind, actualObjects, expectedObjects] of [
+			["view", actualViews, registry.views],
+			[
+				"materialized view",
+				actualMaterializedViews,
+				registry.materializedViews,
+			],
+			["row policy", actualPolicies, registry.policies],
+		] as const) {
+			if (
+				JSON.stringify(actualObjects) !==
+				JSON.stringify([...expectedObjects].sort())
+			) {
+				failures.push(
+					`non-Drizzle ${kind} registry differs: found ${JSON.stringify(actualObjects)}, expected ${JSON.stringify(expectedObjects)}`,
+				);
+			}
+		}
+
 		const foundEnums = new Map(
 			enumValues.map((row) => [
 				`${row.schema_name}.${row.type_name}`,
@@ -2089,7 +2516,7 @@ async function verify(): Promise<void> {
 		).length;
 		const authTableCount = expected.length - publicTableCount;
 		console.log(
-			`Migration catalog and full Drizzle schema verified (${publicTableCount} public tables, ${authTableCount} auth tables, pg_trgm, ordinary automation_step_runs).`,
+			`Migration catalog and full Drizzle schema verified (${publicTableCount} public tables, ${authTableCount} auth tables, ${REQUIRED_BASELINE_EXTENSIONS.join(", ")}, ordinary automation_step_runs).`,
 		);
 	} finally {
 		await sql.end({ timeout: 5 });

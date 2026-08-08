@@ -8,14 +8,11 @@
 // (contact_id, automation_id).
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import {
-	automationContactControls,
-	automations,
-	contacts,
-} from "@relayapi/db";
-import { and, eq, isNull, } from "drizzle-orm";
+import { automationContactControls, automations, contacts } from "@relayapi/db";
+import { and, eq, isNull } from "drizzle-orm";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import type { Context } from "hono";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { resumeExternalEventRuns } from "../services/automations/runner";
 import { ErrorResponse } from "../schemas/common";
 import type { Env, Variables } from "../types";
@@ -82,7 +79,9 @@ const PauseBody = z.object({
 	automation_id: z
 		.string()
 		.optional()
-		.describe("Omit for a global pause (blocks all automations for this contact)"),
+		.describe(
+			"Omit for a global pause (blocks all automations for this contact)",
+		),
 	pause_reason: z.string().optional(),
 	paused_until: z.string().datetime({ offset: true }).optional(),
 });
@@ -176,12 +175,16 @@ app.openapi(pauseContact, async (c) => {
 
 	const scoped = await loadScopedContact(c, id);
 	if (!scoped) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Contact not found" } },
 			404,
 		);
 	}
-	if ("denied" in scoped) return scoped.denied as never;
+	if ("denied" in scoped) {
+		markMutationInputNotApplied(c);
+		return scoped.denied as never;
+	}
 
 	const db = c.get("db");
 
@@ -216,11 +219,11 @@ app.openapi(pauseContact, async (c) => {
 		? [
 				eq(automationContactControls.contactId, id),
 				eq(automationContactControls.automationId, body.automation_id),
-		  ]
+			]
 		: [
 				eq(automationContactControls.contactId, id),
 				isNull(automationContactControls.automationId),
-		  ];
+			];
 	const [existing] = await db
 		.select()
 		.from(automationContactControls)
@@ -296,17 +299,22 @@ app.openapi(resumeContact, async (c) => {
 
 	const scoped = await loadScopedContact(c, id);
 	if (!scoped) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Contact not found" } },
 			404,
 		);
 	}
-	if ("denied" in scoped) return scoped.denied as never;
+	if ("denied" in scoped) {
+		markMutationInputNotApplied(c);
+		return scoped.denied as never;
+	}
 
 	const db = c.get("db");
 
+	let deletedControls: Array<{ id: string }>;
 	if (body.automation_id) {
-		await db
+		deletedControls = await db
 			.delete(automationContactControls)
 			.where(
 				and(
@@ -314,9 +322,10 @@ app.openapi(resumeContact, async (c) => {
 					eq(automationContactControls.contactId, id),
 					eq(automationContactControls.automationId, body.automation_id),
 				),
-			);
+			)
+			.returning({ id: automationContactControls.id });
 	} else {
-		await db
+		deletedControls = await db
 			.delete(automationContactControls)
 			.where(
 				and(
@@ -324,17 +333,34 @@ app.openapi(resumeContact, async (c) => {
 					eq(automationContactControls.contactId, id),
 					isNull(automationContactControls.automationId),
 				),
-			);
+			)
+			.returning({ id: automationContactControls.id });
+	}
+	if (deletedControls.length > 0) {
+		c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+			kind: "committed",
+			units: 1,
+		});
 	}
 
 	// Wake runs parked on the pause (best-effort; the helper swallows per-run
 	// errors so a wake failure never fails the unpause).
-	await resumeExternalEventRuns(db, {
+	const resumed = await resumeExternalEventRuns(db, {
 		organizationId: orgId,
 		contactId: id,
 		automationId: body.automation_id ?? null,
 		env: c.env as unknown as Record<string, unknown>,
 	});
+	if (resumed.activated > 0) {
+		c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+			kind: "committed",
+			units: 1,
+		});
+	} else if (deletedControls.length === 0) {
+		c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+			kind: "not_applied",
+		});
+	}
 
 	return c.body(null, 204);
 });

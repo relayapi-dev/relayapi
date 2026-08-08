@@ -44,6 +44,7 @@ import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "../services/contact-consent";
+import { decryptContactChannelRows } from "../services/contact-protection";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -725,8 +726,13 @@ app.openapi(addRecipients, async (c) => {
 	if (body.contact_ids?.length) {
 		const contactRows = await db
 			.select({
-				id: contacts.id,
-				identifier: contactChannels.identifier,
+				contactId: contacts.id,
+				id: contactChannels.id,
+				organizationId: contactChannels.organizationId,
+				identifierCiphertext: contactChannels.identifierCiphertext,
+				identifierHash: contactChannels.identifierHash,
+				identityKeyFingerprint:
+					contactChannels.identityKeyFingerprint,
 			})
 			.from(contacts)
 			.innerJoin(contactChannels, eq(contactChannels.contactId, contacts.id))
@@ -739,9 +745,13 @@ app.openapi(addRecipients, async (c) => {
 				),
 			);
 
-		for (const row of contactRows) {
+		const plaintextRows = await decryptContactChannelRows(
+			c.env.ENCRYPTION_KEY,
+			contactRows,
+		);
+		for (const row of plaintextRows) {
 			toInsert.push({
-				contactId: row.id,
+				contactId: row.contactId,
 				contactIdentifier: row.identifier,
 			});
 		}
@@ -762,6 +772,7 @@ app.openapi(addRecipients, async (c) => {
 
 	const allowedHashes = await getAllowedRecipientHashes(
 		db,
+		c.env.ENCRYPTION_KEY,
 		orgId,
 		broadcast.platform,
 		"marketing",
@@ -775,7 +786,10 @@ app.openapi(addRecipients, async (c) => {
 			toInsert.map(async (item) => ({
 				...item,
 				contactIdentifierHash: await hashRecipientIdentifier(
+					c.env.ENCRYPTION_KEY,
+					orgId,
 					broadcast.platform,
+					"marketing",
 					item.contactIdentifier,
 				),
 			})),

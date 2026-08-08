@@ -311,10 +311,21 @@ app.openapi(updateContentTemplateRoute, async (c) => {
 	const [updated] = await db
 		.update(contentTemplates)
 		.set(updates)
-		.where(eq(contentTemplates.id, id))
+		.where(
+			and(
+				eq(contentTemplates.id, id),
+				eq(contentTemplates.organizationId, orgId),
+			),
+		)
 		.returning();
 
-	return c.json(serialize(updated ?? existing), 200);
+	if (!updated) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Content template not found" } },
+			404,
+		);
+	}
+	return c.json(serialize(updated), 200);
 });
 
 app.openapi(deleteContentTemplate, async (c) => {
@@ -348,7 +359,21 @@ app.openapi(deleteContentTemplate, async (c) => {
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied;
 
-	await db.delete(contentTemplates).where(eq(contentTemplates.id, id));
+	const [deleted] = await db
+		.delete(contentTemplates)
+		.where(
+			and(
+				eq(contentTemplates.id, id),
+				eq(contentTemplates.organizationId, orgId),
+			),
+		)
+		.returning({ id: contentTemplates.id });
+	if (!deleted) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Content template not found" } },
+			404,
+		);
+	}
 
 	return c.body(null, 204);
 });

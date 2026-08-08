@@ -20,6 +20,7 @@ import {
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { GRAPH_BASE } from "../../../config/api-versions";
 import { decryptAccountToken } from "../../../lib/account-token-crypto";
+import { requireConsentHmacKeyConfig } from "../../../lib/consent-hmac";
 import { workspaceScopeKey } from "../../../lib/request-access";
 import type {
 	MessageBlock,
@@ -29,6 +30,7 @@ import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "../../contact-consent";
+import { decryptContactChannelRow } from "../../contact-protection";
 import { authorizeConversationReply } from "../../conversation-reply-authorization";
 import type {
 	SendMessageRequest,
@@ -42,7 +44,12 @@ import {
 	CHANNEL_SUPPORTS_QUICK_REPLIES,
 	dispatchAutomationMessage,
 } from "../platforms";
-import type { NodeHandler, RunContext } from "../types";
+import {
+	AutomationExternalEffectKnownFailureError,
+	isAutomationExternalEffectControlError,
+	type NodeHandler,
+	type RunContext,
+} from "../types";
 
 type SendTransport = (req: SendMessageRequest) => Promise<SendMessageResult>;
 
@@ -141,11 +148,26 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 				};
 			}
 			try {
-				const providerReference = await dispatchCommentPrivateReply(
-					ctx,
-					recipient,
-					block.text,
-				);
+				const providerReference = ctx.executeExternalEffect
+					? await ctx.executeExternalEffect(
+							{
+								effectKey: `message-block:${block.id}`,
+								kind: "message_block",
+							},
+							async () => {
+								const value = await dispatchCommentPrivateReply(
+									ctx,
+									recipient,
+									block.text,
+								);
+								return {
+									outcome: "succeeded" as const,
+									value,
+									providerReference: value,
+								};
+							},
+						)
+					: await dispatchCommentPrivateReply(ctx, recipient, block.text);
 				return {
 					result: "advance",
 					via_port: "next",
@@ -157,6 +179,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 					},
 				};
 			} catch (error) {
+				if (isAutomationExternalEffectControlError(error)) throw error;
 				return {
 					result: "fail",
 					error: error instanceof Error ? error : new Error(String(error)),
@@ -183,6 +206,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 				platformAccountId: recipient.accountPlatformId,
 			},
 			idempotencyKey: ctx.effectIdempotencyKey,
+			executeExternalEffect: ctx.executeExternalEffect,
 			sendTransport: ctx.env?.sendTransport as SendTransport | undefined,
 		});
 
@@ -423,7 +447,12 @@ async function dispatchCommentPrivateReply(
 	});
 	const raw = await response.text();
 	if (!response.ok) {
-		throw new Error(
+		if (response.status >= 500) {
+			throw new Error(
+				`comment private reply ambiguous (${response.status})${raw ? `: ${raw.slice(0, 500)}` : ""}`,
+			);
+		}
+		throw new AutomationExternalEffectKnownFailureError(
 			`comment private reply failed (${response.status})${raw ? `: ${raw.slice(0, 500)}` : ""}`,
 		);
 	}
@@ -471,8 +500,12 @@ async function resolveRecipient(
 
 	const [channelRow] = await db
 		.select({
+			id: contactChannels.id,
+			organizationId: contactChannels.organizationId,
 			socialAccountId: contactChannels.socialAccountId,
-			identifier: contactChannels.identifier,
+			identifierCiphertext: contactChannels.identifierCiphertext,
+			identifierHash: contactChannels.identifierHash,
+			identityKeyFingerprint: contactChannels.identityKeyFingerprint,
 			createdAt: contactChannels.createdAt,
 		})
 		.from(contactChannels)
@@ -482,12 +515,20 @@ async function resolveRecipient(
 		.limit(1);
 
 	if (!channelRow) return null;
+	const consentKeyConfig = requireConsentHmacKeyConfig(ctx.env.ENCRYPTION_KEY);
+	const plaintextChannel = await decryptContactChannelRow(
+		consentKeyConfig,
+		channelRow,
+	);
 	const recipientHash = await hashRecipientIdentifier(
+		consentKeyConfig,
+		ctx.organizationId,
 		ctx.channel,
-		channelRow.identifier,
+		"automation",
+		plaintextChannel.identifier,
 	);
 	const recipient = [
-		{ identifier: channelRow.identifier, contactId: ctx.contactId },
+		{ identifier: plaintextChannel.identifier, contactId: ctx.contactId },
 	];
 	const triggerEvent = ctx.context.triggerEvent as
 		| { kind?: unknown; payload?: { comment_id?: unknown } }
@@ -501,6 +542,7 @@ async function resolveRecipient(
 		await Promise.all([
 			getAllowedRecipientHashes(
 				db,
+				consentKeyConfig,
 				ctx.organizationId,
 				ctx.channel,
 				"automation",
@@ -508,6 +550,7 @@ async function resolveRecipient(
 			),
 			getAllowedRecipientHashes(
 				db,
+				consentKeyConfig,
 				ctx.organizationId,
 				ctx.channel,
 				"automation",
@@ -515,13 +558,13 @@ async function resolveRecipient(
 				{ requireGrant: false },
 			),
 			ctx.conversationId
-				? authorizeConversationReply(db, {
+				? authorizeConversationReply(db, consentKeyConfig, {
 						organizationId: ctx.organizationId,
 						scopeKey: workspaceScopeKey(ctx.workspaceId ?? null),
 						conversationId: ctx.conversationId,
 						accountId: channelRow.socialAccountId,
 						platform: ctx.channel as typeof inboxMessages.$inferSelect.platform,
-						recipientIdentifier: channelRow.identifier,
+						recipientIdentifier: plaintextChannel.identifier,
 						now: ctx.now,
 					})
 				: Promise.resolve({
@@ -573,7 +616,7 @@ async function resolveRecipient(
 
 	return {
 		socialAccountId: acc.id,
-		platformContactId: channelRow.identifier,
+		platformContactId: plaintextChannel.identifier,
 		accessToken: token,
 		accountPlatformId: acc.platformAccountId,
 	};

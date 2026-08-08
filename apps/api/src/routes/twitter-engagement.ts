@@ -2,6 +2,7 @@ import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { type createDb, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { decryptAccountToken } from "../lib/account-token-crypto";
+import { trackSingleUnitProviderMutation } from "../lib/mutation-provider-boundary";
 import { canAccessWorkspaceScope } from "../lib/workspace-scope";
 import {
 	BookmarkBody,
@@ -219,16 +220,21 @@ app.openapi(retweet, async (c) => {
 		);
 	}
 
-	const res = await fetch(
-		`https://api.twitter.com/2/users/${account.platformAccountId}/retweets`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ tweet_id }),
-		},
+	const res = await trackSingleUnitProviderMutation(
+		c.get("mutationEffectTracker"),
+		"twitter.retweet.create",
+		() =>
+			fetch(
+				`https://api.twitter.com/2/users/${account.platformAccountId}/retweets`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({ tweet_id }),
+				},
+			),
 	);
 
 	if (!res.ok) {
@@ -282,12 +288,17 @@ app.openapi(undoRetweet, async (c) => {
 		);
 	}
 
-	const res = await fetch(
-		`https://api.twitter.com/2/users/${account.platformAccountId}/retweets/${tweet_id}`,
-		{
-			method: "DELETE",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		},
+	const res = await trackSingleUnitProviderMutation(
+		c.get("mutationEffectTracker"),
+		"twitter.retweet.delete",
+		() =>
+			fetch(
+				`https://api.twitter.com/2/users/${account.platformAccountId}/retweets/${tweet_id}`,
+				{
+					method: "DELETE",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				},
+			),
 	);
 
 	if (!res.ok) {
@@ -341,16 +352,21 @@ app.openapi(bookmark, async (c) => {
 		);
 	}
 
-	const res = await fetch(
-		`https://api.twitter.com/2/users/${account.platformAccountId}/bookmarks`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ tweet_id }),
-		},
+	const res = await trackSingleUnitProviderMutation(
+		c.get("mutationEffectTracker"),
+		"twitter.bookmark.create",
+		() =>
+			fetch(
+				`https://api.twitter.com/2/users/${account.platformAccountId}/bookmarks`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({ tweet_id }),
+				},
+			),
 	);
 
 	if (!res.ok) {
@@ -404,12 +420,17 @@ app.openapi(removeBookmark, async (c) => {
 		);
 	}
 
-	const res = await fetch(
-		`https://api.twitter.com/2/users/${account.platformAccountId}/bookmarks/${tweet_id}`,
-		{
-			method: "DELETE",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		},
+	const res = await trackSingleUnitProviderMutation(
+		c.get("mutationEffectTracker"),
+		"twitter.bookmark.delete",
+		() =>
+			fetch(
+				`https://api.twitter.com/2/users/${account.platformAccountId}/bookmarks/${tweet_id}`,
+				{
+					method: "DELETE",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				},
+			),
 	);
 
 	if (!res.ok) {
@@ -463,16 +484,21 @@ app.openapi(follow, async (c) => {
 		);
 	}
 
-	const res = await fetch(
-		`https://api.twitter.com/2/users/${account.platformAccountId}/following`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ target_user_id }),
-		},
+	const res = await trackSingleUnitProviderMutation(
+		c.get("mutationEffectTracker"),
+		"twitter.follow.create",
+		() =>
+			fetch(
+				`https://api.twitter.com/2/users/${account.platformAccountId}/following`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({ target_user_id }),
+				},
+			),
 	);
 
 	if (!res.ok) {
@@ -538,12 +564,17 @@ app.openapi(unfollow, async (c) => {
 		);
 	}
 
-	const res = await fetch(
-		`https://api.twitter.com/2/users/${account.platformAccountId}/following/${target_user_id}`,
-		{
-			method: "DELETE",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		},
+	const res = await trackSingleUnitProviderMutation(
+		c.get("mutationEffectTracker"),
+		"twitter.follow.delete",
+		() =>
+			fetch(
+				`https://api.twitter.com/2/users/${account.platformAccountId}/following/${target_user_id}`,
+				{
+					method: "DELETE",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				},
+			),
 	);
 
 	if (!res.ok) {

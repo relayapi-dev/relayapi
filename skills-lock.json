@@ -2,10 +2,10 @@
   "version": 1,
   "skills": {
     "cloudflare": {
-      "source": "cloudflare/skills",
-      "sourceType": "github",
-      "skillPath": "skills/cloudflare/SKILL.md",
-      "computedHash": "a1646a6a2fb7cc683de5bf8357e5d6ae02db6fd0bf771d633c1890318e25bff2"
+      "source": ".agents/skills/cloudflare",
+      "sourceType": "local",
+      "skillPath": "SKILL.md",
+      "computedHash": "2f5d2022d7d866969e46e96436cde000c671056435a0a11b3f8a213bfe2f7a5d"
     },
     "web-perf": {
       "source": "cloudflare/skills",

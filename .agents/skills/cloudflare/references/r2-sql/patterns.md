@@ -5,7 +5,7 @@ Code templates for CLI, REST, and Worker access. For performance/partitioning be
 ## Wrangler CLI
 
 ```bash
-export WRANGLER_R2_SQL_AUTH_TOKEN=$API_TOKEN
+# WRANGLER_R2_SQL_AUTH_TOKEN is injected directly by the secret manager.
 
 npx wrangler r2 sql query "${ACCOUNT_ID}_my-bucket" "
   SELECT category, COUNT(*) AS cnt, round(AVG(amount), 2) AS avg_amount
@@ -36,7 +36,7 @@ rows, metrics = r2sql("SELECT category, COUNT(*) AS cnt FROM analytics.events GR
 ```bash
 curl -X POST \
   "https://api.sql.cloudflarestorage.com/api/v1/accounts/$ACCOUNT_ID/r2-sql/query/$BUCKET" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
   -d '{"query": "SELECT COUNT(*) AS total FROM analytics.events"}'
 ```
 

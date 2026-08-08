@@ -2,7 +2,6 @@ import {
 	Body,
 	Button,
 	Container,
-	Font,
 	Head,
 	Hr,
 	Html,
@@ -28,18 +27,7 @@ export function InvitationEmail({
 }: InvitationEmailProps) {
 	return (
 		<Html>
-			<Head>
-				<Font
-					fontFamily="Inter"
-					fallbackFontFamily="Helvetica"
-					webFont={{
-						url: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
-						format: "woff2",
-					}}
-					fontWeight={400}
-					fontStyle="normal"
-				/>
-			</Head>
+			<Head />
 			<Preview>
 				{invitedByEmail} invited you to join {organizationName} on RelayAPI
 			</Preview>
@@ -57,9 +45,9 @@ export function InvitationEmail({
 								You've been invited
 							</Text>
 							<Text className="text-gray-600 text-center mb-6">
-								<strong>{invitedByEmail}</strong> invited you to
-								join <strong>{organizationName}</strong> as a{" "}
-								<strong>{role}</strong> on RelayAPI.
+								<strong>{invitedByEmail}</strong> invited you to join{" "}
+								<strong>{organizationName}</strong> as a <strong>{role}</strong>{" "}
+								on RelayAPI.
 							</Text>
 
 							<Section className="text-center mb-6">
@@ -79,8 +67,7 @@ export function InvitationEmail({
 						<Section className="text-center mt-8">
 							<Hr className="border-gray-200 mb-4" />
 							<Text className="text-xs text-gray-400 m-0">
-								&copy; {new Date().getFullYear()} RelayAPI. All
-								rights reserved.
+								&copy; {new Date().getFullYear()} RelayAPI. All rights reserved.
 							</Text>
 							<Link
 								href="https://relayapi.dev"

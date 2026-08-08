@@ -99,7 +99,7 @@ Variants are named presets for transformations.
 ```bash
 curl -X POST \
   https://api.cloudflare.com/client/v4/accounts/{account_id}/images/v1/variants \
-  -H "Authorization: Bearer {api_token}" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{
     "id": "thumbnail",
@@ -158,15 +158,14 @@ Required permissions:
 - Account → Cloudflare Images → Edit
 
 ```bash
-curl -H "Authorization: Bearer {api_token}" \
+curl --header @/secure/bearer-auth-header \
   https://api.cloudflare.com/client/v4/accounts/{account_id}/images/v1
 ```
 
 ### API Key (Legacy)
 
 ```bash
-curl -H "X-Auth-Email: {email}" \
-     -H "X-Auth-Key: {api_key}" \
+curl --header @/secure/cloudflare-global-auth-headers \
   https://api.cloudflare.com/client/v4/accounts/{account_id}/images/v1
 ```
 
@@ -178,7 +177,7 @@ For private images, enable signed URLs:
 # Upload with signed URLs required
 curl -X POST \
   https://api.cloudflare.com/client/v4/accounts/{account_id}/images/v1 \
-  -H "Authorization: Bearer {api_token}" \
+  --header @/secure/bearer-auth-header \
   -F file=@private.jpg \
   -F requireSignedURLs=true
 ```

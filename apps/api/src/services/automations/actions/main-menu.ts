@@ -2,13 +2,18 @@ import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { GRAPH_BASE } from "../../../config/api-versions";
 import { decryptAccountToken } from "../../../lib/account-token-crypto";
+import { requireConsentHmacKeyConfig } from "../../../lib/consent-hmac";
 import type { Action } from "../../../schemas/automation-actions";
 import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "../../contact-consent";
+import { decryptContactChannelRow } from "../../contact-protection";
 import { applyMergeTags } from "../merge-tags";
-import type { RunContext } from "../types";
+import {
+	AutomationExternalEffectKnownFailureError,
+	type RunContext,
+} from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type ChangeMainMenuAction = Extract<Action, { type: "change_main_menu" }>;
@@ -71,7 +76,13 @@ const changeMainMenu: ActionHandler<ChangeMainMenuAction> = async (
 		? eq(contacts.workspaceId, ctx.workspaceId)
 		: isNull(contacts.workspaceId);
 	const [channel] = await ctx.db
-		.select({ identifier: contactChannels.identifier })
+		.select({
+			id: contactChannels.id,
+			organizationId: contactChannels.organizationId,
+			identifierCiphertext: contactChannels.identifierCiphertext,
+			identifierHash: contactChannels.identifierHash,
+			identityKeyFingerprint: contactChannels.identityKeyFingerprint,
+		})
 		.from(contactChannels)
 		.innerJoin(contacts, eq(contacts.id, contactChannels.contactId))
 		.where(
@@ -86,17 +97,26 @@ const changeMainMenu: ActionHandler<ChangeMainMenuAction> = async (
 		.orderBy(desc(contactChannels.createdAt))
 		.limit(1);
 	if (!channel) throw new Error("change_main_menu recipient is unavailable");
+	const consentKeyConfig = requireConsentHmacKeyConfig(ctx.env.ENCRYPTION_KEY);
+	const plaintextChannel = await decryptContactChannelRow(
+		consentKeyConfig,
+		channel,
+	);
 
 	const allowed = await getAllowedRecipientHashes(
 		ctx.db,
+		consentKeyConfig,
 		ctx.organizationId,
 		"facebook",
 		"automation",
-		[{ identifier: channel.identifier, contactId: ctx.contactId }],
+		[{ identifier: plaintextChannel.identifier, contactId: ctx.contactId }],
 	);
 	const recipientHash = await hashRecipientIdentifier(
+		consentKeyConfig,
+		ctx.organizationId,
 		"facebook",
-		channel.identifier,
+		"automation",
+		plaintextChannel.identifier,
 	);
 	if (!allowed.has(recipientHash)) {
 		throw new Error(
@@ -132,32 +152,50 @@ const changeMainMenu: ActionHandler<ChangeMainMenuAction> = async (
 	);
 	const fetchImpl =
 		(ctx.env.mainMenuFetch as typeof fetch | undefined) ?? globalThis.fetch;
-	const response = await fetchImpl(
-		`${GRAPH_BASE.facebook}/${account.platformAccountId}/custom_user_settings`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": "application/json",
+	const dispatch = async () => {
+		const response = await fetchImpl(
+			`${GRAPH_BASE.facebook}/${account.platformAccountId}/custom_user_settings`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					psid: plaintextChannel.identifier,
+					persistent_menu: [
+						{
+							locale: "default",
+							composer_input_disabled:
+								action.menu_payload.composer_input_disabled,
+							call_to_actions: callToActions,
+						},
+					],
+				}),
 			},
-			body: JSON.stringify({
-				psid: channel.identifier,
-				persistent_menu: [
-					{
-						locale: "default",
-						composer_input_disabled:
-							action.menu_payload.composer_input_disabled,
-						call_to_actions: callToActions,
-					},
-				],
-			}),
-		},
-	);
-	if (!response.ok) {
-		const detail = await response.text();
-		throw new Error(
-			`change_main_menu failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`,
 		);
+		if (!response.ok) {
+			const detail = await response.text();
+			const message = `change_main_menu failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`;
+			if (response.status >= 500) throw new Error(message);
+			throw new AutomationExternalEffectKnownFailureError(message);
+		}
+		return { status: response.status };
+	};
+
+	if (ctx.executeExternalEffect) {
+		await ctx.executeExternalEffect(
+			{
+				effectKey: `action:${action.id}`,
+				kind: "automation_action",
+			},
+			async () => ({
+				outcome: "succeeded",
+				value: await dispatch(),
+			}),
+		);
+	} else {
+		await dispatch();
 	}
 };
 

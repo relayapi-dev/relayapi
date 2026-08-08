@@ -6,14 +6,19 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { adAccounts, adAudiences, adCampaigns, ads, eq } from "@relayapi/db";
 import { and, desc, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
+import { createMiddleware } from "hono/factory";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { decryptAccountToken } from "../lib/account-token-crypto";
+import { durableCredentialAuthorityAdmission } from "../lib/durable-credential-authority";
+import { trackAuthoritativeAmbiguousMutation } from "../lib/mutation-effect";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
+import { refreshFeatureEntitlements } from "../middleware/feature-gate";
+import { requireManageSpendMiddleware } from "../middleware/permissions";
 import {
 	AdAccountResponse,
 	AdAnalyticsParams,
@@ -44,11 +49,28 @@ import * as adAnalytics from "../services/ad-analytics";
 import * as adAudienceService from "../services/ad-audience";
 import { getAdPlatformAdapter } from "../services/ad-platforms";
 import type { AdTargeting } from "../services/ad-platforms/types";
-import { AdPlatformError } from "../services/ad-platforms/types";
+import {
+	AdAuthoritativeNotAppliedError,
+	AdPlatformError,
+} from "../services/ad-platforms/types";
 import * as adService from "../services/ad-service";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+const requireManageSpendForMutations = createMiddleware<{
+	Bindings: Env;
+	Variables: Variables;
+}>(async (c, next) => {
+	if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)) {
+		const response = await requireManageSpendMiddleware(c, next);
+		if (response instanceof Response && response.status === 403) {
+			markAdMutationNotApplied(c);
+		}
+		return response;
+	}
+	return next();
+});
+app.use("*", requireManageSpendForMutations);
 const RequiredIdempotencyKeyHeaders = z.object({
 	"idempotency-key": z.string().min(1).openapi({
 		description:
@@ -58,6 +80,22 @@ const RequiredIdempotencyKeyHeaders = z.object({
 });
 
 type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+function markAdMutationNotApplied(c: AppContext): void {
+	if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)) {
+		c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+			kind: "not_applied",
+		});
+	}
+}
+
+function markDeniedAdMutation(
+	c: AppContext,
+	response: Response | undefined,
+): Response | undefined {
+	if (response) markAdMutationNotApplied(c);
+	return response;
+}
 
 async function authorizeAdAccount(
 	c: AppContext,
@@ -72,12 +110,13 @@ async function authorizeAdAccount(
 		)
 		.limit(1);
 	if (!row) {
+		markAdMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Ad account not found" } },
 			404,
 		);
 	}
-	return assertWorkspaceScope(c, row.workspaceId);
+	return markDeniedAdMutation(c, assertWorkspaceScope(c, row.workspaceId));
 }
 
 async function authorizeCampaign(
@@ -96,12 +135,13 @@ async function authorizeCampaign(
 		)
 		.limit(1);
 	if (!row) {
+		markAdMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Campaign not found" } },
 			404,
 		);
 	}
-	return assertWorkspaceScope(c, row.workspaceId);
+	return markDeniedAdMutation(c, assertWorkspaceScope(c, row.workspaceId));
 }
 
 async function authorizeAd(
@@ -115,12 +155,13 @@ async function authorizeAd(
 		.where(and(eq(ads.id, id), eq(ads.organizationId, c.get("orgId"))))
 		.limit(1);
 	if (!row) {
+		markAdMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Ad not found" } },
 			404,
 		);
 	}
-	return assertWorkspaceScope(c, row.workspaceId);
+	return markDeniedAdMutation(c, assertWorkspaceScope(c, row.workspaceId));
 }
 
 async function authorizeAudience(
@@ -139,12 +180,44 @@ async function authorizeAudience(
 		)
 		.limit(1);
 	if (!row) {
+		markAdMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Audience not found" } },
 			404,
 		);
 	}
-	return assertWorkspaceScope(c, row.workspaceId);
+	return markDeniedAdMutation(c, assertWorkspaceScope(c, row.workspaceId));
+}
+
+async function requireSpendEligiblePlan(
+	c: AppContext,
+): Promise<Response | undefined> {
+	await refreshFeatureEntitlements(c);
+	if (
+		c.get("plan") === "pro" &&
+		!(c.get("billingSource") === "stripe" && !c.get("billable"))
+	) {
+		return undefined;
+	}
+	markAdMutationNotApplied(c);
+	return c.json(
+		{
+			error: {
+				code: "PLAN_UPGRADE_REQUIRED",
+				message:
+					"Creating or increasing ad spend requires an eligible Pro plan",
+			},
+		},
+		403,
+	);
+}
+
+async function mayIncreaseSpend(c: AppContext): Promise<boolean> {
+	await refreshFeatureEntitlements(c);
+	return (
+		c.get("plan") === "pro" &&
+		!(c.get("billingSource") === "stripe" && !c.get("billable"))
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -153,22 +226,54 @@ async function authorizeAudience(
 
 function handleAdError(c: AppContext, err: unknown) {
 	if (err instanceof AdPlatformError) {
+		if (
+			err instanceof AdAuthoritativeNotAppliedError ||
+			err.code === "PLAN_UPGRADE_REQUIRED" ||
+			err.code === "UNSUPPORTED_TARGETING"
+		) {
+			// The marker is explicit proof about this attempt, independent of its
+			// public error code. The two policy codes are also emitted only by
+			// route/service preflights today.
+			c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+				kind: "not_applied",
+			});
+		}
+		if (
+			err.code === "AD_MUTATION_IN_PROGRESS" ||
+			err.code === "AD_MUTATION_UNKNOWN" ||
+			err.code === "AD_MUTATION_MANUAL_REVIEW" ||
+			err.code === "AUTHORITY_REVOKED_PENDING"
+		) {
+			c.header("Idempotency-Retryable", "true");
+			c.header("Retry-After", "60");
+		}
 		const status =
 			err.code === "NOT_FOUND"
 				? 404
-				: err.code === "IDEMPOTENCY_KEY_REQUIRED" ||
-						err.code === "IDEMPOTENCY_KEY_REUSED"
-					? 400
-					: err.code === "OPERATION_IN_PROGRESS" ||
-							err.code === "UNKNOWN_EXTERNAL_OUTCOME" ||
-							err.code === "MANUAL_REVIEW_REQUIRED"
-						? 409
-						: err.code === "INVALID_STATE"
-							? 400
-							: err.code === "UNSUPPORTED_PLATFORM" ||
-									err.code === "UNSUPPORTED_FEATURE"
-								? 422
-								: 500;
+				: err.code === "PLAN_UPGRADE_REQUIRED" ||
+						err.code === "CREDENTIAL_NO_LONGER_AUTHORIZED"
+					? 403
+					: err.code === "IDEMPOTENCY_KEY_REQUIRED" ||
+							err.code === "IDEMPOTENCY_KEY_REUSED"
+						? 400
+						: err.code === "OPERATION_IN_PROGRESS" ||
+								err.code === "UNKNOWN_EXTERNAL_OUTCOME" ||
+								err.code === "MANUAL_REVIEW_REQUIRED" ||
+								err.code === "AD_MUTATION_IN_PROGRESS" ||
+								err.code === "AD_MUTATION_UNKNOWN" ||
+								err.code === "AD_MUTATION_MANUAL_REVIEW" ||
+								err.code === "AUTHORITY_REVOKED_PENDING"
+							? 409
+							: err.code === "INVALID_STATE" ||
+									err.code === "INVALID_BUDGET" ||
+									err.code === "CURRENCY_MISMATCH"
+								? 400
+								: err.code === "UNSUPPORTED_PLATFORM" ||
+										err.code === "UNSUPPORTED_FEATURE" ||
+										err.code === "UNSUPPORTED_TARGETING" ||
+										err.code === "UNSUPPORTED_CURRENCY"
+									? 422
+									: 500;
 		return c.json(
 			{ error: { code: err.code, message: err.message } },
 			status as ContentfulStatusCode,
@@ -184,6 +289,23 @@ function handleAdError(c: AppContext, err: unknown) {
 		},
 		500,
 	) as never;
+}
+
+/** Audience service codes emitted only before its first provider mutation. */
+function markAudiencePreboundaryError(c: AppContext, err: unknown): void {
+	if (
+		err instanceof AdPlatformError &&
+		[
+			"NOT_FOUND",
+			"UNSUPPORTED_PLATFORM",
+			"INVALID_SOURCE",
+			"INVALID_TYPE",
+			"INVALID_STATE",
+			"INVALID_AUDIENCE_TYPE",
+		].includes(err.code)
+	) {
+		markAdMutationNotApplied(c);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +531,8 @@ app.openapi(createCampaignRoute, async (c) => {
 	const operationKey = c.req.valid("header")["idempotency-key"];
 	const denied = await authorizeAdAccount(c, body.ad_account_id);
 	if (denied) return denied as never;
+	const planDenied = await requireSpendEligiblePlan(c);
+	if (planDenied) return planDenied as never;
 
 	try {
 		const campaign = await adService.createCampaign(
@@ -427,6 +551,8 @@ app.openapi(createCampaignRoute, async (c) => {
 				operationKey,
 			},
 			c.get("db"),
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_spend"),
 		);
 
 		if (!campaign) {
@@ -645,6 +771,7 @@ const updateCampaignStatus = createRoute({
 	summary: "Update campaign (pause/resume)",
 	security: [{ Bearer: [] }],
 	request: {
+		headers: RequiredIdempotencyKeyHeaders,
 		params: IdParam,
 		body: { content: { "application/json": { schema: UpdateCampaignBody } } },
 	},
@@ -668,38 +795,28 @@ app.openapi(updateCampaignStatus, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
+	const operationKey = c.req.valid("header")["idempotency-key"];
 	const denied = await authorizeCampaign(c, id);
 	if (denied) return denied as never;
 
 	try {
-		if (body.status) {
-			const result = await adService.updateCampaignStatus(
-				c.env,
-				orgId,
-				id,
-				body.status,
-				c.get("db"),
-			);
-			return c.json(result, 200);
-		}
-
-		// Name/budget updates
-		const db = c.get("db");
-		const updateData: Record<string, unknown> = { updatedAt: new Date() };
-		if (body.name) updateData.name = body.name;
-		if (body.daily_budget_cents)
-			updateData.dailyBudgetCents = body.daily_budget_cents;
-		if (body.lifetime_budget_cents)
-			updateData.lifetimeBudgetCents = body.lifetime_budget_cents;
-
-		await db
-			.update(adCampaigns)
-			.set(updateData)
-			.where(
-				and(eq(adCampaigns.id, id), eq(adCampaigns.organizationId, orgId)),
-			);
-
-		return c.json({ updated: 1, skipped: 0 }, 200);
+		const result = await adService.updateCampaign(
+			c.env,
+			orgId,
+			id,
+			{
+				name: body.name,
+				status: body.status,
+				dailyBudgetCents: body.daily_budget_cents,
+				lifetimeBudgetCents: body.lifetime_budget_cents,
+				allowSpendIncrease: await mayIncreaseSpend(c),
+				operationKey,
+			},
+			c.get("db"),
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_spend"),
+		);
+		return c.json(result, 200);
 	} catch (err) {
 		return handleAdError(c, err);
 	}
@@ -712,7 +829,7 @@ const deleteCampaign = createRoute({
 	tags: ["Ads"],
 	summary: "Cancel/archive campaign",
 	security: [{ Bearer: [] }],
-	request: { params: IdParam },
+	request: { headers: RequiredIdempotencyKeyHeaders, params: IdParam },
 	responses: {
 		200: {
 			description: "Cancelled",
@@ -726,18 +843,20 @@ const deleteCampaign = createRoute({
 app.openapi(deleteCampaign, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
+	const operationKey = c.req.valid("header")["idempotency-key"];
 	const denied = await authorizeCampaign(c, id);
 	if (denied) return denied as never;
 
 	try {
-		const db = c.get("db");
-		await adService.updateCampaignStatus(c.env, orgId, id, "paused", db);
-		await db
-			.update(adCampaigns)
-			.set({ status: "cancelled", updatedAt: new Date() })
-			.where(
-				and(eq(adCampaigns.id, id), eq(adCampaigns.organizationId, orgId)),
-			);
+		await adService.cancelCampaign(
+			c.env,
+			orgId,
+			id,
+			operationKey,
+			c.get("db"),
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_spend"),
+		);
 		return c.json({ message: "Campaign cancelled" });
 	} catch (err) {
 		return handleAdError(c, err);
@@ -779,9 +898,38 @@ app.openapi(createAdRoute, async (c) => {
 	const operationKey = c.req.valid("header")["idempotency-key"];
 	const denied = await authorizeAdAccount(c, body.ad_account_id);
 	if (denied) return denied as never;
+	const planDenied = await requireSpendEligiblePlan(c);
+	if (planDenied) return planDenied as never;
 	if (body.campaign_id) {
 		const campaignDenied = await authorizeCampaign(c, body.campaign_id);
 		if (campaignDenied) return campaignDenied as never;
+		const ignoredSharedAdSetFields = [
+			body.objective,
+			body.targeting,
+			body.daily_budget_cents,
+			body.lifetime_budget_cents,
+			body.duration_days,
+			body.start_date,
+			body.end_date,
+		].some((value) => value !== undefined);
+		if (ignoredSharedAdSetFields) {
+			// The current provider model reuses the campaign's shared ad set. Do not
+			// accept per-ad authority that would be stored locally but never sent to
+			// Meta. This guard can be removed if the product adopts one ad set per ad.
+			c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+				kind: "not_applied",
+			});
+			return c.json(
+				{
+					error: {
+						code: "INVALID_EXISTING_CAMPAIGN_OPTIONS",
+						message:
+							"objective, targeting, budgets, duration, and schedule cannot be overridden when reusing a campaign",
+					},
+				},
+				400,
+			);
+		}
 	}
 
 	try {
@@ -808,6 +956,8 @@ app.openapi(createAdRoute, async (c) => {
 				operationKey,
 			},
 			c.get("db"),
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_spend"),
 		);
 
 		if (!ad) throw new Error("Failed to create ad");
@@ -851,6 +1001,8 @@ app.openapi(boostPostRoute, async (c) => {
 	const operationKey = c.req.valid("header")["idempotency-key"];
 	const denied = await authorizeAdAccount(c, body.ad_account_id);
 	if (denied) return denied as never;
+	const planDenied = await requireSpendEligiblePlan(c);
+	if (planDenied) return planDenied as never;
 
 	try {
 		const ad = await adService.boostPost(
@@ -880,6 +1032,8 @@ app.openapi(boostPostRoute, async (c) => {
 				operationKey,
 			},
 			c.get("db"),
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_spend"),
 		);
 
 		if (!ad) throw new Error("Failed to create ad");
@@ -1205,6 +1359,7 @@ app.openapi(createAudience, async (c) => {
 			201,
 		);
 	} catch (err) {
+		markAudiencePreboundaryError(c, err);
 		return handleAdError(c, err);
 	}
 });
@@ -1242,7 +1397,7 @@ app.openapi(listAudiences, async (c) => {
 	//      waitUntil() so the response is served from the local table
 	//      immediately (data is eventually consistent within the TTL window).
 	if (!cursor) {
-		const discoverKey = `ads:aud-discover:${orgId}:${ad_account_id}`;
+		const discoverKey = `ad-discovery:${orgId}:audience:${ad_account_id}`;
 		try {
 			const marker = await c.env.KV.get(discoverKey);
 			if (!marker) {
@@ -1381,6 +1536,7 @@ const addAudienceUsers = createRoute({
 	summary: "Upload hashed users to audience",
 	security: [{ Bearer: [] }],
 	request: {
+		headers: RequiredIdempotencyKeyHeaders,
 		params: IdParam,
 		body: { content: { "application/json": { schema: AddAudienceUsersBody } } },
 	},
@@ -1420,6 +1576,7 @@ app.openapi(addAudienceUsers, async (c) => {
 			stored: result.stored,
 		});
 	} catch (err) {
+		markAudiencePreboundaryError(c, err);
 		return handleAdError(c, err);
 	}
 });
@@ -1452,6 +1609,7 @@ app.openapi(deleteAudienceRoute, async (c) => {
 		await adAudienceService.deleteAudience(c.env, orgId, id);
 		return c.json({ message: "Audience deleted" });
 	} catch (err) {
+		markAudiencePreboundaryError(c, err);
 		return handleAdError(c, err);
 	}
 });
@@ -1485,36 +1643,28 @@ const triggerSync = createRoute({
 app.openapi(triggerSync, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
-	const db = c.get("db");
 	const denied = await authorizeAdAccount(c, id);
 	if (denied) return denied as never;
 
 	try {
-		// Validate the account exists and belongs to the org before enqueueing.
-		const [account] = await db
-			.select({ id: adAccounts.id })
-			.from(adAccounts)
-			.where(and(eq(adAccounts.id, id), eq(adAccounts.organizationId, orgId)))
-			.limit(1);
-
-		if (!account) {
-			return c.json(
-				{ error: { code: "NOT_FOUND", message: "Ad account not found" } },
-				404,
-			);
-		}
-
 		// The full sync (external Graph fetch, per-ad upserts, and metrics refresh
 		// of up to 200 ads) can exceed the request window, so run it on the ADS
 		// queue instead of inline. The same job type the cron enqueues.
-		await c.env.ADS_QUEUE.send({
-			type: "sync_external",
-			org_id: orgId,
-			ad_account_id: id,
-			// Manual sync is a full refresh — pull the complete 30-day window
-			// regardless of the consumer's wall-clock hour.
-			window_days: 30,
-		});
+		const tracker = c.get("mutationEffectTracker");
+		if (!tracker) throw new Error("Mutation effect tracker is unavailable");
+		await trackAuthoritativeAmbiguousMutation(
+			tracker,
+			() =>
+				c.env.ADS_QUEUE.send({
+					type: "sync_external",
+					org_id: orgId,
+					ad_account_id: id,
+					// Manual sync is a full refresh — pull the complete 30-day window
+					// regardless of the consumer's wall-clock hour.
+					window_days: 30,
+				}),
+			1,
+		);
 
 		return c.json({ status: "queued" as const }, 202);
 	} catch (err) {
@@ -1592,6 +1742,7 @@ const updateAdRoute = createRoute({
 	summary: "Update ad (name, budget, targeting, pause/resume)",
 	security: [{ Bearer: [] }],
 	request: {
+		headers: RequiredIdempotencyKeyHeaders,
 		params: IdParam,
 		body: { content: { "application/json": { schema: UpdateAdBody } } },
 	},
@@ -1613,6 +1764,7 @@ app.openapi(updateAdRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
+	const operationKey = c.req.valid("header")["idempotency-key"];
 	const denied = await authorizeAd(c, id);
 	if (denied) return denied as never;
 
@@ -1627,8 +1779,12 @@ app.openapi(updateAdRoute, async (c) => {
 				dailyBudgetCents: body.daily_budget_cents,
 				lifetimeBudgetCents: body.lifetime_budget_cents,
 				targeting: body.targeting as AdTargeting | undefined,
+				allowSpendIncrease: await mayIncreaseSpend(c),
+				operationKey,
 			},
 			c.get("db"),
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_spend"),
 		);
 
 		if (!updated) throw new Error("Failed to update ad");
@@ -1648,7 +1804,7 @@ const deleteAdRoute = createRoute({
 	tags: ["Ads"],
 	summary: "Cancel an ad",
 	security: [{ Bearer: [] }],
-	request: { params: IdParam },
+	request: { headers: RequiredIdempotencyKeyHeaders, params: IdParam },
 	responses: {
 		200: {
 			description: "Cancelled",
@@ -1662,11 +1818,20 @@ const deleteAdRoute = createRoute({
 app.openapi(deleteAdRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const { id } = c.req.valid("param");
+	const operationKey = c.req.valid("header")["idempotency-key"];
 	const denied = await authorizeAd(c, id);
 	if (denied) return denied as never;
 
 	try {
-		await adService.cancelAd(c.env, orgId, id, c.get("db"));
+		await adService.cancelAd(
+			c.env,
+			orgId,
+			id,
+			operationKey,
+			c.get("db"),
+			c.get("usageReservation"),
+			durableCredentialAuthorityAdmission(c, "manage_spend"),
+		);
 		return c.json({ message: "Ad cancelled" });
 	} catch (err) {
 		return handleAdError(c, err);

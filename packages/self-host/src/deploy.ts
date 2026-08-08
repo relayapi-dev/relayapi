@@ -1,9 +1,24 @@
+import { createHash, createHmac } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { CloudflareClient, parsePostgresUrl } from "./cloudflare.js";
+import {
+	BASELINE_GENERATION,
+	MAINTENANCE_SMOKE_HASH_DOMAIN,
+} from "../../config/src/index.js";
+import { CloudflareClient } from "./cloudflare.js";
 import { readConfig, readLock, writeConfig } from "./config.js";
 import { RESOURCE_NAMES } from "./constants.js";
+import {
+	validateBetterAuthSecret,
+	validateEncryptionKeyRing,
+	validateMigrationDatabaseUrl,
+	validateRuntimeDatabaseUrl,
+	verifyMigratedDatabaseExtensions,
+	verifyRequiredDatabaseExtensions,
+	verifySelfHostDatabaseContract,
+} from "./doctor.js";
 import { run } from "./process.js";
+import { reconcileCloudflareResources } from "./reconcile.js";
 import { resolveSource } from "./source.js";
 import type { CliOptions, SelfHostConfig } from "./types.js";
 import { apiWranglerConfig, appWranglerConfig } from "./wrangler-config.js";
@@ -13,6 +28,9 @@ const API_SECRET_NAMES = [
 	"R2_ACCESS_KEY_ID",
 	"R2_SECRET_ACCESS_KEY",
 	"CF_ACCOUNT_ID",
+	"OPENAI_API_KEY",
+	"OPERATIONS_ALERT_WEBHOOK_URL",
+	"OPERATIONS_ALERT_EMAIL",
 	"RESEND_API_KEY",
 	"DOWNLOADER_SERVICE_URL",
 	"DOWNLOADER_SERVICE_KEY",
@@ -51,6 +69,142 @@ const API_SECRET_NAMES = [
 	"YOUTUBE_HUB_SECRET",
 ] as const;
 
+const SELF_HOST_SMOKE_DERIVATION_DOMAIN =
+	"relayapi:self-host:database-smoke-token:v1";
+const DATABASE_PROBE_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000] as const;
+
+export function deriveSelfHostSmokeCredential(betterAuthSecret: string): {
+	token: string;
+	digest: string;
+} {
+	validateBetterAuthSecret(betterAuthSecret);
+	const token = createHmac("sha256", betterAuthSecret)
+		.update(SELF_HOST_SMOKE_DERIVATION_DOMAIN)
+		.digest("base64url");
+	const digest = createHash("sha256")
+		.update(MAINTENANCE_SMOKE_HASH_DOMAIN)
+		.update(token)
+		.digest("hex");
+	return { token, digest };
+}
+
+async function wait(delayMs: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+	const reader = response.body?.getReader();
+	if (!reader) return null;
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	while (true) {
+		const result = await reader.read();
+		if (result.done) break;
+		size += result.value.byteLength;
+		if (size > 16_384) {
+			await reader.cancel();
+			throw new Error("database probe returned an oversized response");
+		}
+		chunks.push(result.value);
+	}
+	const bytes = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	try {
+		return JSON.parse(new TextDecoder().decode(bytes));
+	} catch {
+		throw new Error("database probe returned malformed JSON");
+	}
+}
+
+function databaseProbeAttestation(
+	value: unknown,
+): { name: string; user: string } | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const root = value as Record<string, unknown>;
+	if (root.ok !== true) return null;
+	if (
+		!root.control ||
+		typeof root.control !== "object" ||
+		Array.isArray(root.control)
+	) {
+		return null;
+	}
+	const control = root.control as Record<string, unknown>;
+	if (
+		control.status !== "open" ||
+		control.application_baseline_generation !== BASELINE_GENERATION ||
+		control.configured_baseline_generation !== String(BASELINE_GENERATION)
+	) {
+		return null;
+	}
+	if (!root.database || typeof root.database !== "object") return null;
+	const database = root.database as Record<string, unknown>;
+	return typeof database.name === "string" && typeof database.user === "string"
+		? { name: database.name, user: database.user }
+		: null;
+}
+
+export async function probeWorkerDatabase(input: {
+	label: "API" | "dashboard";
+	hostname: string;
+	token: string;
+	expectedDatabase: string;
+	expectedUser: string;
+	fetcher?: typeof fetch;
+	/** Test seam; production uses the bounded deployment retry schedule. */
+	retryDelaysMs?: readonly number[];
+}): Promise<void> {
+	const fetcher = input.fetcher ?? fetch;
+	const retryDelaysMs = input.retryDelaysMs ?? DATABASE_PROBE_DELAYS_MS;
+	let lastFailure = "did not return a successful database probe";
+	for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+		try {
+			const response = await fetcher(
+				`https://${input.hostname}/internal/cutover-smoke?probe=database`,
+				{
+					headers: {
+						"x-relayapi-maintenance-smoke-bypass": input.token,
+					},
+					redirect: "error",
+					signal: AbortSignal.timeout(10_000),
+				},
+			);
+			if (!response.headers.get("cache-control")?.includes("no-store")) {
+				await response.body?.cancel();
+				lastFailure = "did not return the required no-store response";
+			} else if (!response.ok) {
+				await response.body?.cancel();
+				lastFailure = `returned HTTP ${response.status}`;
+			} else {
+				const identity = databaseProbeAttestation(
+					await readBoundedJson(response),
+				);
+				if (
+					identity?.name === input.expectedDatabase &&
+					identity.user === input.expectedUser
+				) {
+					return;
+				}
+				lastFailure =
+					"returned a non-open, generation-mismatched, or unexpected database attestation";
+			}
+		} catch (error) {
+			lastFailure =
+				error instanceof Error && error.name === "TimeoutError"
+					? "timed out"
+					: "could not be completed";
+		}
+		const delay = retryDelaysMs[attempt];
+		if (delay === undefined) break;
+		await wait(delay);
+	}
+	throw new Error(`${input.label} Worker database probe ${lastFailure}`);
+}
+
 function requiredEnvironment(name: string): string {
 	const value = process.env[name]?.trim();
 	if (!value) throw new Error(`Missing required environment variable ${name}`);
@@ -68,6 +222,7 @@ function selectedEnvironment(names: readonly string[]): Record<string, string> {
 
 function assertFeatureSecrets(config: SelfHostConfig): void {
 	if (config.features.email) requiredEnvironment("RESEND_API_KEY");
+	if (config.features.ai) requiredEnvironment("OPENAI_API_KEY");
 	if (config.features.downloader) {
 		requiredEnvironment("DOWNLOADER_SERVICE_URL");
 		requiredEnvironment("DOWNLOADER_SERVICE_KEY");
@@ -118,14 +273,20 @@ export async function deploy(options: CliOptions): Promise<void> {
 			"CLOUDFLARE_ACCOUNT_ID does not match relayapi.selfhost.json",
 		);
 	}
-	const migrationDatabaseUrl = requiredEnvironment("RELAYAPI_DATABASE_URL");
+	const migrationDatabaseUrl = requiredEnvironment(
+		"RELAYAPI_MIGRATION_DATABASE_URL",
+	);
 	const runtimeDatabaseUrl = requiredEnvironment(
 		"RELAYAPI_RUNTIME_DATABASE_URL",
 	);
-	parsePostgresUrl(migrationDatabaseUrl);
-	parsePostgresUrl(runtimeDatabaseUrl);
-	requiredEnvironment("ENCRYPTION_KEY");
-	requiredEnvironment("BETTER_AUTH_SECRET");
+	validateMigrationDatabaseUrl(migrationDatabaseUrl);
+	validateRuntimeDatabaseUrl(runtimeDatabaseUrl);
+	// Reject malformed local secrets before the first database probe or
+	// Cloudflare API call. A merely non-empty ring can still be unusable by the
+	// consent and erasure-identity paths at runtime.
+	validateEncryptionKeyRing(requiredEnvironment("ENCRYPTION_KEY"));
+	const betterAuthSecret = requiredEnvironment("BETTER_AUTH_SECRET");
+	const smokeCredential = deriveSelfHostSmokeCredential(betterAuthSecret);
 	requiredEnvironment("RELAYAPI_ADMIN_EMAIL");
 	const adminPassword = requiredEnvironment("RELAYAPI_ADMIN_PASSWORD");
 	if (adminPassword.length < 12) {
@@ -137,25 +298,53 @@ export async function deploy(options: CliOptions): Promise<void> {
 	requiredEnvironment("R2_SECRET_ACCESS_KEY");
 	assertFeatureSecrets(config);
 
+	await verifySelfHostDatabaseContract(
+		migrationDatabaseUrl,
+		runtimeDatabaseUrl,
+	);
 	const cloudflare = new CloudflareClient(accountId, token);
 	await cloudflare.verifyAccess(config.cloudflare.zoneId);
-	if (options.dryRun) {
-		console.log(JSON.stringify(await cloudflare.plan(), null, 2));
+	const reconciliation = await reconcileCloudflareResources({
+		config,
+		runtimeDatabaseUrl,
+		client: cloudflare,
+		dryRun: options.dryRun,
+		...(options.hyperdriveCaCertificateId
+			? {
+					requestedCaCertificateId: options.hyperdriveCaCertificateId,
+				}
+			: {}),
+		persist: (appliedConfig) => writeConfig(appliedConfig, options.configPath),
+	});
+	if (!reconciliation.applied) {
+		console.log(JSON.stringify(reconciliation.plan, null, 2));
 		return;
 	}
-	config = {
-		...config,
-		resources: await cloudflare.apply(config, runtimeDatabaseUrl),
-	};
-	await writeConfig(config, options.configPath);
+	console.log(
+		`Hyperdrive CA certificate intent: ${reconciliation.plan.hyperdrive.caCertificateAction} ${reconciliation.plan.hyperdrive.caCertificateId}`,
+	);
+	config = reconciliation.config;
 
 	const source = await resolveSource(lock, options.source);
 	console.log(`Deploying RelayAPI ${lock.version} from ${source.root}`);
 	await run("bun", ["install", "--frozen-lockfile"], { cwd: source.root });
+	await verifyRequiredDatabaseExtensions(migrationDatabaseUrl);
 	await run("bun", ["run", "--cwd", "packages/db", "migrate"], {
 		cwd: source.root,
-		env: { ...process.env, DATABASE_URL: migrationDatabaseUrl },
+		env: {
+			...process.env,
+			CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE:
+				migrationDatabaseUrl,
+		},
 	});
+	await verifyMigratedDatabaseExtensions(migrationDatabaseUrl);
+	await verifySelfHostDatabaseContract(
+		migrationDatabaseUrl,
+		runtimeDatabaseUrl,
+		{
+			postMigration: true,
+		},
+	);
 	await run("bun", ["run", "scripts/bootstrap-self-host.ts"], {
 		cwd: source.root,
 		env: {
@@ -180,33 +369,46 @@ export async function deploy(options: CliOptions): Promise<void> {
 	const apiConfigPath = await writeGeneratedConfig(
 		options.configPath,
 		"api.wrangler.json",
-		apiWranglerConfig(config, source.root),
+		apiWranglerConfig(config, source.root, smokeCredential.digest),
 	);
 	const appConfigPath = await writeGeneratedConfig(
 		options.configPath,
 		"app.wrangler.json",
-		appWranglerConfig(config, source.root),
+		appWranglerConfig(config, source.root, smokeCredential.digest),
 	);
-	await deployWorker(
-		apiConfigPath,
-		{
-			...selectedEnvironment(API_SECRET_NAMES),
-			CF_ACCOUNT_ID: accountId,
-		},
-		source.root,
-	);
+	const apiSecrets = {
+		...selectedEnvironment(API_SECRET_NAMES),
+		...(config.features.email && !process.env.OPERATIONS_ALERT_EMAIL
+			? {
+					OPERATIONS_ALERT_EMAIL: requiredEnvironment("RELAYAPI_ADMIN_EMAIL"),
+				}
+			: {}),
+		CF_ACCOUNT_ID: accountId,
+	};
+	await deployWorker(apiConfigPath, apiSecrets, source.root);
+	const expectedRuntime = validateRuntimeDatabaseUrl(runtimeDatabaseUrl);
+	await probeWorkerDatabase({
+		label: "API",
+		hostname: config.cloudflare.apiHostname,
+		token: smokeCredential.token,
+		expectedDatabase: expectedRuntime.database,
+		expectedUser: expectedRuntime.username,
+	});
 	await deployWorker(
 		appConfigPath,
 		{
-			BETTER_AUTH_SECRET: requiredEnvironment("BETTER_AUTH_SECRET"),
-			...selectedEnvironment([
-				"GOOGLE_CLIENT_ID",
-				"GOOGLE_CLIENT_SECRET",
-				"RESEND_API_KEY",
-			]),
+			BETTER_AUTH_SECRET: betterAuthSecret,
+			...selectedEnvironment(["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]),
 		},
 		source.root,
 	);
+	await probeWorkerDatabase({
+		label: "dashboard",
+		hostname: config.cloudflare.appHostname,
+		token: smokeCredential.token,
+		expectedDatabase: expectedRuntime.database,
+		expectedUser: expectedRuntime.username,
+	});
 	console.log(`RelayAPI is live at https://${config.cloudflare.appHostname}`);
 	console.log(`API: https://${config.cloudflare.apiHostname}`);
 }

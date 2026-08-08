@@ -6,7 +6,13 @@ import {
 	queueFailures,
 	webhookDeliveries,
 } from "@relayapi/db";
-import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import { CUSTOMER_WEBHOOK_REPAIR_WINDOW_MS } from "../lib/customer-webhook-policy";
+import { decryptQueueFailurePayload } from "../queues/failures";
+import {
+	normalizeQueueClass,
+	type WorkQueueCapability,
+} from "../queues/queue-class";
 import type { Env } from "../types";
 import { getAdCreationReplayState } from "./ad-creation-operations";
 
@@ -16,29 +22,37 @@ function organizationScope(organizationId: string) {
 	return sql`${queueFailures.organizationIds} @> ARRAY[${organizationId}]::text[]`;
 }
 
-function sourceQueueName(queueName: string): string {
-	return queueName.endsWith("-dlq") ? queueName.slice(0, -4) : queueName;
-}
-
-function replayQueue(env: Env, queueName: string): Queue | undefined {
-	return {
-		"relayapi-publish": env.PUBLISH_QUEUE,
-		"relayapi-email": env.EMAIL_QUEUE,
-		"relayapi-refresh": env.REFRESH_QUEUE,
-		"relayapi-inbox": env.INBOX_QUEUE,
-		"relayapi-inbox-raw": env.INBOX_QUEUE,
-		"relayapi-tools": env.TOOLS_QUEUE,
-		"relayapi-ads": env.ADS_QUEUE,
-		"relayapi-sync": env.SYNC_QUEUE,
-		"relayapi-customer-webhooks": env.CUSTOMER_WEBHOOK_QUEUE,
-	}[queueName];
+function replayQueue(
+	env: Env,
+	queueClass: WorkQueueCapability,
+): Queue | undefined {
+	switch (queueClass) {
+		case "publish":
+			return env.PUBLISH_QUEUE;
+		case "email":
+			return env.EMAIL_QUEUE;
+		case "refresh":
+			return env.REFRESH_QUEUE;
+		case "inbox":
+			return env.INBOX_QUEUE;
+		case "tools":
+			return env.TOOLS_QUEUE;
+		case "ads":
+			return env.ADS_QUEUE;
+		case "sync":
+			return env.SYNC_QUEUE;
+		case "customer-webhooks":
+			return env.CUSTOMER_WEBHOOK_QUEUE;
+		case "media-cleanup":
+			return undefined;
+	}
 }
 
 export async function replayQueueFailure(
 	env: Env,
 	failureId: string,
 	organizationId: string,
-): Promise<{ replayed: boolean; reason?: string }> {
+): Promise<{ replayed: boolean; reason?: string; outcomeUnknown?: true }> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 	const [candidate] = await db
 		.select()
@@ -61,17 +75,19 @@ export async function replayQueueFailure(
 		};
 	}
 
-	const queueName = sourceQueueName(candidate.queueName);
-	if (
-		!candidate.payload ||
-		typeof candidate.payload !== "object" ||
-		Array.isArray(candidate.payload)
-	) {
+	const normalizedQueue = normalizeQueueClass(candidate.queueName);
+	const queueClass =
+		normalizedQueue?.role === "rescue"
+			? null
+			: (normalizedQueue?.capability ?? null);
+	const payload = await decryptQueueFailurePayload(env, candidate).catch(
+		() => null,
+	);
+	if (!payload) {
 		return { replayed: false, reason: "Failure payload is not replayable" };
 	}
-	const payload = candidate.payload as Record<string, unknown>;
 	const paidOperationId =
-		queueName === "relayapi-ads" &&
+		queueClass === "ads" &&
 		(payload.type === "create_ad" || payload.type === "boost_post")
 			? typeof payload.operation_id === "string" &&
 				payload.operation_id.length > 0
@@ -79,11 +95,23 @@ export async function replayQueueFailure(
 				: candidate.messageId
 			: null;
 	const rawReceiptId =
-		(queueName === "relayapi-inbox" || queueName === "relayapi-inbox-raw") &&
+		queueClass === "inbox" &&
 		payload.type === "raw_platform_webhook" &&
 		typeof payload.receipt_id === "string"
 			? payload.receipt_id
 			: null;
+	const customerWebhookDeliveryId =
+		queueClass === "customer-webhooks" &&
+		typeof payload.delivery_id === "string" &&
+		payload.delivery_id.length > 0
+			? payload.delivery_id
+			: null;
+	if (queueClass === "customer-webhooks" && !customerWebhookDeliveryId) {
+		return {
+			replayed: false,
+			reason: "Customer webhook failure payload has no delivery identity",
+		};
+	}
 	if (
 		rawReceiptId &&
 		(candidate.organizationIds.length !== 1 ||
@@ -95,17 +123,17 @@ export async function replayQueueFailure(
 				"Shared raw receipts require internal reconciliation and cannot be tenant-replayed",
 		};
 	}
-	const queue = replayQueue(env, queueName);
+	const queue = queueClass ? replayQueue(env, queueClass) : undefined;
 	if (!queue) {
 		return {
 			replayed: false,
-			reason: `Queue ${queueName} is not replayable here`,
+			reason: `Queue ${candidate.queueName} is not replayable here`,
 		};
 	}
 
 	// Read-only operation-aware checks happen before the claim. No status or
 	// provider state is changed until this failure wins the atomic fence below.
-	if (queueName === "relayapi-publish" && typeof payload.post_id === "string") {
+	if (queueClass === "publish" && typeof payload.post_id === "string") {
 		const unknown = await db
 			.select({ id: postTargets.id })
 			.from(postTargets)
@@ -125,7 +153,7 @@ export async function replayQueueFailure(
 		}
 	}
 	if (
-		queueName === "relayapi-ads" &&
+		queueClass === "ads" &&
 		(payload.type === "create_ad" || payload.type === "boost_post")
 	) {
 		const replayState = await getAdCreationReplayState(
@@ -147,7 +175,7 @@ export async function replayQueueFailure(
 		}
 	}
 
-	if (queueName === "relayapi-email" && typeof payload.id === "string") {
+	if (queueClass === "email" && typeof payload.id === "string") {
 		const [email] = await db
 			.select({ status: emailDeliveries.status })
 			.from(emailDeliveries)
@@ -165,26 +193,18 @@ export async function replayQueueFailure(
 		}
 	}
 
-	if (
-		queueName === "relayapi-customer-webhooks" &&
-		typeof payload.delivery_id === "string"
-	) {
+	if (customerWebhookDeliveryId) {
 		const [delivery] = await db
 			.select({ status: webhookDeliveries.status })
 			.from(webhookDeliveries)
 			.where(
 				and(
-					eq(webhookDeliveries.id, payload.delivery_id),
+					eq(webhookDeliveries.id, customerWebhookDeliveryId),
 					eq(webhookDeliveries.organizationId, organizationId),
 				),
 			)
 			.limit(1);
-		if (
-			!delivery ||
-			delivery.status === "unknown" ||
-			delivery.status === "succeeded" ||
-			delivery.status === "in_flight"
-		) {
+		if (!delivery || !["pending", "failed"].includes(delivery.status)) {
 			return {
 				replayed: false,
 				reason: delivery
@@ -239,17 +259,147 @@ export async function replayQueueFailure(
 		return { replayed: false, reason: "Failure was concurrently claimed" };
 	}
 
+	// Customer webhook replay is a durable DB-outbox handoff, not a new Queue
+	// send. Commit the delivery reset and failure-ledger resolution together so
+	// a crash can leave either an untouched claim or a completed handoff, never
+	// an externally ambiguous half-state.
+	if (customerWebhookDeliveryId) {
+		try {
+			await db.transaction(async (tx) => {
+				const now = new Date();
+				const repairDeadlineAt = new Date(
+					now.getTime() + CUSTOMER_WEBHOOK_REPAIR_WINDOW_MS,
+				);
+				const reset = await tx
+					.update(webhookDeliveries)
+					.set({
+						status: "pending",
+						attempts: 0,
+						repairAttempts: 0,
+						repairDeadlineAt,
+						leaseToken: sql`${webhookDeliveries.leaseToken} + 1`,
+						leaseExpiresAt: null,
+						claimedAt: null,
+						requestMayHaveBeenSentAt: null,
+						completedAt: null,
+						statusCode: null,
+						responseTimeMs: null,
+						manualReviewReason: null,
+						manualReviewUntil: null,
+						operatorIntervenedAt: null,
+						operatorRetryRequestedAt: null,
+						error: null,
+						nextAttemptAt: now,
+						dispatchLeaseId: null,
+						dispatchLeaseExpiresAt: null,
+						nextDispatchAt: now,
+						lastEnqueuedAt: null,
+						dispatchAttempts: 0,
+						updatedAt: now,
+					})
+					.where(
+						and(
+							eq(webhookDeliveries.id, customerWebhookDeliveryId),
+							eq(webhookDeliveries.organizationId, organizationId),
+							inArray(webhookDeliveries.status, ["pending", "failed"]),
+							isNull(webhookDeliveries.operatorIntervenedAt),
+							isNull(webhookDeliveries.operatorRetryRequestedAt),
+						),
+					)
+					.returning({ id: webhookDeliveries.id });
+				if (reset.length === 0) {
+					throw new Error("Webhook delivery changed state before replay reset");
+				}
+
+				const resolved = await tx
+					.update(queueFailures)
+					.set({
+						status: "replayed",
+						resolvedAt: now,
+						replayClaimExpiresAt: null,
+					})
+					.where(
+						and(
+							eq(queueFailures.id, failure.id),
+							eq(queueFailures.status, "replay_claimed"),
+							eq(queueFailures.replayClaimToken, claimToken),
+						),
+					)
+					.returning({ id: queueFailures.id });
+				if (resolved.length === 0) {
+					throw new Error(
+						"Webhook replay claim changed before durable handoff",
+					);
+				}
+			});
+			return { replayed: true };
+		} catch (error) {
+			const replayError =
+				error instanceof Error ? error.message : String(error);
+			const released = await db
+				.update(queueFailures)
+				.set({
+					status: "unresolved",
+					replayClaimToken: null,
+					replayClaimExpiresAt: null,
+					replayError,
+				})
+				.where(
+					and(
+						eq(queueFailures.id, failure.id),
+						eq(queueFailures.status, "replay_claimed"),
+						eq(queueFailures.replayClaimToken, claimToken),
+					),
+				)
+				.returning({ id: queueFailures.id })
+				.catch(() => []);
+			if (released.length > 0) {
+				return {
+					replayed: false,
+					reason:
+						"Webhook replay did not commit its durable handoff; refresh before retrying",
+				};
+			}
+
+			// A lost commit response is resolved by the atomically updated ledger.
+			let current: { status: string } | undefined;
+			try {
+				[current] = await db
+					.select({ status: queueFailures.status })
+					.from(queueFailures)
+					.where(eq(queueFailures.id, failure.id))
+					.limit(1);
+			} catch {
+				current = undefined;
+			}
+			if (current?.status === "replayed") {
+				return { replayed: true };
+			}
+			return {
+				replayed: false,
+				outcomeUnknown: true,
+				reason:
+					"Webhook replay state could not be confirmed; wait for claim reconciliation before another attempt",
+			};
+		}
+	}
+
+	let queueSendMayHaveOccurred = false;
 	try {
 		// Reset operation projections only after the replay claim is durable.
-		if (queueName === "relayapi-email" && typeof payload.id === "string") {
+		if (queueClass === "email" && typeof payload.id === "string") {
 			const reset = await db
 				.update(emailDeliveries)
 				.set({
 					status: "pending",
+					leaseExpiresAt: null,
 					requestMayHaveBeenSentAt: null,
 					providerMessageId: null,
 					error: null,
 					completedAt: null,
+					nextAttemptAt: new Date(),
+					nextDispatchAt: new Date(),
+					dispatchLeaseExpiresAt: null,
 				})
 				.where(
 					and(
@@ -260,42 +410,6 @@ export async function replayQueueFailure(
 				.returning({ id: emailDeliveries.id });
 			if (reset.length === 0) {
 				throw new Error("Email changed state before replay reset");
-			}
-		}
-		if (
-			queueName === "relayapi-customer-webhooks" &&
-			typeof payload.delivery_id === "string"
-		) {
-			const now = new Date();
-			const reset = await db
-				.update(webhookDeliveries)
-				.set({
-					status: "pending",
-					attempts: 0,
-					leaseExpiresAt: null,
-					claimedAt: null,
-					requestMayHaveBeenSentAt: null,
-					completedAt: null,
-					statusCode: null,
-					error: null,
-					nextAttemptAt: now,
-					dispatchLeaseId: null,
-					dispatchLeaseExpiresAt: null,
-					nextDispatchAt: now,
-					lastEnqueuedAt: null,
-					dispatchAttempts: 0,
-					updatedAt: now,
-				})
-				.where(
-					and(
-						eq(webhookDeliveries.id, payload.delivery_id),
-						eq(webhookDeliveries.organizationId, organizationId),
-						inArray(webhookDeliveries.status, ["pending", "failed"]),
-					),
-				)
-				.returning({ id: webhookDeliveries.id });
-			if (reset.length === 0) {
-				throw new Error("Webhook delivery changed state before replay reset");
 			}
 		}
 		if (rawReceiptId) {
@@ -317,14 +431,11 @@ export async function replayQueueFailure(
 			}
 		}
 
-		// Customer deliveries use their DB outbox/reconciler. Resetting the durable
-		// row above is the replay handoff; a second direct Queue send would race it.
-		if (queueName !== "relayapi-customer-webhooks") {
-			const replayPayload = paidOperationId
-				? { ...payload, operation_id: paidOperationId }
-				: payload;
-			await queue.send(replayPayload);
-		}
+		const replayPayload = paidOperationId
+			? { ...payload, operation_id: paidOperationId }
+			: payload;
+		queueSendMayHaveOccurred = true;
+		await queue.send(replayPayload);
 		const resolved = await db
 			.update(queueFailures)
 			.set({
@@ -343,18 +454,43 @@ export async function replayQueueFailure(
 		if (resolved.length === 0) {
 			console.error("[Queue replay] send succeeded but claim fence was lost", {
 				failureId: failure.id,
-				queueName,
+				queueName: candidate.queueName,
+				queueClass,
 			});
 		}
 		return { replayed: true };
 	} catch (error) {
+		const replayError = error instanceof Error ? error.message : String(error);
+		if (!queueSendMayHaveOccurred) {
+			await db
+				.update(queueFailures)
+				.set({
+					status: "unresolved",
+					replayClaimToken: null,
+					replayClaimExpiresAt: null,
+					replayError,
+				})
+				.where(
+					and(
+						eq(queueFailures.id, failure.id),
+						eq(queueFailures.status, "replay_claimed"),
+						eq(queueFailures.replayClaimToken, claimToken),
+					),
+				);
+			return {
+				replayed: false,
+				reason:
+					"Replay stopped before the Queue send boundary; refresh before retrying",
+			};
+		}
+
 		// Queue send errors are ambiguous. Never reopen the claim automatically:
 		// doing so could duplicate a send that reached Cloudflare before the error.
 		await db
 			.update(queueFailures)
 			.set({
 				status: "replay_unknown",
-				replayError: error instanceof Error ? error.message : String(error),
+				replayError,
 				replayClaimExpiresAt: null,
 			})
 			.where(
@@ -366,13 +502,17 @@ export async function replayQueueFailure(
 			);
 		return {
 			replayed: false,
+			outcomeUnknown: true,
 			reason:
 				"Replay send outcome is unknown; reconcile before any further attempt",
 		};
 	}
 }
 
-/** Crash reconciliation: an expired claim is ambiguous, never auto-replayed. */
+/**
+ * Crash reconciliation distinguishes the atomic customer-webhook DB handoff
+ * from paths that may have crossed a Cloudflare Queue send boundary.
+ */
 export async function reconcileQueueReplayClaims(
 	env: Env,
 	requestedLimit = 100,
@@ -381,7 +521,7 @@ export async function reconcileQueueReplayClaims(
 	const limit = Math.max(1, Math.min(requestedLimit, 500));
 	const now = new Date();
 	const expired = await db
-		.select({ id: queueFailures.id })
+		.select({ id: queueFailures.id, queueName: queueFailures.queueName })
 		.from(queueFailures)
 		.where(
 			and(
@@ -392,24 +532,58 @@ export async function reconcileQueueReplayClaims(
 		.orderBy(asc(queueFailures.replayClaimExpiresAt))
 		.limit(limit);
 	if (expired.length === 0) return 0;
-	const updated = await db
-		.update(queueFailures)
-		.set({
-			status: "replay_unknown",
-			replayError:
-				"Replay worker ended before the Queue send could be confirmed",
-			replayClaimExpiresAt: null,
-		})
-		.where(
-			and(
-				inArray(
-					queueFailures.id,
-					expired.map((row) => row.id),
-				),
-				eq(queueFailures.status, "replay_claimed"),
-				lt(queueFailures.replayClaimExpiresAt, now),
-			),
+	const durableWebhookIds = expired
+		.filter(
+			(row) =>
+				normalizeQueueClass(row.queueName)?.capability === "customer-webhooks",
 		)
-		.returning({ id: queueFailures.id });
-	return updated.length;
+		.map((row) => row.id);
+	const queueSendIds = expired
+		.filter(
+			(row) =>
+				normalizeQueueClass(row.queueName)?.capability !== "customer-webhooks",
+		)
+		.map((row) => row.id);
+
+	let reconciled = 0;
+	if (durableWebhookIds.length > 0) {
+		const reopened = await db
+			.update(queueFailures)
+			.set({
+				status: "unresolved",
+				replayClaimToken: null,
+				replayClaimExpiresAt: null,
+				replayError:
+					"Replay worker ended before the atomic webhook handoff committed; safe to inspect and retry",
+			})
+			.where(
+				and(
+					inArray(queueFailures.id, durableWebhookIds),
+					eq(queueFailures.status, "replay_claimed"),
+					lt(queueFailures.replayClaimExpiresAt, now),
+				),
+			)
+			.returning({ id: queueFailures.id });
+		reconciled += reopened.length;
+	}
+	if (queueSendIds.length > 0) {
+		const unknown = await db
+			.update(queueFailures)
+			.set({
+				status: "replay_unknown",
+				replayError:
+					"Replay worker ended before the Queue send could be confirmed",
+				replayClaimExpiresAt: null,
+			})
+			.where(
+				and(
+					inArray(queueFailures.id, queueSendIds),
+					eq(queueFailures.status, "replay_claimed"),
+					lt(queueFailures.replayClaimExpiresAt, now),
+				),
+			)
+			.returning({ id: queueFailures.id });
+		reconciled += unknown.length;
+	}
+	return reconciled;
 }

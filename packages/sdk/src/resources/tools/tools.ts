@@ -69,6 +69,10 @@ export class Tools extends APIResource {
     return this._client.post('/v1/tools/youtube/transcript', { body, ...options });
   }
 
+  /**
+   * Poll a durable async tools job. Terminal results remain available for one
+   * hour and tenant ownership is enforced by the API.
+   */
   getJobStatus(jobID: string, options?: RequestOptions): APIPromise<ToolsJobStatusResponse> {
     return this._client.get(path`/v1/tools/jobs/${jobID}`, options);
   }

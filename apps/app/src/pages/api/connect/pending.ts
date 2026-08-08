@@ -1,16 +1,18 @@
 import type { APIRoute } from "astro";
-import { requireClient, handleSdkError } from "@/lib/api-utils";
+import { handleSdkError, requireSessionBoundClient } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
-  const client = await requireClient(ctx);
-  if (client instanceof Response) return client;
-  try {
-    const url = new URL(ctx.request.url);
-    const data = await client.connect.fetchPendingData({
-      token: url.searchParams.get("token") || "",
-    });
-    return Response.json(data);
-  } catch (e) {
-    return handleSdkError(e);
-  }
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) return boundClient;
+	const { client, requestOptions } = boundClient;
+	try {
+		const url = new URL(ctx.request.url);
+		const data = await client.connect.fetchPendingData(
+			{ token: url.searchParams.get("token") || "" },
+			requestOptions,
+		);
+		return Response.json(data);
+	} catch (e) {
+		return handleSdkError(e);
+	}
 };

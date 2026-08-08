@@ -78,7 +78,11 @@ describe("remote dashboard development mode", () => {
 			mock(async () => {
 				return Response.json(
 					{
-						user: { id: "user_1", email: "developer@example.com" },
+						user: {
+							id: "user_1",
+							email: "developer@example.com",
+							credentialVersion: "legacy-v1",
+						},
 						session: { id: "session_1", userId: "user_1" },
 						organization: { id: "org_1", name: "Development" },
 						organizationMembershipRole: "owner",

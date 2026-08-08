@@ -16,6 +16,36 @@ import { VERSION } from './version';
 import * as Errors from './core/error';
 import * as Uploads from './core/uploads';
 import * as API from './resources/index';
+import {
+  Admin,
+  AdminOrganization,
+  AdminOrganizationListParams,
+  AdminOrganizationListResponse,
+  AdminOrganizationUpdateParams,
+  AdminSubscription,
+  AdminSubscriptionListResponse,
+  AdminSubscriptionUpdateParams,
+  AdminMutationResponse,
+  AdminErasureHold,
+  AdminErasureHoldListParams,
+  AdminErasureHoldListResponse,
+  AdminErasureHoldCreateParams,
+  AdminErasureHoldReleaseParams,
+} from './resources/admin';
+import {
+  Privacy,
+  PrivacyListActiveErasureHoldsParams,
+  ErasureHoldSummary,
+  ErasureHoldSummaryListResponse,
+} from './resources/privacy';
+import {
+  Billing,
+  BillingSubscription,
+  BillingInvoice,
+  BillingStatusResponse,
+  BillingURLResponse,
+  BillingSyncResponse,
+} from './resources/billing';
 import { APIPromise } from './core/api-promise';
 import {
   AutoPostRules,
@@ -158,6 +188,27 @@ import {
   SegmentFilterPredicate,
 } from './resources/segments';
 import {
+  SubscriptionLists,
+  SubscriptionListMembers,
+  SubscriptionList,
+  SubscriptionListChannel,
+  SubscriptionListCreateParams,
+  SubscriptionListUpdateParams,
+  SubscriptionListListParams,
+  SubscriptionListListResponse,
+  SubscriptionListMember,
+  SubscriptionListMemberStatus,
+  SubscriptionListMemberSource,
+  SubscriptionListMemberAddParams,
+  SubscriptionListMemberListParams,
+  SubscriptionListMemberListResponse,
+} from './resources/subscription-lists';
+import {
+  Byos,
+  ByosConfigParams,
+  ByosConfigResponse,
+} from './resources/byos';
+import {
   AiKnowledge,
   AiKnowledgeDocuments,
   KnowledgeBaseCreateParams,
@@ -169,15 +220,55 @@ import {
   KnowledgeDocumentListParams,
   KnowledgeDocumentResponse,
   KnowledgeDocumentListResponse,
+  KnowledgeDocumentStatus,
+  KnowledgeSearchParams,
+  KnowledgeSearchResult,
+  KnowledgeSearchResponse,
 } from './resources/ai-knowledge';
 import {
+  AiAgents,
+  AiAgentGuardrails,
+  AiAgentHandoff,
+  AiAgentCreateParams,
+  AiAgentUpdateParams,
+  AiAgentListParams,
+  AiAgentResponse,
+  AiAgentListResponse,
+  AiAgentTurn,
+  AiAgentRespondParams,
+  AiAgentHandoffReason,
+  AiAgentRespondResponse,
+} from './resources/ai-agents';
+import {
   RefUrls,
+  RefUrlDestination,
   RefUrlCreateParams,
   RefUrlUpdateParams,
   RefUrlListParams,
+  RefUrlClickParams,
   RefUrlResponse,
   RefUrlListResponse,
 } from './resources/ref-urls';
+import {
+  QrCodes,
+  QrCodeCreateParams,
+  QrCodeUpdateParams,
+  QrCodeListParams,
+  QrCodeResponse,
+  QrCodeListResponse,
+} from './resources/qr-codes';
+import {
+  LandingPages,
+  LandingPageTheme,
+  LandingPageFormField,
+  LandingPageBlock,
+  LandingPageConfig,
+  LandingPageCreateParams,
+  LandingPageUpdateParams,
+  LandingPageListParams,
+  LandingPageResponse,
+  LandingPageListResponse,
+} from './resources/landing-pages';
 import {
   APIKeyCreateParams,
   APIKeyCreateResponse,
@@ -190,8 +281,15 @@ import {
   InviteTokenCreateResponse,
   InviteTokenListParams,
   InviteTokenListResponse,
+  InviteTokenRedeemParams,
+  InviteTokenRedeemResponse,
   InviteTokens,
 } from './resources/invite-tokens';
+import {
+  EmailIntents,
+  OnDemandPlatformRequest,
+  StagedEmailResponse,
+} from './resources/email-intents';
 import { ConnectionListLogsParams, ConnectionListLogsResponse, Connections } from './resources/connections';
 import {
   Contacts,
@@ -264,6 +362,7 @@ import {
   IdeaResponse,
   IdeaListResponse,
   IdeaConvertResponse,
+  IdeaActorResponse,
   IdeaCommentResponse,
   IdeaCommentListResponse,
   IdeaActivityResponse,
@@ -404,6 +503,11 @@ import {
   PostUpdateResponse,
   Posts,
 } from './resources/posts/posts';
+import {
+  PostTags,
+  PostTagListParams,
+  PostTagListResponse,
+} from './resources/posts/tags';
 import {
   Queue,
   QueueGetNextSlotResponse,
@@ -1179,6 +1283,9 @@ export class Relay {
   static toFile = Uploads.toFile;
 
   ads: API.Ads = new API.Ads(this);
+  admin: API.Admin = new API.Admin(this);
+  privacy: API.Privacy = new API.Privacy(this);
+  billing: API.Billing = new API.Billing(this);
   autoPostRules: API.AutoPostRules = new API.AutoPostRules(this);
   broadcasts: API.Broadcasts = new API.Broadcasts(this);
   automations: API.Automations = new API.Automations(this);
@@ -1186,8 +1293,13 @@ export class Relay {
   automationBindings: API.AutomationBindings = new API.AutomationBindings(this);
   automationRuns: API.AutomationRuns = new API.AutomationRuns(this);
   segments: API.Segments = new API.Segments(this);
+  subscriptionLists: API.SubscriptionLists = new API.SubscriptionLists(this);
+  byos: API.Byos = new API.Byos(this);
+  aiAgents: API.AiAgents = new API.AiAgents(this);
   aiKnowledge: API.AiKnowledge = new API.AiKnowledge(this);
   refUrls: API.RefUrls = new API.RefUrls(this);
+  qrCodes: API.QrCodes = new API.QrCodes(this);
+  landingPages: API.LandingPages = new API.LandingPages(this);
   shortLinks: API.ShortLinks = new API.ShortLinks(this);
   contentTemplates: API.ContentTemplates = new API.ContentTemplates(this);
   customFields: API.CustomFields = new API.CustomFields(this);
@@ -1201,6 +1313,7 @@ export class Relay {
   webhooks: API.Webhooks = new API.Webhooks(this);
   apiKeys: API.APIKeys = new API.APIKeys(this);
   inviteTokens: API.InviteTokens = new API.InviteTokens(this);
+  emailIntents: API.EmailIntents = new API.EmailIntents(this);
   streaks: API.Streaks = new API.Streaks(this);
   usage: API.Usage = new API.Usage(this);
   orgSettings: API.OrgSettings = new API.OrgSettings(this);
@@ -1222,6 +1335,9 @@ export class Relay {
 }
 
 Relay.Ads = Ads;
+Relay.Admin = Admin;
+Relay.Privacy = Privacy;
+Relay.Billing = Billing;
 Relay.AutoPostRules = AutoPostRules;
 Relay.Broadcasts = Broadcasts;
 Relay.Automations = Automations;
@@ -1230,8 +1346,13 @@ Relay.AutomationBindings = AutomationBindings;
 Relay.AutomationRuns = AutomationRuns;
 Relay.ContactAutomationControls = ContactAutomationControls;
 Relay.Segments = Segments;
+Relay.SubscriptionLists = SubscriptionLists;
+Relay.Byos = Byos;
+Relay.AiAgents = AiAgents;
 Relay.AiKnowledge = AiKnowledge;
 Relay.RefUrls = RefUrls;
+Relay.QrCodes = QrCodes;
+Relay.LandingPages = LandingPages;
 Relay.ContentTemplates = ContentTemplates;
 Relay.Tags = Tags;
 Relay.IdeaGroups = IdeaGroups;
@@ -1243,6 +1364,7 @@ Relay.Media = Media;
 Relay.Webhooks = Webhooks;
 Relay.APIKeys = APIKeys;
 Relay.InviteTokens = InviteTokens;
+Relay.EmailIntents = EmailIntents;
 Relay.Streaks = Streaks;
 Relay.Usage = Usage;
 Relay.Organizations = Organizations;
@@ -1264,6 +1386,39 @@ Relay.WsTicket = WsTicket;
 
 export declare namespace Relay {
   export type RequestOptions = Opts.RequestOptions;
+
+  export {
+    Admin as Admin,
+    type AdminOrganization as AdminOrganization,
+    type AdminOrganizationListParams as AdminOrganizationListParams,
+    type AdminOrganizationListResponse as AdminOrganizationListResponse,
+    type AdminOrganizationUpdateParams as AdminOrganizationUpdateParams,
+    type AdminSubscription as AdminSubscription,
+    type AdminSubscriptionListResponse as AdminSubscriptionListResponse,
+    type AdminSubscriptionUpdateParams as AdminSubscriptionUpdateParams,
+    type AdminMutationResponse as AdminMutationResponse,
+    type AdminErasureHold as AdminErasureHold,
+    type AdminErasureHoldListParams as AdminErasureHoldListParams,
+    type AdminErasureHoldListResponse as AdminErasureHoldListResponse,
+    type AdminErasureHoldCreateParams as AdminErasureHoldCreateParams,
+    type AdminErasureHoldReleaseParams as AdminErasureHoldReleaseParams,
+  };
+
+  export {
+    Privacy as Privacy,
+    type PrivacyListActiveErasureHoldsParams as PrivacyListActiveErasureHoldsParams,
+    type ErasureHoldSummary as ErasureHoldSummary,
+    type ErasureHoldSummaryListResponse as ErasureHoldSummaryListResponse,
+  };
+
+  export {
+    Billing as Billing,
+    type BillingSubscription as BillingSubscription,
+    type BillingInvoice as BillingInvoice,
+    type BillingStatusResponse as BillingStatusResponse,
+    type BillingURLResponse as BillingURLResponse,
+    type BillingSyncResponse as BillingSyncResponse,
+  };
 
   export {
     Ads as Ads,
@@ -1406,6 +1561,29 @@ export declare namespace Relay {
   };
 
   export {
+    SubscriptionLists as SubscriptionLists,
+    SubscriptionListMembers as SubscriptionListMembers,
+    type SubscriptionList as SubscriptionList,
+    type SubscriptionListChannel as SubscriptionListChannel,
+    type SubscriptionListCreateParams as SubscriptionListCreateParams,
+    type SubscriptionListUpdateParams as SubscriptionListUpdateParams,
+    type SubscriptionListListParams as SubscriptionListListParams,
+    type SubscriptionListListResponse as SubscriptionListListResponse,
+    type SubscriptionListMember as SubscriptionListMember,
+    type SubscriptionListMemberStatus as SubscriptionListMemberStatus,
+    type SubscriptionListMemberSource as SubscriptionListMemberSource,
+    type SubscriptionListMemberAddParams as SubscriptionListMemberAddParams,
+    type SubscriptionListMemberListParams as SubscriptionListMemberListParams,
+    type SubscriptionListMemberListResponse as SubscriptionListMemberListResponse,
+  };
+
+  export {
+    Byos as Byos,
+    type ByosConfigParams as ByosConfigParams,
+    type ByosConfigResponse as ByosConfigResponse,
+  };
+
+  export {
     AiKnowledge as AiKnowledge,
     AiKnowledgeDocuments as AiKnowledgeDocuments,
     type KnowledgeBaseCreateParams as KnowledgeBaseCreateParams,
@@ -1417,15 +1595,58 @@ export declare namespace Relay {
     type KnowledgeDocumentListParams as KnowledgeDocumentListParams,
     type KnowledgeDocumentResponse as KnowledgeDocumentResponse,
     type KnowledgeDocumentListResponse as KnowledgeDocumentListResponse,
+    type KnowledgeDocumentStatus as KnowledgeDocumentStatus,
+    type KnowledgeSearchParams as KnowledgeSearchParams,
+    type KnowledgeSearchResult as KnowledgeSearchResult,
+    type KnowledgeSearchResponse as KnowledgeSearchResponse,
+  };
+
+  export {
+    AiAgents as AiAgents,
+    type AiAgentGuardrails as AiAgentGuardrails,
+    type AiAgentHandoff as AiAgentHandoff,
+    type AiAgentCreateParams as AiAgentCreateParams,
+    type AiAgentUpdateParams as AiAgentUpdateParams,
+    type AiAgentListParams as AiAgentListParams,
+    type AiAgentResponse as AiAgentResponse,
+    type AiAgentListResponse as AiAgentListResponse,
+    type AiAgentTurn as AiAgentTurn,
+    type AiAgentRespondParams as AiAgentRespondParams,
+    type AiAgentHandoffReason as AiAgentHandoffReason,
+    type AiAgentRespondResponse as AiAgentRespondResponse,
   };
 
   export {
     RefUrls as RefUrls,
+    type RefUrlDestination as RefUrlDestination,
     type RefUrlCreateParams as RefUrlCreateParams,
     type RefUrlUpdateParams as RefUrlUpdateParams,
     type RefUrlListParams as RefUrlListParams,
+    type RefUrlClickParams as RefUrlClickParams,
     type RefUrlResponse as RefUrlResponse,
     type RefUrlListResponse as RefUrlListResponse,
+  };
+
+  export {
+    QrCodes as QrCodes,
+    type QrCodeCreateParams as QrCodeCreateParams,
+    type QrCodeUpdateParams as QrCodeUpdateParams,
+    type QrCodeListParams as QrCodeListParams,
+    type QrCodeResponse as QrCodeResponse,
+    type QrCodeListResponse as QrCodeListResponse,
+  };
+
+  export {
+    LandingPages as LandingPages,
+    type LandingPageTheme as LandingPageTheme,
+    type LandingPageFormField as LandingPageFormField,
+    type LandingPageBlock as LandingPageBlock,
+    type LandingPageConfig as LandingPageConfig,
+    type LandingPageCreateParams as LandingPageCreateParams,
+    type LandingPageUpdateParams as LandingPageUpdateParams,
+    type LandingPageListParams as LandingPageListParams,
+    type LandingPageResponse as LandingPageResponse,
+    type LandingPageListResponse as LandingPageListResponse,
   };
 
   export {
@@ -1477,6 +1698,7 @@ export declare namespace Relay {
     type IdeaResponse as IdeaResponse,
     type IdeaListResponse as IdeaListResponse,
     type IdeaConvertResponse as IdeaConvertResponse,
+    type IdeaActorResponse as IdeaActorResponse,
     type IdeaCommentResponse as IdeaCommentResponse,
     type IdeaCommentListResponse as IdeaCommentListResponse,
     type IdeaActivityResponse as IdeaActivityResponse,
@@ -1495,6 +1717,7 @@ export declare namespace Relay {
 
   export {
     Posts as Posts,
+    PostTags as PostTags,
     type PostTargetPlatform as PostTargetPlatform,
     type PostTargetStatus as PostTargetStatus,
     type PostMetrics as PostMetrics,
@@ -1511,6 +1734,8 @@ export declare namespace Relay {
     type PostListParams as PostListParams,
     type PostBulkCreateParams as PostBulkCreateParams,
     type PostReconcileTargetParams as PostReconcileTargetParams,
+    type PostTagListParams as PostTagListParams,
+    type PostTagListResponse as PostTagListResponse,
   };
 
   export {
@@ -1561,8 +1786,16 @@ export declare namespace Relay {
     InviteTokens as InviteTokens,
     type InviteTokenCreateResponse as InviteTokenCreateResponse,
     type InviteTokenListResponse as InviteTokenListResponse,
+    type InviteTokenRedeemResponse as InviteTokenRedeemResponse,
     type InviteTokenCreateParams as InviteTokenCreateParams,
     type InviteTokenListParams as InviteTokenListParams,
+    type InviteTokenRedeemParams as InviteTokenRedeemParams,
+  };
+
+  export {
+    EmailIntents as EmailIntents,
+    type StagedEmailResponse as StagedEmailResponse,
+    type OnDemandPlatformRequest as OnDemandPlatformRequest,
   };
 
   export { Streaks as Streaks, type StreakRetrieveResponse as StreakRetrieveResponse };

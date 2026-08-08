@@ -66,9 +66,9 @@ async function requestWithRetry(fn, maxRetries = 3) {
 
 ```bash
 # Test connectivity
-curl -v https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openai/models \
-  -H "Authorization: Bearer $OPENAI_KEY" \
-  -H "cf-aig-authorization: Bearer $CF_TOKEN"
+curl -sS -D - https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openai/models \
+  --header @/secure/bearer-auth-header \
+  --header @/secure/ai-gateway-auth-header
 ```
 
 ```typescript

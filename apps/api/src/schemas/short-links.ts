@@ -41,17 +41,10 @@ export const ShortLinkTestResponse = z.object({
 	short_url: z
 		.string()
 		.nullable()
-		.describe("The shortened test URL (if successful)"),
-	error: z.string().nullable().describe("Error message (if failed)"),
-});
-
-export const ShortLinkTestQuery = z.object({
-	workspace_id: z
-		.string()
-		.optional()
 		.describe(
-			"Workspace for the test allocation. Omit for organization scope when workspace IDs are optional.",
+			"Always null: connection tests use a non-mutating provider probe",
 		),
+	error: z.string().nullable().describe("Error message (if failed)"),
 });
 
 // --- Short link ---
@@ -63,7 +56,13 @@ export const ShortLinkResponse = z.object({
 		.nullable()
 		.describe("Workspace ID, or null for organization scope"),
 	original_url: z.string().describe("Original URL"),
-	short_url: z.string().describe("Shortened URL"),
+	short_url: z
+		.string()
+		.nullable()
+		.describe("Shortened URL once creation is active"),
+	status: z
+		.enum(["pending", "active", "manual_review"])
+		.describe("Durable provider-creation lifecycle"),
 	post_id: z.string().nullable().describe("Associated post ID"),
 	click_count: z.number().describe("Cached click count"),
 	created_at: z.string().datetime(),

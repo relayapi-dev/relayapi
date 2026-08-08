@@ -44,10 +44,8 @@ client := cloudflare.NewClient(
 **Create token**: Dashboard → My Profile → API Tokens → Create Token
 
 ```bash
-export CLOUDFLARE_API_TOKEN='your-token-here'
-
 curl "https://api.cloudflare.com/client/v4/zones" \
-  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+  --header @/secure/bearer-auth-header
 ```
 
 **Token scopes**: Always use minimal permissions (zone-specific, time-limited).
@@ -56,11 +54,12 @@ curl "https://api.cloudflare.com/client/v4/zones" \
 
 ```bash
 curl "https://api.cloudflare.com/client/v4/zones" \
-  --header "X-Auth-Email: user@example.com" \
-  --header "X-Auth-Key: $CLOUDFLARE_API_KEY"
+  --header @/secure/cloudflare-global-auth-headers
 ```
 
-**Not recommended:** Full account access, cannot scope permissions.
+The header file must be provisioned directly by a secret manager and contain the
+`X-Auth-Email` and `X-Auth-Key` header lines. **Not recommended:** global keys
+have full account access and cannot be scoped.
 
 ## Auto-Pagination
 

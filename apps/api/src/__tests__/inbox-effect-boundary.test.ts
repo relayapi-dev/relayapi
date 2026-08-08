@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { chunkInboxReplayEntries } from "../services/inbox-effect-reconciler";
+import { readFileSync } from "node:fs";
 import { runInboxEffectOnce } from "../services/inbox-event-processor";
 
 function effectDb() {
@@ -43,31 +43,13 @@ const replayPayload = {
 };
 
 describe("inbox effect boundary semantics", () => {
-	it("splits byte-heavy replay batches below the Queue aggregate limit", () => {
-		const entries = Array.from({ length: 100 }, (_, index) => ({
-			id: index,
-			bytes: 4 * 1024,
-		}));
-
-		const { chunks, oversized } = chunkInboxReplayEntries(entries);
-
-		expect(oversized).toHaveLength(0);
-		expect(chunks.length).toBeGreaterThan(1);
-		for (const chunk of chunks) {
-			expect(chunk.length).toBeLessThanOrEqual(100);
-			expect(
-				chunk.reduce((total, entry) => total + entry.bytes, 0),
-			).toBeLessThanOrEqual(240 * 1024);
-		}
-	});
-
-	it("separates a replay payload that cannot fit in one Queue message", () => {
-		const { chunks, oversized } = chunkInboxReplayEntries([
-			{ id: "too-large", bytes: 121 * 1024 },
-		]);
-
-		expect(chunks).toEqual([]);
-		expect(oversized).toEqual([{ id: "too-large", bytes: 121 * 1024 }]);
+	it("replays persisted payloads directly instead of copying them into Queue", () => {
+		const source = readFileSync(
+			new URL("../services/inbox-effect-reconciler.ts", import.meta.url),
+			"utf8",
+		);
+		expect(source).toContain("await processInboxEvent(entry.body, env, db)");
+		expect(source).not.toContain("env.INBOX_QUEUE.sendBatch");
 	});
 
 	it("retries customer-webhook outbox failures without marking an external outcome unknown", async () => {

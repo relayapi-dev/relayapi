@@ -4,7 +4,18 @@ import { createRelayApiProvider } from "./relayapi";
 import { shortIoProvider } from "./short-io";
 import type { ShortLinkProvider, ShortLinkProviderType } from "./types";
 
-export type { ShortLinkProvider, ShortLinkProviderType };
+export type {
+	BitlyProviderRef,
+	DubProviderRef,
+	ProviderAnalyticsTarget,
+	ProviderCleanupOutcome,
+	ProviderCreateResult,
+	ProviderRef,
+	RelayApiProviderRef,
+	ShortIoProviderRef,
+	ShortLinkProvider,
+	ShortLinkProviderType,
+} from "./types";
 export { createRelayApiProvider };
 
 const thirdPartyProviders: Record<string, ShortLinkProvider> = {

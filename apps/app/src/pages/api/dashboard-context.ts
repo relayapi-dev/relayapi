@@ -1,5 +1,6 @@
 import {
 	invitation,
+	LEGACY_CREDENTIAL_VERSION,
 	member,
 	organization as organizationTable,
 } from "@relayapi/db";
@@ -73,6 +74,8 @@ export const GET: APIRoute = async (context) => {
 				email: user.email,
 				image: user.image ?? null,
 				role: user.role ?? null,
+				credentialVersion:
+					user.credentialVersion ?? LEGACY_CREDENTIAL_VERSION,
 			},
 			session: {
 				id: session.id,

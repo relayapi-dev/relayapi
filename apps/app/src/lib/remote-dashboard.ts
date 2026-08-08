@@ -4,6 +4,7 @@ const REMOTE_CONTEXT_PATH = "/api/dashboard-context";
 type RemoteUser = Record<string, unknown> & {
 	id: string;
 	email: string;
+	credentialVersion: string;
 };
 
 type RemoteSession = Record<string, unknown> & {
@@ -39,6 +40,7 @@ function isRemoteDashboardContext(
 	if (!isRecord(value)) return false;
 	if (!isRecord(value.user) || typeof value.user.id !== "string") return false;
 	if (typeof value.user.email !== "string") return false;
+	if (typeof value.user.credentialVersion !== "string") return false;
 	if (!isRecord(value.session) || typeof value.session.id !== "string") {
 		return false;
 	}

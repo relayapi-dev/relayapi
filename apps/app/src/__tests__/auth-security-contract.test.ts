@@ -51,13 +51,15 @@ describe("production authentication security contract", () => {
 			/sendAccountEmail:\s*!selfHosted \|\| selfHostedEmailEnabled\s*\? createAccountEmailSender\(cfEnv\)\s*:\s*undefined/,
 		);
 		expect(middlewareSource).toMatch(
-			/sendInvitationEmail:\s*!selfHosted \|\| selfHostedEmailEnabled\s*\? createInvitationEmailSender\(cfEnv, publicAppOrigin\)\s*:\s*undefined/,
+			/sendInvitationEmail:\s*!selfHosted \|\| selfHostedEmailEnabled\s*\? createInvitationEmailSender\(cfEnv\)\s*:\s*undefined/,
 		);
 		expect(authSource).toContain("sendResetPassword:");
 		expect(authSource).toContain("revokeSessionsOnPasswordReset: true");
 		expect(authSource).toContain("sendVerificationEmail:");
 		expect(authSource).toContain("sendDeleteAccountVerification:");
-		expect(middlewareSource).toContain("await send();");
+		expect(middlewareSource).toContain(
+			"await createEmailIntentClient(cfEnv.EMAIL_INTENTS).stage({",
+		);
 		expect(middlewareSource).not.toContain("waitUntil(delivery)");
 	});
 
@@ -79,7 +81,7 @@ describe("production authentication security contract", () => {
 
 	it("serializes the actual owner delete or demotion in PostgreSQL", () => {
 		const migration = readRepoSource(
-			"packages/db/drizzle/0005_atomic_identity_deletion.sql",
+			"packages/db/scripts/render-auth-identity-invariant-sql.ts",
 		);
 
 		expect(migration).toContain("pg_advisory_xact_lock(hashtext(");
@@ -99,15 +101,12 @@ describe("production authentication security contract", () => {
 		expect(migration).toContain("UPDATE auth.apikey");
 		expect(migration).toContain("UPDATE auth.session");
 		expect(migration).toContain(
-			'CREATE CONSTRAINT TRIGGER "enforce_active_organization_owner_at_commit"',
+			"CREATE CONSTRAINT TRIGGER ${identifier(activeOwner.triggerName)}",
 		);
+		expect(
+			readRepoSource("packages/db/src/provisioning-contracts.ts"),
+		).toContain("enforce_active_organization_owner_at_commit");
 		expect(migration).toContain("DEFERRABLE INITIALLY DEFERRED");
-		expect(migration).toContain(
-			"identity migration preflight: active ownerless organization exists",
-		);
-		expect(migration).toContain(
-			"identity migration preflight: orphan API key reference exists",
-		);
 	});
 
 	it("revokes member credentials only after a successful removal", () => {
@@ -142,17 +141,35 @@ describe("production authentication security contract", () => {
 		);
 	});
 
-	it("bypasses cached sessions for privileged pages and admin API actions", () => {
+	it("bypasses cached sessions for privileged pages and every internal API action", () => {
 		const middlewareSource = readRepoSource("apps/app/src/middleware/index.ts");
 		const authSource = readRepoSource("packages/auth/src/index.ts");
 
 		expect(middlewareSource).toContain('url.pathname.startsWith("/app/admin")');
-		expect(middlewareSource).toContain('url.pathname.startsWith("/api/admin")');
+		expect(middlewareSource).toContain('url.pathname.startsWith("/api/")');
+		expect(middlewareSource).toContain(
+			'!url.pathname.startsWith("/api/auth/")',
+		);
 		expect(middlewareSource).toContain(
 			"disableCookieCache: requiresAuthoritativeSession(context.url)",
 		);
 		expect(authSource).toContain("getAuthoritativeSessionFromCtx(context)");
 		expect(authSource).toContain('roles.includes("admin")');
+	});
+
+	it("treats signed session cookies as a cache bound to the live user generation", () => {
+		const middlewareSource = readRepoSource("apps/app/src/middleware/index.ts");
+		const banCleanupSource = readRepoSource(
+			"apps/app/src/lib/dashboard-user-ban.ts",
+		);
+
+		expect(middlewareSource).toContain("resolvedFromCookieCache");
+		expect(middlewareSource).toContain("authUser.credentialVersion");
+		expect(middlewareSource).toContain("hasActiveBan(liveUser)");
+		expect(middlewareSource).toContain("cachedCredentialVersion");
+		expect(middlewareSource).toContain("afterUserBanned: ({ userId })");
+		expect(banCleanupSource).toContain("enabled: false");
+		expect(banCleanupSource).toContain("attributable_service_key_ids");
 	});
 
 	it("keeps framework disclosure off and ships edge security headers", () => {

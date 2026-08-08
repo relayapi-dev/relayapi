@@ -91,7 +91,7 @@ Same R2 API token works. Endpoint: `https://api.cloudflare.com/client/v4/graphql
 
 ```bash
 curl -X POST "https://api.cloudflare.com/client/v4/graphql" \
-  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
   -d '{"query": "query { viewer { accounts(filter: {accountTag: \"'$ACCOUNT_ID'\"}) { pipelinesIngestionAdaptiveGroups(filter: {pipelineId: \"PIPELINE-UUID-WITH-DASHES\", datetime_geq: \"2026-03-01T00:00:00Z\"}, limit: 10) { sum { ingestedRecords ingestedBytes } dimensions { datetimeHour } } } } }"}'
 ```
 

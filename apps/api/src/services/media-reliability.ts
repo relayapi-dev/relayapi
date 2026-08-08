@@ -20,11 +20,21 @@ import {
 import { validateStoredMediaObject } from "../lib/media-storage-policy";
 import { purgePresignedViewCache } from "../lib/r2-presign";
 import {
-	generateAndStoreThumbnail,
+	generateAndStoreThumbnailFromStoredObject,
 	type ThumbnailGenerationResult,
+	type ThumbnailStorageTarget,
 	thumbnailKeyFor,
+	thumbnailStorageTarget,
 } from "../lib/thumbnails";
 import type { Env } from "../types";
+import { encryptQueueFailurePayload } from "../queues/failures";
+import {
+	deleteStoredObject,
+	getStoredObject,
+	headStoredObject,
+	storageLocatorForMedia,
+	storageLocatorForThumbnailObject,
+} from "./storage-locator";
 
 export interface MediaEventMessage {
 	account: string;
@@ -97,6 +107,9 @@ export async function retireRejectedMediaUpload(
 				status: "deleting",
 				url: null,
 				thumbnailKey: sql<string>`COALESCE(${media.thumbnailKey}, ${media.storageKey} || '.avif')`,
+				thumbnailStorageProvider: sql<"r2">`COALESCE(${media.thumbnailStorageProvider}, 'r2')`,
+				thumbnailStorageBucketLocator: sql<string>`COALESCE(${media.thumbnailStorageBucketLocator}, ${env.R2_THUMBNAIL_BUCKET_NAME})`,
+				thumbnailStorageRegion: sql<"default" | "eu">`COALESCE(${media.thumbnailStorageRegion}, ${env.R2_THUMBNAIL_BUCKET_JURISDICTION})`,
 				deletionRequestedAt: sql<Date>`COALESCE(${media.deletionRequestedAt}, ${now})`,
 				deletionNextRetryAt: now,
 				deletionLastError: reason,
@@ -144,8 +157,16 @@ export async function processMediaDeletion(
 		.select({
 			id: media.id,
 			organizationId: media.organizationId,
+			storageProvider: media.storageProvider,
+			storageBucketLocator: media.storageBucketLocator,
+			storageRegion: media.storageRegion,
+			storageLocationId: media.storageLocationId,
+			storageCredentialVersion: media.storageCredentialVersion,
 			storageKey: media.storageKey,
 			thumbnailKey: media.thumbnailKey,
+			thumbnailStorageProvider: media.thumbnailStorageProvider,
+			thumbnailStorageBucketLocator: media.thumbnailStorageBucketLocator,
+			thumbnailStorageRegion: media.thumbnailStorageRegion,
 			createdAt: media.createdAt,
 			deletionRequestedAt: media.deletionRequestedAt,
 			originalDeletionConfirmedAt: media.originalDeletionConfirmedAt,
@@ -164,18 +185,16 @@ export async function processMediaDeletion(
 	);
 	const finalSweep = now.getTime() >= retainUntil.getTime();
 
-	const deleteObject = async (bucket: R2Bucket, key: string): Promise<void> => {
-		await bucket.delete(key);
-	};
 	const [originalResult, thumbnailResult] = await Promise.allSettled([
 		row.originalDeletionConfirmedAt && !finalSweep
 			? Promise.resolve()
-			: deleteObject(env.MEDIA_BUCKET, row.storageKey),
+			: deleteStoredObject(db, env, storageLocatorForMedia(row)),
 		row.thumbnailDeletionConfirmedAt && !finalSweep
 			? Promise.resolve()
-			: deleteObject(
-					env.THUMBNAIL_BUCKET,
-					row.thumbnailKey ?? thumbnailKeyFor(row.storageKey),
+			: deleteStoredObject(
+					db,
+					env,
+					storageLocatorForThumbnailObject(row),
 				),
 	]);
 	const originalComplete = originalResult.status === "fulfilled";
@@ -261,6 +280,16 @@ export async function processMediaDeletion(
 		]
 			.filter(Boolean)
 			.join(",");
+		const encryptedPayload = await encryptQueueFailurePayload(
+			env,
+			"media-deletion-reconciler",
+			row.id,
+			{
+				media_id: row.id,
+				operation_id: row.id,
+				organization_id: row.organizationId,
+			},
+		);
 		await db
 			.insert(queueFailures)
 			.values({
@@ -271,11 +300,7 @@ export async function processMediaDeletion(
 				failureKind: "unknown_external_outcome",
 				status: "unresolved",
 				attempts,
-				payload: {
-					media_id: row.id,
-					operation_id: row.id,
-					organization_id: row.organizationId,
-				},
+				...encryptedPayload,
 				error,
 			})
 			.onConflictDoUpdate({
@@ -346,9 +371,19 @@ export async function reconcileMediaUploads(env: Env): Promise<number> {
 	const rows = await db
 		.select({
 			id: media.id,
+			organizationId: media.organizationId,
+			storageProvider: media.storageProvider,
+			storageBucketLocator: media.storageBucketLocator,
+			storageRegion: media.storageRegion,
+			storageLocationId: media.storageLocationId,
+			storageCredentialVersion: media.storageCredentialVersion,
 			storageKey: media.storageKey,
 			status: media.status,
 			mimeType: media.mimeType,
+			thumbnailKey: media.thumbnailKey,
+			thumbnailStorageProvider: media.thumbnailStorageProvider,
+			thumbnailStorageBucketLocator: media.thumbnailStorageBucketLocator,
+			thumbnailStorageRegion: media.thumbnailStorageRegion,
 			thumbnailUrl: media.thumbnailUrl,
 			thumbnailStatus: media.thumbnailStatus,
 			thumbnailAttempts: media.thumbnailAttempts,
@@ -377,9 +412,18 @@ export async function reconcileMediaUploads(env: Env): Promise<number> {
 	let processed = 0;
 	for (const row of rows) {
 		try {
-			const object = await env.MEDIA_BUCKET.head(row.storageKey);
+			const object = await headStoredObject(
+				db,
+				env,
+				storageLocatorForMedia(row),
+			);
 			if (object) {
-				const validation = validateStoredMediaObject(object);
+				const validation = validateStoredMediaObject({
+					size: object.size,
+					httpMetadata: {
+						contentType: object.contentType ?? undefined,
+					},
+				});
 				if (!validation.ok) {
 					await retireRejectedMediaUpload(db, env, row.id);
 					processed++;
@@ -470,13 +514,43 @@ type ThumbnailRow = Pick<
 	typeof media.$inferSelect,
 	| "id"
 	| "storageKey"
+	| "storageBucketLocator"
+	| "storageRegion"
+	| "storageLocationId"
+	| "storageCredentialVersion"
 	| "mimeType"
 	| "thumbnailUrl"
 	| "thumbnailStatus"
 	| "thumbnailAttempts"
 	| "thumbnailNextRetryAt"
 	| "originalDeletedAt"
->;
+> &
+	Partial<
+		Pick<
+			typeof media.$inferSelect,
+			| "organizationId"
+			| "storageProvider"
+			| "thumbnailKey"
+			| "thumbnailStorageProvider"
+			| "thumbnailStorageBucketLocator"
+			| "thumbnailStorageRegion"
+		>
+	>;
+
+function sourceStorageLocatorForThumbnail(row: ThumbnailRow) {
+	if (!row.organizationId) {
+		throw new Error("Thumbnail source is missing its organization locator");
+	}
+	return storageLocatorForMedia({
+		organizationId: row.organizationId,
+		storageProvider: row.storageProvider ?? "r2",
+		storageBucketLocator: row.storageBucketLocator,
+		storageRegion: row.storageRegion,
+		storageLocationId: row.storageLocationId,
+		storageCredentialVersion: row.storageCredentialVersion,
+		storageKey: row.storageKey,
+	});
+}
 
 /** Generate one thumbnail attempt and persist its typed terminal/retry state. */
 export async function processThumbnailForMedia(
@@ -486,9 +560,24 @@ export async function processThumbnailForMedia(
 	now: Date = new Date(),
 ): Promise<ThumbnailGenerationResult> {
 	if (row.thumbnailUrl) {
+		const target: ThumbnailStorageTarget =
+			row.thumbnailStorageProvider === "r2" &&
+			row.thumbnailStorageBucketLocator &&
+			(row.thumbnailStorageRegion === "default" ||
+				row.thumbnailStorageRegion === "eu")
+				? {
+						provider: "r2" as const,
+						bucket: row.thumbnailStorageBucketLocator,
+						region: row.thumbnailStorageRegion,
+					}
+				: thumbnailStorageTarget(env);
 		await db
 			.update(media)
 			.set({
+				thumbnailKey: row.thumbnailKey ?? thumbnailKeyFor(row.storageKey),
+				thumbnailStorageProvider: target.provider,
+				thumbnailStorageBucketLocator: target.bucket,
+				thumbnailStorageRegion: target.region,
 				thumbnailStatus: "generated",
 				thumbnailNextRetryAt: null,
 				thumbnailLastError: null,
@@ -498,8 +587,9 @@ export async function processThumbnailForMedia(
 			);
 		return {
 			status: "generated",
-			thumbnailKey: thumbnailKeyFor(row.storageKey),
+			thumbnailKey: row.thumbnailKey ?? thumbnailKeyFor(row.storageKey),
 			thumbnailUrl: row.thumbnailUrl,
+			storage: target,
 		};
 	}
 
@@ -571,11 +661,31 @@ export async function processThumbnailForMedia(
 		};
 	}
 
-	const result = await generateAndStoreThumbnail(
-		env,
-		row.storageKey,
-		row.mimeType,
-	);
+	const result: ThumbnailGenerationResult = !env.IMAGES
+		? {
+				status: "transient_failure",
+				error: "Cloudflare Images binding is unavailable",
+			}
+		: await (async () => {
+				const source = await getStoredObject(
+					db,
+					env,
+					sourceStorageLocatorForThumbnail(row),
+				);
+				return source
+					? generateAndStoreThumbnailFromStoredObject(
+							env,
+							row.storageKey,
+							row.mimeType,
+							source.body,
+							source.size,
+						)
+					: {
+							status: "source_missing" as const,
+							reason:
+								"Original media object is missing from configured storage",
+						};
+			})();
 	const claimFence = and(
 		eq(media.id, row.id),
 		eq(media.status, "ready"),
@@ -587,6 +697,9 @@ export async function processThumbnailForMedia(
 			.update(media)
 			.set({
 				thumbnailKey: result.thumbnailKey,
+				thumbnailStorageProvider: result.storage.provider,
+				thumbnailStorageBucketLocator: result.storage.bucket,
+				thumbnailStorageRegion: result.storage.region,
 				thumbnailUrl: result.thumbnailUrl,
 				thumbnailStatus: result.status,
 				thumbnailAttempts: attempts,
@@ -671,10 +784,20 @@ async function handleMediaCreated(
 	const [row] = await db
 		.select({
 			id: media.id,
+			organizationId: media.organizationId,
+			storageProvider: media.storageProvider,
+			storageBucketLocator: media.storageBucketLocator,
+			storageRegion: media.storageRegion,
+			storageLocationId: media.storageLocationId,
+			storageCredentialVersion: media.storageCredentialVersion,
 			storageKey: media.storageKey,
 			mimeType: media.mimeType,
 			status: media.status,
 			thumbnailUrl: media.thumbnailUrl,
+			thumbnailKey: media.thumbnailKey,
+			thumbnailStorageProvider: media.thumbnailStorageProvider,
+			thumbnailStorageBucketLocator: media.thumbnailStorageBucketLocator,
+			thumbnailStorageRegion: media.thumbnailStorageRegion,
 			thumbnailStatus: media.thumbnailStatus,
 			thumbnailAttempts: media.thumbnailAttempts,
 			thumbnailNextRetryAt: media.thumbnailNextRetryAt,
@@ -842,6 +965,9 @@ async function handleExplicitDeletion(
 			status: "deleting",
 			url: null,
 			thumbnailKey: sql<string>`COALESCE(${media.thumbnailKey}, ${thumbnailKeyFor(key)})`,
+			thumbnailStorageProvider: sql<"r2">`COALESCE(${media.thumbnailStorageProvider}, 'r2')`,
+			thumbnailStorageBucketLocator: sql<string>`COALESCE(${media.thumbnailStorageBucketLocator}, ${env.R2_THUMBNAIL_BUCKET_NAME})`,
+			thumbnailStorageRegion: sql<"default" | "eu">`COALESCE(${media.thumbnailStorageRegion}, ${env.R2_THUMBNAIL_BUCKET_JURISDICTION})`,
 			deletionRequestedAt: sql<Date>`COALESCE(${media.deletionRequestedAt}, ${now})`,
 			originalDeletionConfirmedAt: now,
 			deletionNextRetryAt: now,

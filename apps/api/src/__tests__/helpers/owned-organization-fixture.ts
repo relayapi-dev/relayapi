@@ -1,7 +1,6 @@
 import {
 	contactConsentEvents,
 	contactConsentStates,
-	contactSuppressions,
 	type Database,
 	ideaGroups,
 	member,
@@ -60,9 +59,6 @@ export async function deleteOwnedFixtureWorkspaces(
 	organizationId: string,
 ): Promise<void> {
 	await db.transaction(async (tx) => {
-		await tx
-			.delete(contactSuppressions)
-			.where(eq(contactSuppressions.organizationId, organizationId));
 		await tx
 			.delete(contactConsentStates)
 			.where(eq(contactConsentStates.organizationId, organizationId));

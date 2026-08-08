@@ -1,11 +1,15 @@
 import { Resend } from "resend";
-import type { EmailQueueMessage, EmailSendResult } from "./types";
+import type {
+	EmailDeliveryEnvelope,
+	EmailQueueMessage,
+	EmailSendResult,
+} from "./types";
 
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_FROM = "RelayAPI <notifications@relayapi.dev>";
 
 export async function processEmailMessage(
-	message: EmailQueueMessage,
+	message: EmailDeliveryEnvelope & Pick<EmailQueueMessage, "id">,
 	resendApiKey: string,
 ): Promise<EmailSendResult> {
 	const resend = new Resend(resendApiKey);

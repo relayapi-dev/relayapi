@@ -8,7 +8,7 @@ AI > AI Gateway > Create Gateway > Configure (auth, caching, rate limiting, logg
 ### API
 ```bash
 curl -X POST https://api.cloudflare.com/client/v4/accounts/{account_id}/ai-gateway/gateways \
-  -H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json" \
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
   -d '{"id":"my-gateway","cache_ttl":3600,"rate_limiting_interval":60,"rate_limiting_limit":100,"collect_logs":true}'
 ```
 
@@ -71,7 +71,7 @@ const client = new OpenAI({
 ```bash
 # List
 curl https://api.cloudflare.com/client/v4/accounts/{account_id}/ai-gateway/gateways \
-  -H "Authorization: Bearer $CF_API_TOKEN"
+  --header @/secure/bearer-auth-header
 
 # Get
 curl .../gateways/{gateway_id}

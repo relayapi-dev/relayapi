@@ -1,5 +1,10 @@
 import type { APIRoute } from "astro";
-import { requireClient, requireParam, handleSdkError } from "@/lib/api-utils";
+import {
+	handleSdkError,
+	requireClient,
+	requireParam,
+	requireSessionBoundClient,
+} from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
 	const client = await requireClient(ctx);
@@ -15,13 +20,17 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 export const PATCH: APIRoute = async (ctx) => {
-	const client = await requireClient(ctx);
-	if (client instanceof Response) return client;
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) return boundClient;
 	const id = requireParam(ctx.params, "id");
 	if (id instanceof Response) return id;
 	try {
 		const body = await ctx.request.json();
-		const data = await client.automationBindings.update(id, body);
+		const data = await boundClient.client.automationBindings.update(
+			id,
+			body,
+			boundClient.requestOptions,
+		);
 		return Response.json(data);
 	} catch (e) {
 		return handleSdkError(e);

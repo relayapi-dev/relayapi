@@ -1,19 +1,41 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { apikey, generateId, inviteTokens, member, workspaces } from "@relayapi/db";
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import {
+	apikey,
+	generateId,
+	inviteTokens,
+	inviteTokenWorkspaces,
+	member,
+	organizationPrincipals,
+	user,
+	workspaces,
+} from "@relayapi/db";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import {
+	currentInviteIssuerCredentialVersion,
+	isCurrentInviteIssuerCredential,
+} from "../lib/invite-issuer-authority";
+import { canAssignOrganizationRole } from "../lib/organization-roles";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
+import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	CreateInviteTokenBody,
 	InviteTokenCreatedResponse,
 	InviteTokenListResponse,
 } from "../schemas/invite";
-import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
-// --- Helpers ---
-
-const ROLE_RANK: Record<string, number> = { member: 0, admin: 1, owner: 2 };
+class InviteIssuerAuthorizationError extends Error {
+	constructor(
+		readonly status: 401 | 403,
+		readonly code: "UNAUTHORIZED" | "FORBIDDEN",
+		message: string,
+	) {
+		super(message);
+		this.name = "InviteIssuerAuthorizationError";
+	}
+}
 
 async function hashToken(token: string): Promise<string> {
 	const encoded = new TextEncoder().encode(token);
@@ -62,10 +84,12 @@ const createInviteToken = createRoute({
 	tags: ["Invite Tokens"],
 	summary: "Create an invite token",
 	description:
-		"Create a single-use invite token with a 7-day expiry. The full token is returned only once — store it securely.",
+		"Create a single-use bearer invitation. Owner invitations expire within 24 hours; admin/member invitations expire within 7 days. The full token is returned only once.",
 	security: [{ Bearer: [] }],
 	request: {
-		body: { content: { "application/json": { schema: CreateInviteTokenBody } } },
+		body: {
+			content: { "application/json": { schema: CreateInviteTokenBody } },
+		},
 	},
 	responses: {
 		201: {
@@ -133,8 +157,16 @@ app.openapi(listInviteTokens, async (c) => {
 	const tokens = await db
 		.select({
 			id: inviteTokens.id,
-			scope: inviteTokens.scope,
-			scopedWorkspaceIds: inviteTokens.scopedWorkspaceIds,
+			scopeMode: inviteTokens.scopeMode,
+			workspaceIds: sql<string[]>`COALESCE(
+				(
+					SELECT jsonb_agg(token_workspace.workspace_id ORDER BY token_workspace.workspace_id)
+					FROM ${inviteTokenWorkspaces} AS token_workspace
+					WHERE token_workspace.organization_id = ${inviteTokens.organizationId}
+						AND token_workspace.invite_token_id = ${inviteTokens.id}
+				),
+				'[]'::jsonb
+			)`,
 			role: inviteTokens.role,
 			used: inviteTokens.used,
 			expiresAt: inviteTokens.expiresAt,
@@ -152,8 +184,8 @@ app.openapi(listInviteTokens, async (c) => {
 		{
 			data: data.map((t) => ({
 				id: t.id,
-				scope: t.scope as "all" | "workspaces",
-				workspace_ids: (t.scopedWorkspaceIds as string[]) ?? null,
+				scope_mode: t.scopeMode,
+				workspace_ids: t.scopeMode === "selected" ? t.workspaceIds : null,
 				role: t.role as "owner" | "admin" | "member",
 				used: t.used,
 				expires_at: t.expiresAt.toISOString(),
@@ -168,115 +200,200 @@ app.openapi(listInviteTokens, async (c) => {
 
 app.openapi(createInviteToken, async (c) => {
 	const orgId = c.get("orgId");
-	const keyId = c.get("keyId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
-
-	// Resolve creator user ID from API key
-	const [key] = await db
-		.select({ referenceId: apikey.referenceId })
-		.from(apikey)
-		.where(eq(apikey.id, keyId))
-		.limit(1);
-
-	const creatorUserId = key?.referenceId;
-	if (!creatorUserId) {
+	const creatorPrincipalId = c.get("principalId");
+	const creatorUserId = c.get("principalUserId");
+	if (c.get("principalType") !== "dashboard_user") {
 		return c.json(
-			{ error: { code: "INVALID_KEY", message: "API key has no associated user" } },
-			400,
-		);
-	}
-
-	// Role escalation prevention
-	const [creatorMember] = await db
-		.select({ role: member.role })
-		.from(member)
-		.where(and(eq(member.userId, creatorUserId), eq(member.organizationId, orgId)))
-		.limit(1);
-
-	if (!creatorMember) {
-		return c.json(
-			{ error: { code: "FORBIDDEN", message: "You are not a member of this organization" } },
-			403,
-		);
-	}
-
-	const creatorRank = ROLE_RANK[creatorMember.role];
-	if (creatorRank === undefined) {
-		return c.json(
-			{ error: { code: "FORBIDDEN", message: "Your organization role is not recognized" } },
-			403,
-		);
-	}
-
-	const requestedRank = ROLE_RANK[body.role] ?? 0;
-	if (requestedRank > creatorRank) {
-		return c.json(
-			{ error: { code: "FORBIDDEN", message: "Cannot create invite with a higher role than your own" } },
-			403,
-		);
-	}
-
-	// Validate workspace IDs belong to the organization
-	if (body.scope === "workspaces") {
-		if (!body.workspace_ids?.length) {
-			return c.json(
-				{ error: { code: "BAD_REQUEST", message: "workspace_ids is required when scope is 'workspaces'" } },
-				400,
-			);
-		}
-	}
-	if (body.scope === "workspaces" && body.workspace_ids) {
-		const existing = await db
-			.select({ id: workspaces.id })
-			.from(workspaces)
-			.where(
-				and(
-					eq(workspaces.organizationId, orgId),
-					inArray(workspaces.id, body.workspace_ids),
-				),
-			);
-		if (existing.length !== body.workspace_ids.length) {
-			return c.json(
-				{
-					error: {
-						code: "INVALID_WORKSPACE",
-						message: "One or more workspace IDs are invalid or do not belong to this organization.",
-					},
+			{
+				error: {
+					code: "FORBIDDEN",
+					message:
+						"Only an authenticated organization member can issue invitations",
 				},
-				400,
-			);
-		}
+			},
+			403,
+		);
+	}
+	if (!creatorUserId) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "UNAUTHORIZED",
+					message: "The invitation issuer is no longer authorized.",
+				},
+			},
+			401,
+		);
 	}
 
 	const rawToken = generateInviteToken();
 	const hashedToken = await hashToken(rawToken);
 	const tokenId = generateId("inv_");
-	const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+	const createdAt = new Date();
+	const expiryHours = body.role === "owner" ? 24 : 7 * 24;
+	const expiresAt = new Date(
+		createdAt.getTime() + expiryHours * 60 * 60 * 1000,
+	);
 
-	await db.insert(inviteTokens).values({
-		id: tokenId,
-		organizationId: orgId,
-		createdBy: creatorUserId,
-		tokenHash: hashedToken,
-		scope: body.scope,
-		scopedWorkspaceIds: body.scope === "workspaces" ? (body.workspace_ids ?? null) : null,
-		role: body.role,
-		expiresAt,
-	});
+	let created: boolean;
+	try {
+		created = await db.transaction(async (tx) => {
+			// This shared lock is the serialization fence against the ban trigger's
+			// user-row update. The same query also prevents the dashboard key,
+			// principal, or membership from changing before the token is inserted.
+			const [issuer] = await tx
+				.select({
+					keyId: apikey.id,
+					keyReferenceId: apikey.referenceId,
+					keyCredentialVersion: apikey.credentialVersion,
+					keyExpiresAt: apikey.expiresAt,
+					principalId: organizationPrincipals.id,
+					principalKind: organizationPrincipals.kind,
+					principalStatus: organizationPrincipals.lifecycleStatus,
+					memberUserId: member.userId,
+					memberRole: member.role,
+					userId: user.id,
+					userBanned: user.banned,
+					userBanExpires: user.banExpires,
+					userCredentialVersion: user.credentialVersion,
+				})
+				.from(apikey)
+				.innerJoin(
+					organizationPrincipals,
+					and(
+						eq(organizationPrincipals.id, apikey.principalId),
+						eq(organizationPrincipals.organizationId, apikey.organizationId),
+					),
+				)
+				.innerJoin(
+					member,
+					and(
+						eq(member.id, organizationPrincipals.memberId),
+						eq(member.organizationId, organizationPrincipals.organizationId),
+					),
+				)
+				.innerJoin(user, eq(user.id, member.userId))
+				.where(
+					and(
+						eq(apikey.id, c.get("keyId")),
+						eq(apikey.organizationId, orgId),
+						eq(apikey.principalId, creatorPrincipalId),
+						eq(apikey.enabled, true),
+					),
+				)
+				.for("share")
+				.limit(1);
+			const now = new Date();
+			if (
+				!issuer ||
+				issuer.keyReferenceId !== creatorUserId ||
+				issuer.principalKind !== "member" ||
+				issuer.principalStatus !== "active" ||
+				issuer.memberUserId !== creatorUserId ||
+				issuer.userId !== creatorUserId ||
+				(issuer.keyExpiresAt !== null && issuer.keyExpiresAt <= now) ||
+				!isCurrentInviteIssuerCredential({
+					issuedCredentialVersion: issuer.keyCredentialVersion,
+					liveCredentialVersion: issuer.userCredentialVersion,
+					banned: issuer.userBanned,
+					banExpires: issuer.userBanExpires,
+					now,
+				})
+			) {
+				throw new InviteIssuerAuthorizationError(
+					401,
+					"UNAUTHORIZED",
+					"The invitation issuer is no longer authorized.",
+				);
+			}
+			if (!canAssignOrganizationRole(issuer.memberRole, body.role)) {
+				throw new InviteIssuerAuthorizationError(
+					403,
+					"FORBIDDEN",
+					"Cannot create an invitation with a higher role than the issuer's current role",
+				);
+			}
 
-	const baseUrl = c.env.API_BASE_URL?.replace("api.", "app.") ?? "https://app.relayapi.dev";
+			if (body.scope_mode === "selected" && body.workspace_ids) {
+				const existing = await tx
+					.select({ id: workspaces.id })
+					.from(workspaces)
+					.where(
+						and(
+							eq(workspaces.organizationId, orgId),
+							eq(workspaces.lifecycleStatus, "active"),
+							inArray(workspaces.id, body.workspace_ids),
+						),
+					)
+					.for("share");
+				if (existing.length !== body.workspace_ids.length) return false;
+			}
+
+			await tx.insert(inviteTokens).values({
+				id: tokenId,
+				organizationId: orgId,
+				createdBy: creatorUserId,
+				createdByPrincipalId: creatorPrincipalId,
+				issuerCredentialVersion: currentInviteIssuerCredentialVersion(
+					issuer.userCredentialVersion,
+				),
+				tokenHash: hashedToken,
+				scopeMode: body.scope_mode,
+				role: body.role,
+				expiresAt,
+				createdAt,
+			});
+			if (body.scope_mode === "selected" && body.workspace_ids) {
+				await tx.insert(inviteTokenWorkspaces).values(
+					body.workspace_ids.map((workspaceId) => ({
+						organizationId: orgId,
+						inviteTokenId: tokenId,
+						workspaceId,
+					})),
+				);
+			}
+			return true;
+		});
+	} catch (error) {
+		if (!(error instanceof InviteIssuerAuthorizationError)) throw error;
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: error.code, message: error.message } },
+			error.status,
+		);
+	}
+	if (!created) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_WORKSPACE",
+					message:
+						"One or more workspace IDs are invalid or do not belong to this organization.",
+				},
+			},
+			400,
+		);
+	}
+
+	const baseUrl =
+		c.env.APP_BASE_URL ??
+		c.env.API_BASE_URL?.replace("api.", "app.") ??
+		"https://app.relayapi.dev";
 
 	return c.json(
 		{
 			id: tokenId,
 			token: rawToken,
 			invite_url: `${baseUrl}/invite/${rawToken}`,
-			scope: body.scope,
-			workspace_ids: body.scope === "workspaces" ? (body.workspace_ids ?? null) : null,
+			scope_mode: body.scope_mode,
+			workspace_ids:
+				body.scope_mode === "selected" ? (body.workspace_ids ?? null) : null,
 			role: body.role,
 			expires_at: expiresAt.toISOString(),
-			created_at: new Date().toISOString(),
+			created_at: createdAt.toISOString(),
 		},
 		201,
 	);

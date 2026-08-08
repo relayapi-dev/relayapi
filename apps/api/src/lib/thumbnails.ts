@@ -73,10 +73,26 @@ export type ThumbnailGenerationResult =
 			status: "generated";
 			thumbnailKey: string;
 			thumbnailUrl: string;
+			storage: ThumbnailStorageTarget;
 	  }
 	| { status: "unsupported"; reason: string }
 	| { status: "source_missing"; reason: string }
 	| { status: "transient_failure"; error: string };
+
+export type ThumbnailStorageTarget = {
+	provider: "r2";
+	bucket: string;
+	region: "default" | "eu";
+};
+
+/** Persist this target beside every thumbnail key; bindings are only routers. */
+export function thumbnailStorageTarget(env: Env): ThumbnailStorageTarget {
+	return {
+		provider: "r2",
+		bucket: env.R2_THUMBNAIL_BUCKET_NAME,
+		region: env.R2_THUMBNAIL_BUCKET_JURISDICTION,
+	};
+}
 
 function transientFailure(error: unknown): ThumbnailGenerationResult {
 	return {
@@ -158,6 +174,7 @@ async function transformAndStoreThumbnail(
 			status: "generated",
 			thumbnailKey,
 			thumbnailUrl: thumbnailUrlFor(storageKey, thumbnailPublicHost(env)),
+			storage: thumbnailStorageTarget(env),
 		};
 	} catch (err) {
 		console.error(`[Thumbnail] Generation failed for ${storageKey}:`, err);
@@ -190,6 +207,23 @@ export async function generateAndStoreThumbnailFromResponse(
 		Number.isSafeInteger(declaredSize) && declaredSize >= 0
 			? declaredSize
 			: undefined,
+	);
+}
+
+/** Generate a durable preview from an object resolved through any storage provider. */
+export async function generateAndStoreThumbnailFromStoredObject(
+	env: Env,
+	storageKey: string,
+	mimeType: string | null | undefined,
+	body: ReadableStream<Uint8Array>,
+	size: number,
+): Promise<ThumbnailGenerationResult> {
+	return transformAndStoreThumbnail(
+		env,
+		storageKey,
+		mimeType,
+		body,
+		size,
 	);
 }
 

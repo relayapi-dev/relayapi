@@ -87,7 +87,14 @@ export const secretGroups: Record<SecretGroupName, SecretGroupSpec> = {
 					"CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE",
 					"ENCRYPTION_KEY",
 				],
-				optional: ["BETTER_AUTH_SECRET", "RELAYAPI_DB_SSH_TARGET"],
+				optional: [
+					"BETTER_AUTH_SECRET",
+					"RELAYAPI_DB_SSH_TARGET",
+					"STRIPE_SECRET_KEY",
+					"STRIPE_PRO_PRICE_ID",
+					"STRIPE_WEBHOOK_SECRET",
+					"STRIPE_PORTAL_CONFIGURATION_ID",
+				],
 				completeGroups: developmentApiGroups,
 				exampleLiteralKeys: ["RELAYAPI_DB_SSH_TARGET"],
 			},
@@ -129,7 +136,11 @@ export const secretGroups: Record<SecretGroupName, SecretGroupSpec> = {
 				vault: "apps/api/.production.secrets.vault",
 				example: "apps/api/.production.secrets.example",
 				required: productionResources.requiredSecrets,
-				optional: ["API_BASE_URL"],
+				optional: [
+					"API_BASE_URL",
+					"OPERATIONS_ALERT_EMAIL",
+					"OPERATIONS_ALERT_WEBHOOK_URL",
+				],
 				completeGroups: productionResources.secretGroups,
 				cloudflareTarget: "api",
 				optionalVault: true,
@@ -139,12 +150,7 @@ export const secretGroups: Record<SecretGroupName, SecretGroupSpec> = {
 				plain: "apps/app/.production.secrets",
 				vault: "apps/app/.production.secrets.vault",
 				example: "apps/app/.production.secrets.example",
-				required: [
-					"BETTER_AUTH_SECRET",
-					"RESEND_API_KEY",
-					"STRIPE_SECRET_KEY",
-					"STRIPE_PRO_PRICE_ID",
-				],
+				required: ["BETTER_AUTH_SECRET", "MAINTENANCE_SMOKE_BYPASS_SHA256"],
 				optional: ["BETTER_AUTH_URL"],
 				completeGroups: [["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]],
 				exampleLiteralKeys: ["BETTER_AUTH_URL"],
@@ -242,6 +248,17 @@ export function validateEncryptionKeyRing(value: string): void {
 			throw new Error(`ENCRYPTION_KEY contains duplicate key id: ${id}`);
 		}
 		ids.add(id);
+	}
+	const activeId = entries[0]?.trim().split("=", 1)[0];
+	if (activeId === "identity") {
+		throw new Error(
+			"ENCRYPTION_KEY identity entry is retained consent material and cannot be active",
+		);
+	}
+	if (!ids.has("identity")) {
+		throw new Error(
+			"ENCRYPTION_KEY must retain an identity=64-hex entry for consent authority",
+		);
 	}
 }
 

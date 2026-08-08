@@ -101,7 +101,6 @@ describe("raw inbound webhook durability", () => {
 			{
 				type: "raw_platform_webhook",
 				receipt_id: "iwe_test",
-				received_at: expect.any(String),
 			},
 		]);
 	});

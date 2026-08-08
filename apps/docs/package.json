@@ -14,6 +14,8 @@
 		"postinstall": "fumadocs-mdx"
 	},
 	"dependencies": {
+		"@fontsource-variable/geist": "catalog:",
+		"@fontsource-variable/geist-mono": "catalog:",
 		"@radix-ui/react-popover": "catalog:",
 		"@tailwindcss/postcss": "catalog:",
 		"class-variance-authority": "catalog:",

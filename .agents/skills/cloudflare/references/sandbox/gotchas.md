@@ -118,13 +118,14 @@ getSandbox(env.Sandbox, 'id', { keepAlive: true });
 ### Sandbox Isolation
 - Each sandbox = isolated container (filesystem, network, processes)
 - Use unique sandbox IDs per tenant for multi-tenant apps
+- Sessions in the same sandbox share its security boundary and must not separate tenants
+- Derive tenant IDs only from verified server-side authentication, never caller headers
 - Sandboxes cannot communicate directly
 
 ### Input Validation
 
 ```typescript
-// ❌ DANGEROUS: Command injection
-const result = await sandbox.exec(`python3 -c "${userCode}"`);
+// ❌ DANGEROUS: Never interpolate userCode into an exec command string.
 
 // ✅ SAFE: Write to file, execute file
 await sandbox.writeFile('/workspace/user_code.py', userCode);
@@ -143,15 +144,18 @@ const result = await sandbox.exec('python3 script.py', {
 ### Secrets Management
 
 ```typescript
-// ❌ NEVER hardcode secrets
-const token = 'ghp_abc123';
+// ❌ NEVER hardcode a Git token or put one in a URL/command string.
 
-// ✅ Use environment secrets
-const token = env.GITHUB_TOKEN;
-
-// Pass to sandbox via exec env
-const result = await sandbox.exec('git clone ...', {
-  env: { GIT_TOKEN: token }
+// ✅ Prefer an authenticated proxy so the sandbox never receives the real secret.
+// If Git needs a credential, issue a short-lived, repository-scoped token and
+// pass it through GIT_ASKPASS. Never embed credentials in a URL or command argv.
+const token = await issueShortLivedGitToken(principal, repository);
+const result = await sandbox.exec('git clone "$GIT_REPOSITORY" /workspace/repo', {
+  env: {
+    GIT_ASKPASS: '/workspace/git-askpass.sh',
+    GIT_JOB_TOKEN: token,
+    GIT_REPOSITORY: repository
+  }
 });
 ```
 

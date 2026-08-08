@@ -20,7 +20,7 @@
 
 ```bash
 curl -X POST '.../browser-rendering/screenshot' \
-  -H "Authorization: Bearer $TOKEN" \
+  --header @/secure/bearer-auth-header \
   -d '{"url":"https://example.com","screenshotOptions":{"fullPage":true}}'
 ```
 

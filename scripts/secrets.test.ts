@@ -24,7 +24,7 @@ describe("secret manifest validation", () => {
 	it("validates the runtime encryption key-ring grammar", () => {
 		expect(() =>
 			validateEncryptionKeyRing(
-				`active=${"11".repeat(32)},old=${"22".repeat(32)}`,
+				`active=${"11".repeat(32)},identity=${"22".repeat(32)},old=${"33".repeat(32)}`,
 			),
 		).not.toThrow();
 		expect(() => validateEncryptionKeyRing("11".repeat(32))).toThrow(
@@ -38,6 +38,14 @@ describe("secret manifest validation", () => {
 				`active=${"11".repeat(32)},active=${"22".repeat(32)}`,
 			),
 		).toThrow(/duplicate key id/);
+		expect(() =>
+			validateEncryptionKeyRing(`active=${"11".repeat(32)}`),
+		).toThrow(/must retain an identity/);
+		expect(() =>
+			validateEncryptionKeyRing(
+				`identity=${"22".repeat(32)},active=${"11".repeat(32)}`,
+			),
+		).toThrow(/cannot be active/);
 	});
 
 	it("rejects placeholders without rejecting ordinary values", () => {
@@ -55,9 +63,7 @@ describe("secret manifest validation", () => {
 		expect(() =>
 			validateTargetValues(spec, {
 				BETTER_AUTH_SECRET: "auth-secret",
-				RESEND_API_KEY: "resend-secret",
-				STRIPE_SECRET_KEY: "stripe-secret",
-				STRIPE_PRO_PRICE_ID: "price_123",
+				MAINTENANCE_SMOKE_BYPASS_SHA256: "a".repeat(64),
 				GOOGLE_CLIENT_ID: "google-id",
 			}),
 		).toThrow("all or none");
@@ -72,7 +78,7 @@ describe("secret manifest validation", () => {
 			spec.required.map((key) => [
 				key,
 				key === "ENCRYPTION_KEY"
-					? `active=${"11".repeat(32)}`
+					? `active=${"11".repeat(32)},identity=${"22".repeat(32)}`
 					: `${key.toLowerCase()}-value`,
 			]),
 		);
@@ -109,9 +115,7 @@ describe("secret manifest validation", () => {
 		expect(() =>
 			validateTargetValues(spec, {
 				BETTER_AUTH_SECRET: "auth-secret",
-				RESEND_API_KEY: "resend-secret",
-				STRIPE_SECRET_KEY: "stripe-secret",
-				STRIPE_PRO_PRICE_ID: "price_123",
+				MAINTENANCE_SMOKE_BYPASS_SHA256: "a".repeat(64),
 				ENCRYPTION_KEY: "api-only",
 			}),
 		).toThrow("outside its target allowlist");
@@ -139,16 +143,12 @@ describe("secret manifest validation", () => {
 		if (!spec) throw new Error("missing app production manifest");
 		const selected = selectCloudflareSecrets(spec, {
 			BETTER_AUTH_SECRET: "auth-secret",
-			RESEND_API_KEY: "resend-secret",
-			STRIPE_SECRET_KEY: "stripe-secret",
-			STRIPE_PRO_PRICE_ID: "price_123",
+			MAINTENANCE_SMOKE_BYPASS_SHA256: "a".repeat(64),
 			BETTER_AUTH_URL: "",
 		});
 		expect(selected).toEqual({
 			BETTER_AUTH_SECRET: "auth-secret",
-			RESEND_API_KEY: "resend-secret",
-			STRIPE_SECRET_KEY: "stripe-secret",
-			STRIPE_PRO_PRICE_ID: "price_123",
+			MAINTENANCE_SMOKE_BYPASS_SHA256: "a".repeat(64),
 		});
 	});
 
@@ -160,26 +160,16 @@ describe("secret manifest validation", () => {
 		expect(() =>
 			validateExampleValues(spec, {
 				BETTER_AUTH_SECRET: "replace-me",
-				RESEND_API_KEY: "replace-me",
-				STRIPE_SECRET_KEY: "replace-me",
-				STRIPE_PRO_PRICE_ID: "replace-me",
+				MAINTENANCE_SMOKE_BYPASS_SHA256: "replace-me",
 			}),
 		).not.toThrow();
 		expect(() =>
 			validateExampleValues(spec, {
 				BETTER_AUTH_SECRET: "replace-me",
+				MAINTENANCE_SMOKE_BYPASS_SHA256: "replace-me",
 				RESEND_API_KEY: "replace-me",
-				STRIPE_SECRET_KEY: "replace-me",
 			}),
-		).toThrow("STRIPE_PRO_PRICE_ID");
-		expect(() =>
-			validateExampleValues(spec, {
-				BETTER_AUTH_SECRET: "a-real-secret",
-				RESEND_API_KEY: "replace-me",
-				STRIPE_SECRET_KEY: "replace-me",
-				STRIPE_PRO_PRICE_ID: "replace-me",
-			}),
-		).toThrow("must use placeholders");
+		).toThrow("outside its target allowlist");
 	});
 });
 

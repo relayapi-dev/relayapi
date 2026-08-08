@@ -9,12 +9,18 @@
 // nodes can branch on it via the condition/filter engine.
 
 import {
+	BlockedPublicUrlError,
 	fetchPublicUrl,
 	readResponseBytes,
 } from "../../../lib/fetch-public-url";
 import { loadAutomationHttpRequestSecret } from "../graph-secrets";
 import { applyMergeTags } from "../merge-tags";
-import type { NodeHandler, RunContext } from "../types";
+import {
+	AutomationExternalEffectKnownFailureError,
+	isAutomationExternalEffectControlError,
+	type NodeHandler,
+	type RunContext,
+} from "../types";
 
 type HttpRequestConfig = {
 	url: string;
@@ -76,14 +82,9 @@ export const httpRequestHandler: NodeHandler<HttpRequestConfig> = {
 		for (const [k, v] of Object.entries(secret.headers ?? {})) {
 			headers[k] = applyMergeTags(v, mergeCtx);
 		}
-		if (
-			ctx.effectIdempotencyKey &&
-			!Object.keys(headers).some(
-				(key) => key.toLowerCase() === "idempotency-key",
-			)
-		) {
-			headers["Idempotency-Key"] = ctx.effectIdempotencyKey;
-		}
+		const hasConfiguredIdempotencyKey = Object.keys(headers).some(
+			(key) => key.toLowerCase() === "idempotency-key",
+		);
 		const body = secret.body
 			? applyMergeTags(secret.body, mergeCtx)
 			: undefined;
@@ -105,44 +106,79 @@ export const httpRequestHandler: NodeHandler<HttpRequestConfig> = {
 		}
 
 		try {
-			const res = await fetchPublicUrl(url, {
-				method,
-				headers,
-				body,
-				timeout: timeoutMs,
-				timeoutThroughBody: true,
-			});
-			const text = new TextDecoder().decode(
-				await readResponseBytes(res, MAX_RESPONSE_BODY_BYTES),
-			);
-			let parsed: unknown = text;
-			try {
-				parsed = JSON.parse(text);
-			} catch {
-				// keep text body as-is
-			}
-
-			const headerObj: Record<string, string> = {};
-			res.headers.forEach((value, key) => {
-				if (/(authorization|cookie|token|secret|api[-_]?key)/i.test(key)) {
-					return;
+			const request = async (
+				providerIdempotencyKey = ctx.effectIdempotencyKey,
+			) => {
+				const requestHeaders = { ...headers };
+				if (providerIdempotencyKey && !hasConfiguredIdempotencyKey) {
+					requestHeaders["Idempotency-Key"] = providerIdempotencyKey;
 				}
-				headerObj[key] = value;
-			});
+				let res: Response;
+				try {
+					res = await fetchPublicUrl(url, {
+						method,
+						headers: requestHeaders,
+						body,
+						timeout: timeoutMs,
+						timeoutThroughBody: true,
+					});
+				} catch (error) {
+					if (error instanceof BlockedPublicUrlError) {
+						throw new AutomationExternalEffectKnownFailureError(error.message);
+					}
+					throw error;
+				}
+				const text = new TextDecoder().decode(
+					await readResponseBytes(res, MAX_RESPONSE_BODY_BYTES),
+				);
+				let parsed: unknown = text;
+				try {
+					parsed = JSON.parse(text);
+				} catch {
+					// keep text body as-is
+				}
+
+				const headerObj: Record<string, string> = {};
+				res.headers.forEach((value, key) => {
+					if (/(authorization|cookie|token|secret|api[-_]?key)/i.test(key)) {
+						return;
+					}
+					headerObj[key] = value;
+				});
+				return {
+					ok: res.ok,
+					status: res.status,
+					headers: headerObj,
+					body: parsed,
+				};
+			};
+			const observed = ctx.executeExternalEffect
+				? await ctx.executeExternalEffect(
+						{
+							effectKey: `http-request:${node.key}`,
+							kind: "http_request",
+						},
+						async (providerIdempotencyKey) => ({
+							outcome: "succeeded" as const,
+							value: await request(providerIdempotencyKey),
+						}),
+					)
+				: await request();
 
 			ctx.context[responseKey] = {
-				status: res.status,
-				headers: headerObj,
-				body: parsed,
+				status: observed.status,
+				headers: observed.headers,
+				body: observed.body,
 			};
 
-			const viaPort = res.ok ? "success" : "error";
+			const viaPort = observed.ok ? "success" : "error";
 			return {
 				result: "advance",
 				via_port: viaPort,
-				payload: { status: res.status, method },
+				payload: { status: observed.status, method },
 			};
 		} catch (err: unknown) {
+			if (isAutomationExternalEffectControlError(err)) throw err;
 			const e = err as { name?: string; message?: string };
 			const isTimeout = e?.name === "AbortError" || e?.name === "TimeoutError";
 			const msg = isTimeout ? "timeout" : String(e?.message ?? err);

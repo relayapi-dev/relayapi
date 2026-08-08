@@ -19,6 +19,23 @@ export class InviteTokens extends APIResource {
   }
 
   /**
+   * Redeem a bearer invitation
+   *
+   * Authenticated, rate-limited redemption atomically consumes the bearer token,
+   * creates or upgrades membership, resolves a stable member principal, and applies
+   * its workspace grants.
+   */
+  redeem(
+    body: InviteTokenRedeemParams,
+    options?: RequestOptions,
+  ): APIPromise<InviteTokenRedeemResponse> {
+    return this._client.post('/v1/invite/tokens/redeem', {
+      body,
+      ...options,
+    });
+  }
+
+  /**
    * List invite tokens
    */
   list(
@@ -38,6 +55,8 @@ export class InviteTokens extends APIResource {
     });
   }
 }
+
+export type InviteTokenRole = 'owner' | 'admin' | 'member';
 
 export interface InviteTokenCreateResponse {
   /**
@@ -63,12 +82,12 @@ export interface InviteTokenCreateResponse {
   /**
    * Role assigned on acceptance
    */
-  role: 'owner' | 'admin' | 'member';
+  role: InviteTokenRole;
 
   /**
    * Access scope
    */
-  scope: 'all' | 'workspaces';
+  scope_mode: 'all' | 'selected';
 
   /**
    * Full invite token (shown once, store securely)
@@ -115,12 +134,12 @@ export namespace InviteTokenListResponse {
     /**
      * Role assigned on acceptance
      */
-    role: 'owner' | 'admin' | 'member';
+    role: InviteTokenRole;
 
     /**
      * Access scope
      */
-    scope: 'all' | 'workspaces';
+    scope_mode: 'all' | 'selected';
 
     /**
      * Whether the token has been used
@@ -138,17 +157,50 @@ export interface InviteTokenCreateParams {
   /**
    * Role to assign on acceptance
    */
-  role?: 'owner' | 'admin' | 'member';
+  role?: InviteTokenRole;
 
   /**
-   * Access scope: 'all' for full org access, or 'workspaces' for specific workspaces
+   * Access scope: all workspaces or an exact selected set
    */
-  scope?: 'all' | 'workspaces';
+  scope_mode?: 'all' | 'selected';
 
   /**
-   * Workspace IDs to scope access to (required when scope is 'workspaces')
+   * Workspace IDs to grant (required for selected scope)
    */
   workspace_ids?: string[];
+}
+
+export interface InviteTokenRedeemResponse {
+  member: {
+    id: string;
+
+    role: InviteTokenRole;
+  };
+
+  organization: {
+    id: string;
+
+    name: string;
+
+    slug: string;
+  };
+
+  principal: {
+    id: string;
+
+    scope_mode: 'all' | 'selected';
+
+    workspace_ids: string[] | null;
+  };
+
+  redeemed_at: string;
+}
+
+export interface InviteTokenRedeemParams {
+  /**
+   * Bearer invite token
+   */
+  token: string;
 }
 
 export interface InviteTokenListParams {
@@ -165,9 +217,12 @@ export interface InviteTokenListParams {
 
 export declare namespace InviteTokens {
   export {
+    type InviteTokenRole as InviteTokenRole,
     type InviteTokenCreateResponse as InviteTokenCreateResponse,
     type InviteTokenListResponse as InviteTokenListResponse,
+    type InviteTokenRedeemResponse as InviteTokenRedeemResponse,
     type InviteTokenCreateParams as InviteTokenCreateParams,
     type InviteTokenListParams as InviteTokenListParams,
+    type InviteTokenRedeemParams as InviteTokenRedeemParams,
   };
 }

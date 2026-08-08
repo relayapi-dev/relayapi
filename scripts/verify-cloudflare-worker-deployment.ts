@@ -1,3 +1,5 @@
+import { BASELINE_GENERATION } from "@relayapi/config";
+
 type TargetName = "app" | "docs";
 
 type WorkerBinding = Record<string, unknown> & {
@@ -49,13 +51,21 @@ const targets: Record<TargetName, TargetPolicy> = {
 			ASSETS: { type: "assets" },
 			IDENTITY_DELETION_CONTRACT_VERSION: {
 				type: "plain_text",
-				text: "0005",
+				text: "identity-deletion-v1",
+			},
+			BASELINE_GENERATION: {
+				type: "plain_text",
+				text: String(BASELINE_GENERATION),
 			},
 			AVATARS_BUCKET: {
 				type: "r2_bucket",
 				bucket_name: "relayapi-avatars",
 			},
-			EMAIL_QUEUE: { type: "queue", queue_name: "relayapi-email" },
+			EMAIL_INTENTS: {
+				type: "service",
+				service: "relayapi",
+				entrypoint: "EmailIntentEntrypoint",
+			},
 			HYPERDRIVE: {
 				type: "hyperdrive",
 				id: "11180e4939824902a75753084dc6a8e9",
@@ -68,10 +78,6 @@ const targets: Record<TargetName, TargetPolicy> = {
 			PUBLIC_ASSETS: {
 				type: "r2_bucket",
 				bucket_name: "relayapi-public-assets",
-			},
-			SESSION: {
-				type: "kv_namespace",
-				namespace_id: "851563e6b3f2452199be81dd0eda681f",
 			},
 		},
 		observability: {

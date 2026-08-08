@@ -67,22 +67,50 @@ const cacheRules = [
 
 **Note**: This modifies response headers to meet eligibility criteria but does NOT directly control Cache Reserve storage (which is zone-level automatic).
 
+Prefer Cache Rules for known static paths. If a Worker must add headers, use a
+strict static-asset allowlist and preserve every origin signal that makes a
+response private. Never turn an authenticated or cookie-bearing response public,
+and never remove `Set-Cookie`.
+
 ```typescript
+const STATIC_CONTENT_TYPES = [
+  'application/javascript',
+  'font/',
+  'image/',
+  'text/css'
+];
+
+function isExplicitStaticAsset(url: URL): boolean {
+  return url.pathname.startsWith('/static/') &&
+    /\.(?:avif|css|gif|ico|jpe?g|js|png|svg|webp|woff2?)$/i.test(url.pathname);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (!['GET', 'HEAD'].includes(request.method) ||
+        !isExplicitStaticAsset(url) ||
+        request.headers.has('Authorization') ||
+        request.headers.has('Cookie')) {
+      return fetch(request);
+    }
+
     const response = await fetch(request);
-    if (!response.ok) return response;
+    if (!response.ok || response.status !== 200) return response;
     
     const headers = new Headers(response.headers);
-    headers.set('Cache-Control', 'public, max-age=36000'); // 10hr minimum
-    headers.delete('Set-Cookie'); // Blocks caching
-    
-    // Ensure Content-Length present
-    if (!headers.has('Content-Length')) {
-      const blob = await response.blob();
-      headers.set('Content-Length', blob.size.toString());
-      return new Response(blob, { status: response.status, headers });
+    const cacheControl = headers.get('Cache-Control') ?? '';
+    const contentType = headers.get('Content-Type')?.toLowerCase() ?? '';
+    if (headers.has('Set-Cookie') ||
+        /(?:^|,)\s*(?:private|no-store|no-cache)\b/i.test(cacheControl) ||
+        !headers.has('Content-Length') ||
+        !STATIC_CONTENT_TYPES.some(type => contentType.startsWith(type))) {
+      return response;
     }
+
+    // Only supply a default when the explicitly static origin omitted policy.
+    // Do not override an origin-selected shorter TTL.
+    if (!cacheControl) headers.set('Cache-Control', 'public, max-age=36000');
     
     return new Response(response.body, { status: response.status, headers });
   }
@@ -102,10 +130,21 @@ Use Worker's hostname for efficient caching - avoid overriding hostname unnecess
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const isImmutable = /\.[a-f0-9]{8,}\.(js|css|jpg|png|woff2)$/.test(url.pathname);
+    const isImmutable = url.pathname.startsWith('/static/') &&
+      /\.[a-f0-9]{8,}\.(js|css|jpg|png|woff2)$/.test(url.pathname);
     const response = await fetch(request);
-    
-    if (isImmutable) {
+
+    const cacheControl = response.headers.get('Cache-Control') ?? '';
+    const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
+    if (isImmutable &&
+        ['GET', 'HEAD'].includes(request.method) &&
+        !request.headers.has('Authorization') &&
+        !request.headers.has('Cookie') &&
+        response.status === 200 &&
+        !response.headers.has('Set-Cookie') &&
+        response.headers.has('Content-Length') &&
+        STATIC_CONTENT_TYPES.some(type => contentType.startsWith(type)) &&
+        !cacheControl) {
       const headers = new Headers(response.headers);
       headers.set('Cache-Control', 'public, max-age=31536000, immutable');
       return new Response(response.body, { status: response.status, headers });

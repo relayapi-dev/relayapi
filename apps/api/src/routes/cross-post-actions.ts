@@ -21,8 +21,9 @@ function serializeAction(a: typeof crossPostActions.$inferSelect) {
 		target_account_id: a.targetAccountId,
 		content: a.content ?? null,
 		delay_minutes: a.delayMinutes,
-		status: a.status as "pending" | "executed" | "failed" | "cancelled",
-		execute_at: a.executeAt.toISOString(),
+		status: a.status,
+		scheduled_for: a.scheduledFor.toISOString(),
+		next_attempt_at: a.nextAttemptAt.toISOString(),
 		executed_at: a.executedAt?.toISOString() ?? null,
 		result_post_id: a.resultPostId ?? null,
 		error: a.error ?? null,
@@ -188,7 +189,7 @@ app.openapi(cancelAction, async (c) => {
 
 	const [updated] = await db
 		.update(crossPostActions)
-		.set({ status: "cancelled" })
+		.set({ status: "cancelled", completedAt: new Date() })
 		.where(
 			and(
 				eq(crossPostActions.id, id),

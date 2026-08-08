@@ -13,7 +13,7 @@ RealtimeKit is Cloudflare's SDK suite built on Realtime SFU, abstracting WebRTC 
 - **App**: Workspace grouping meetings, participants, presets, recordings. Use separate Apps for staging/production
 - **Meeting**: Re-usable virtual room. Each join creates new **Session**
 - **Session**: Live meeting instance. Created on first join, ends after last leave
-- **Participant**: User added via REST API. Returns `authToken` for client SDK. **Do not reuse tokens**
+- **Participant**: User added via REST API. The response carries the client token at `data.token`; pass that value to the SDK as `authToken`. **Do not reuse tokens**
 - **Preset**: Reusable permission/UI template (permissions, meeting type, theme). Applied at participant creation
 - **Peer ID** (`id`): Unique per session, changes on rejoin
 - **Participant ID** (`userId`): Persistent across sessions
@@ -25,19 +25,19 @@ RealtimeKit is Cloudflare's SDK suite built on Realtime SFU, abstracting WebRTC 
 ```bash
 # Create app
 curl -X POST 'https://api.cloudflare.com/client/v4/accounts/<account_id>/realtime/kit/apps' \
-  -H 'Authorization: Bearer <api_token>' \
+  --header @/secure/bearer-auth-header \
   -d '{"name": "My RealtimeKit App"}'
 
 # Create meeting
 curl -X POST 'https://api.cloudflare.com/client/v4/accounts/<account_id>/realtime/kit/<app_id>/meetings' \
-  -H 'Authorization: Bearer <api_token>' \
+  --header @/secure/bearer-auth-header \
   -d '{"title": "Team Standup"}'
 
 # Add participant
 curl -X POST 'https://api.cloudflare.com/client/v4/accounts/<account_id>/realtime/kit/<app_id>/meetings/<meeting_id>/participants' \
-  -H 'Authorization: Bearer <api_token>' \
+  --header @/secure/bearer-auth-header \
   -d '{"name": "Alice", "preset_name": "host"}'
-# Returns: { authToken }
+# Response: { "success": true, "data": { "token": "..." } }
 ```
 
 ### 2. Client Integration

@@ -108,7 +108,6 @@ export async function reconcileInboundWebhookReceipts(
 					body: {
 						type: "raw_platform_webhook",
 						receipt_id: receipt.id,
-						received_at: receipt.receivedAt.toISOString(),
 					},
 				})),
 			);
@@ -162,7 +161,6 @@ export async function reconcileInboundWebhookReceipts(
 			payload: {
 				type: "raw_platform_webhook",
 				receipt_id: receipt.id,
-				received_at: receipt.receivedAt.toISOString(),
 				organization_ids: receipt.organizationIds,
 			},
 			kind: "dead_letter",

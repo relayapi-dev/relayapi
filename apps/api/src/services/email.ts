@@ -3,6 +3,7 @@
  */
 
 import { sendEmail } from "../lib/email-queue/producer";
+import type { Env } from "../types";
 
 /**
  * react-email + templates are loaded lazily so this module (imported from
@@ -21,10 +22,10 @@ async function loadRenderStack() {
 }
 
 export async function sendPaymentFailedReminder(
-	queue: Queue | undefined,
-	resendApiKey: string,
+	env: Env,
 	params: {
 		organizationId: string;
+		subjectUserId?: string;
 		to: string;
 		orgName: string;
 		invoiceUrl: string | null;
@@ -47,8 +48,9 @@ export async function sendPaymentFailedReminder(
 		}),
 	);
 
-	await sendEmail(queue, resendApiKey, {
+	await sendEmail(env, {
 		organizationId: params.organizationId,
+		subjectUserId: params.subjectUserId,
 		to: params.to,
 		subject,
 		html,
@@ -57,10 +59,10 @@ export async function sendPaymentFailedReminder(
 }
 
 export async function sendPlanDeactivatedEmail(
-	queue: Queue | undefined,
-	resendApiKey: string,
+	env: Env,
 	params: {
 		organizationId: string;
+		subjectUserId?: string;
 		to: string;
 		orgName: string;
 		idempotencyKey: string;
@@ -73,8 +75,9 @@ export async function sendPlanDeactivatedEmail(
 		}),
 	);
 
-	await sendEmail(queue, resendApiKey, {
+	await sendEmail(env, {
 		organizationId: params.organizationId,
+		subjectUserId: params.subjectUserId,
 		to: params.to,
 		subject: "Your RelayAPI Pro plan has been deactivated",
 		html,

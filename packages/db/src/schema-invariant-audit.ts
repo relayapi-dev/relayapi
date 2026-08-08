@@ -10,6 +10,7 @@ import {
 	type SchemaInvariantCategory,
 	type SchemaInvariantException,
 } from "./schema-contracts";
+import { validateGovernanceReview } from "./governance-review";
 
 type PublicTableConfig = ReturnType<typeof getTableConfig>;
 type PublicColumn = PublicTableConfig["columns"][number];
@@ -59,6 +60,30 @@ function columnReference(columnName: string): string {
 	return `"${columnName.replaceAll('"', '""')}"`;
 }
 
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function directCheckValues(checkSql: string, columnName: string): string[] | null {
+	const column = escapeRegex(columnName);
+	const match = checkSql.match(
+		new RegExp(
+			`(?:(?:"[^"]+"|[a-z_][a-z0-9_]*)\\.)?(?:"${column}"|${column})\\s+IN\\s*\\(([^)]*)\\)`,
+			"i",
+		),
+	);
+	if (!match?.[1]) return null;
+	const values: string[] = [];
+	for (const value of match[1].matchAll(/'((?:''|[^'])*)'/g)) {
+		values.push((value[1] ?? "").replaceAll("''", "'"));
+	}
+	return values.length > 0 ? values : null;
+}
+
+function sorted(values: readonly string[]): string[] {
+	return [...values].sort();
+}
+
 function exceptionKey(
 	exception: Pick<
 		SchemaInvariantException,
@@ -91,6 +116,7 @@ export function auditSchemaInvariants(
 		if (exception.rationale.trim().length < 20) {
 			failures.push(`${key} must have a meaningful rationale`);
 		}
+		failures.push(...validateGovernanceReview(key, exception));
 
 		const table = tables.get(exception.tableName);
 		const column = table?.columns.find(
@@ -125,6 +151,32 @@ export function auditSchemaInvariants(
 			const checkCovered = checkSql.some((sql) => sql.includes(reference));
 			const enumCovered =
 				category === "workflow_state" && isPostgresEnum(column);
+			if (category === "workflow_state" && !enumCovered) {
+				const expectedValues =
+					(column as PublicColumn & { enumValues?: readonly string[] })
+						.enumValues ?? [];
+				if (expectedValues.length > 0) {
+					const declaredCheckDomains = checkSql
+						.map((value) => directCheckValues(value, column.name))
+						.filter(
+							(value): value is string[] => value !== null,
+						);
+					const exact = declaredCheckDomains.some(
+						(values) =>
+							JSON.stringify(sorted(values)) ===
+							JSON.stringify(sorted(expectedValues)),
+					);
+					if (!exact) {
+						failures.push(
+							`${table.name}.${column.name} CHECK domain ${JSON.stringify(
+								declaredCheckDomains,
+							)} does not equal its Drizzle enum ${JSON.stringify(
+								expectedValues,
+							)}`,
+						);
+					}
+				}
+			}
 			const key = exceptionKey({
 				tableName: table.name,
 				columnName: column.name,

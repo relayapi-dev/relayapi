@@ -78,6 +78,8 @@ describe("external response thumbnails", () => {
 		});
 		const env = fixture<import("../types").Env>({
 			IMAGES: fixture<ImagesBinding>({ input: () => transformer }),
+			R2_THUMBNAIL_BUCKET_NAME: "relayapi-media-thumbnails",
+			R2_THUMBNAIL_BUCKET_JURISDICTION: "default",
 			THUMBNAIL_BUCKET: fixture<R2Bucket>({
 				put: async (key: string) => {
 					stored.push(key);
@@ -96,6 +98,13 @@ describe("external response thumbnails", () => {
 		);
 
 		expect(result.status).toBe("generated");
+		if (result.status === "generated") {
+			expect(result.storage).toEqual({
+				provider: "r2",
+				bucket: "relayapi-media-thumbnails",
+				region: "default",
+			});
+		}
 		expect(stored).toEqual(["org_1/external-posts/xp_1/preview.avif"]);
 	});
 });

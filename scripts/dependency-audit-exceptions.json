@@ -1,8 +1,18 @@
 {
 	"schemaVersion": 1,
-	"reviewedOn": "2026-07-13",
-	"documentation": "Each exception is bound to one advisory, exact installed version, Bun lock install path, workspace artifact, and dependency class. runtime means dependencies/optionalDependencies (including their resolved peers); development means devDependencies. Changed versions, install paths, artifacts, classes, or advisory IDs are new findings. Entries must match a current finding and are valid through expiresOn (UTC), for at most 30 days from reviewedOn.",
+	"reviewedOn": "2026-08-03",
+	"documentation": "Each exception is bound to one advisory, exact installed version, Bun lock install path, workspace artifact, and dependency class. runtime means dependencies/optionalDependencies (including their resolved peers); development means devDependencies. Changed versions, install paths, artifacts, classes, or advisory IDs are new findings. Entries must match a current finding and are valid through expiresOn (UTC), for at most 30 days from reviewedOn. Every scope below was manually traced on 2026-08-03; no concrete reachable Critical/High production exploit was established, and the ledger remains fail-closed for feed or lockfile drift.",
 	"exceptions": [
+		{
+			"advisory": "GHSA-23hp-3jrh-7fpw",
+			"package": "tar",
+			"version": "6.2.1",
+			"dependencyPath": "tar",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
 		{
 			"advisory": "GHSA-2gcr-mfcq-wcc3",
 			"package": "hono",
@@ -10,8 +20,18 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-2p49-hgcm-8545",
+			"package": "svgo",
+			"version": "4.0.1",
+			"dependencyPath": "svgo",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the Astro dashboard only invokes this chain for built-in DiceBear SVG generation; no caller-supplied SVG or removeScripts input reaches it. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-34x7-hfp2-rc4v",
@@ -20,8 +40,8 @@
 			"dependencyPath": "tar",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-35p6-xmwp-9g52",
@@ -30,8 +50,8 @@
 			"dependencyPath": "@cloudflare/vite-plugin/miniflare/undici",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-3hrh-pfw6-9m5x",
@@ -40,8 +60,278 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "1.1.14",
+			"dependencyPath": "multimatch/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@node-minify/core/glob/minimatch/brace-expansion",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@npmcli/arborist/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@npmcli/map-workspaces/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@npmcli/package-json/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@oclif/core/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@tufjs/models/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@yeoman/conflicter/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@yeoman/transform/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "archiver-utils/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "cacache/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "filelist/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "ignore-walk/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "mem-fs-editor/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "node-gyp/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "readdir-glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-3jxr-9vmj-r5cp",
+			"package": "brace-expansion",
+			"version": "5.0.5",
+			"dependencyPath": "brace-expansion",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4633-3j49-mh5q",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4633-3j49-mh5q",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4633-3j49-mh5q",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-4633-3j49-mh5q",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4c39-4ccg-62r3",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4c39-4ccg-62r3",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4c39-4ccg-62r3",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-4c39-4ccg-62r3",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4c8g-83qw-93j6",
+			"package": "fast-uri",
+			"version": "3.1.2",
+			"dependencyPath": "fast-uri",
+			"artifact": "packages/mcp",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: fast-uri is reached only by SDK/AJV schema validation; RelayAPI does not use its result for navigation, host authorization, or network fetching. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-4c8g-83qw-93j6",
+			"package": "fast-uri",
+			"version": "3.1.2",
+			"dependencyPath": "fast-uri",
+			"artifact": "repository-tooling",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-4x5r-pxfx-6jf8",
@@ -50,8 +340,8 @@
 			"dependencyPath": "@babel/core",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-4x5r-pxfx-6jf8",
@@ -60,8 +350,18 @@
 			"dependencyPath": "@babel/core",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-52cp-r559-cp3m",
+			"package": "js-yaml",
+			"version": "4.2.0",
+			"dependencyPath": "js-yaml",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-52f5-9888-hmc6",
@@ -70,8 +370,8 @@
 			"dependencyPath": "external-editor/tmp",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-52v5-jr5w-gjxr",
@@ -80,8 +380,8 @@
 			"dependencyPath": "sigstore",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-5wm8-gmm8-39j9",
@@ -90,8 +390,8 @@
 			"dependencyPath": "@aws-sdk/xml-builder/fast-xml-parser/fast-xml-builder",
 			"artifact": "apps/docs",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of apps/docs; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-67mh-4wv8-2f99",
@@ -100,8 +400,8 @@
 			"dependencyPath": "@esbuild-kit/core-utils/esbuild",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-67mh-4wv8-2f99",
@@ -110,8 +410,8 @@
 			"dependencyPath": "@esbuild-kit/core-utils/esbuild",
 			"artifact": "packages/auth",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/auth; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-67mh-4wv8-2f99",
@@ -120,8 +420,48 @@
 			"dependencyPath": "@esbuild-kit/core-utils/esbuild",
 			"artifact": "packages/db",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/db; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-68g3-v927-f742",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-68g3-v927-f742",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-68g3-v927-f742",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-68g3-v927-f742",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-69xw-7hcm-h432",
@@ -130,8 +470,88 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-6g55-p6wh-862q",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-6g55-p6wh-862q",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-6g55-p6wh-862q",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this path processes maintainer-controlled docs source/assets during build; no untrusted production input reaches the vulnerable PostCSS, Sharp, or esbuild predicate. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-6g55-p6wh-862q",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-6gpp-xcg3-4w24",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-6gpp-xcg3-4w24",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-6gpp-xcg3-4w24",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-6gpp-xcg3-4w24",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-73rr-hh4g-fpgx",
@@ -140,8 +560,8 @@
 			"dependencyPath": "@yeoman/conflicter/diff",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-83g3-92jg-28cx",
@@ -150,8 +570,8 @@
 			"dependencyPath": "tar",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-88fw-hqm2-52qc",
@@ -160,8 +580,48 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-89xv-2m56-2m9x",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-89xv-2m56-2m9x",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-89xv-2m56-2m9x",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-89xv-2m56-2m9x",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-8qq5-rm4j-mr97",
@@ -170,8 +630,58 @@
 			"dependencyPath": "tar",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-8x88-c5mf-7j5w",
+			"package": "tar",
+			"version": "6.2.1",
+			"dependencyPath": "tar",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-955p-x3mx-jcvp",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-955p-x3mx-jcvp",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-955p-x3mx-jcvp",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-955p-x3mx-jcvp",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-96hv-2xvq-fx4p",
@@ -180,8 +690,8 @@
 			"dependencyPath": "@cloudflare/vite-plugin/ws",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-9ppj-qmqm-q256",
@@ -190,8 +700,8 @@
 			"dependencyPath": "tar",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-9vqf-7f2p-gf9v",
@@ -200,8 +710,8 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-f23m-r3pf-42rh",
@@ -210,8 +720,8 @@
 			"dependencyPath": "lodash",
 			"artifact": "packages/integrations/n8n-node",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/n8n-node; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-f23m-r3pf-42rh",
@@ -220,8 +730,8 @@
 			"dependencyPath": "lodash",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-f577-qrjj-4474",
@@ -230,8 +740,78 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-f88m-g3jw-g9cj",
+			"package": "sharp",
+			"version": "0.34.5",
+			"dependencyPath": "sharp",
+			"artifact": "apps/api",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-f88m-g3jw-g9cj",
+			"package": "sharp",
+			"version": "0.34.5",
+			"dependencyPath": "sharp",
+			"artifact": "apps/app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-f88m-g3jw-g9cj",
+			"package": "sharp",
+			"version": "0.34.5",
+			"dependencyPath": "sharp",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-f88m-g3jw-g9cj",
+			"package": "sharp",
+			"version": "0.34.5",
+			"dependencyPath": "sharp",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-f88m-g3jw-g9cj",
+			"package": "sharp",
+			"version": "0.34.5",
+			"dependencyPath": "sharp",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this path processes maintainer-controlled docs source/assets during build; no untrusted production input reaches the vulnerable PostCSS, Sharp, or esbuild predicate. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-f88m-g3jw-g9cj",
+			"package": "sharp",
+			"version": "0.34.5",
+			"dependencyPath": "sharp",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-frvp-7c67-39w9",
+			"package": "@hono/node-server",
+			"version": "1.19.14",
+			"dependencyPath": "@hono/node-server",
+			"artifact": "packages/mcp",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g7r4-m6w7-qqqr",
@@ -240,8 +820,8 @@
 			"dependencyPath": "@cloudflare/vite-plugin/wrangler/esbuild",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g7r4-m6w7-qqqr",
@@ -250,8 +830,8 @@
 			"dependencyPath": "tsx/esbuild",
 			"artifact": "apps/api",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of apps/api; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g7r4-m6w7-qqqr",
@@ -260,8 +840,8 @@
 			"dependencyPath": "tsx/esbuild",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g7r4-m6w7-qqqr",
@@ -270,8 +850,8 @@
 			"dependencyPath": "tsx/esbuild",
 			"artifact": "apps/docs",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/docs; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this path processes maintainer-controlled docs source/assets during build; no untrusted production input reaches the vulnerable PostCSS, Sharp, or esbuild predicate. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g7r4-m6w7-qqqr",
@@ -280,8 +860,8 @@
 			"dependencyPath": "tsx/esbuild",
 			"artifact": "packages/auth",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/auth; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g7r4-m6w7-qqqr",
@@ -290,8 +870,8 @@
 			"dependencyPath": "tsx/esbuild",
 			"artifact": "packages/db",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/db; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g7r4-m6w7-qqqr",
@@ -300,8 +880,8 @@
 			"dependencyPath": "tsx/esbuild",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-g8m3-5g58-fq7m",
@@ -310,8 +890,8 @@
 			"dependencyPath": "@cloudflare/vite-plugin/miniflare/undici",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-gh4j-gqv2-49f6",
@@ -320,8 +900,18 @@
 			"dependencyPath": "@aws-sdk/xml-builder/fast-xml-parser",
 			"artifact": "apps/docs",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of apps/docs; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-gvwx-54wh-qm9j",
+			"package": "tar",
+			"version": "6.2.1",
+			"dependencyPath": "tar",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-hm8q-7f3q-5f36",
@@ -330,8 +920,8 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-hm92-r4w5-c3mj",
@@ -340,8 +930,8 @@
 			"dependencyPath": "@cloudflare/vite-plugin/miniflare/undici",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-hmw2-7cc7-3qxx",
@@ -350,8 +940,8 @@
 			"dependencyPath": "form-data",
 			"artifact": "packages/integrations/n8n-node",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/n8n-node; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-hmw2-7cc7-3qxx",
@@ -360,8 +950,8 @@
 			"dependencyPath": "@types/node-fetch/form-data",
 			"artifact": "apps/docs",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of apps/docs; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-hmw2-7cc7-3qxx",
@@ -370,8 +960,18 @@
 			"dependencyPath": "zapier-platform-core/form-data",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/integrations/zapier-app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the shipped Zapier integration sends fixed-shape JSON and does not expose caller-controlled multipart field names or filenames to form-data. Upgrade zapier-platform-core before expiry."
+		},
+		{
+			"advisory": "GHSA-hvrm-45r6-mjfj",
+			"package": "hono",
+			"version": "4.12.14",
+			"dependencyPath": "@modelcontextprotocol/sdk/hono",
+			"artifact": "packages/mcp",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-j6c9-x7qj-28xf",
@@ -380,8 +980,8 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-jfc7-64v2-mr8c",
@@ -390,8 +990,8 @@
 			"dependencyPath": "@sigstore/core",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-jxxr-4gwj-5jf2",
@@ -400,8 +1000,218 @@
 			"dependencyPath": "brace-expansion",
 			"artifact": "apps/docs",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of apps/docs; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-m99w-x7hq-7vfj",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-m99w-x7hq-7vfj",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-m99w-x7hq-7vfj",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-m99w-x7hq-7vfj",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "1.1.14",
+			"dependencyPath": "multimatch/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@node-minify/core/glob/minimatch/brace-expansion",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@npmcli/arborist/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@npmcli/map-workspaces/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@npmcli/package-json/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@oclif/core/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@tufjs/models/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@yeoman/conflicter/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "@yeoman/transform/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "archiver-utils/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "cacache/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "filelist/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "ignore-walk/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "mem-fs-editor/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "node-gyp/glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "2.1.0",
+			"dependencyPath": "readdir-glob/minimatch/brace-expansion",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-mh99-v99m-4gvg",
+			"package": "brace-expansion",
+			"version": "5.0.5",
+			"dependencyPath": "brace-expansion",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-p77w-8qqv-26rm",
@@ -410,8 +1220,8 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-p88m-4jfj-68fv",
@@ -420,8 +1230,48 @@
 			"dependencyPath": "@cloudflare/vite-plugin/miniflare/undici",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-p9j2-gv94-2wf4",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-p9j2-gv94-2wf4",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-p9j2-gv94-2wf4",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-p9j2-gv94-2wf4",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-ph9p-34f9-6g65",
@@ -430,8 +1280,8 @@
 			"dependencyPath": "external-editor/tmp",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-ph9p-34f9-6g65",
@@ -440,8 +1290,8 @@
 			"dependencyPath": "tmp",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-pr7r-676h-xcf6",
@@ -450,8 +1300,48 @@
 			"dependencyPath": "@cloudflare/vite-plugin/miniflare/undici",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-q8wf-6r8g-63ch",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-q8wf-6r8g-63ch",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-q8wf-6r8g-63ch",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the public docs app has no Server Actions, image optimizer, personalized cache content, or attacker-selected rewrite destination; its middleware protects no private/authenticated boundary. The advisory predicates therefore do not create a serious reachable impact here. Upgrade Next before expiry."
+		},
+		{
+			"advisory": "GHSA-q8wf-6r8g-63ch",
+			"package": "next",
+			"version": "16.2.10",
+			"dependencyPath": "next",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-qffp-2rhf-9h96",
@@ -460,8 +1350,8 @@
 			"dependencyPath": "tar",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-qp7p-654g-cw7p",
@@ -470,8 +1360,8 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-qx2v-qp2m-jg93",
@@ -480,8 +1370,8 @@
 			"dependencyPath": "next/postcss",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-qx2v-qp2m-jg93",
@@ -490,8 +1380,8 @@
 			"dependencyPath": "next/postcss",
 			"artifact": "apps/docs",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of apps/docs; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-qx2v-qp2m-jg93",
@@ -500,8 +1390,8 @@
 			"dependencyPath": "next/postcss",
 			"artifact": "apps/docs",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/docs; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this path processes maintainer-controlled docs source/assets during build; no untrusted production input reaches the vulnerable PostCSS, Sharp, or esbuild predicate. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-qx2v-qp2m-jg93",
@@ -510,8 +1400,108 @@
 			"dependencyPath": "next/postcss",
 			"artifact": "packages/auth",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/auth; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this path processes maintainer-controlled docs source/assets during build; no untrusted production input reaches the vulnerable PostCSS, Sharp, or esbuild predicate. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.4.31",
+			"dependencyPath": "next/postcss",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.5.15",
+			"dependencyPath": "vite/postcss",
+			"artifact": "apps/api",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.5.15",
+			"dependencyPath": "vite/postcss",
+			"artifact": "apps/app",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.5.15",
+			"dependencyPath": "vite/postcss",
+			"artifact": "apps/docs",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this path processes maintainer-controlled docs source/assets during build; no untrusted production input reaches the vulnerable PostCSS, Sharp, or esbuild predicate. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.5.15",
+			"dependencyPath": "vite/postcss",
+			"artifact": "packages/auth",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the auth package runs Better Auth on Workers and imports no Next runtime; this optional/transitive Next build chain is not invoked on untrusted input. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r28c-9q8g-f849",
+			"package": "postcss",
+			"version": "8.5.15",
+			"dependencyPath": "vite/postcss",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-r292-9mhp-454m",
+			"package": "tar",
+			"version": "6.2.1",
+			"dependencyPath": "tar",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-r5fr-rjxr-66jc",
@@ -520,8 +1510,8 @@
 			"dependencyPath": "lodash",
 			"artifact": "packages/integrations/n8n-node",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/n8n-node; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-r5fr-rjxr-66jc",
@@ -530,8 +1520,8 @@
 			"dependencyPath": "lodash",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-r6q2-hw4h-h46w",
@@ -540,8 +1530,8 @@
 			"dependencyPath": "tar",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-rv63-4mwf-qqc2",
@@ -550,8 +1540,28 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-v2hh-gcrm-f6hx",
+			"package": "fast-uri",
+			"version": "3.1.2",
+			"dependencyPath": "fast-uri",
+			"artifact": "packages/mcp",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: fast-uri is reached only by SDK/AJV schema validation; RelayAPI does not use its result for navigation, host authorization, or network fetching. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-v2hh-gcrm-f6hx",
+			"package": "fast-uri",
+			"version": "3.1.2",
+			"dependencyPath": "fast-uri",
+			"artifact": "repository-tooling",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-v2v4-37r5-5v8g",
@@ -560,8 +1570,8 @@
 			"dependencyPath": "ip-address",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-v2v4-37r5-5v8g",
@@ -570,8 +1580,38 @@
 			"dependencyPath": "ip-address",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-v422-hmwv-36x6",
+			"package": "body-parser",
+			"version": "2.2.2",
+			"dependencyPath": "body-parser",
+			"artifact": "apps/docs",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-v422-hmwv-36x6",
+			"package": "body-parser",
+			"version": "2.2.2",
+			"dependencyPath": "body-parser",
+			"artifact": "packages/mcp",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-v422-hmwv-36x6",
+			"package": "body-parser",
+			"version": "2.2.2",
+			"dependencyPath": "body-parser",
+			"artifact": "repository-tooling",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-vmf3-w455-68vh",
@@ -580,8 +1620,8 @@
 			"dependencyPath": "tar",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-vmh5-mc38-953g",
@@ -590,8 +1630,8 @@
 			"dependencyPath": "@cloudflare/vite-plugin/miniflare/undici",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-vv9j-gjw2-j8wp",
@@ -600,8 +1640,8 @@
 			"dependencyPath": "yeoman-environment",
 			"artifact": "packages/integrations/zapier-app",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/zapier-app; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-vxpw-j846-p89q",
@@ -610,8 +1650,8 @@
 			"dependencyPath": "@cloudflare/vite-plugin/miniflare/undici",
 			"artifact": "apps/app",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of apps/app; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: the dashboard is an Astro Worker, not a Next runtime; this exact Next/build/Cloudflare-tooling path is not invoked on untrusted production input. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-w5hq-g745-h8pq",
@@ -620,8 +1660,28 @@
 			"dependencyPath": "uuid",
 			"artifact": "packages/integrations/n8n-node",
 			"dependencyClass": "development",
-			"expiresOn": "2026-08-12",
-			"reason": "Development-only locked dependency of packages/integrations/n8n-node; not shipped as that artifact runtime. Re-review and update/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
+		},
+		{
+			"advisory": "GHSA-w62v-xxxg-mg59",
+			"package": "hono",
+			"version": "4.12.14",
+			"dependencyPath": "@modelcontextprotocol/sdk/hono",
+			"artifact": "packages/mcp",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-w8wr-v893-vjvp",
+			"package": "tar",
+			"version": "6.2.1",
+			"dependencyPath": "tar",
+			"artifact": "packages/integrations/zapier-app",
+			"dependencyClass": "development",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: this exact path is development-only, consumes maintainer-controlled build/test inputs, and is not shipped in the artifact runtime. Upgrade or remove the upstream chain before expiry."
 		},
 		{
 			"advisory": "GHSA-wgpf-jwqj-8h8p",
@@ -630,8 +1690,8 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-wwfh-h76j-fc44",
@@ -640,8 +1700,18 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
+		},
+		{
+			"advisory": "GHSA-xgm2-5f3f-mvvc",
+			"package": "hono",
+			"version": "4.12.14",
+			"dependencyPath": "@modelcontextprotocol/sdk/hono",
+			"artifact": "packages/mcp",
+			"dependencyClass": "runtime",
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		},
 		{
 			"advisory": "GHSA-xrhx-7g5j-rcj5",
@@ -650,8 +1720,8 @@
 			"dependencyPath": "@modelcontextprotocol/sdk/hono",
 			"artifact": "packages/mcp",
 			"dependencyClass": "runtime",
-			"expiresOn": "2026-08-12",
-			"reason": "Locked production dependency graph of packages/mcp; this gate-only change intentionally does not alter packages. Upgrade/remove the upstream chain before expiry."
+			"expiresOn": "2026-09-02",
+			"reason": "Reviewed 2026-08-03: RelayAPI MCP is stdio-only and imports none of the SDK's Hono, Node HTTP, body-parser, HTML, cache, JWT, CORS, or static-serving paths named by this advisory. Upgrade the MCP SDK chain before expiry."
 		}
 	]
 }

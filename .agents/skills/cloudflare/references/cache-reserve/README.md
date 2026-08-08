@@ -113,11 +113,11 @@ https://dash.cloudflare.com/caching/cache-reserve
 ```bash
 # Check Cache Reserve status
 curl -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/cache/cache_reserve" \
-  -H "Authorization: Bearer $API_TOKEN"
+  --header @/secure/bearer-auth-header
 
 # Enable Cache Reserve
 curl -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/cache/cache_reserve" \
-  -H "Authorization: Bearer $API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{"value": "on"}'
 

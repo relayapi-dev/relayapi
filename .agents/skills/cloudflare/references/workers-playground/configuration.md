@@ -89,7 +89,7 @@ Method: POST
 URL: /api/users
 Headers:
   Content-Type: application/json
-  Authorization: Bearer token123
+  X-Debug-Request-ID: example-request
 Body:
 {
   "name": "Alice",

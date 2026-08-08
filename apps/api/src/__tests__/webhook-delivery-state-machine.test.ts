@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { CUSTOMER_WEBHOOK_MANUAL_REVIEW_WINDOW_MS } from "../lib/customer-webhook-policy";
 
 type Row = Record<string, unknown>;
 type Column = { name: string };
@@ -26,6 +27,8 @@ const webhookDeliveries = table("webhookDeliveries", [
 	"organizationId",
 	"status",
 	"attempts",
+	"repairAttempts",
+	"repairDeadlineAt",
 	"leaseToken",
 	"leaseExpiresAt",
 	"claimedAt",
@@ -33,6 +36,10 @@ const webhookDeliveries = table("webhookDeliveries", [
 	"completedAt",
 	"statusCode",
 	"responseTimeMs",
+	"manualReviewReason",
+	"manualReviewUntil",
+	"operatorIntervenedAt",
+	"operatorRetryRequestedAt",
 	"error",
 	"nextAttemptAt",
 	"nextDispatchAt",
@@ -201,6 +208,7 @@ let lastRequest: RequestInit | undefined;
 let fetchResult: () => Promise<Response> = async () => new Response(null);
 let urlSafety: "allowed" | "blocked" | "indeterminate" = "allowed";
 let decryptFailure: Error | null = null;
+let operatorAlerts: Row[] = [];
 
 mock.module("@relayapi/db", () => ({
 	createDb: () => activeDb,
@@ -243,6 +251,10 @@ mock.module("drizzle-orm", () => {
 			(col: Column): Condition =>
 			(row) =>
 				row[col.name] == null,
+		isNotNull:
+			(col: Column): Condition =>
+			(row) =>
+				row[col.name] != null,
 		inArray:
 			(col: Column, values: unknown[]): Condition =>
 			(row) =>
@@ -274,8 +286,22 @@ mock.module("../lib/fetch-timeout", () => ({
 		return fetchResult();
 	},
 }));
+mock.module("../queues/failures", () => ({
+	encryptQueueFailurePayload: async () => ({
+		payloadCiphertext: "encrypted-test-payload",
+		payloadKeyId: "test",
+		payloadExpiresAt: new Date("2026-07-29T00:00:00.000Z"),
+	}),
+}));
+mock.module("../services/operator-alerts", () => ({
+	dispatchCustomerWebhookRepairExhaustedAlert: async (alert: Row) => {
+		operatorAlerts.push(alert);
+	},
+}));
 
-const { performWebhookDelivery } = await import("../services/webhook-delivery");
+const { performWebhookDelivery, webhookDeliveryAttemptLimit } = await import(
+	"../services/webhook-delivery"
+);
 
 import type { Env } from "../types";
 
@@ -292,6 +318,8 @@ function seedDelivery(overrides: Row = {}): Row {
 		organizationId: "org_1",
 		status: "pending",
 		attempts: 0,
+		repairAttempts: 0,
+		repairDeadlineAt: new Date(Date.now() + 24 * 60 * 60_000),
 		leaseToken: 0,
 		leaseExpiresAt: null,
 		claimedAt: null,
@@ -299,6 +327,10 @@ function seedDelivery(overrides: Row = {}): Row {
 		completedAt: null,
 		statusCode: null,
 		responseTimeMs: null,
+		manualReviewReason: null,
+		manualReviewUntil: null,
+		operatorIntervenedAt: null,
+		operatorRetryRequestedAt: null,
 		error: null,
 		nextAttemptAt: new Date(Date.now() - 1_000),
 		nextDispatchAt: new Date(Date.now() - 1_000),
@@ -328,9 +360,15 @@ beforeEach(() => {
 	fetchResult = async () => new Response(null, { status: 200 });
 	urlSafety = "allowed";
 	decryptFailure = null;
+	operatorAlerts = [];
 });
 
 describe("performWebhookDelivery", () => {
+	it("adds exactly one HTTP attempt only after an audited operator retry", () => {
+		expect(webhookDeliveryAttemptLimit(null)).toBe(8);
+		expect(webhookDeliveryAttemptLimit(new Date())).toBe(9);
+	});
+
 	it("defers an indeterminate DNS result without disabling the endpoint", async () => {
 		const delivery = seedDelivery();
 		urlSafety = "indeterminate";
@@ -338,6 +376,7 @@ describe("performWebhookDelivery", () => {
 		expect(await performWebhookDelivery(env, "whd_1")).toBe("retry_scheduled");
 		expect(delivery.status).toBe("pending");
 		expect(delivery.attempts).toBe(0);
+		expect(delivery.repairAttempts).toBe(1);
 		expect(activeDb.rows.webhookEndpoints[0]?.enabled).toBe(true);
 		expect(fetchCallCount).toBe(0);
 	});
@@ -349,7 +388,38 @@ describe("performWebhookDelivery", () => {
 		expect(await performWebhookDelivery(env, "whd_1")).toBe("retry_scheduled");
 		expect(delivery.status).toBe("pending");
 		expect(delivery.attempts).toBe(0);
+		expect(delivery.repairAttempts).toBe(1);
 		expect(activeDb.rows.webhookEndpoints[0]?.enabled).toBe(true);
+		expect(fetchCallCount).toBe(0);
+	});
+
+	it("terminates an unresolved pre-boundary repair at its durable deadline", async () => {
+		const repairDeadlineAt = new Date(Date.now() - 1);
+		const delivery = seedDelivery({
+			repairDeadlineAt,
+		});
+		urlSafety = "indeterminate";
+
+		expect(await performWebhookDelivery(env, "whd_1")).toBe("manual_review");
+		expect(delivery.status).toBe("manual_review");
+		expect(delivery.attempts).toBe(0);
+		expect(delivery.repairAttempts).toBe(1);
+		expect(delivery.completedAt).toBeNull();
+		expect(delivery.manualReviewReason).toBe("pre_http_repair_exhausted");
+		expect(delivery.manualReviewUntil).toEqual(
+			new Date(
+				repairDeadlineAt.getTime() + CUSTOMER_WEBHOOK_MANUAL_REVIEW_WINDOW_MS,
+			),
+		);
+		expect(String(delivery.error)).toContain("automatic repair exhausted");
+		expect(operatorAlerts).toEqual([
+			expect.objectContaining({
+				type: "customer_webhook_pre_boundary_repair_exhausted",
+				organizationId: "org_1",
+				deliveryId: "whd_1",
+				repairAttempts: 1,
+			}),
+		]);
 		expect(fetchCallCount).toBe(0);
 	});
 
@@ -407,8 +477,13 @@ describe("performWebhookDelivery", () => {
 		};
 
 		expect(await performWebhookDelivery(env, "whd_1")).toBe("unknown");
-		expect(delivery.status).toBe("unknown");
+		expect(delivery.status).toBe("manual_review");
 		expect(delivery.requestMayHaveBeenSentAt).toBeInstanceOf(Date);
+		expect(delivery.manualReviewReason).toBe("http_outcome_unknown");
+		expect(
+			(delivery.manualReviewUntil as Date).getTime() -
+				(delivery.requestMayHaveBeenSentAt as Date).getTime(),
+		).toBe(CUSTOMER_WEBHOOK_MANUAL_REVIEW_WINDOW_MS);
 		expect(delivery.error).toBe("timed out");
 	});
 
@@ -420,11 +495,17 @@ describe("performWebhookDelivery", () => {
 	});
 
 	it("reports a settled unknown row again until failure-ledger persistence succeeds", async () => {
+		const requestMayHaveBeenSentAt = new Date();
 		seedDelivery({
-			status: "unknown",
+			status: "manual_review",
 			attempts: 1,
 			leaseExpiresAt: null,
-			requestMayHaveBeenSentAt: new Date(),
+			requestMayHaveBeenSentAt,
+			manualReviewReason: "http_outcome_unknown",
+			manualReviewUntil: new Date(
+				requestMayHaveBeenSentAt.getTime() +
+					CUSTOMER_WEBHOOK_MANUAL_REVIEW_WINDOW_MS,
+			),
 		});
 
 		expect(await performWebhookDelivery(env, "whd_1")).toBe("unknown");

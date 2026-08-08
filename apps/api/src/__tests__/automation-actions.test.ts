@@ -35,8 +35,9 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFieldsFixture } from "./helpers/protected-contact-fixtures";
 
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -87,12 +88,18 @@ async function teardownFixtureOrg() {
 }
 
 async function createContact(name = "actions-test-contact") {
+	const id = generateId("ct_");
 	const [ct] = await db
 		.insert(contacts)
 		.values({
+			id,
 			organizationId: orgId,
 			workspaceId,
-			name,
+			...(await protectedContactFieldsFixture({
+				id,
+				organizationId: orgId,
+				name,
+			})),
 		})
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
@@ -162,7 +169,7 @@ afterEach(() => {
 });
 
 describe("action dispatcher", () => {
-	it("persists a durable conversion fact before emitting the internal event", async () => {
+	it("persists a durable conversion outbox fact before its fast-path dispatch", async () => {
 		let persisted: Record<string, unknown> | undefined;
 		let conflictTarget: unknown;
 		const durableDb = {
@@ -185,8 +192,8 @@ describe("action dispatcher", () => {
 			env: { db: durableDb, ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 			context: {
 				contact: { name: "alice" },
-				// Stop the best-effort internal trigger at the cycle guard. This unit
-				// test is concerned with the durable write that precedes emission.
+				// The unit is concerned with the durable write that precedes the
+				// best-effort fast path; the scheduled dispatcher owns recovery.
 				triggerEvent: { payload: { _event_depth: 5 } },
 			},
 		};

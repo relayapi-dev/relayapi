@@ -46,6 +46,7 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -94,13 +95,13 @@ async function seedFixture() {
 	// than replaces.
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "Alice Example",
 			email: "alice@example.com",
 			tags: ["lead"],
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	contactId = ct.id;
@@ -325,12 +326,12 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 		// interference from earlier tests.
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "Same-run tag refresh contact",
 				tags: [],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 
@@ -513,12 +514,12 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "Same-run field refresh contact",
 				tags: [],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 

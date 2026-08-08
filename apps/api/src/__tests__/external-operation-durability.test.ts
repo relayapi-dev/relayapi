@@ -8,11 +8,14 @@ import {
 	tenantDeletionJobs,
 	tokenRefreshOperations,
 	whatsappPhoneNumbers,
+	whatsappPhoneProvisioningOperations,
+	whatsappPhoneReleaseOperations,
 } from "@relayapi/db";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { stableOperationJson } from "../lib/durable-operation";
 import {
 	adProviderCorrelationMarker,
+	buildAdOperationCampaignProjection,
 	classifyAdCreationReplayState,
 	correlatedAdProviderName,
 	remainingAdCreationPhases,
@@ -52,6 +55,70 @@ describe("durable external-operation identities", () => {
 		expect(once).toBe("Launch [relay:adop_123]");
 		expect(correlatedAdProviderName(once, "adop_123")).toBe(once);
 	});
+
+	it("takes over a sync-raced campaign with the canonical operation projection", () => {
+		const projection = buildAdOperationCampaignProjection({
+			kind: "boost_post",
+			workspaceId: "ws_1",
+			name: "Launch",
+			platformAdSetId: "adset_1",
+			objective: "engagement",
+			dailyBudgetCents: 2_500,
+			currency: "USD",
+		});
+
+		expect(projection).toEqual({
+			workspaceId: "ws_1",
+			name: "Launch",
+			objective: "engagement",
+			status: "active",
+			dailyBudgetCents: 2_500,
+			lifetimeBudgetCents: null,
+			currency: "USD",
+			isExternal: false,
+			metadata: { platformAdSetId: "adset_1" },
+		});
+		expect(projection.name).not.toContain("[relay:");
+
+		expect(
+			buildAdOperationCampaignProjection({
+				kind: "create_campaign",
+				workspaceId: null,
+				name: "Scheduled launch",
+				platformAdSetId: "adset_2",
+				objective: "traffic",
+				startDate: "2026-08-03T09:00:00.000Z",
+				endDate: "2026-08-10T09:00:00.000Z",
+			}),
+		).toMatchObject({
+			status: "paused",
+			isExternal: false,
+			startDate: new Date("2026-08-03T09:00:00.000Z"),
+			endDate: new Date("2026-08-10T09:00:00.000Z"),
+		});
+	});
+
+	it("validates targeting before staging a paid-object operation", async () => {
+		const source = await Bun.file(
+			new URL("../services/ad-service.ts", import.meta.url),
+		).text();
+		const createAdStart = source.indexOf("export async function createAd(");
+		const boostStart = source.indexOf("export async function boostPost(");
+		const updateStart = source.indexOf("export async function updateAd(");
+		const createAdSource = source.slice(createAdStart, boostStart);
+		const boostSource = source.slice(boostStart, updateStart);
+
+		for (const operationSource of [createAdSource, boostSource]) {
+			const validation = operationSource.indexOf(
+				"adapter.canonicalizeTargeting(",
+			);
+			const durableBoundary = operationSource.indexOf(
+				"beginAdCreationOperation({",
+			);
+			expect(validation).toBeGreaterThan(-1);
+			expect(durableBoundary).toBeGreaterThan(validation);
+		}
+	});
 });
 
 describe("paid-operation Queue replay fencing", () => {
@@ -76,6 +143,20 @@ describe("paid-operation Queue replay fencing", () => {
 					...base,
 					status: "processing",
 					leaseExpiresAt: new Date("2026-07-13T11:59:00.000Z"),
+				},
+				now,
+			),
+		).toBe("safe");
+		expect(
+			classifyAdCreationReplayState(
+				{
+					...base,
+					status: "processing",
+					leaseExpiresAt: new Date("2026-07-13T11:59:00.000Z"),
+					kind: "create_ad",
+					requestPayload: { campaignId: "campaign_local" },
+					platformCampaignId: "campaign_provider",
+					platformAdSetId: "adset_provider",
 				},
 				now,
 			),
@@ -211,9 +292,9 @@ describe("durable external-operation schema", () => {
 			"kind",
 			"operation_key_hash",
 		]);
-		expect(uniqueColumns(whatsappPhoneNumbers)).toContainEqual([
+		expect(uniqueColumns(whatsappPhoneProvisioningOperations)).toContainEqual([
 			"organization_id",
-			"provisioning_operation_key_hash",
+			"idempotency_key_hash",
 		]);
 		expect(uniqueColumns(whatsappPhoneNumbers)).toContainEqual([
 			"provider_number_id",
@@ -238,8 +319,12 @@ describe("durable external-operation schema", () => {
 			(foreignKey) => foreignKey.reference().foreignTable === adAccounts,
 		);
 		expect(accountForeignKey?.onDelete).toBe("no action");
-		expect(whatsappPhoneNumbers.provisioningLeaseToken).toBeDefined();
-		expect(whatsappPhoneNumbers.releaseLeaseToken).toBeDefined();
+		expect(
+			whatsappPhoneProvisioningOperations.provisioningLeaseToken,
+		).toBeDefined();
+		expect(whatsappPhoneReleaseOperations.releaseLeaseToken).toBeDefined();
+		expect("provisioningState" in whatsappPhoneNumbers).toBe(false);
+		expect("releaseState" in whatsappPhoneNumbers).toBe(false);
 		expect(tenantDeletionJobs.leaseToken).toBeDefined();
 		expect(tenantDeletionJobs.status.enumValues).toContain("waiting_external");
 		expect(tenantDeletionJobs.status.enumValues).toContain("manual_review");
@@ -249,7 +334,7 @@ describe("durable external-operation schema", () => {
 		expect("sourceAccessToken" in tokenRefreshOperations).toBe(false);
 		expect("sourceRefreshToken" in tokenRefreshOperations).toBe(false);
 		expect("tokenExpiresAt" in accountRevocationJobs).toBe(false);
-		expect("kind" in billingOperations).toBe(false);
+		expect(billingOperations.kind.enumValues).toEqual(["cycle", "catchup"]);
 		expect("metadata" in billingOperations).toBe(false);
 		expect(
 			getTableConfig(stripeEvents).indexes.map((index) => index.config.name),

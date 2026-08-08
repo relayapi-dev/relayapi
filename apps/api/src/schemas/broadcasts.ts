@@ -141,7 +141,7 @@ export const RecipientListQuery = z.object({
 export const RecipientResponse = z.object({
 	id: z.string(),
 	contact_id: z.string().nullable(),
-	contact_identifier: z.string(),
+	contact_identifier: z.string().nullable(),
 	status: z.enum([
 		"pending",
 		"sending",

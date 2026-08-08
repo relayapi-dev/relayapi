@@ -41,6 +41,66 @@ function hostname(value: unknown, label: string): string {
 	return parsed;
 }
 
+function r2Jurisdiction(value: unknown): "default" | "eu" {
+	const parsed =
+		value === undefined
+			? "default"
+			: string(value, "cloudflare.r2Jurisdiction");
+	if (parsed !== "default" && parsed !== "eu") {
+		throw new Error('cloudflare.r2Jurisdiction must be "default" or "eu"');
+	}
+	return parsed;
+}
+
+const CLOUDFLARE_CERTIFICATE_ID =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function validateHyperdriveCaCertificateId(
+	value: unknown,
+	label = "cloudflare.hyperdriveCaCertificateId",
+): string {
+	const parsed = string(value, label).toLowerCase();
+	if (!CLOUDFLARE_CERTIFICATE_ID.test(parsed)) {
+		throw new Error(`${label} must be a Cloudflare certificate UUID`);
+	}
+	return parsed;
+}
+
+export function withResolvedHyperdriveCaCertificateId(
+	config: SelfHostConfig,
+	caCertificateId: string,
+	options: { allowExplicitReplacement?: boolean } = {},
+): SelfHostConfig {
+	const resolved = validateHyperdriveCaCertificateId(caCertificateId);
+	const configured = config.cloudflare.hyperdriveCaCertificateId
+		? validateHyperdriveCaCertificateId(
+				config.cloudflare.hyperdriveCaCertificateId,
+			)
+		: undefined;
+	if (
+		configured &&
+		configured !== resolved &&
+		!options.allowExplicitReplacement
+	) {
+		throw new Error(
+			"Resolved Hyperdrive CA certificate ID conflicts with relayapi.selfhost.json",
+		);
+	}
+	if (
+		configured === resolved &&
+		config.cloudflare.hyperdriveCaCertificateId === resolved
+	) {
+		return config;
+	}
+	return {
+		...config,
+		cloudflare: {
+			...config.cloudflare,
+			hyperdriveCaCertificateId: resolved,
+		},
+	};
+}
+
 export function validateConfig(value: unknown): SelfHostConfig {
 	const root = object(value, "configuration");
 	if (root.schemaVersion !== 1) {
@@ -54,6 +114,10 @@ export function validateConfig(value: unknown): SelfHostConfig {
 	const rootDomain = hostname(cf.rootDomain, "cloudflare.rootDomain");
 	const apiHostname = hostname(cf.apiHostname, "cloudflare.apiHostname");
 	const appHostname = hostname(cf.appHostname, "cloudflare.appHostname");
+	const publicHostname = hostname(
+		cf.publicHostname ?? `go.${rootDomain}`,
+		"cloudflare.publicHostname",
+	);
 	const mediaHostname = hostname(cf.mediaHostname, "cloudflare.mediaHostname");
 	const thumbnailHostname = hostname(
 		cf.thumbnailHostname,
@@ -62,6 +126,7 @@ export function validateConfig(value: unknown): SelfHostConfig {
 	for (const [label, child] of [
 		["apiHostname", apiHostname],
 		["appHostname", appHostname],
+		["publicHostname", publicHostname],
 		["mediaHostname", mediaHostname],
 		["thumbnailHostname", thumbnailHostname],
 	] as const) {
@@ -109,8 +174,17 @@ export function validateConfig(value: unknown): SelfHostConfig {
 			rootDomain,
 			apiHostname,
 			appHostname,
+			publicHostname,
 			mediaHostname,
 			thumbnailHostname,
+			r2Jurisdiction: r2Jurisdiction(cf.r2Jurisdiction),
+			...(cf.hyperdriveCaCertificateId === undefined
+				? {}
+				: {
+						hyperdriveCaCertificateId: validateHyperdriveCaCertificateId(
+							cf.hyperdriveCaCertificateId,
+						),
+					}),
 		},
 		features: {
 			email: boolean(features.email, "features.email"),

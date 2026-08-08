@@ -5,8 +5,12 @@ import apiKeysRouter from "../routes/api-keys";
 import { contactsRouter } from "../routes/contacts";
 import ideasRouter from "../routes/ideas";
 import inboxRouter from "../routes/inbox-feed";
+import landingPagesRouter from "../routes/landing-pages";
 import postsRouter from "../routes/posts";
+import qrCodesRouter from "../routes/qr-codes";
 import queueRouter from "../routes/queue";
+import refUrlsRouter from "../routes/ref-urls";
+import subscriptionListsRouter from "../routes/subscription-lists";
 import webhooksRouter from "../routes/webhooks";
 import {
 	listConversations,
@@ -28,6 +32,7 @@ function request(router: typeof postsRouter, path: string) {
 	app.use("*", async (c, next) => {
 		c.set("orgId", "org_a");
 		c.set("keyId", "key_a");
+		c.set("principalId", "prn_a");
 		c.set("permissions", ["read", "write", "manage_api_keys"]);
 		c.set("workspaceScope", "all");
 		c.set("db", throwingDb as never);
@@ -40,6 +45,7 @@ function request(router: typeof postsRouter, path: string) {
 describe("affected cursor routes", () => {
 	it.each([
 		["posts", postsRouter, "/?cursor=not-a-cursor"],
+		["post tags", postsRouter, "/post_1/tags?cursor=not-a-cursor"],
 		["ideas", ideasRouter, "/?cursor=not-a-cursor"],
 		["inbox conversations", inboxRouter, "/conversations?cursor=not-a-cursor"],
 		["inbox messages", inboxRouter, "/search?q=hello&cursor=not-a-cursor"],
@@ -48,13 +54,25 @@ describe("affected cursor routes", () => {
 		["API keys", apiKeysRouter, "/?cursor=not-a-cursor"],
 		["contact consents", contactsRouter, "/ct_1/consents?cursor=not-a-cursor"],
 		["queue failures", queueRouter, "/failures?cursor=not-a-cursor"],
-	] as const)("rejects malformed %s cursors before querying", async (_name, router, path) => {
-		const response = await request(router, path);
-		expect(response.status).toBe(400);
-		expect((await response.json()) as { error: { code: string } }).toEqual({
-			error: expect.objectContaining({ code: "INVALID_CURSOR" }),
-		});
-	});
+		["subscription lists", subscriptionListsRouter, "/?cursor=not-a-cursor"],
+		["reference URLs", refUrlsRouter, "/?cursor=not-a-cursor"],
+		["QR codes", qrCodesRouter, "/?cursor=not-a-cursor"],
+		["landing pages", landingPagesRouter, "/?cursor=not-a-cursor"],
+		[
+			"subscription-list members",
+			subscriptionListsRouter,
+			"/sublist_1/members?cursor=not-a-cursor",
+		],
+	] as const)(
+		"rejects malformed %s cursors before querying",
+		async (_name, router, path) => {
+			const response = await request(router, path);
+			expect(response.status).toBe(400);
+			expect((await response.json()) as { error: { code: string } }).toEqual({
+				error: expect.objectContaining({ code: "INVALID_CURSOR" }),
+			});
+		},
+	);
 });
 
 function pageDb(rows: Array<Record<string, unknown>>) {

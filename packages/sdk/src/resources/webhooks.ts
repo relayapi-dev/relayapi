@@ -6,6 +6,11 @@ import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
 import { path } from '../internal/utils/path';
 
+/**
+ * Endpoint CRUD and secret rotation are PostgreSQL-owned. `sendTest` crosses an
+ * external HTTP boundary; only its missing, scope-denied, and blocked-URL
+ * preflights are proven zero-effect outcomes.
+ */
 export class Webhooks extends APIResource {
   /**
    * Create a new webhook endpoint. The signing secret is returned only once in the
@@ -195,11 +200,28 @@ export namespace WebhookListLogsResponse {
   export interface Data {
     id: string;
 
+    attempt_kind: 'delivery' | 'test';
+
+    /**
+     * One-based HTTP attempt ordinal within the delivery
+     */
+    attempt_ordinal: number;
+
     created_at: string;
+
+    /**
+     * Durable delivery ID; null only for an explicit test attempt
+     */
+    delivery_id: string | null;
 
     error: string | null;
 
     event: string;
+
+    /**
+     * Persisted outcome of this exact HTTP attempt
+     */
+    outcome: 'succeeded' | 'retry_scheduled' | 'failed' | 'unknown';
 
     payload: unknown;
 

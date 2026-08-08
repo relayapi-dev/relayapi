@@ -78,5 +78,17 @@ export function mapAuthDatabaseError(error: unknown): Response | null {
 			{ status: 409 },
 		);
 	}
+	if (databaseError.message === "members may only be added for active users") {
+		return Response.json(
+			{
+				error: {
+					code: "USER_NOT_ACTIVE",
+					message:
+						"Your account is not currently authorized to accept this invitation.",
+				},
+			},
+			{ status: 401 },
+		);
+	}
 	return null;
 }

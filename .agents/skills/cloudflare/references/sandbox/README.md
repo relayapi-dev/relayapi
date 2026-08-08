@@ -71,7 +71,7 @@ EXPOSE 8080 3000  # Required for wrangler dev
 - `sandbox.readFile(path)` / `writeFile(path, content)` → File ops
 - `sandbox.startProcess(command, options)` → Background process
 - `sandbox.exposePort(port, options)` → Get preview URL
-- `sandbox.createSession(options)` → Isolated session
+- `sandbox.createSession(options)` → Command session (not a tenant security boundary)
 - `sandbox.wsConnect(request, port)` → WebSocket proxy
 - `sandbox.destroy()` → Terminate container
 - `sandbox.mountBucket(bucket, path, options)` → Mount S3 storage
@@ -80,6 +80,8 @@ EXPOSE 8080 3000  # Required for wrangler dev
 
 - ALWAYS call `proxyToSandbox()` first
 - Same ID = reuse sandbox
+- Authenticate and authorize before selecting a sandbox or executing code
+- Use a distinct sandbox ID per tenant; sessions in one sandbox share its security boundary
 - Use `/workspace` for persistent files
 - `normalizeId: true` for preview URLs
 - Retry on `CONTAINER_NOT_READY`

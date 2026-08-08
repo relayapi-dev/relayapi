@@ -23,23 +23,23 @@ const ROOT_WRITERS: Record<string, string[]> = {
 		"routes/contacts.ts",
 		"services/automations/webhook-receiver.ts",
 		"services/contact-linker.ts",
+		"services/public-growth-events.ts",
 	],
 	broadcasts: ["routes/broadcasts.ts", "routes/whatsapp.ts"],
 	adAccounts: ["services/ad-service.ts"],
 	adAudiences: ["services/ad-audience.ts"],
 	shortLinks: [
-		"routes/posts.ts",
-		"routes/short-links.ts",
+		"services/short-link-lifecycle.ts",
 		"services/short-link-providers/relayapi.ts",
 	],
 	ideas: ["routes/ideas.ts"],
 	automations: ["routes/automations.ts"],
 	segments: ["routes/segments.ts"],
-	subscriptionLists: [],
+	subscriptionLists: ["routes/subscription-lists.ts"],
 	aiKnowledgeBases: ["routes/ai-knowledge.ts"],
-	aiAgents: [],
+	aiAgents: ["routes/ai-agents.ts"],
 	refUrls: ["routes/ref-urls.ts"],
-	landingPages: [],
+	landingPages: ["routes/landing-pages.ts"],
 };
 
 async function source(relativePath: string): Promise<string> {

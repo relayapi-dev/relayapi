@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { z } from "@hono/zod-openapi";
 import { Relay } from "../../../../packages/sdk/src/client";
+import type { CrossPostActionResponse as SdkCrossPostAction } from "../../../../packages/sdk/src/resources/cross-post-actions";
 import type {
 	PostBulkCreateResponse,
 	PostBulkCreateParams,
@@ -19,6 +20,7 @@ import type {
 	PostUpdateResponse,
 } from "../../../../packages/sdk/src/resources/posts/posts";
 import { FilterParams, type Platform } from "../schemas/common";
+import { CrossPostActionResponse } from "../schemas/cross-post-actions";
 import type { CreatePostBody, PostResponse } from "../schemas/posts";
 
 type Equal<A, B> =
@@ -30,6 +32,7 @@ type Equal<A, B> =
 type Assert<T extends true> = T;
 
 type ApiPost = z.infer<typeof PostResponse>;
+type ApiCrossPostAction = z.infer<typeof CrossPostActionResponse>;
 type ApiCreatePost = z.input<typeof CreatePostBody>;
 type ApiListPosts = z.input<typeof FilterParams>;
 type SdkPost =
@@ -82,6 +85,9 @@ type _PublishOperationParity = Assert<
 		Pick<SdkTargetAccount, "publish_operation_id" | "delivery_state">
 	>
 >;
+type _CrossPostActionParity = Assert<
+	Equal<ApiCrossPostAction, SdkCrossPostAction>
+>;
 
 const _reconcileRequest: PostReconcileTargetParams = {
 	outcome: "failed",
@@ -99,6 +105,39 @@ const _reconcileResponse: PostReconcileTargetResponse = {
 };
 
 describe("API/SDK contract parity", () => {
+	it("serializes product schedule separately from cross-post retry timing", async () => {
+		const route = await Bun.file(
+			new URL("../routes/cross-post-actions.ts", import.meta.url),
+		).text();
+		expect(route).toContain("scheduled_for: a.scheduledFor.toISOString()");
+		expect(route).toContain("next_attempt_at: a.nextAttemptAt.toISOString()");
+		expect(route).not.toContain("execute_at:");
+
+		const response = {
+			id: "cpa_contract",
+			post_id: "post_contract",
+			action_type: "repost" as const,
+			target_account_id: "acc_contract",
+			content: null,
+			delay_minutes: 5,
+			status: "retry" as const,
+			scheduled_for: "2026-07-28T12:00:00.000Z",
+			next_attempt_at: "2026-07-28T12:05:00.000Z",
+			executed_at: null,
+			result_post_id: null,
+			error: "rate limited",
+			created_at: "2026-07-28T11:55:00.000Z",
+		};
+		expect(CrossPostActionResponse.safeParse(response).success).toBe(true);
+		expect(
+			CrossPostActionResponse.safeParse({
+				...response,
+				scheduled_for: undefined,
+				execute_at: response.scheduled_for,
+			}).success,
+		).toBe(false);
+	});
+
 	it("encodes Ideas media as multipart with a generated boundary", async () => {
 		let capturedRequest: Request | undefined;
 		const client = new Relay({

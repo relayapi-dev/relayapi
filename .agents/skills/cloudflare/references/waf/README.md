@@ -44,8 +44,12 @@ await client.rulesets.create({
 ```
 
 ### Create Custom Rule
+
+Cloudflare attack scores run from `1` (almost certainly malicious) to `99`
+(likely clean); `100` means unscored. Start by blocking only the `attack` band
+(`1`-`20`) and monitor Security Events before broadening mitigation.
 ```typescript
-// Block requests with attack score >= 40
+// Block requests in Cloudflare's recommended initial attack band (1-20)
 await client.rulesets.create({
   zone_id: 'zone_id',
   kind: 'zone',
@@ -53,8 +57,8 @@ await client.rulesets.create({
   name: 'Custom WAF Rules',
   rules: [{
     action: 'block',
-    expression: 'cf.waf.score gt 40',
-    description: 'Block high attack scores',
+    expression: 'cf.waf.score le 20',
+    description: 'Block requests classified as attacks',
     enabled: true,
   }],
 });

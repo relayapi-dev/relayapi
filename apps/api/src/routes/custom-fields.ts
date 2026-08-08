@@ -115,6 +115,10 @@ const updateField = createRoute({
 			description: "Updated field",
 			content: { "application/json": { schema: FieldResponse } },
 		},
+		400: {
+			description: "Options are invalid for the immutable field type",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -297,6 +301,7 @@ app.openapi(updateField, async (c) => {
 		.select({
 			id: customFieldDefinitions.id,
 			workspaceId: customFieldDefinitions.workspaceId,
+			type: customFieldDefinitions.type,
 		})
 		.from(customFieldDefinitions)
 		.where(
@@ -314,6 +319,17 @@ app.openapi(updateField, async (c) => {
 	}
 	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+	}
+	if (body.options !== undefined && existing.type !== "select") {
+		return c.json(
+			{
+				error: {
+					code: "VALIDATION_ERROR",
+					message: "Options are allowed only for select fields",
+				},
+			},
+			400,
+		);
 	}
 
 	const updateSet: Record<string, unknown> = { updatedAt: new Date() };
@@ -372,9 +388,21 @@ app.openapi(deleteField, async (c) => {
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied;
 
-	await db
+	const [deleted] = await db
 		.delete(customFieldDefinitions)
-		.where(eq(customFieldDefinitions.id, id));
+		.where(
+			and(
+				eq(customFieldDefinitions.id, id),
+				eq(customFieldDefinitions.organizationId, orgId),
+			),
+		)
+		.returning({ id: customFieldDefinitions.id });
+	if (!deleted) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Field not found" } },
+			404,
+		);
+	}
 
 	return c.body(null, 204);
 });

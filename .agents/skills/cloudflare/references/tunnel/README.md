@@ -42,7 +42,8 @@ cloudflared tunnel run my-tunnel
 1. **Zero Trust** > **Networks** > **Tunnels** > **Create**
 2. Name tunnel, copy token
 3. Configure routes in dashboard
-4. Run: `cloudflared tunnel --no-autoupdate run --token <TOKEN>`
+4. Store the token in a root-readable secret file and run:
+   `cloudflared tunnel --no-autoupdate run --token-file /run/secrets/cloudflared-token`
 
 ## Decision Tree
 

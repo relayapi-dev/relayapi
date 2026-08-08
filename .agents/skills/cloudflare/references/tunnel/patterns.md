@@ -7,8 +7,13 @@
 services:
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run --token-file /run/secrets/tunnel_token
+    secrets:
+      - tunnel_token
     restart: unless-stopped
+secrets:
+  tunnel_token:
+    file: /secure/cloudflared-token
 ```
 
 ### Local Config
@@ -46,14 +51,19 @@ spec:
         - tunnel
         - --no-autoupdate
         - run
-        - --token
-        - $(TUNNEL_TOKEN)
-        env:
-        - name: TUNNEL_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: tunnel-credentials
-              key: token
+        - --token-file
+        - /run/secrets/tunnel-token
+        volumeMounts:
+        - name: tunnel-token
+          mountPath: /run/secrets
+          readOnly: true
+      volumes:
+      - name: tunnel-token
+        secret:
+          secretName: tunnel-credentials
+          items:
+          - key: token
+            path: tunnel-token
 ```
 
 ## High Availability
@@ -136,10 +146,9 @@ resource "cloudflare_record" "app" {
   proxied = true
 }
 
-output "tunnel_token" {
-  value     = cloudflare_tunnel.app.tunnel_token
-  sensitive = true
-}
+# Do not expose the tunnel token as a Terraform output. Deliver any runtime
+# credential directly to the origin's secret manager through a reviewed,
+# provider-specific secret resource.
 ```
 
 ### Pulumi

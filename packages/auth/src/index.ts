@@ -1,4 +1,5 @@
 import { apiKey } from "@better-auth/api-key";
+import { queueAfterTransactionHook } from "@better-auth/core/context";
 import { LIMITS } from "@relayapi/config";
 import type { Database } from "@relayapi/db";
 import {
@@ -9,6 +10,7 @@ import {
 	eq,
 	gt,
 	invitation,
+	LEGACY_CREDENTIAL_VERSION,
 	lt,
 	member,
 	organization,
@@ -27,18 +29,52 @@ import {
 } from "better-auth/api";
 import { admin, organization as organizationPlugin } from "better-auth/plugins";
 import {
+	isActiveUserBan,
+	wrapAdminMutationEndpointsInTransactions,
+} from "./admin-ban-endpoints";
+import {
 	type TransactionalEndpointContext,
 	wrapEndpointInTransaction,
 } from "./atomic-endpoint";
+import { authoritativeOrganizationSessionPlugin } from "./authoritative-organization-session";
+import {
+	fenceInvitationAcceptingSession,
+	type InvitationAcceptContext,
+} from "./invitation-redeemer-fence";
+import {
+	fenceOrganizationMutationActor,
+	type OrganizationActorMutationContext,
+} from "./organization-actor-fence";
 import { ac, type ownerRole, roles } from "./permissions";
 
 export interface InvitationEmailData {
 	id: string;
+	/** Stable for one creation/resend occurrence (derived from its expiry). */
+	occurrenceId: string;
 	email: string;
 	role: string;
 	organizationId: string;
 	organizationName: string;
 	inviterEmail: string;
+}
+
+export function createPostCommitInvitationEmailSender(
+	sendInvitationEmail: (data: InvitationEmailData) => Promise<void>,
+): (data: InvitationEmailData) => Promise<void> {
+	return async (data) => {
+		await queueAfterTransactionHook(async () => {
+			try {
+				await sendInvitationEmail(data);
+			} catch {
+				// The invitation transaction is already committed. A delivery failure
+				// must not report the durable invitation as rolled back or encourage a
+				// duplicate mutation retry.
+				console.error(
+					JSON.stringify({ event: "post_commit_invitation_email_failed" }),
+				);
+			}
+		});
+	};
 }
 
 export type AccountEmailKind =
@@ -48,6 +84,7 @@ export type AccountEmailKind =
 
 export interface AccountEmailData {
 	kind: AccountEmailKind;
+	userId: string;
 	email: string;
 	url: string;
 	token: string;
@@ -68,6 +105,8 @@ export interface AuthEnv {
 		userId: string;
 		organizationId: string;
 	}) => Promise<void>;
+	/** Best-effort cleanup after an administrator commits an active user ban. */
+	afterUserBanned?: (data: { userId: string }) => Promise<void> | void;
 	/**
 	 * RelayAPI-owned atomic identity deletion lifecycle. Better Auth's first
 	 * child/user delete hook invokes this operation and then suppresses its own
@@ -211,9 +250,25 @@ function createRateLimitStorage(db: Database) {
 
 export function createAuth(db: Database, env: AuthEnv) {
 	const { sendInvitationEmail } = env;
+	const sendInvitationEmailAfterCommit = sendInvitationEmail
+		? createPostCommitInvitationEmailSender(sendInvitationEmail)
+		: undefined;
 	const sendAccountEmail = env.sendAccountEmail;
 	const afterRemoveMember = env.afterRemoveMember;
+	const afterUserBanned = env.afterUserBanned;
 	const deleteUserAtomically = env.deleteUserAtomically;
+	const notifyActiveUserBan = async (userId: string): Promise<void> => {
+		if (!afterUserBanned) return;
+		const [currentUser] = await db
+			.select({ banned: user.banned, banExpires: user.banExpires })
+			.from(user)
+			.where(eq(user.id, userId))
+			.limit(1);
+		if (!currentUser || !isActiveUserBan(currentUser)) {
+			return;
+		}
+		await afterUserBanned({ userId });
+	};
 	const identityDeletionPaths = new Set([
 		"/delete-user",
 		"/delete-user/callback",
@@ -388,6 +443,10 @@ export function createAuth(db: Database, env: AuthEnv) {
 	const config: Parameters<typeof betterAuth>[0] = {
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: env.BETTER_AUTH_URL,
+		// Let the app boundary sanitize RelayAPI-owned PostgreSQL invariants.
+		// Better Auth still converts APIError instances to their normal responses;
+		// only unexpected failures escape to the narrow database-error mapper.
+		onAPIError: { throw: true },
 		database: drizzleAdapter(db, {
 			provider: "pg",
 			transaction: true,
@@ -409,6 +468,7 @@ export function createAuth(db: Database, env: AuthEnv) {
 				? async ({ user: resetUser, url, token }) => {
 						await sendAccountEmail({
 							kind: "reset-password",
+							userId: resetUser.id,
 							email: resetUser.email,
 							url,
 							token,
@@ -431,6 +491,7 @@ export function createAuth(db: Database, env: AuthEnv) {
 					}) => {
 						await sendAccountEmail({
 							kind: "verify-email",
+							userId: unverifiedUser.id,
 							email: unverifiedUser.email,
 							url,
 							token,
@@ -463,6 +524,14 @@ export function createAuth(db: Database, env: AuthEnv) {
 			encryptOAuthTokens: true,
 		},
 		user: {
+			additionalFields: {
+				credentialVersion: {
+					type: "string",
+					required: true,
+					defaultValue: LEGACY_CREDENTIAL_VERSION,
+					input: false,
+				},
+			},
 			deleteUser: {
 				enabled: true,
 				deleteTokenExpiresIn: 30 * 60,
@@ -470,6 +539,7 @@ export function createAuth(db: Database, env: AuthEnv) {
 					? async ({ user: deletingUser, url, token }) => {
 							await sendAccountEmail({
 								kind: "delete-account",
+								userId: deletingUser.id,
 								email: deletingUser.email,
 								url,
 								token,
@@ -568,12 +638,37 @@ export function createAuth(db: Database, env: AuthEnv) {
 		},
 		plugins: [
 			apiKey(),
+			authoritativeOrganizationSessionPlugin(),
 			authoritativeAdminSessionPlugin,
 			admin(),
 			membershipLeaveRevocationPlugin,
 			organizationPlugin({
 				ac,
 				roles: roles as unknown as Record<string, typeof ownerRole>,
+				schema: {
+					organization: {
+						additionalFields: {
+							lifecycleStatus: {
+								type: "string",
+								required: true,
+								input: false,
+								returned: false,
+								defaultValue: "active",
+							},
+						},
+					},
+					invitation: {
+						additionalFields: {
+							issuerCredentialVersion: {
+								type: "string",
+								required: true,
+								input: false,
+								returned: false,
+								defaultValue: LEGACY_CREDENTIAL_VERSION,
+							},
+						},
+					},
+				},
 				// Tenant erasure must always pass through RelayAPI's durable
 				// requestTenantDeletion lifecycle rather than a raw adapter delete.
 				disableOrganizationDeletion: true,
@@ -602,10 +697,11 @@ export function createAuth(db: Database, env: AuthEnv) {
 						});
 					},
 				},
-				sendInvitationEmail: sendInvitationEmail
+				sendInvitationEmail: sendInvitationEmailAfterCommit
 					? async (data) => {
-							await sendInvitationEmail({
+							await sendInvitationEmailAfterCommit({
 								id: data.id,
+								occurrenceId: new Date(data.invitation.expiresAt).toISOString(),
 								email: data.email,
 								role: data.role,
 								organizationId: data.organization.id,
@@ -662,6 +758,77 @@ export function createAuth(db: Database, env: AuthEnv) {
 				},
 			) as never;
 	}
+	const createInvitationEndpoint =
+		organizationAuthPlugin?.endpoints?.createInvitation;
+	if (
+		organizationAuthPlugin?.endpoints &&
+		typeof createInvitationEndpoint === "function"
+	) {
+		const protectedCreateInvitationEndpoint = Object.assign(
+			async (context: OrganizationActorMutationContext) => {
+				await fenceOrganizationMutationActor(context, "invite");
+				return (
+					createInvitationEndpoint as unknown as (
+						context: OrganizationActorMutationContext,
+					) => Promise<unknown>
+				)(context);
+			},
+			createInvitationEndpoint,
+		);
+		organizationAuthPlugin.endpoints.createInvitation =
+			wrapEndpointInTransaction(protectedCreateInvitationEndpoint) as never;
+	}
+	const updateMemberRoleEndpoint =
+		organizationAuthPlugin?.endpoints?.updateMemberRole;
+	if (
+		organizationAuthPlugin?.endpoints &&
+		typeof updateMemberRoleEndpoint === "function"
+	) {
+		const protectedUpdateMemberRoleEndpoint = Object.assign(
+			async (context: OrganizationActorMutationContext) => {
+				await fenceOrganizationMutationActor(context, "update-member-role");
+				return (
+					updateMemberRoleEndpoint as unknown as (
+						context: OrganizationActorMutationContext,
+					) => Promise<unknown>
+				)(context);
+			},
+			updateMemberRoleEndpoint,
+		);
+		organizationAuthPlugin.endpoints.updateMemberRole =
+			wrapEndpointInTransaction(protectedUpdateMemberRoleEndpoint) as never;
+	}
+	const acceptInvitationEndpoint =
+		organizationAuthPlugin?.endpoints?.acceptInvitation;
+	if (
+		organizationAuthPlugin?.endpoints &&
+		typeof acceptInvitationEndpoint === "function"
+	) {
+		// Better Auth changes the invitation status before inserting membership.
+		// Keep both operations in one adapter transaction so the database issuer
+		// fence owns the entire grant boundary rather than only the status update.
+		const protectedAcceptInvitationEndpoint = Object.assign(
+			async (context: InvitationAcceptContext) => {
+				await fenceInvitationAcceptingSession(context);
+				return (
+					acceptInvitationEndpoint as unknown as (
+						context: InvitationAcceptContext,
+					) => Promise<unknown>
+				)(context);
+			},
+			acceptInvitationEndpoint,
+		);
+		organizationAuthPlugin.endpoints.acceptInvitation =
+			wrapEndpointInTransaction(protectedAcceptInvitationEndpoint) as never;
+	}
+
+	const adminAuthPlugin = config.plugins?.find(
+		(plugin) => plugin.id === "admin",
+	);
+	wrapAdminMutationEndpointsInTransactions(
+		adminAuthPlugin,
+		notifyActiveUserBan,
+	);
 
 	if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
 		config.socialProviders = {

@@ -66,13 +66,31 @@ export async function processBackfill(
 	try {
 		switch (platform) {
 			case "facebook":
-				await backfillFacebook(db, account, token, message.organization_id);
+				await backfillFacebook(
+					db,
+					account,
+					token,
+					message.organization_id,
+					env.ENCRYPTION_KEY,
+				);
 				break;
 			case "instagram":
-				await backfillInstagram(db, account, token, message.organization_id);
+				await backfillInstagram(
+					db,
+					account,
+					token,
+					message.organization_id,
+					env.ENCRYPTION_KEY,
+				);
 				break;
 			case "youtube":
-				await backfillYouTube(db, account, token, message.organization_id);
+				await backfillYouTube(
+					db,
+					account,
+					token,
+					message.organization_id,
+					env.ENCRYPTION_KEY,
+				);
 				break;
 			case "googlebusiness":
 				await backfillGoogleBusiness(
@@ -80,6 +98,7 @@ export async function processBackfill(
 					account,
 					token,
 					message.organization_id,
+					env.ENCRYPTION_KEY,
 				);
 				break;
 			default:
@@ -109,6 +128,7 @@ async function backfillFacebook(
 	account: SocialAccount,
 	token: string,
 	organizationId: string,
+	subjectLocatorKeyConfig: string,
 ): Promise<void> {
 	// Fetch page posts
 	const postsUrl = `${GRAPH_BASE.facebook}/me/feed?access_token=${encodeURIComponent(token)}&limit=25&fields=id,message,created_time`;
@@ -139,6 +159,7 @@ async function backfillFacebook(
 				token,
 				organizationId,
 				post.id,
+				subjectLocatorKeyConfig,
 			);
 		} catch (err) {
 			console.error(
@@ -155,6 +176,7 @@ async function fetchAndStoreFacebookComments(
 	token: string,
 	organizationId: string,
 	postId: string,
+	subjectLocatorKeyConfig: string,
 ): Promise<void> {
 	let cursor: string | undefined;
 	let page = 0;
@@ -187,21 +209,25 @@ async function fetchAndStoreFacebookComments(
 
 		for (const comment of comments) {
 			try {
-				const conversation = await upsertConversation(db, {
-					organizationId,
-					workspaceId: account.workspaceId,
-					accountId: account.id,
-					platform: "facebook",
-					type: "comment_thread",
-					platformConversationId: postId,
-					postPlatformId: postId,
-					participantName: comment.from?.name ?? null,
-					participantPlatformId: comment.from?.id ?? null,
-					participantAvatar: comment.from?.picture?.data?.url ?? null,
-					lastMessageText: comment.message,
-					lastMessageAt: new Date(comment.created_time),
-					lastMessageDirection: "inbound",
-				});
+				const conversation = await upsertConversation(
+					db,
+					{
+						organizationId,
+						workspaceId: account.workspaceId,
+						accountId: account.id,
+						platform: "facebook",
+						type: "comment_thread",
+						platformConversationId: postId,
+						postPlatformId: postId,
+						participantName: comment.from?.name ?? null,
+						participantPlatformId: comment.from?.id ?? null,
+						participantAvatar: comment.from?.picture?.data?.url ?? null,
+						lastMessageText: comment.message,
+						lastMessageAt: new Date(comment.created_time),
+						lastMessageDirection: "inbound",
+					},
+					subjectLocatorKeyConfig,
+				);
 
 				await insertMessage(db, {
 					conversationId: conversation.id,
@@ -245,6 +271,7 @@ async function backfillInstagram(
 	account: SocialAccount,
 	token: string,
 	organizationId: string,
+	subjectLocatorKeyConfig: string,
 ): Promise<void> {
 	const host = igGraphHost(token);
 
@@ -278,6 +305,7 @@ async function backfillInstagram(
 				organizationId,
 				media.id,
 				host,
+				subjectLocatorKeyConfig,
 			);
 		} catch (err) {
 			console.error(
@@ -295,6 +323,7 @@ async function fetchAndStoreInstagramComments(
 	organizationId: string,
 	mediaId: string,
 	host: string,
+	subjectLocatorKeyConfig: string,
 ): Promise<void> {
 	let cursor: string | undefined;
 	let page = 0;
@@ -323,20 +352,24 @@ async function fetchAndStoreInstagramComments(
 
 		for (const comment of comments) {
 			try {
-				const conversation = await upsertConversation(db, {
-					organizationId,
-					workspaceId: account.workspaceId,
-					accountId: account.id,
-					platform: "instagram",
-					type: "comment_thread",
-					platformConversationId: mediaId,
-					postPlatformId: mediaId,
-					participantName: comment.from?.username ?? null,
-					participantPlatformId: comment.from?.id ?? null,
-					lastMessageText: comment.text,
-					lastMessageAt: new Date(comment.timestamp),
-					lastMessageDirection: "inbound",
-				});
+				const conversation = await upsertConversation(
+					db,
+					{
+						organizationId,
+						workspaceId: account.workspaceId,
+						accountId: account.id,
+						platform: "instagram",
+						type: "comment_thread",
+						platformConversationId: mediaId,
+						postPlatformId: mediaId,
+						participantName: comment.from?.username ?? null,
+						participantPlatformId: comment.from?.id ?? null,
+						lastMessageText: comment.text,
+						lastMessageAt: new Date(comment.timestamp),
+						lastMessageDirection: "inbound",
+					},
+					subjectLocatorKeyConfig,
+				);
 
 				await insertMessage(db, {
 					conversationId: conversation.id,
@@ -373,6 +406,7 @@ async function backfillYouTube(
 	account: SocialAccount,
 	token: string,
 	organizationId: string,
+	subjectLocatorKeyConfig: string,
 ): Promise<void> {
 	const channelId = account.platformAccountId;
 
@@ -439,21 +473,25 @@ async function backfillYouTube(
 				const videoId = topComment.videoId;
 
 				// Upsert conversation for this video's comment thread
-				const conversation = await upsertConversation(db, {
-					organizationId,
-					workspaceId: account.workspaceId,
-					accountId: account.id,
-					platform: "youtube",
-					type: "comment_thread",
-					platformConversationId: videoId,
-					postPlatformId: videoId,
-					participantName: topComment.authorDisplayName,
-					participantPlatformId: topComment.authorChannelId?.value ?? null,
-					participantAvatar: topComment.authorProfileImageUrl ?? null,
-					lastMessageText: topComment.textOriginal,
-					lastMessageAt: new Date(topComment.publishedAt),
-					lastMessageDirection: "inbound",
-				});
+				const conversation = await upsertConversation(
+					db,
+					{
+						organizationId,
+						workspaceId: account.workspaceId,
+						accountId: account.id,
+						platform: "youtube",
+						type: "comment_thread",
+						platformConversationId: videoId,
+						postPlatformId: videoId,
+						participantName: topComment.authorDisplayName,
+						participantPlatformId: topComment.authorChannelId?.value ?? null,
+						participantAvatar: topComment.authorProfileImageUrl ?? null,
+						lastMessageText: topComment.textOriginal,
+						lastMessageAt: new Date(topComment.publishedAt),
+						lastMessageDirection: "inbound",
+					},
+					subjectLocatorKeyConfig,
+				);
 
 				// Store top-level comment
 				await insertMessage(db, {
@@ -519,6 +557,7 @@ async function backfillGoogleBusiness(
 	account: SocialAccount,
 	token: string,
 	organizationId: string,
+	subjectLocatorKeyConfig: string,
 ): Promise<void> {
 	// Step 1: Resolve the GMB account name
 	const accountsRes = await fetch(
@@ -604,18 +643,22 @@ async function backfillGoogleBusiness(
 
 		for (const review of reviews) {
 			try {
-				const conversation = await upsertConversation(db, {
-					organizationId,
-					workspaceId: account.workspaceId,
-					accountId: account.id,
-					platform: "googlebusiness",
-					type: "review",
-					platformConversationId: review.name,
-					participantName: review.reviewer.displayName,
-					lastMessageText: review.comment ?? null,
-					lastMessageAt: new Date(review.createTime),
-					lastMessageDirection: "inbound",
-				});
+				const conversation = await upsertConversation(
+					db,
+					{
+						organizationId,
+						workspaceId: account.workspaceId,
+						accountId: account.id,
+						platform: "googlebusiness",
+						type: "review",
+						platformConversationId: review.name,
+						participantName: review.reviewer.displayName,
+						lastMessageText: review.comment ?? null,
+						lastMessageAt: new Date(review.createTime),
+						lastMessageDirection: "inbound",
+					},
+					subjectLocatorKeyConfig,
+				);
 
 				await insertMessage(db, {
 					conversationId: conversation.id,

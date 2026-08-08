@@ -2,6 +2,7 @@ import { contactChannels, socialAccounts } from "@relayapi/db";
 import { and, eq, isNull } from "drizzle-orm";
 import { GRAPH_BASE } from "../../../config/api-versions";
 import { decryptAccountToken } from "../../../lib/account-token-crypto";
+import { decryptContactChannelRow } from "../../contact-protection";
 import type { NodeHandler } from "../types";
 
 type SocialProfileCheckConfig = {
@@ -81,13 +82,17 @@ export const socialProfileCheckHandler: NodeHandler<SocialProfileCheckConfig> =
 					error: new Error("account token could not be decrypted"),
 				};
 			}
+			const plaintextRecipient = await decryptContactChannelRow(
+				encryptionKey,
+				recipient,
+			);
 
 			const fetchImpl =
 				(ctx.env.profileFetch as typeof fetch | undefined) ?? globalThis.fetch;
 			const base = token.startsWith("IGAA")
 				? GRAPH_BASE.instagram
 				: GRAPH_BASE.facebook;
-			const url = new URL(`${base}/${recipient.identifier}`);
+			const url = new URL(`${base}/${plaintextRecipient.identifier}`);
 			url.searchParams.set("fields", "is_user_follow_business");
 			const response = await fetchImpl(url.toString(), {
 				headers: { Authorization: `Bearer ${token}` },

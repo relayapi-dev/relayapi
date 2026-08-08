@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { BASELINE_GENERATION } from "@relayapi/config";
 import {
 	assertWorkerDeployment,
 	assertWorkerDomain,
@@ -9,14 +10,24 @@ const appBindings = [
 	{
 		name: "IDENTITY_DELETION_CONTRACT_VERSION",
 		type: "plain_text",
-		text: "0005",
+		text: "identity-deletion-v1",
+	},
+	{
+		name: "BASELINE_GENERATION",
+		type: "plain_text",
+		text: String(BASELINE_GENERATION),
 	},
 	{
 		name: "AVATARS_BUCKET",
 		type: "r2_bucket",
 		bucket_name: "relayapi-avatars",
 	},
-	{ name: "EMAIL_QUEUE", type: "queue", queue_name: "relayapi-email" },
+	{
+		name: "EMAIL_INTENTS",
+		type: "service",
+		service: "relayapi",
+		entrypoint: "EmailIntentEntrypoint",
+	},
 	{
 		name: "HYPERDRIVE",
 		type: "hyperdrive",
@@ -32,11 +43,6 @@ const appBindings = [
 		name: "PUBLIC_ASSETS",
 		type: "r2_bucket",
 		bucket_name: "relayapi-public-assets",
-	},
-	{
-		name: "SESSION",
-		type: "kv_namespace",
-		namespace_id: "851563e6b3f2452199be81dd0eda681f",
 	},
 ];
 

@@ -14,9 +14,6 @@ function subscriptionMessage() {
 		organization_id: "org_123",
 		account_id: "acc_123",
 		event_type: "subscribe",
-		payload: {
-			callback_url: "https://api.example.test/webhooks/platform/youtube",
-		},
 		received_at: new Date().toISOString(),
 	};
 }
@@ -67,6 +64,7 @@ describe("YouTube authenticated subscriptions", () => {
 		expect(
 			processInboxEvent(subscriptionMessage(), {
 				YOUTUBE_HUB_SECRET: "shared-hub-secret",
+				API_BASE_URL: "https://api.example.test",
 			} as Env),
 		).rejects.toThrow("YouTube subscribe failed");
 	});

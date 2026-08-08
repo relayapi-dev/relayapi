@@ -185,7 +185,7 @@ For managing flags via the REST API (create, update, delete), set these environm
 Base URL: `https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship`
 
 ```bash
-curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+curl -s --header @/secure/bearer-auth-header \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps" | jq .
 ```
 

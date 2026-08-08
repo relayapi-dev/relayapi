@@ -145,12 +145,18 @@ ctx.waitUntil(env.ANALYTICS.writeDataPoint({
 // Security headers
 const security = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' };
 
-// Auth
-const auth = request.headers.get('Authorization');
-if (!auth?.startsWith('Bearer ')) return new Response('Unauthorized', { status: 401 });
+// Auth: parsing the scheme is only the first step. The verifier must validate
+// signature, issuer, audience, expiry, and revocation before returning a principal.
+const match = /^Bearer ([^\s]+)$/.exec(request.headers.get('Authorization') ?? '');
+if (!match) return new Response('Unauthorized', { status: 401 });
+const principal = await env.ACCESS_TOKENS.verifyAccessToken(match[1], {
+  issuer: env.ACCESS_TOKEN_ISSUER,
+  audience: env.ACCESS_TOKEN_AUDIENCE
+});
+if (!principal) return new Response('Unauthorized', { status: 401 });
 
 // Gradual rollouts (deterministic user bucketing)
-const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userId));
+const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(principal.subject));
 if (new Uint8Array(hash)[0] % 100 < rolloutPercent) return newFeature(request);
 ```
 

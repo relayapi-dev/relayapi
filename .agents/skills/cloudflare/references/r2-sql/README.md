@@ -32,7 +32,7 @@ For full function lists, data types, and pricing, **retrieve the live docs** —
 
 ```bash
 npx wrangler r2 bucket catalog enable my-bucket           # 1. enable catalog
-export WRANGLER_R2_SQL_AUTH_TOKEN=<r2-token>              # 2. auth (Admin R&W + R2 SQL Read)
+# 2. Inject WRANGLER_R2_SQL_AUTH_TOKEN with your secret manager
 npx wrangler r2 sql query "$ACCOUNT_ID"_my-bucket \
   "SELECT * FROM default.my_table LIMIT 10"                # 3. query
 ```

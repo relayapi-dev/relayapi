@@ -38,15 +38,15 @@ Set build command, output dir, env vars. Framework auto-detection configures aut
 ## Environment Variables
 
 ### Local (.dev.vars)
-```bash
-# .dev.vars (never commit)
-SECRET_KEY="local-secret-key"
-API_TOKEN="dev-token-123"
-```
+
+Provision `SECRET_KEY` and `API_TOKEN` into an ignored `.dev.vars` file through
+your local secret manager. Do not commit the file or use reusable placeholder
+credentials as working defaults.
 
 ### Production
 ```bash
-echo "secret-value" | npx wrangler pages secret put SECRET_KEY --project-name=my-project
+# Enter the value at Wrangler's masked interactive prompt.
+npx wrangler pages secret put SECRET_KEY --project-name=my-project
 npx wrangler pages secret list --project-name=my-project
 npx wrangler pages secret delete SECRET_KEY --project-name=my-project
 ```

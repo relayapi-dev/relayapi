@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { requireClient } from "@/lib/api-utils";
+import { requireSessionBoundClient } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
 	const platform = ctx.params.platform;
@@ -13,8 +13,8 @@ export const GET: APIRoute = async (ctx) => {
 		);
 	}
 
-	const client = await requireClient(ctx);
-	if (client instanceof Response) {
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) {
 		return Response.redirect(
 			new URL(
 				"/app/connections?tab=connect&error=Not+authenticated",
@@ -23,6 +23,7 @@ export const GET: APIRoute = async (ctx) => {
 			302,
 		);
 	}
+	const { client, requestOptions } = boundClient;
 
 	try {
 		const method = ctx.url.searchParams.get("method") || undefined;
@@ -31,6 +32,7 @@ export const GET: APIRoute = async (ctx) => {
 		const data = await client.connect.startOAuthFlow(
 			platform as Parameters<typeof client.connect.startOAuthFlow>[0],
 			{ redirect_url: redirectUrl, method, workspace_id: workspaceId },
+			requestOptions,
 		);
 		return Response.redirect(data.auth_url, 302);
 	} catch (e) {

@@ -191,9 +191,9 @@ export default {
 Store JSON secret:
 
 ```bash
-echo '{"host":"db.example.com","port":5432,"username":"app","password":"secret"}' | \
-  wrangler secrets-store secret create <store-id> \
-    --name DB_CONFIG --scopes workers --remote
+# Wrangler prompts for the JSON value without putting it in argv or shell history.
+wrangler secrets-store secret create <store-id> \
+  --name DB_CONFIG --scopes workers --remote
 ```
 
 ## Integration

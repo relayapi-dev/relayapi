@@ -32,7 +32,13 @@ type ReadyRow = {
 function policyDb(rows: ReadyRow[]): Database {
 	const query = {
 		from: () => query,
-		where: async () => rows,
+		where: async () =>
+			rows.map((row) => ({
+				storageProvider: "r2" as const,
+				storageBucketLocator: "relayapi-media",
+				storageRegion: "default",
+				...row,
+			})),
 	};
 	return fixture<Database>({ select: () => query });
 }
@@ -47,6 +53,10 @@ function signingEnv(
 		CF_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
 		R2_ACCESS_KEY_ID: "test-access-key",
 		R2_SECRET_ACCESS_KEY: "test-secret-key",
+		R2_MEDIA_BUCKET_NAME: "relayapi-media",
+		R2_MEDIA_BUCKET_JURISDICTION: "default",
+		R2_THUMBNAIL_BUCKET_NAME: "relayapi-media-thumbnails",
+		R2_THUMBNAIL_BUCKET_JURISDICTION: "default",
 		MEDIA_BUCKET: fixture<R2Bucket>({
 			head: async () =>
 				fixture<R2Object>({
@@ -265,7 +275,7 @@ describe("media policy integration fences", () => {
 			source.indexOf("export async function reconcileMediaUploads"),
 			source.indexOf("export function isMediaEventMessage"),
 		);
-		const validation = reconciler.indexOf("validateStoredMediaObject(object)");
+		const validation = reconciler.indexOf("validateStoredMediaObject({");
 		const promotion = reconciler.indexOf('status: "ready"');
 		expect(validation).toBeGreaterThan(-1);
 		expect(promotion).toBeGreaterThan(validation);

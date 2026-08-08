@@ -9,6 +9,7 @@ import { and, eq } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountTokens } from "../lib/account-token-crypto";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
+import { trackSingleUnitProviderMutation } from "../lib/mutation-provider-boundary";
 import { canAccessWorkspaceScope } from "../lib/workspace-scope";
 import { BroadcastResponse as GenericBroadcastResponse } from "../schemas/broadcasts";
 import { ErrorResponse } from "../schemas/common";
@@ -643,6 +644,7 @@ app.openapi(bulkSend, async (c) => {
 	}
 	const allowedHashes = await getAllowedRecipientHashes(
 		db,
+		c.env.ENCRYPTION_KEY,
 		orgId,
 		"whatsapp",
 		"marketing",
@@ -653,7 +655,10 @@ app.openapi(bulkSend, async (c) => {
 			body.recipients.map(async (recipient) => ({
 				...recipient,
 				identifierHash: await hashRecipientIdentifier(
+					c.env.ENCRYPTION_KEY,
+					orgId,
 					"whatsapp",
+					"marketing",
 					recipient.phone,
 				),
 			})),
@@ -927,19 +932,24 @@ app.openapi(createTemplate, async (c) => {
 	try {
 		// WhatsApp Business Management API: Create a new message template
 		// https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates#create-message-templates
-		const res = await fetch(`${WA_API_BASE}/${wabaId}/message_templates`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				name: body.name,
-				language: body.language,
-				category: body.category,
-				components: body.components,
-			}),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.template.create",
+			() =>
+				fetch(`${WA_API_BASE}/${wabaId}/message_templates`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						name: body.name,
+						language: body.language,
+						category: body.category,
+						components: body.components,
+					}),
+				}),
+		);
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -1142,14 +1152,19 @@ app.openapi(deleteTemplate, async (c) => {
 	try {
 		// WhatsApp Business Management API: Delete a message template by name
 		// https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates#delete-message-templates
-		const res = await fetch(
-			`${WA_API_BASE}/${wabaId}/message_templates?name=${encodeURIComponent(template_name)}`,
-			{
-				method: "DELETE",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-				},
-			},
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.template.delete",
+			() =>
+				fetch(
+					`${WA_API_BASE}/${wabaId}/message_templates?name=${encodeURIComponent(template_name)}`,
+					{
+						method: "DELETE",
+						headers: {
+							Authorization: `Bearer ${account.accessToken}`,
+						},
+					},
+				),
 		);
 
 		if (!res.ok) {
@@ -1306,16 +1321,18 @@ app.openapi(updateBusinessProfile, async (c) => {
 	try {
 		// WhatsApp Cloud API: Update the business profile for a phone number
 		// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/business-profiles
-		const updateRes = await fetch(
-			`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(updatePayload),
-			},
+		const updateRes = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.business_profile.update",
+			() =>
+				fetch(`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(updatePayload),
+				}),
 		);
 
 		if (!updateRes.ok) {
@@ -1600,14 +1617,19 @@ app.openapi(updateDisplayName, async (c) => {
 		// Official curl: POST 'https://graph.facebook.com/v25.0/{id}?new_display_name=Lucky%20Shrub'
 		// Note: new_display_name is a QUERY PARAMETER, not a JSON body field.
 		// Review by Meta takes 1-3 business days. name_status field tracks review progress.
-		const res = await fetch(
-			`${WA_API_BASE}/${phoneNumberId}?new_display_name=${encodeURIComponent(body.display_name)}`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-				},
-			},
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.display_name.update",
+			() =>
+				fetch(
+					`${WA_API_BASE}/${phoneNumberId}?new_display_name=${encodeURIComponent(body.display_name)}`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${account.accessToken}`,
+						},
+					},
+				),
 		);
 
 		if (!res.ok) {
@@ -1814,19 +1836,21 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		// Confirmed via: https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/whatsapp-business-profile-api
 		// Section: "Update Fields" — profile_picture_handle is a valid POST field
 		// Requires: messaging_product: "whatsapp" and the handle from Resumable Upload API
-		const profileRes = await fetch(
-			`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					messaging_product: "whatsapp",
-					profile_picture_handle: fileHandle,
+		const profileRes = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.business_profile.photo.update",
+			() =>
+				fetch(`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						messaging_product: "whatsapp",
+						profile_picture_handle: fileHandle,
+					}),
 				}),
-			},
 		);
 
 		if (!profileRes.ok) {
@@ -2028,14 +2052,19 @@ app.openapi(createFlow, async (c) => {
 			payload.clone_flow_id = body.clone_flow_id;
 		}
 
-		const res = await fetch(`${WA_API_BASE}/${wabaId}/flows`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(payload),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.create",
+			() =>
+				fetch(`${WA_API_BASE}/${wabaId}/flows`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(payload),
+				}),
+		);
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -2206,14 +2235,19 @@ app.openapi(updateFlow, async (c) => {
 		if (body.name !== undefined) payload.name = body.name;
 		if (body.categories !== undefined) payload.categories = body.categories;
 
-		const res = await fetch(`${WA_API_BASE}/${flow_id}`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(payload),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.update",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(payload),
+				}),
+		);
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -2293,10 +2327,15 @@ app.openapi(deleteFlow, async (c) => {
 		// WhatsApp Flows API — Delete a DRAFT flow
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Delete Flow" — DELETE /{flow-id}, returns { success: true }
-		const res = await fetch(`${WA_API_BASE}/${flow_id}`, {
-			method: "DELETE",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.delete",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}`, {
+					method: "DELETE",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				}),
+		);
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -2370,10 +2409,15 @@ app.openapi(publishFlow, async (c) => {
 		// WhatsApp Flows API — Publish a flow (irreversible, DRAFT → PUBLISHED)
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Publish Flow" — POST /{flow-id}/publish, no body required, returns { success: true }
-		const res = await fetch(`${WA_API_BASE}/${flow_id}/publish`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.publish",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}/publish`, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				}),
+		);
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -2447,10 +2491,15 @@ app.openapi(deprecateFlow, async (c) => {
 		// WhatsApp Flows API — Deprecate a published flow (irreversible)
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Deprecate Flow" — POST /{flow-id}/deprecate, no body, returns { success: true }
-		const res = await fetch(`${WA_API_BASE}/${flow_id}/deprecate`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.deprecate",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}/deprecate`, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				}),
+		);
 
 		if (!res.ok) {
 			const err = await res.text();
@@ -2613,7 +2662,8 @@ app.openapi(uploadFlowJson, async (c) => {
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Update Flow JSON" — POST /{flow-id}/assets (multipart form-data)
 		// Required fields: file (JSON blob), name: "flow.json", asset_type: "FLOW_JSON"
-		// Returns validation_errors array if JSON is invalid
+		// A successful update still returns validation_errors when the uploaded
+		// draft is invalid. The asset was updated, so that response remains K=1.
 		const flowJsonBlob = new Blob([JSON.stringify(body.flow_json)], {
 			type: "application/json",
 		});
@@ -2622,46 +2672,64 @@ app.openapi(uploadFlowJson, async (c) => {
 		formData.append("name", "flow.json");
 		formData.append("asset_type", "FLOW_JSON");
 
-		const res = await fetch(`${WA_API_BASE}/${flow_id}/assets`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-			body: formData,
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.json.update",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}/assets`, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+					body: formData,
+				}),
+		);
 
-		if (!res.ok) {
-			const err = await res.text();
-			// Meta returns validation errors in the response body
-			try {
-				const parsed = JSON.parse(err) as {
+		const responseBody = await res.text();
+		let parsed:
+			| {
+					success?: boolean;
+					validation_errors?: unknown[];
 					error?: {
 						error_user_msg?: string;
 						error_data?: { validation_errors?: unknown[] };
 					};
-				};
-				if (parsed.error?.error_data?.validation_errors) {
-					return c.json(
-						{
-							success: false,
-							validation_errors: parsed.error.error_data.validation_errors,
-						},
-						200,
-					);
-				}
-			} catch {
-				/* not JSON, fall through */
+			  }
+			| undefined;
+		try {
+			parsed = JSON.parse(responseBody) as typeof parsed;
+		} catch {
+			/* not JSON */
+		}
+
+		if (!res.ok) {
+			const validationErrors = parsed?.error?.error_data?.validation_errors;
+			if (validationErrors) {
+				// The provider-boundary helper has already classified this status.
+				// Do not turn an ambiguous 408/425/429/5xx into false K=0 proof.
+				return c.json(
+					{ success: false, validation_errors: validationErrors },
+					200,
+				);
 			}
 			return c.json(
 				{
 					error: {
 						code: "WA_API_ERROR",
-						message: `Failed to upload flow JSON: ${err}`,
+						message: `Failed to upload flow JSON: ${responseBody}`,
 					},
 				},
 				502,
 			);
 		}
 
-		return c.json({ success: true }, 200);
+		return c.json(
+			{
+				success: parsed?.success ?? true,
+				...(parsed?.validation_errors
+					? { validation_errors: parsed.validation_errors }
+					: {}),
+			},
+			200,
+		);
 	} catch (e) {
 		return c.json(
 			{
@@ -2701,6 +2769,7 @@ app.openapi(sendFlowMessage, async (c) => {
 	}
 	const allowedFlowHashes = await getAllowedRecipientHashes(
 		db,
+		c.env.ENCRYPTION_KEY,
 		orgId,
 		"whatsapp",
 		"automation",
@@ -2708,7 +2777,13 @@ app.openapi(sendFlowMessage, async (c) => {
 	);
 	if (
 		!allowedFlowHashes.has(
-			await hashRecipientIdentifier("whatsapp", body.recipient_phone),
+			await hashRecipientIdentifier(
+				c.env.ENCRYPTION_KEY,
+				orgId,
+				"whatsapp",
+				"automation",
+				body.recipient_phone,
+			),
 		)
 	) {
 		return c.json(
@@ -2760,14 +2835,19 @@ app.openapi(sendFlowMessage, async (c) => {
 			},
 		};
 
-		const res = await fetch(`${WA_API_BASE}/${phoneNumberId}/messages`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(payload),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.message.send",
+			() =>
+				fetch(`${WA_API_BASE}/${phoneNumberId}/messages`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(payload),
+				}),
+		);
 
 		if (!res.ok) {
 			const err = await res.text();

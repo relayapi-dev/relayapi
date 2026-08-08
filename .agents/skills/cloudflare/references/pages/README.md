@@ -50,7 +50,7 @@ npx wrangler pages deploy ./dist --project-name=my-project
 npx wrangler types --path='./functions/types.d.ts'
 
 # Secrets
-echo "value" | npx wrangler pages secret put KEY --project-name=my-project
+npx wrangler pages secret put KEY --project-name=my-project
 
 # Logs
 npx wrangler pages deployment tail --project-name=my-project

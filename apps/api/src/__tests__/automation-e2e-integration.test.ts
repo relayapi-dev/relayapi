@@ -64,11 +64,15 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import {
+	protectedContactChannelFixture,
+	protectedContactFixture,
+} from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -249,23 +253,24 @@ async function createContactWithChannel(params: {
 }) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: params.name,
 			tags: params.tags ?? [],
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
-	await db.insert(contactChannels).values({
+	await db.insert(contactChannels).values(await protectedContactChannelFixture({
 		organizationId: orgId,
+		workspaceId,
 		contactId: ct.id,
 		socialAccountId,
 		platform: (params.channel ??
 			"telegram") as typeof contactChannels.$inferInsert.platform,
 		identifier: params.identifier,
-	});
-	await recordContactConsent(db, {
+	}));
+	await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 		organizationId: orgId,
 		workspaceId,
 		contactId: ct.id,
@@ -286,13 +291,13 @@ async function createBareContact(params: {
 }) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: params.name,
-			email: params.email,
+			email: params.email ?? null,
 			tags: params.tags ?? [],
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -738,21 +743,22 @@ describe("11.3 comment-to-DM template", () => {
 		// Contact with an IG channel so the DM recipient resolver finds them.
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "ig-commenter",
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
-		await db.insert(contactChannels).values({
+		await db.insert(contactChannels).values(await protectedContactChannelFixture({
 			organizationId: orgId,
+			workspaceId,
 			contactId: ct.id,
 			socialAccountId: igAccountId,
 			platform: "instagram",
 			identifier: "ig_user_42",
-		});
-		await recordContactConsent(db, {
+		}));
+		await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 			organizationId: orgId,
 			workspaceId,
 			contactId: ct.id,
@@ -1346,6 +1352,8 @@ describe("11.6 scheduled_trigger", () => {
 		const [job] = await db
 			.insert(automationScheduledJobs)
 			.values({
+				organizationId: auto.organizationId,
+				scopeKey: auto.scopeKey,
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,

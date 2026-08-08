@@ -46,12 +46,12 @@ describe("official OAuth configuration contracts", () => {
 
 	it("uses the current Threads short-lived OAuth and Graph hosts", () => {
 		const config = OAUTH_CONFIGS.threads;
-		expect(config?.authUrl).toBe("https://threads.com/oauth/authorize");
+		expect(config?.authUrl).toBe("https://threads.net/oauth/authorize");
 		expect(config?.tokenUrl).toBe(
-			"https://graph.threads.com/oauth/access_token",
+			"https://graph.threads.net/oauth/access_token",
 		);
 		expect(
-			config?.profileUrl.startsWith("https://graph.threads.com/v1.0/"),
+			config?.profileUrl.startsWith("https://graph.threads.net/v1.0/"),
 		).toBe(true);
 	});
 });

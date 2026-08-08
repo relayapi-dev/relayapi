@@ -7,8 +7,9 @@ import { messageHandler } from "../services/automations/nodes/message";
 import { socialProfileCheckHandler } from "../services/automations/nodes/social-profile-check";
 import { waitEventHandler } from "../services/automations/nodes/wait-event";
 import type { RunContext } from "../services/automations/types";
+import { protectedContactChannelFieldsFixture } from "./helpers/protected-contact-fixtures";
 
-const ENCRYPTION_KEY = `test=${"33".repeat(32)}`;
+const ENCRYPTION_KEY = `test=${"33".repeat(32)},identity=${"34".repeat(32)}`;
 
 function context(overrides: Partial<RunContext> = {}): RunContext {
 	return {
@@ -119,10 +120,22 @@ describe("social_profile_check node", () => {
 			accountId,
 			"access_token",
 		);
+		const protectedRecipient = {
+			id: "cc_instagram",
+			organizationId: "org_nodes",
+			...(await protectedContactChannelFieldsFixture(
+				{
+					id: "cc_instagram",
+					organizationId: "org_nodes",
+					identifier: "igsid_123",
+				},
+				ENCRYPTION_KEY,
+			)),
+		};
 		const db = {
 			query: {
 				contactChannels: {
-					findFirst: async () => ({ identifier: "igsid_123" }),
+					findFirst: async () => protectedRecipient,
 				},
 				socialAccounts: {
 					findFirst: async () => ({

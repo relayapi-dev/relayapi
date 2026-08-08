@@ -56,11 +56,7 @@ export interface AutomationBindingResponse {
 	workspace_id: string | null;
 	social_account_id: string;
 	channel: AutomationChannel;
-	/**
-	 * Read-compatible with legacy rows. New writes accept only
-	 * `AutomationBindingType`.
-	 */
-	binding_type: string;
+	binding_type: AutomationBindingType;
 	automation_id: string;
 	config: Record<string, unknown> | null;
 	status: string;

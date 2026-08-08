@@ -47,7 +47,7 @@ Cloudflare Stream provides video upload, storage, encoding, and delivery without
 ```bash
 curl -X POST \
   "https://api.cloudflare.com/client/v4/accounts/{account_id}/stream/copy" \
-  -H "Authorization: Bearer <TOKEN>" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/video.mp4"}'
 ```
@@ -67,7 +67,7 @@ curl -X POST \
 ```bash
 curl -X POST \
   "https://api.cloudflare.com/client/v4/accounts/{account_id}/stream/live_inputs" \
-  -H "Authorization: Bearer <TOKEN>" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{"recording": {"mode": "automatic"}}'
 ```

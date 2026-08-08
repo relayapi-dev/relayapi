@@ -1,6 +1,8 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
-import { apikey, member, user } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { assertKvPrivacyStoreKey, user } from "@relayapi/db";
+import { eq } from "drizzle-orm";
+import { lockCredentialMutationAuthorityInTransaction } from "../lib/credential-mutation-authority";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import {
 	requireAllWorkspaceScopeMiddleware,
 	requireWriteAccessMiddleware,
@@ -20,18 +22,35 @@ app.use("*", requireWriteAccessMiddleware);
 app.use("*", requireAllWorkspaceScopeMiddleware);
 
 export function canRequestTenantDeletion(input: {
+	principalType: "dashboard_user" | "service";
 	callerOrganizationId: string;
 	targetOrganizationId: string;
 	membershipRole: string | null;
 	globalRole: string | null;
 }): boolean {
-	if (input.globalRole === "admin") return true;
+	if (input.principalType !== "dashboard_user") return false;
+	if (
+		(input.globalRole ?? "").split(",").some((role) => role.trim() === "admin")
+	) {
+		return true;
+	}
 	return (
 		input.callerOrganizationId === input.targetOrganizationId &&
 		(input.membershipRole ?? "")
 			.split(",")
 			.some((role) => role.trim() === "owner")
 	);
+}
+
+class TenantDeletionAuthorizationError extends Error {
+	constructor(
+		readonly status: 401 | 403,
+		readonly code: string,
+		message: string,
+	) {
+		super(message);
+		this.name = "TenantDeletionAuthorizationError";
+	}
 }
 
 const deleteOrganization = createRoute({
@@ -69,44 +88,12 @@ const deleteOrganization = createRoute({
 
 app.openapi(deleteOrganization, async (c) => {
 	const callerOrganizationId = c.get("orgId");
-	const keyId = c.get("keyId");
+	const principalType = c.get("principalType");
+	const principalUserId = c.get("principalUserId");
 	const { id: targetOrganizationId } = c.req.valid("param");
 	const db = c.get("db");
-
-	// One indexed lookup binds the API credential to its principal and resolves
-	// both target-tenant ownership and the separate system-admin capability.
-	const [actor] = await db
-		.select({
-			userId: apikey.referenceId,
-			globalRole: user.role,
-			membershipRole: member.role,
-		})
-		.from(apikey)
-		.leftJoin(user, eq(user.id, apikey.referenceId))
-		.leftJoin(
-			member,
-			and(
-				eq(member.userId, apikey.referenceId),
-				eq(member.organizationId, targetOrganizationId),
-			),
-		)
-		.where(
-			and(
-				eq(apikey.id, keyId),
-				eq(apikey.organizationId, callerOrganizationId),
-			),
-		)
-		.limit(1);
-
-	if (
-		!actor?.userId ||
-		!canRequestTenantDeletion({
-			callerOrganizationId,
-			targetOrganizationId,
-			membershipRole: actor.membershipRole,
-			globalRole: actor.globalRole,
-		})
-	) {
+	if (principalType !== "dashboard_user" || !principalUserId) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -123,33 +110,98 @@ app.openapi(deleteOrganization, async (c) => {
 		const result = await requestTenantDeletion(
 			db,
 			targetOrganizationId,
-			actor.userId,
+			{
+				organizationIds: [callerOrganizationId],
+				async lockActorUser(tx) {
+					const [actor] = await tx
+						.select({ id: user.id })
+						.from(user)
+						.where(eq(user.id, principalUserId))
+						.for("share")
+						.limit(1);
+					if (!actor) {
+						throw new TenantDeletionAuthorizationError(
+							401,
+							"CREDENTIAL_NO_LONGER_AUTHORIZED",
+							"The issuing credential is no longer authorized.",
+						);
+					}
+				},
+				async authorize(tx) {
+					const authority = await lockCredentialMutationAuthorityInTransaction(
+						c,
+						{ requireAllWorkspaceScope: true },
+						tx,
+					);
+					if (!authority.ok) {
+						throw new TenantDeletionAuthorizationError(
+							authority.status,
+							authority.code,
+							authority.message,
+						);
+					}
+					if (
+						!authority.value.userId ||
+						!canRequestTenantDeletion({
+							principalType: authority.value.principalType,
+							callerOrganizationId: authority.value.organizationId,
+							targetOrganizationId,
+							membershipRole: authority.value.memberRole,
+							globalRole: authority.value.globalRole,
+						})
+					) {
+						throw new TenantDeletionAuthorizationError(
+							403,
+							"FORBIDDEN",
+							"Only an organization owner or system administrator can delete this organization.",
+						);
+					}
+					return authority.value.userId;
+				},
+			},
+			async (pending) => {
+				await Promise.all([
+					c.env.KV.delete(`queue-schedule:${targetOrganizationId}`),
+					c.env.KV.delete(`org-settings:${targetOrganizationId}`),
+					c.env.KV.delete(`org-summary:${targetOrganizationId}`),
+					...pending.apiKeyHashes.map((hash) =>
+						c.env.KV.delete(`apikey:${hash}`),
+					),
+					...pending.dashboardPrincipalIds.map((userId) =>
+						c.env.KV.delete(`dashboard-key:${targetOrganizationId}:${userId}`),
+					),
+					...pending.workspaceIds.map((workspaceId) =>
+						c.env.KV.delete(
+							workspaceValidKvKey(targetOrganizationId, workspaceId),
+						),
+					),
+					...pending.accountCacheKeys.map((key) =>
+						c.env.KV.delete(
+							assertKvPrivacyStoreKey(
+								[
+									"kv:platform-account",
+									"kv:ig-sender-id",
+									"kv:sync-dedup",
+									"kv:inbox-posts",
+								],
+								key,
+							),
+						),
+					),
+				]);
+			},
 		);
-		const invalidations = [
-			c.env.KV.delete(`queue-schedule:${targetOrganizationId}`),
-			c.env.KV.delete(`org-settings:${targetOrganizationId}`),
-			...result.apiKeyHashes.map((hash) => c.env.KV.delete(`apikey:${hash}`)),
-			...result.dashboardPrincipalIds.map((userId) =>
-				c.env.KV.delete(`dashboard-key:${targetOrganizationId}:${userId}`),
-			),
-			...result.workspaceIds.map((workspaceId) =>
-				c.env.KV.delete(workspaceValidKvKey(targetOrganizationId, workspaceId)),
-			),
-			...result.accountCacheKeys.map((key) => c.env.KV.delete(key)),
-		];
-		const invalidationResults = await Promise.allSettled(invalidations);
-		const failedInvalidations = invalidationResults.filter(
-			(item) => item.status === "rejected",
-		);
-		if (failedInvalidations.length > 0) {
-			console.error("Tenant deletion KV invalidation failed", {
-				organizationId: targetOrganizationId,
-				failed: failedInvalidations.length,
-			});
-		}
 		return c.json({ status: result.status }, 202);
 	} catch (error) {
+		if (error instanceof TenantDeletionAuthorizationError) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{ error: { code: error.code, message: error.message } },
+				error.status,
+			);
+		}
 		if (error instanceof TenantDeletionNotFoundError) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{ error: { code: "NOT_FOUND", message: "Organization not found" } },
 				404,

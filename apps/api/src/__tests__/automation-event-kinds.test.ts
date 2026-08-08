@@ -40,6 +40,7 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -134,11 +135,11 @@ async function makeAutomation(name: string) {
 async function makeContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "event-kind-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -482,12 +483,12 @@ describe("no-op tag/field mutations skip internal emission", () => {
 		// Create a contact that already has the tag applied.
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "noop-contact",
 				tags: ["lead"],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 
@@ -542,12 +543,12 @@ describe("no-op tag/field mutations skip internal emission", () => {
 
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "new-tag-contact",
 				tags: [],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 

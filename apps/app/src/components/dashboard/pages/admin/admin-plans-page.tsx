@@ -70,9 +70,10 @@ interface Subscription {
   orgName: string | null;
   orgSlug: string | null;
   status: string;
-  monthlyPriceCents: number;
-  postsIncluded: number;
-  pricePerPostCents: number;
+  source: "stripe" | "complimentary";
+  basePriceCents: number;
+  delinquentAt: string | null;
+  graceEndsAt: string | null;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
   trialEndsAt: string | null;
@@ -98,7 +99,6 @@ export function AdminPlansPage() {
   const [editModal, setEditModal] = useState<Subscription | null>(null);
   const [editForm, setEditForm] = useState({
     status: "",
-    monthlyPriceCents: 0,
   });
   const [saving, setSaving] = useState(false);
 
@@ -125,7 +125,6 @@ export function AdminPlansPage() {
     setEditModal(sub);
     setEditForm({
       status: sub.status,
-      monthlyPriceCents: sub.monthlyPriceCents,
     });
   };
 
@@ -153,7 +152,7 @@ export function AdminPlansPage() {
   const totalApiCalls = subs.reduce((sum, s) => sum + s.apiCallsUsed, 0);
   const totalRevenue = subs
     .filter((s) => s.status === "active")
-    .reduce((sum, s) => sum + s.monthlyPriceCents, 0);
+    .reduce((sum, s) => sum + s.basePriceCents, 0);
 
   const columns: ColumnDef<Subscription>[] = useMemo(
     () => [
@@ -197,11 +196,11 @@ export function AdminPlansPage() {
         ),
       },
       {
-        accessorKey: "monthlyPriceCents",
+        accessorKey: "basePriceCents",
         header: "Price",
         cell: ({ row }) => (
           <span className="text-[13px]">
-            ${(row.original.monthlyPriceCents / 100).toFixed(2)}/mo
+            ${(row.original.basePriceCents / 100).toFixed(2)}/mo
           </span>
         ),
       },
@@ -238,7 +237,10 @@ export function AdminPlansPage() {
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => openEdit(row.original)}>
+              <DropdownMenuItem
+                disabled={row.original.source !== "complimentary"}
+                onClick={() => openEdit(row.original)}
+              >
                 <Pencil className="size-4" />
                 Edit subscription
               </DropdownMenuItem>
@@ -442,35 +444,9 @@ export function AdminPlansPage() {
                   }
                   className="w-full rounded-[10px] border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20"
                 >
-                  <option value="trialing">Trialing</option>
                   <option value="active">Active</option>
-                  <option value="past_due">Past Due</option>
                   <option value="cancelled">Cancelled</option>
                 </select>
-              </div>
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="admin-plan-edit-price"
-                  className="text-xs text-muted-foreground"
-                >
-                  Monthly Price ($)
-                </label>
-                <input
-                  id="admin-plan-edit-price"
-                  type="number"
-                  value={editForm.monthlyPriceCents / 100}
-                  onChange={(e) =>
-                    setEditForm({
-                      ...editForm,
-                      monthlyPriceCents: Math.round(
-                        parseFloat(e.target.value || "0") * 100
-                      ),
-                    })
-                  }
-                  className="w-full rounded-[10px] border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-foreground/20 focus:ring-2 focus:ring-ring/20"
-                  step="0.01"
-                  min="0"
-                />
               </div>
             </div>
             <div className="flex gap-2 justify-end">

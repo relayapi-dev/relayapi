@@ -1,6 +1,9 @@
 export interface EmailQueueMessage {
 	id: string;
-	organization_id: string;
+}
+
+/** Application-encrypted in `email_deliveries`; never place this in Queue. */
+export interface EmailDeliveryEnvelope {
 	to: string;
 	subject: string;
 	html: string;

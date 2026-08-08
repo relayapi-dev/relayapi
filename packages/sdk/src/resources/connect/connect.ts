@@ -42,7 +42,10 @@ export class Connect extends APIResource {
   snapchat: SnapchatAPI.Snapchat = new SnapchatAPI.Snapchat(this._client);
 
   /**
-   * Exchange OAuth code for tokens and save the account.
+   * Exchange OAuth code for tokens and save the account after revalidating the
+   * initiating credential and its exact dashboard session when applicable.
+   * Dashboard-user credentials must return the one-time state from the flow;
+   * service credentials retain the direct code-only compatibility path.
    */
   completeOAuthCallback(
     platform:
@@ -75,7 +78,8 @@ export class Connect extends APIResource {
   }
 
   /**
-   * One-time use, expires after 10 minutes. For headless OAuth flows.
+   * One-time use, expires after 10 minutes, and remains bound to the initiating
+   * credential and exact dashboard session when applicable.
    */
   fetchPendingData(
     query: ConnectFetchPendingDataParams,
@@ -85,7 +89,8 @@ export class Connect extends APIResource {
   }
 
   /**
-   * Returns an auth_url to redirect the user for OAuth authorization.
+   * Returns an auth_url whose one-time state is bound to the initiating credential,
+   * exact dashboard session when applicable, and accepted workspace grant.
    */
   startOAuthFlow(
     platform:
@@ -375,7 +380,8 @@ export interface ConnectCompleteOAuthCallbackParams {
   redirect_url?: string;
 
   /**
-   * OAuth state token returned when the flow was started
+   * OAuth state token returned when the flow was started. Required when the
+   * caller uses a dashboard-user credential.
    */
   state?: string;
 

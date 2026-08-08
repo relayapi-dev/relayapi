@@ -4,6 +4,11 @@ import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
 import { path } from '../internal/utils/path';
 
+/**
+ * Paid ad mutations settle deterministic preflight rejections as zero usage.
+ * A different idempotency key blocked by an active mutation also consumes zero
+ * usage; a same-key retry remains attached to the original operation.
+ */
 export class Ads extends APIResource {
   // --- Ad Accounts ---
 
@@ -18,7 +23,7 @@ export class Ads extends APIResource {
    * Trigger a manual sync for an ad account.
    *
    * Asynchronous: the full external sync (Graph fetch + ad/campaign upserts +
-   * metrics refresh) is enqueued on the ads queue and this resolves immediately
+   * metrics refresh) is durably accepted by the ads queue before this resolves
    * with `202 { status: "queued" }`. Poll {@link listCampaigns}/{@link list}/
    * {@link getAnalytics} for results. Throws `404 NOT_FOUND` if the ad account
    * does not belong to the caller's org.
@@ -47,10 +52,14 @@ export class Ads extends APIResource {
 
   updateCampaign(
     id: string,
-    body: AdUpdateCampaignParams | null | undefined = {},
-    options?: RequestOptions,
+    body: AdUpdateCampaignParams | null | undefined,
+    options: RequestOptions & { idempotencyKey: string },
   ): APIPromise<AdUpdateCampaignResponse> {
-    return this._client.patch(path`/v1/ads/campaigns/${id}`, { body, ...options });
+    return this._client.patch(path`/v1/ads/campaigns/${id}`, {
+      body,
+      ...options,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 
   /**
@@ -64,10 +73,14 @@ export class Ads extends APIResource {
     return this._client.get('/v1/ads/campaigns', { query, ...options });
   }
 
-  deleteCampaign(id: string, options?: RequestOptions): APIPromise<void> {
+  deleteCampaign(
+    id: string,
+    options: RequestOptions & { idempotencyKey: string },
+  ): APIPromise<void> {
     return this._client.delete(path`/v1/ads/campaigns/${id}`, {
       ...options,
-      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+      idempotencyKey: options.idempotencyKey,
+      headers: buildHeaders([{ Accept: '*/*' }, options.headers]),
     });
   }
 
@@ -103,10 +116,14 @@ export class Ads extends APIResource {
 
   update(
     id: string,
-    body: AdUpdateParams | null | undefined = {},
-    options?: RequestOptions,
+    body: AdUpdateParams | null | undefined,
+    options: RequestOptions & { idempotencyKey: string },
   ): APIPromise<AdResponse> {
-    return this._client.patch(path`/v1/ads/${id}`, { body, ...options });
+    return this._client.patch(path`/v1/ads/${id}`, {
+      body,
+      ...options,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 
   /**
@@ -120,10 +137,11 @@ export class Ads extends APIResource {
     return this._client.get('/v1/ads', { query, ...options });
   }
 
-  delete(id: string, options?: RequestOptions): APIPromise<void> {
+  delete(id: string, options: RequestOptions & { idempotencyKey: string }): APIPromise<void> {
     return this._client.delete(path`/v1/ads/${id}`, {
       ...options,
-      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+      idempotencyKey: options.idempotencyKey,
+      headers: buildHeaders([{ Accept: '*/*' }, options.headers]),
     });
   }
 
@@ -393,6 +411,7 @@ export interface AdListCampaignsParams {
 
 export interface AdCreateParams {
   ad_account_id: string;
+  /** Reuse a campaign's shared ad set. Objective, targeting, budgets, duration, and schedule overrides are rejected when supplied. */
   campaign_id?: string;
   name: string;
   objective?: string;
@@ -402,6 +421,7 @@ export interface AdCreateParams {
   link_url?: string;
   image_url?: string;
   video_url?: string;
+  /** Meta currently rejects cities, radius_miles, languages, and platform_specific instead of silently dropping them. */
   targeting?: Record<string, unknown>;
   daily_budget_cents?: number;
   lifetime_budget_cents?: number;
@@ -418,6 +438,7 @@ export interface AdBoostParams {
   external_post_id?: string;
   name?: string;
   objective?: string;
+  /** Meta currently rejects cities, radius_miles, languages, and platform_specific instead of silently dropping them. */
   targeting?: Record<string, unknown>;
   daily_budget_cents: number;
   lifetime_budget_cents?: number;
@@ -435,6 +456,7 @@ export interface AdUpdateParams {
   status?: 'active' | 'paused';
   daily_budget_cents?: number;
   lifetime_budget_cents?: number;
+  /** Meta currently rejects cities, radius_miles, languages, and platform_specific instead of silently dropping them. */
   targeting?: Record<string, unknown>;
 }
 

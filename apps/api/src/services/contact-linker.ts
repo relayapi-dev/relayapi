@@ -1,6 +1,21 @@
 import type { Database } from "@relayapi/db";
-import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
-import { and, eq, ilike, sql } from "drizzle-orm";
+import {
+	contactChannels,
+	contacts,
+	generateId,
+	socialAccounts,
+} from "@relayapi/db";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { normalizeContactPhone } from "../lib/contact-phone";
+import { workspaceScopeKey } from "../lib/request-access";
+import {
+	deriveContactChannelIdentifierHash,
+	deriveContactEmailHash,
+	deriveContactNameHash,
+	deriveContactPhoneHash,
+	protectContactChannelIdentifier,
+	protectContactValues,
+} from "./contact-protection";
 
 interface LinkResult {
 	contactId: string;
@@ -13,8 +28,8 @@ interface LinkResult {
  *
  * Priority chain:
  * 1. Exact channel match (identifier + account) — auto-link
- * 2. Phone match (contacts.phone matches participant phone) — auto-link
- * 3. Email match (contacts.email matches participant email from metadata) — auto-link
+ * 2. Canonical phone identity match — auto-link
+ * 3. Email match (keyed contacts.email_hash matches participant metadata) — auto-link
  * 4. Name match (exact case-insensitive) — suggestion only
  */
 export async function findMatchingContact(
@@ -23,7 +38,8 @@ export async function findMatchingContact(
 	accountId: string,
 	participantPlatformId: string | null,
 	participantName: string | null,
-	participantMetadata?: Record<string, unknown> | null,
+	participantMetadata: Record<string, unknown> | null | undefined,
+	keyConfig: string,
 ): Promise<LinkResult | null> {
 	if (!participantPlatformId && !participantName) return null;
 	const account = await db.query.socialAccounts.findFirst({
@@ -38,6 +54,11 @@ export async function findMatchingContact(
 
 	// Priority 1: Exact channel match (identifier + social account)
 	if (participantPlatformId) {
+		const identifierHash = await deriveContactChannelIdentifierHash(
+			keyConfig,
+			orgId,
+			participantPlatformId,
+		);
 		const [exactMatch] = await db
 			.select({ contactId: contactChannels.contactId })
 			.from(contactChannels)
@@ -47,7 +68,7 @@ export async function findMatchingContact(
 					eq(contacts.organizationId, orgId),
 					sameAccountWorkspace,
 					eq(contactChannels.socialAccountId, accountId),
-					eq(contactChannels.identifier, participantPlatformId),
+					eq(contactChannels.identifierHash, identifierHash),
 				),
 			)
 			.limit(1);
@@ -57,12 +78,20 @@ export async function findMatchingContact(
 		}
 	}
 
-	// Priority 2: Phone match (if identifier looks like a phone number).
-	// Compare digits-only on BOTH sides so a WhatsApp wa_id like "393331234567"
-	// links to a contact stored in E.164 form "+393331234567" instead of
-	// duplicating the contact. (Postgres regexp_replace strips non-digits.)
-	if (participantPlatformId && /^\+?\d{7,15}$/.test(participantPlatformId)) {
-		const normalizedPhone = participantPlatformId.replace(/\D/g, "");
+	// Priority 2: normalize provider identifiers with the same numbering-aware
+	// function used by every contact writer. WhatsApp wa_id deliberately omits
+	// the plus, hence allowBareInternational on this provider-bound path.
+	const normalizedPhone = participantPlatformId
+		? normalizeContactPhone(participantPlatformId, {
+				allowBareInternational: true,
+			})
+		: null;
+	if (normalizedPhone) {
+		const phoneHash = await deriveContactPhoneHash(
+			keyConfig,
+			orgId,
+			normalizedPhone,
+		);
 		const [phoneMatch] = await db
 			.select({ id: contacts.id })
 			.from(contacts)
@@ -70,7 +99,7 @@ export async function findMatchingContact(
 				and(
 					eq(contacts.organizationId, orgId),
 					sameAccountWorkspace,
-					sql`regexp_replace(${contacts.phone}, '\\D', '', 'g') = ${normalizedPhone}`,
+					eq(contacts.phoneHash, phoneHash as string),
 				),
 			)
 			.limit(1);
@@ -83,6 +112,7 @@ export async function findMatchingContact(
 	// Priority 3: Email match (from participant metadata)
 	const email = participantMetadata?.email as string | undefined;
 	if (email) {
+		const emailHash = await deriveContactEmailHash(keyConfig, orgId, email);
 		const [emailMatch] = await db
 			.select({ id: contacts.id })
 			.from(contacts)
@@ -90,7 +120,7 @@ export async function findMatchingContact(
 				and(
 					eq(contacts.organizationId, orgId),
 					sameAccountWorkspace,
-					eq(contacts.emailCanonical, email.trim().toLowerCase()),
+					eq(contacts.emailHash, emailHash),
 				),
 			)
 			.limit(1);
@@ -102,6 +132,11 @@ export async function findMatchingContact(
 
 	// Priority 4: Name match (exact case-insensitive — suggestion only)
 	if (participantName && participantName.length >= 2) {
+		const nameHash = await deriveContactNameHash(
+			keyConfig,
+			orgId,
+			participantName,
+		);
 		const [nameMatch] = await db
 			.select({ id: contacts.id })
 			.from(contacts)
@@ -109,7 +144,7 @@ export async function findMatchingContact(
 				and(
 					eq(contacts.organizationId, orgId),
 					sameAccountWorkspace,
-					ilike(contacts.name, participantName),
+					eq(contacts.nameHash, nameHash),
 				),
 			)
 			.limit(1);
@@ -140,6 +175,7 @@ export async function ensureContactForAuthor(
 	platform: string,
 	authorId: string | null,
 	authorName: string | null,
+	keyConfig: string,
 ): Promise<string | null> {
 	if (!authorId) return null;
 
@@ -149,6 +185,8 @@ export async function ensureContactForAuthor(
 		socialAccountId,
 		authorId,
 		authorName,
+		null,
+		keyConfig,
 	);
 	if (existing && existing.confidence !== "name_suggestion") {
 		// An "exact" match already matched ON the (socialAccount, identifier)
@@ -164,6 +202,7 @@ export async function ensureContactForAuthor(
 				socialAccountId,
 				platform,
 				authorId,
+				keyConfig,
 			);
 		}
 		return existing.contactId;
@@ -180,32 +219,87 @@ export async function ensureContactForAuthor(
 	// Only treat the author id as a phone number for channels whose identifiers
 	// ARE phone numbers (WhatsApp wa_id, SMS E.164). Telegram/Instagram/Facebook
 	// ids are plain integers that pass a naive /\d{7,15}/ test, so writing them
-	// to contacts.phone produces a bogus phone that the phone matcher could later
+	// to the protected contact phone produces a bogus identity that the phone
+	// matcher could later
 	// collide against an unrelated WhatsApp/SMS participant.
 	const PHONE_PLATFORMS = new Set(["whatsapp", "sms", "twilio"]);
-	const phone =
-		PHONE_PLATFORMS.has(platform) && /^\+?\d{7,15}$/.test(authorId)
-			? authorId
-			: null;
-
-	const [created] = await db
-		.insert(contacts)
-		.values({
-			organizationId: orgId,
-			workspaceId: account.workspaceId,
+	const phoneCanonical = PHONE_PLATFORMS.has(platform)
+		? normalizeContactPhone(authorId, { allowBareInternational: true })
+		: null;
+	const phone = phoneCanonical ? authorId : null;
+	const contactId = generateId("ct_");
+	const protectedContact = await protectContactValues(
+		keyConfig,
+		orgId,
+		contactId,
+		{
 			name: authorName ?? null,
+			email: null,
 			phone,
-		})
-		.returning({ id: contacts.id });
-	if (!created) return null;
-
-	await db.insert(contactChannels).values({
+			metadata: null,
+		},
+	);
+	const phoneHash = phone
+		? await deriveContactPhoneHash(keyConfig, orgId, phone)
+		: null;
+	const channelId = generateId("cc_");
+	const protectedChannel = await protectContactChannelIdentifier(keyConfig, {
+		id: channelId,
 		organizationId: orgId,
-		contactId: created.id,
-		socialAccountId,
-		platform: platform as typeof contactChannels.$inferInsert.platform,
 		identifier: authorId,
 	});
+
+	const created = await db.transaction(async (tx) => {
+		const [row] = await tx
+			.insert(contacts)
+			.values({
+				id: contactId,
+				organizationId: orgId,
+				workspaceId: account.workspaceId,
+				...protectedContact,
+			})
+			.onConflictDoNothing()
+			.returning({ id: contacts.id });
+		if (!row) return null;
+		await tx.insert(contactChannels).values({
+			id: channelId,
+			organizationId: orgId,
+			scopeKey: workspaceScopeKey(account.workspaceId),
+			contactId: row.id,
+			socialAccountId,
+			platform: platform as typeof contactChannels.$inferInsert.platform,
+			...protectedChannel,
+		});
+		return row;
+	});
+	if (!created && phoneCanonical) {
+		const [concurrent] = await db
+			.select({ id: contacts.id })
+			.from(contacts)
+			.where(
+				and(
+					eq(contacts.organizationId, orgId),
+					account.workspaceId
+						? eq(contacts.workspaceId, account.workspaceId)
+						: isNull(contacts.workspaceId),
+					eq(contacts.phoneHash, phoneHash as string),
+				),
+			)
+			.limit(1);
+		if (concurrent) {
+			await ensureChannelLink(
+				db,
+				orgId,
+				concurrent.id,
+				socialAccountId,
+				platform,
+				authorId,
+				keyConfig,
+			);
+			return concurrent.id;
+		}
+	}
+	if (!created) return null;
 
 	return created.id;
 }
@@ -217,9 +311,13 @@ async function ensureChannelLink(
 	socialAccountId: string,
 	platform: string,
 	identifier: string,
+	keyConfig: string,
 ): Promise<void> {
 	const [relationship] = await db
-		.select({ contactId: contacts.id })
+		.select({
+			contactId: contacts.id,
+			workspaceId: contacts.workspaceId,
+		})
 		.from(contacts)
 		.innerJoin(
 			socialAccounts,
@@ -237,21 +335,34 @@ async function ensureChannelLink(
 		)
 		.limit(1);
 	if (!relationship) return;
+	const identifierHash = await deriveContactChannelIdentifierHash(
+		keyConfig,
+		organizationId,
+		identifier,
+	);
 	const existing = await db.query.contactChannels.findFirst({
 		where: and(
 			eq(contactChannels.contactId, contactId),
 			eq(contactChannels.socialAccountId, socialAccountId),
-			eq(contactChannels.identifier, identifier),
+			eq(contactChannels.identifierHash, identifierHash),
 		),
 	});
 	if (existing) return;
+	const id = generateId("cc_");
+	const protectedIdentifier = await protectContactChannelIdentifier(keyConfig, {
+		id,
+		organizationId,
+		identifier,
+	});
 	try {
 		await db.insert(contactChannels).values({
+			id,
 			organizationId,
+			scopeKey: workspaceScopeKey(relationship.workspaceId),
 			contactId,
 			socialAccountId,
 			platform: platform as typeof contactChannels.$inferInsert.platform,
-			identifier,
+			...protectedIdentifier,
 		});
 	} catch {
 		// Unique index on (social_account_id, identifier) means a race with

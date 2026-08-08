@@ -64,15 +64,21 @@ export default {
 
 **CRITICAL WARNINGS:**
 
-1. **Messages not explicitly ack'd or retry'd will auto-retry indefinitely** until `max_retries` is reached. Always call `msg.ack()` or `msg.retry()` for each message.
+1. **A successful handler return implicitly acknowledges every message that has
+   no explicit outcome.** Always call `msg.retry()` in a per-message catch (or
+   let the handler throw) so a failed message is redelivered and can eventually
+   reach its DLQ.
 
-2. **Throwing uncaught errors retries the ENTIRE batch**, not just the failed message. Always wrap individual message processing in try/catch and call `msg.retry()` explicitly per message.
+2. **Throwing uncaught errors retries every message without an explicit outcome**,
+   not just the failed message. Messages already acknowledged remain
+   acknowledged. Wrap individual processing in try/catch and call `msg.retry()`
+   explicitly per failure.
 
 ```typescript
-// ❌ BAD: Uncaught error retries entire batch
+// ❌ BAD: An uncaught error retries every message without an explicit outcome
 async queue(batch: MessageBatch): Promise<void> {
   for (const msg of batch.messages) {
-    await riskyOperation(msg.body); // If this throws, entire batch retries
+    await riskyOperation(msg.body); // If this throws, remaining unhandled messages retry
     msg.ack();
   }
 }
@@ -92,15 +98,15 @@ async queue(batch: MessageBatch): Promise<void> {
 
 ## Ack/Retry Precedence Rules
 
-1. **Per-message calls take precedence**: If you call both `msg.ack()` and `msg.retry()`, last call wins
+1. **First per-message call wins**: After `msg.ack()` or `msg.retry()`, later outcome calls for that message are silently ignored
 2. **Batch calls don't override**: `batch.ackAll()` only affects messages without explicit ack/retry
-3. **No action = automatic retry**: Messages with no explicit action retry with configured delay
+3. **No action + successful return = implicit acknowledgement**: An uncaught handler failure retries unacknowledged messages in the batch
 
 ```typescript
 async queue(batch: MessageBatch): Promise<void> {
   for (const msg of batch.messages) {
-    msg.ack();        // Message marked for ack
-    msg.retry();      // Overrides ack - message will retry
+    msg.ack();        // First call wins: message is acknowledged
+    msg.retry();      // Ignored; this does not undo the ack
   }
   
   batch.ackAll();     // Only affects messages not explicitly handled above

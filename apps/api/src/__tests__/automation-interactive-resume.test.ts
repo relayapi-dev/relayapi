@@ -32,11 +32,15 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import {
+	protectedContactChannelFixture,
+	protectedContactFixture,
+} from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -146,21 +150,22 @@ async function createAutomation(name: string, graph: Graph) {
 async function createContactWithChannel(identifier: string) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: `contact-${identifier}`,
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
-	await db.insert(contactChannels).values({
+	await db.insert(contactChannels).values(await protectedContactChannelFixture({
 		organizationId: orgId,
+		workspaceId,
 		contactId: ct.id,
 		socialAccountId,
 		platform: "telegram",
 		identifier,
-	});
-	await recordContactConsent(db, {
+	}));
+	await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 		organizationId: orgId,
 		workspaceId,
 		contactId: ct.id,

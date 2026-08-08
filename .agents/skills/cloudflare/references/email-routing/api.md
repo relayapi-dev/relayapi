@@ -163,7 +163,7 @@ Base URL: `https://api.cloudflare.com/client/v4`
 ### Authentication
 
 ```bash
-curl -H "Authorization: Bearer $API_TOKEN" https://api.cloudflare.com/client/v4/...
+curl --header @/secure/bearer-auth-header https://api.cloudflare.com/client/v4/...
 ```
 
 ### Key Endpoints
@@ -181,7 +181,7 @@ curl -H "Authorization: Bearer $API_TOKEN" https://api.cloudflare.com/client/v4/
 
 ```bash
 curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/email/routing/rules" \
-  -H "Authorization: Bearer $API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{
     "enabled": true,

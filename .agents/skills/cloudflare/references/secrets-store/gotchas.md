@@ -33,7 +33,7 @@ try {
 ### "Scope Mismatch"
 
 **Cause:** Secret exists but missing `workers` scope (only has `ai-gateway` scope)  
-**Solution:** Update secret scopes: `wrangler secrets-store secret update <store-id> --name SECRET --scopes workers --remote` or add via Dashboard
+**Solution:** Update secret scopes: `wrangler secrets-store secret update <store-id> --secret-id <secret-id> --scopes workers --remote` or add via Dashboard
 
 ### "JSON Parsing Failure"
 
@@ -41,10 +41,11 @@ try {
 **Solution:** Validate JSON before storing:
 
 ```bash
-# Validate before storing
-echo '{"key":"value"}' | jq . && \
-  echo '{"key":"value"}' | wrangler secrets-store secret create <store-id> \
-    --name CONFIG --scopes workers --remote
+# Validate a protected local file without printing it, then enter the same value
+# at Wrangler's masked interactive prompt.
+jq -e . /secure/config.json >/dev/null
+wrangler secrets-store secret create <store-id> \
+  --name CONFIG --scopes workers --remote
 ```
 
 Runtime parsing with error handling:

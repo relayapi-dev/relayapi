@@ -27,7 +27,7 @@ For internal platforms where you control all code:
 ```bash
 curl -X PUT \
   "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/dispatch/namespaces/$NAMESPACE" \
-  -H "Authorization: Bearer $API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -d '{"name": "'$NAMESPACE'", "trusted_workers": true}'
 ```
 

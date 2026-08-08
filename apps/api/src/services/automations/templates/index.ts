@@ -4,6 +4,7 @@
 // small set of high-level fields into a graph + entrypoint set that the caller
 // (POST /v1/automations) persists. See spec §7 for the template catalog.
 
+import type { AutomationEntrypointKind } from "@relayapi/db";
 import type { Graph } from "../../../schemas/automation-graph";
 import { buildBlank } from "./blank";
 import { buildCommentToDm } from "./comment-to-dm";
@@ -25,7 +26,7 @@ export type TemplateKind =
 	| "follow_to_dm";
 
 export type TemplateEntrypoint = {
-	kind: string;
+	kind: AutomationEntrypointKind;
 	config: Record<string, unknown>;
 	socialAccountId?: string | null;
 	filters?: Record<string, unknown> | null;

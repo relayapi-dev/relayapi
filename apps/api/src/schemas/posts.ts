@@ -1,6 +1,7 @@
 import { z } from "@hono/zod-openapi";
 import { PlatformEnum, paginatedResponse } from "./common";
 import { CrossPostActionInput } from "./cross-post-actions";
+import { TagResponse } from "./tags";
 
 function isHttpOrHttpsUrl(url: string): boolean {
 	try {
@@ -314,6 +315,18 @@ export const PostResponse = z.object({
 });
 
 export const PostListResponse = paginatedResponse(PostResponse);
+
+export const PostTagListQuery = z.object({
+	cursor: z.string().optional().describe("Opaque pagination cursor"),
+	limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const PostTagListResponse = paginatedResponse(TagResponse);
+
+export const PostTagParams = z.object({
+	id: z.string().describe("Post ID"),
+	tag_id: z.string().describe("Tag ID"),
+});
 
 // --- External post (fetched from platform, not created through RelayAPI) ---
 

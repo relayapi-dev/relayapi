@@ -4,13 +4,9 @@ Setup and configuration for Cloudflare TURN service in Workers and applications.
 
 ## Environment Variables
 
-```bash
-# .env
-CLOUDFLARE_ACCOUNT_ID=your_account_id
-CLOUDFLARE_API_TOKEN=your_api_token
-TURN_KEY_ID=your_turn_key_id
-TURN_KEY_SECRET=your_turn_key_secret
-```
+`TURN_KEY_ID` is ordinary configuration. Inject the long-term
+`TURN_KEY_SECRET` directly from a secret manager (or use Wrangler's masked
+`secret put` prompt); never put it in a committed dotenv file or shell command.
 
 Validate with zod:
 
@@ -18,8 +14,6 @@ Validate with zod:
 import { z } from 'zod';
 
 const envSchema = z.object({
-  CLOUDFLARE_ACCOUNT_ID: z.string().min(1),
-  CLOUDFLARE_API_TOKEN: z.string().min(1),
   TURN_KEY_ID: z.string().min(1),
   TURN_KEY_SECRET: z.string().min(1)
 });
@@ -75,48 +69,80 @@ export default {
 
 ### Basic Worker Example
 
+The TURN key is an account credential that can mint unlimited client credentials.
+The endpoint must authenticate the application user, authorize TURN use, and
+consume a server-side per-user/tenant quota before calling Cloudflare. A header's
+mere presence or `Bearer ` prefix is not authentication.
+
 ```typescript
+interface Principal {
+  userId: string;
+  tenantId: string;
+}
+
+interface TurnCredentialsResponse {
+  iceServers: Array<{
+    urls: string[];
+    username?: string;
+    credential?: string;
+  }>;
+}
+
+// Supply these with your established auth and rate-limit services. The
+// authenticator must verify integrity, issuer, audience, expiry, and revocation.
+declare function authenticateRequest(request: Request, env: Env): Promise<Principal | null>;
+declare function authorizeTurn(principal: Principal, env: Env): Promise<boolean>;
+declare function consumeTurnQuota(principal: Principal, env: Env): Promise<boolean>;
+
+const TURN_CREDENTIAL_TTL_SECONDS = 3600; // Bound to the longest expected call.
+
+function isBrowserBlockedPort53Url(turnUrl: string): boolean {
+  return /:53(?:\?|$)/.test(turnUrl);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (request.url.endsWith('/turn-credentials')) {
-      // Validate client auth
-      const authHeader = request.headers.get('Authorization');
-      if (!authHeader) {
-        return new Response('Unauthorized', { status: 401 });
+    const url = new URL(request.url);
+    if (url.pathname === '/api/turn-credentials' && request.method === 'POST') {
+      const principal = await authenticateRequest(request, env);
+      if (!principal) return new Response('Unauthorized', { status: 401 });
+      if (!(await authorizeTurn(principal, env))) {
+        return new Response('Forbidden', { status: 403 });
+      }
+      if (!(await consumeTurnQuota(principal, env))) {
+        return new Response('Too Many Requests', {
+          status: 429,
+          headers: { 'Retry-After': '60' }
+        });
       }
 
       const response = await fetch(
-        `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate`,
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`,
         {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${env.TURN_KEY_SECRET}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ ttl: 3600 })
+          body: JSON.stringify({ ttl: TURN_CREDENTIAL_TTL_SECONDS })
         }
       );
 
       if (!response.ok) {
+        console.error('TURN credential generation failed', { status: response.status });
         return new Response('Failed to generate credentials', { status: 500 });
       }
 
-      const data = await response.json();
+      const data = await response.json() as TurnCredentialsResponse;
 
       // Filter port 53 for browser clients
-      const filteredUrls = data.iceServers.urls.filter(
-        (url: string) => !url.includes(':53')
-      );
+      const iceServers = data.iceServers.map(server => ({
+        ...server,
+        urls: server.urls.filter(turnUrl => !isBrowserBlockedPort53Url(turnUrl))
+      }));
 
-      return Response.json({
-        iceServers: [
-          { urls: 'stun:stun.cloudflare.com:3478' },
-          {
-            urls: filteredUrls,
-            username: data.iceServers.username,
-            credential: data.iceServers.credential
-          }
-        ]
+      return Response.json({ iceServers }, {
+        headers: { 'Cache-Control': 'no-store' }
       });
     }
 

@@ -80,7 +80,7 @@ return new Response(stream, { headers: { "Content-Type": "text/event-stream" } }
 
 ```bash
 curl https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/autorag/rags/{NAME}/ai-search \
-  -H "Authorization: Bearer {TOKEN}" \
+  --header @/secure/bearer-auth-header \
   -d '{"query": "...", "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"}'
 ```
 

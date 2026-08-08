@@ -292,6 +292,7 @@ let activeDb = new FakeDb();
 const dispatchPublishOutbox = mock(async () => 0);
 
 mock.module("@relayapi/db", () => ({
+	SOCIAL_PLATFORM_IDS: ["twitter", "facebook"],
 	automationBindings,
 	automationContactControls,
 	automationEffects,
@@ -307,6 +308,7 @@ mock.module("@relayapi/db", () => ({
 	customFieldDefinitions,
 	customFieldValues,
 	inboxConversations,
+	isAutomationNodeKind: (value: unknown) => typeof value === "string",
 	posts,
 	postTargets,
 	publishOutbox,
@@ -349,6 +351,9 @@ mock.module("drizzle-orm", () => ({
 
 mock.module("../services/automations/manifest", () => ({
 	getHandler: () => undefined,
+}));
+mock.module("../services/segment-memberships", () => ({
+	getContactSegmentIds: async () => new Map<string, string[]>(),
 }));
 
 mock.module("../services/publish-outbox", () => ({

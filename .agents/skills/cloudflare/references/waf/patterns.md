@@ -60,12 +60,12 @@ await client.rulesets.create({
   phase: 'http_request_firewall_custom',
   name: 'Custom WAF Rules',
   rules: [
-    // Attack score-based
-    { action: 'block', expression: 'cf.waf.score gt 50', enabled: true },
-    { action: 'challenge', expression: 'cf.waf.score gt 20', enabled: true },
+    // Attack score-based: low scores are more likely to be malicious.
+    { action: 'block', expression: 'cf.waf.score le 20', enabled: true },
+    { action: 'managed_challenge', expression: 'cf.waf.score ge 21 and cf.waf.score le 50', enabled: true },
     
     // Specific attack types
-    { action: 'block', expression: 'cf.waf.score.sqli gt 30 or cf.waf.score.xss gt 30', enabled: true },
+    { action: 'block', expression: 'cf.waf.score.sqli le 20 or cf.waf.score.xss le 20', enabled: true },
     
     // Geographic blocking
     { action: 'block', expression: 'ip.geoip.country in {"CN" "RU"}', enabled: true },
@@ -169,8 +169,8 @@ await client.rulesets.create({
   phase: 'http_request_firewall_custom',
   rules: [
     { action: 'skip', action_parameters: { phases: ['http_request_firewall_managed', 'http_ratelimit'] }, expression: 'ip.src in {192.0.2.0/24}' },
-    { action: 'block', expression: 'cf.waf.score gt 50' },
-    { action: 'managed_challenge', expression: 'cf.waf.score gt 20' },
+    { action: 'block', expression: 'cf.waf.score le 20' },
+    { action: 'managed_challenge', expression: 'cf.waf.score ge 21 and cf.waf.score le 50' },
   ],
 });
 

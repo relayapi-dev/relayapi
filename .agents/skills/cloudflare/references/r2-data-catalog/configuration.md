@@ -30,15 +30,10 @@ Dashboard → **R2** → **Manage R2 API tokens** → **Create API token**.
 
 R2 Data Catalog runs compaction and snapshot expiration for you.
 
-```bash
-# Compaction — merges small files (target size MB; default 128)
-npx wrangler r2 bucket catalog compaction enable my-bucket \
-  --target-size 128 --token $API_TOKEN
-
-# Snapshot expiration — removes old snapshots AND their unreferenced data files
-npx wrangler r2 bucket catalog snapshot-expiration enable my-bucket \
-  --token $API_TOKEN --older-than-days 7 --retain-last 10
-```
+Use the R2 Data Catalog dashboard wizard to enable compaction (target size 128
+MB by default) and snapshot expiration (for example, seven days while retaining
+the latest ten snapshots). The maintenance token is entered into a masked field;
+do not pass it through shell argv.
 
 Compaction needs a **stored credential** to access files. `compaction enable` (and the dashboard wizard) stores it automatically; pure-API setups must call `/credential` (see [api.md](api.md)).
 
@@ -50,7 +45,7 @@ Compaction needs a **stored credential** to access files. `compaction enable` (a
 npx wrangler r2 bucket catalog status my-bucket
 # or control-plane API:
 curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2-catalog/$BUCKET" \
-  -H "Authorization: Bearer $API_TOKEN"
+  --header @/secure/bearer-auth-header
 ```
 
 Expect `"status": "active"`, `compaction.state: "enabled"`, `credential_status: "present"`.

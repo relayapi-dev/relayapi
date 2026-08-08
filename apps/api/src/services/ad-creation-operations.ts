@@ -10,6 +10,15 @@ import {
 	socialAccounts,
 } from "@relayapi/db";
 import { and, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import {
+	adCreationUsesExistingCampaign,
+	hasAdCreationProviderEffect,
+} from "../lib/ad-money";
+import {
+	type DurableCredentialAuthorityAdmission,
+	type DurableCredentialAuthoritySnapshot,
+	revalidateDurableCredentialAuthority,
+} from "../lib/durable-credential-authority";
 import { durableOperationHashes } from "../lib/durable-operation";
 import type { Env } from "../types";
 import { resolveAdsAccessToken } from "./ad-access-token";
@@ -20,7 +29,19 @@ import type {
 	AdProviderObjectPhase,
 	AdTargeting,
 } from "./ad-platforms/types";
-import { AdPlatformError } from "./ad-platforms/types";
+import {
+	AdAuthoritativeNotAppliedError,
+	AdPlatformError,
+} from "./ad-platforms/types";
+import {
+	type AdProviderBoundaryContext,
+	lockAdProviderBoundary,
+} from "./ad-provider-boundary";
+import {
+	adoptDurableUsageReservationInTransaction,
+	settleLinkedDurableUsage,
+} from "./durable-operation-usage";
+import type { UsageReservation } from "./usage-meter";
 
 const LEASE_MS = 2 * 60_000;
 
@@ -55,11 +76,74 @@ interface BeginOptions {
 	platform: AdPlatform;
 	operationKey: string | undefined;
 	request: Record<string, unknown>;
+	usageReservation?: UsageReservation;
+	authorityAdmission: DurableCredentialAuthorityAdmission;
 }
 
 export interface ClaimedAdOperation {
 	row: Operation;
 	leaseToken: number;
+}
+
+function creationAuthoritySnapshot(
+	row: Operation,
+): DurableCredentialAuthoritySnapshot {
+	return {
+		organizationId: row.organizationId,
+		keyId: row.authorityKeyId,
+		principalId: row.authorityPrincipalId,
+		principalType: row.authorityPrincipalType,
+		userId: row.authorityUserId,
+		authorityMemberId: row.authorityMemberId,
+		authoritySessionId: row.authoritySessionId,
+		authorityWorkspaceId: row.authorityWorkspaceId,
+		authorityRequiresAllWorkspaceScope: row.authorityRequiresAllWorkspaceScope,
+		credentialVersion: row.authorityCredentialVersion,
+		admittedAt: row.authorityAdmittedAt,
+		revision: row.authorityRevision,
+	};
+}
+
+function creationAuthorityValues(snapshot: DurableCredentialAuthoritySnapshot) {
+	return {
+		authorityKeyId: snapshot.keyId,
+		authorityPrincipalId: snapshot.principalId,
+		authorityPrincipalType: snapshot.principalType,
+		authorityUserId: snapshot.userId,
+		authorityMemberId: snapshot.authorityMemberId,
+		authoritySessionId: snapshot.authoritySessionId,
+		authorityWorkspaceId: snapshot.authorityWorkspaceId,
+		authorityRequiresAllWorkspaceScope:
+			snapshot.authorityRequiresAllWorkspaceScope,
+		authorityCredentialVersion: snapshot.credentialVersion,
+		authorityAdmittedAt: snapshot.admittedAt,
+		authorityRevision: snapshot.revision,
+	};
+}
+
+function sameCreationAuthority(
+	row: Operation,
+	snapshot: DurableCredentialAuthoritySnapshot,
+): boolean {
+	return (
+		row.authorityKeyId === snapshot.keyId &&
+		row.authorityPrincipalId === snapshot.principalId &&
+		row.authorityPrincipalType === snapshot.principalType &&
+		row.authorityUserId === snapshot.userId &&
+		row.authorityMemberId === snapshot.authorityMemberId &&
+		row.authoritySessionId === snapshot.authoritySessionId &&
+		row.authorityWorkspaceId === snapshot.authorityWorkspaceId &&
+		row.authorityRequiresAllWorkspaceScope ===
+			snapshot.authorityRequiresAllWorkspaceScope &&
+		row.authorityCredentialVersion === snapshot.credentialVersion
+	);
+}
+
+function throwCreationAuthorityDenied(message: string): never {
+	throw new AdAuthoritativeNotAppliedError(
+		"CREDENTIAL_NO_LONGER_AUTHORIZED",
+		message,
+	);
 }
 
 export type AdCreationReplayState =
@@ -71,16 +155,17 @@ export type AdCreationReplayState =
 
 export function classifyAdCreationReplayState(
 	row:
-			| Pick<
-					Operation,
-					| "status"
-					| "leaseExpiresAt"
-					| "requestMayHaveBeenSentAt"
-					| "platformCampaignId"
-					| "platformAdSetId"
-					| "platformCreativeId"
-					| "platformAdId"
-		  >
+		| (Pick<
+				Operation,
+				| "status"
+				| "leaseExpiresAt"
+				| "requestMayHaveBeenSentAt"
+				| "platformCampaignId"
+				| "platformAdSetId"
+				| "platformCreativeId"
+				| "platformAdId"
+		  > &
+				Partial<Pick<Operation, "kind" | "requestPayload">>)
 		| undefined,
 	now: Date = new Date(),
 ): AdCreationReplayState {
@@ -90,10 +175,14 @@ export function classifyAdCreationReplayState(
 	if (
 		row.status === "processing" &&
 		!row.requestMayHaveBeenSentAt &&
-		!row.platformCampaignId &&
-		!row.platformAdSetId &&
-		!row.platformCreativeId &&
-		!row.platformAdId
+		!hasAdCreationProviderEffect({
+			kind: row.kind ?? "create_campaign",
+			requestPayload: row.requestPayload ?? {},
+			platformCampaignId: row.platformCampaignId,
+			platformAdSetId: row.platformAdSetId,
+			platformCreativeId: row.platformCreativeId,
+			platformAdId: row.platformAdId,
+		})
 	) {
 		return row.leaseExpiresAt && row.leaseExpiresAt > now
 			? "lease_active"
@@ -129,6 +218,8 @@ export async function getAdCreationReplayState(
 			platformAdSetId: adCreationOperations.platformAdSetId,
 			platformCreativeId: adCreationOperations.platformCreativeId,
 			platformAdId: adCreationOperations.platformAdId,
+			kind: adCreationOperations.kind,
+			requestPayload: adCreationOperations.requestPayload,
 		})
 		.from(adCreationOperations)
 		.where(
@@ -143,6 +234,17 @@ export async function getAdCreationReplayState(
 }
 
 function operationError(row: Operation): never {
+	if (row.status === "cancelled") {
+		throwCreationAuthorityDenied(
+			"The paid operation was cancelled because its admitting credential was revoked.",
+		);
+	}
+	if (row.status === "revocation_pending") {
+		throw new AdPlatformError(
+			"AUTHORITY_REVOKED_PENDING",
+			"The admitting credential was revoked after a provider effect; only correlation or spend-reducing compensation may continue.",
+		);
+	}
 	if (row.status === "completed") {
 		throw new AdPlatformError(
 			"OPERATION_RESULT_MISSING",
@@ -187,88 +289,109 @@ export async function beginAdCreationOperation(
 		options.operationKey,
 		options.request,
 	);
-	const now = new Date();
-	const [inserted] = await options.db
-		.insert(adCreationOperations)
-		.values({
-			organizationId: options.organizationId,
+	return options.db.transaction(async (tx) => {
+		const admitted = await options.authorityAdmission(tx, {
 			workspaceId: options.workspaceId,
-			adAccountId: options.adAccountId,
-			kind: options.kind,
-			operationKeyHash,
-			requestHash,
-			requestPayload: options.request,
-			platform: options.platform,
-			phase: "campaign",
-			nextAttemptAt: now,
-		})
-		.onConflictDoNothing()
-		.returning();
+			requireAllWorkspaceScope: options.workspaceId === null,
+		});
+		if (!admitted.ok) throwCreationAuthorityDenied(admitted.message);
+		const now = admitted.value.admittedAt;
+		const [inserted] = await tx
+			.insert(adCreationOperations)
+			.values({
+				organizationId: options.organizationId,
+				usageReservationId: options.usageReservation?.id ?? null,
+				workspaceId: options.workspaceId,
+				adAccountId: options.adAccountId,
+				kind: options.kind,
+				operationKeyHash,
+				requestHash,
+				requestPayload: options.request,
+				platform: options.platform,
+				phase: "campaign",
+				...creationAuthorityValues(admitted.value),
+				createdAt: now,
+				updatedAt: now,
+				nextAttemptAt: now,
+			})
+			.onConflictDoNothing()
+			.returning();
 
-	const row =
-		inserted ??
-		(
-			await options.db
-				.select()
-				.from(adCreationOperations)
-				.where(
-					and(
-						eq(adCreationOperations.organizationId, options.organizationId),
-						eq(adCreationOperations.kind, options.kind),
-						eq(adCreationOperations.operationKeyHash, operationKeyHash),
-					),
-				)
-				.limit(1)
-		)[0];
-	if (!row) throw new Error("Failed to create durable ad operation");
-	if (row.requestHash !== requestHash) {
-		throw new AdPlatformError(
-			"IDEMPOTENCY_KEY_REUSED",
-			"This Idempotency-Key was already used for a different paid operation request",
+		const row =
+			inserted ??
+			(
+				await tx
+					.select()
+					.from(adCreationOperations)
+					.where(
+						and(
+							eq(adCreationOperations.organizationId, options.organizationId),
+							eq(adCreationOperations.kind, options.kind),
+							eq(adCreationOperations.operationKeyHash, operationKeyHash),
+						),
+					)
+					.for("update")
+					.limit(1)
+			)[0];
+		if (!row) throw new Error("Failed to create durable ad operation");
+		await adoptDurableUsageReservationInTransaction(
+			tx,
+			row.usageReservationId,
+			options.usageReservation,
 		);
-	}
-	if (row.status === "completed") return { completed: row };
+		if (row.requestHash !== requestHash) {
+			throw new AdPlatformError(
+				"IDEMPOTENCY_KEY_REUSED",
+				"This Idempotency-Key was already used for a different paid operation request",
+			);
+		}
 
-	// A duplicate request must never steal an active provider boundary. The
-	// scheduled reconciler claims it only after the durable lease expires.
-	if (row.status === "request_may_have_been_sent") {
-		operationError(row);
-	}
-	if (
-		row.status === "unknown" ||
-		row.status === "reconciling" ||
-		row.status === "manual_review"
-	) {
-		operationError(row);
-	}
+		if (!sameCreationAuthority(row, admitted.value)) {
+			throwCreationAuthorityDenied(
+				"This Idempotency-Key belongs to a different or revoked credential authority; use a new key.",
+			);
+		}
 
-	const [claimed] = await options.db
-		.update(adCreationOperations)
-		.set({
-			status: "processing",
-			leaseToken: sql`${adCreationOperations.leaseToken} + 1`,
-			leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
-			attempts: sql`${adCreationOperations.attempts} + 1`,
-			lastError: null,
-			updatedAt: now,
-		})
-		.where(
-			and(
-				eq(adCreationOperations.id, row.id),
-				or(
-					eq(adCreationOperations.status, "pending"),
-					eq(adCreationOperations.status, "failed"),
-					and(
-						eq(adCreationOperations.status, "processing"),
-						lte(adCreationOperations.leaseExpiresAt, now),
-						isNull(adCreationOperations.requestMayHaveBeenSentAt),
+		if (row.status === "completed") return { completed: row };
+		if (
+			row.status === "request_may_have_been_sent" ||
+			row.status === "unknown" ||
+			row.status === "reconciling" ||
+			row.status === "revocation_pending" ||
+			row.status === "cancelled" ||
+			row.status === "manual_review"
+		) {
+			operationError(row);
+		}
+
+		const [claimed] = await tx
+			.update(adCreationOperations)
+			.set({
+				status: "processing",
+				leaseToken: sql`${adCreationOperations.leaseToken} + 1`,
+				leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
+				attempts: sql`${adCreationOperations.attempts} + 1`,
+				lastError: null,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(adCreationOperations.id, row.id),
+					or(
+						eq(adCreationOperations.status, "pending"),
+						eq(adCreationOperations.status, "failed"),
+						and(
+							eq(adCreationOperations.status, "processing"),
+							lte(adCreationOperations.leaseExpiresAt, now),
+							isNull(adCreationOperations.requestMayHaveBeenSentAt),
+						),
 					),
 				),
-			),
-		)
-		.returning();
-	if (!claimed) operationError(row);
-	return { row: claimed, leaseToken: claimed.leaseToken };
+			)
+			.returning();
+		if (!claimed) operationError(row);
+		return { row: claimed, leaseToken: claimed.leaseToken };
+	});
 }
 
 export function adProviderCorrelationMarker(operationId: string): string {
@@ -284,34 +407,136 @@ export function correlatedAdProviderName(
 }
 
 export async function markAdProviderBoundary(
+	env: Env,
 	db: Database,
 	claim: ClaimedAdOperation,
 	phase: AdCreationPhase,
-): Promise<void> {
-	const now = new Date();
-	const updated = await db
-		.update(adCreationOperations)
-		.set({
-			status: "request_may_have_been_sent",
-			phase,
-			requestMayHaveBeenSentAt: now,
-			leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
-			updatedAt: now,
-		})
-		.where(
-			and(
-				eq(adCreationOperations.id, claim.row.id),
-				eq(adCreationOperations.leaseToken, claim.leaseToken),
-				eq(adCreationOperations.status, "processing"),
-			),
-		)
-		.returning({ id: adCreationOperations.id });
-	if (updated.length !== 1) {
+): Promise<AdProviderBoundaryContext> {
+	const outcome = await db.transaction(async (tx) => {
+		const authority = await revalidateDurableCredentialAuthority(
+			tx,
+			creationAuthoritySnapshot(claim.row),
+			"manage_spend",
+		);
+		const [current] = await tx
+			.select()
+			.from(adCreationOperations)
+			.where(eq(adCreationOperations.id, claim.row.id))
+			.for("update")
+			.limit(1);
+		if (
+			!current ||
+			current.leaseToken !== claim.leaseToken ||
+			!(
+				["processing", "reconciling", "request_may_have_been_sent"] as const
+			).includes(current.status as never) ||
+			(current.status === "request_may_have_been_sent" &&
+				current.phase !== phase) ||
+			current.authorityRevision !== claim.row.authorityRevision
+		) {
+			return { kind: "lease_lost" } as const;
+		}
+		const providerAuthority = authority.ok
+			? await lockAdProviderBoundary(tx, env, {
+					organizationId: current.organizationId,
+					workspaceId: current.workspaceId,
+					adAccountId: current.adAccountId,
+					platform: current.platform,
+					requiresLiveEntitlement: true,
+				})
+			: ({ ok: false, message: authority.message } as const);
+		const now = new Date();
+		if (!providerAuthority.ok) {
+			const hasEffect =
+				hasAdCreationProviderEffect(current) ||
+				current.requestMayHaveBeenSentAt !== null;
+			const [revoked] = await tx
+				.update(adCreationOperations)
+				.set({
+					status: hasEffect ? "manual_review" : "cancelled",
+					authorityRevokedAt: hasEffect ? null : now,
+					leaseExpiresAt: null,
+					lastError: providerAuthority.message,
+					updatedAt: now,
+				})
+				.where(
+					and(
+						eq(adCreationOperations.id, current.id),
+						eq(adCreationOperations.leaseToken, claim.leaseToken),
+						inArray(adCreationOperations.status, [
+							"processing",
+							"reconciling",
+							"request_may_have_been_sent",
+						]),
+						eq(
+							adCreationOperations.authorityRevision,
+							claim.row.authorityRevision,
+						),
+					),
+				)
+				.returning({ id: adCreationOperations.id });
+			if (!revoked) return { kind: "lease_lost" } as const;
+			return {
+				kind: hasEffect ? "manual_review" : "cancelled",
+				organizationId: current.organizationId,
+				usageReservationId: current.usageReservationId,
+			} as const;
+		}
+
+		const updated = await tx
+			.update(adCreationOperations)
+			.set({
+				status: "request_may_have_been_sent",
+				phase,
+				requestMayHaveBeenSentAt: current.requestMayHaveBeenSentAt ?? now,
+				leaseExpiresAt: new Date(now.getTime() + LEASE_MS),
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(adCreationOperations.id, claim.row.id),
+					eq(adCreationOperations.leaseToken, claim.leaseToken),
+					inArray(adCreationOperations.status, [
+						"processing",
+						"reconciling",
+						"request_may_have_been_sent",
+					]),
+					eq(
+						adCreationOperations.authorityRevision,
+						claim.row.authorityRevision,
+					),
+				),
+			)
+			.returning({ id: adCreationOperations.id });
+		return updated.length === 1
+			? ({ kind: "opened", context: providerAuthority.context } as const)
+			: ({ kind: "lease_lost" } as const);
+	});
+
+	if (outcome.kind === "cancelled") {
+		await settleLinkedDurableUsage(db, {
+			organizationId: outcome.organizationId,
+			usageReservationId: outcome.usageReservationId,
+			committed: false,
+		});
+		throwCreationAuthorityDenied(
+			"The paid operation was cancelled because its admitting credential is no longer authorized.",
+		);
+	}
+	if (outcome.kind === "manual_review") {
+		throw new AdPlatformError(
+			"MANUAL_REVIEW_REQUIRED",
+			"Live billing or provider authority ended after an ad provider effect; the operation now requires operator review.",
+		);
+	}
+	if (outcome.kind === "lease_lost") {
 		throw new AdPlatformError(
 			"OPERATION_LEASE_LOST",
 			"The paid operation lease was lost before the provider request",
 		);
 	}
+	if (!outcome.context) throw new Error("Ad provider context was not returned");
+	return outcome.context;
 }
 
 export async function confirmAdProviderBoundary(
@@ -343,9 +568,19 @@ export async function confirmAdProviderBoundary(
 				eq(adCreationOperations.status, "request_may_have_been_sent"),
 			),
 		)
-		.returning({ id: adCreationOperations.id });
+		.returning({
+			id: adCreationOperations.id,
+			organizationId: adCreationOperations.organizationId,
+			usageReservationId: adCreationOperations.usageReservationId,
+		});
 	if (updated.length !== 1)
 		throw new Error("Paid operation provider fence lost");
+	await settleLinkedDurableUsage(db, {
+		organizationId: updated[0]?.organizationId ?? claim.row.organizationId,
+		usageReservationId:
+			updated[0]?.usageReservationId ?? claim.row.usageReservationId,
+		committed: true,
+	});
 }
 
 /** Persist local/provider progress so an expired pre-boundary lease can resume
@@ -432,9 +667,19 @@ export async function completeAdCreationOperation(
 				eq(adCreationOperations.status, "processing"),
 			),
 		)
-		.returning({ id: adCreationOperations.id });
+		.returning({
+			id: adCreationOperations.id,
+			organizationId: adCreationOperations.organizationId,
+			usageReservationId: adCreationOperations.usageReservationId,
+		});
 	if (updated.length !== 1)
 		throw new Error("Paid operation completion fence lost");
+	await settleLinkedDurableUsage(db, {
+		organizationId: updated[0]?.organizationId ?? claim.row.organizationId,
+		usageReservationId:
+			updated[0]?.usageReservationId ?? claim.row.usageReservationId,
+		committed: true,
+	});
 }
 
 interface DurableAdRequest {
@@ -463,6 +708,49 @@ interface DurableAdRequest {
 	specialAdCategories?: string[];
 }
 
+export interface AdOperationCampaignProjectionInput {
+	kind: AdCreationOperationKind;
+	workspaceId: string | null;
+	name: string;
+	platformAdSetId: string;
+	objective?: string;
+	dailyBudgetCents?: number;
+	lifetimeBudgetCents?: number;
+	currency?: string;
+	startDate?: string;
+	endDate?: string;
+}
+
+/**
+ * Canonical local campaign fields owned by one durable creation operation.
+ * Reusing this projection for insert and conflict-update prevents a racing
+ * provider sync from leaving an API-created campaign classified as external.
+ */
+export function buildAdOperationCampaignProjection(
+	input: AdOperationCampaignProjectionInput,
+) {
+	return {
+		workspaceId: input.workspaceId,
+		name: input.name,
+		objective: (input.objective ??
+			"engagement") as typeof adCampaigns.$inferInsert.objective,
+		status: (input.kind === "boost_post"
+			? "active"
+			: "paused") as typeof adCampaigns.$inferInsert.status,
+		dailyBudgetCents: input.dailyBudgetCents ?? null,
+		lifetimeBudgetCents: input.lifetimeBudgetCents ?? null,
+		currency: input.currency ?? null,
+		isExternal: false,
+		metadata: { platformAdSetId: input.platformAdSetId },
+		...(input.kind === "create_campaign"
+			? {
+					startDate: input.startDate ? new Date(input.startDate) : null,
+					endDate: input.endDate ? new Date(input.endDate) : null,
+				}
+			: {}),
+	};
+}
+
 export type AdCreationExecutionResult =
 	| {
 			kind: "create_campaign";
@@ -474,11 +762,9 @@ export type AdCreationExecutionResult =
 	  };
 
 interface ExecuteAdCreationOptions {
+	env: Env;
 	db: Database;
 	claim: ClaimedAdOperation;
-	adapter: AdPlatformAdapter;
-	accessToken: string;
-	platformAdAccountId: string;
 }
 
 function requiredRequestString(
@@ -517,15 +803,16 @@ function providerIdsForPhase(
 }
 
 async function createProviderObject(
+	env: Env,
 	db: Database,
 	claim: ClaimedAdOperation,
 	phase: AdProviderObjectPhase,
-	create: () => Promise<string>,
+	create: (context: AdProviderBoundaryContext) => Promise<string>,
 	onBoundary: () => void,
 ): Promise<string> {
-	await markAdProviderBoundary(db, claim, phase);
+	const context = await markAdProviderBoundary(env, db, claim, phase);
 	onBoundary();
-	const id = await create();
+	const id = await create(context);
 	await confirmAdProviderBoundary(db, claim, providerIdsForPhase(phase, id));
 	return id;
 }
@@ -538,32 +825,38 @@ async function upsertOperationCampaign(
 	platformAdSetId: string,
 	name: string,
 ): Promise<typeof adCampaigns.$inferSelect> {
+	const projection = buildAdOperationCampaignProjection({
+		kind: operation.kind,
+		workspaceId: operation.workspaceId,
+		name,
+		platformAdSetId,
+		objective: request.objective,
+		dailyBudgetCents: request.dailyBudgetCents,
+		lifetimeBudgetCents: request.lifetimeBudgetCents,
+		currency: request.currency,
+		startDate: request.startDate,
+		endDate: request.endDate,
+	});
+	const updatedAt = new Date();
 	const values: typeof adCampaigns.$inferInsert = {
 		organizationId: operation.organizationId,
-		workspaceId: operation.workspaceId,
 		adAccountId: operation.adAccountId,
 		platform: operation.platform,
 		platformCampaignId,
-		name,
-		objective: (request.objective ??
-			"engagement") as typeof adCampaigns.$inferInsert.objective,
-		status: "active",
-		dailyBudgetCents: request.dailyBudgetCents,
-		lifetimeBudgetCents: request.lifetimeBudgetCents,
-		metadata: { platformAdSetId },
+		// Provider campaigns and ad sets are created PAUSED. Boosts become active
+		// only after the explicit activation checkpoint immediately before here.
+		...projection,
 	};
-	if (operation.kind === "create_campaign") {
-		values.currency = request.currency ?? "USD";
-		values.startDate = request.startDate ? new Date(request.startDate) : null;
-		values.endDate = request.endDate ? new Date(request.endDate) : null;
-	}
 
 	const [campaign] = await db
 		.insert(adCampaigns)
 		.values(values)
 		.onConflictDoUpdate({
 			target: [adCampaigns.adAccountId, adCampaigns.platformCampaignId],
-			set: { updatedAt: new Date() },
+			// Ad sync can observe the provider object before this local write. Take
+			// ownership of the complete operation-authored projection on conflict,
+			// including clearing `is_external` and the provider correlation name.
+			set: { ...projection, updatedAt },
 		})
 		.returning();
 	if (!campaign) throw new Error("Failed to persist created campaign");
@@ -603,17 +896,11 @@ async function findExistingOperationCampaign(
 export async function executeClaimedAdCreationOperation(
 	options: ExecuteAdCreationOptions,
 ): Promise<AdCreationExecutionResult> {
-	const { db, claim, adapter, accessToken, platformAdAccountId } = options;
+	const { env, db, claim } = options;
 	const operation = claim.row;
 	const request = operation.requestPayload as DurableAdRequest;
-	const usesExistingCampaign =
-		operation.kind === "create_ad" && typeof request.campaignId === "string";
-	let providerTouched = Boolean(
-		operation.platformCreativeId ||
-			operation.platformAdId ||
-			(!usesExistingCampaign &&
-				(operation.platformCampaignId || operation.platformAdSetId)),
-	);
+	const usesExistingCampaign = adCreationUsesExistingCampaign(operation);
+	let providerTouched = hasAdCreationProviderEffect(operation);
 	const touched = () => {
 		providerTouched = true;
 	};
@@ -664,47 +951,57 @@ export async function executeClaimedAdCreationOperation(
 			}
 			if (!platformCampaignId) {
 				platformCampaignId = await createProviderObject(
+					env,
 					db,
 					claim,
 					"campaign",
-					() =>
-						adapter.creation.createCampaign(accessToken, platformAdAccountId, {
-							name: providerName,
-							objective,
-							dailyBudgetCents: request.dailyBudgetCents,
-							lifetimeBudgetCents: request.lifetimeBudgetCents,
-							currency: request.currency,
-							startDate: request.startDate,
-							endDate: request.endDate,
-							specialAdCategories: request.specialAdCategories,
-						}),
+					(context) =>
+						context.adapter.creation.createCampaign(
+							context.accessToken,
+							context.platformAdAccountId,
+							{
+								name: providerName,
+								objective,
+								dailyBudgetCents: request.dailyBudgetCents,
+								lifetimeBudgetCents: request.lifetimeBudgetCents,
+								currency: request.currency,
+								startDate: request.startDate,
+								endDate: request.endDate,
+								specialAdCategories: request.specialAdCategories,
+							},
+						),
 					touched,
 				);
 			}
 			if (!platformAdSetId) {
 				platformAdSetId = await createProviderObject(
+					env,
 					db,
 					claim,
 					"ad_set",
-					() =>
-						adapter.creation.createAdSet(accessToken, platformAdAccountId, {
-							campaignId: requiredRequestString(
-								platformCampaignId,
-								"platformCampaignId",
-							),
-							name: providerName,
-							mode: operation.kind === "boost_post" ? "boost" : "standard",
-							targeting: request.targeting,
-							dailyBudgetCents: request.dailyBudgetCents,
-							lifetimeBudgetCents: request.lifetimeBudgetCents,
-							startDate: request.startDate,
-							endDate:
-								operation.kind === "boost_post"
-									? boostEndDate(operation, request)
-									: request.endDate,
-							bidAmount: request.bidAmount,
-							pixelId: request.tracking?.pixelId,
-						}),
+					(context) =>
+						context.adapter.creation.createAdSet(
+							context.accessToken,
+							context.platformAdAccountId,
+							{
+								campaignId: requiredRequestString(
+									platformCampaignId,
+									"platformCampaignId",
+								),
+								name: providerName,
+								mode: operation.kind === "boost_post" ? "boost" : "standard",
+								targeting: request.targeting,
+								dailyBudgetCents: request.dailyBudgetCents,
+								lifetimeBudgetCents: request.lifetimeBudgetCents,
+								startDate: request.startDate,
+								endDate:
+									operation.kind === "boost_post"
+										? boostEndDate(operation, request)
+										: request.endDate,
+								bidAmount: request.bidAmount,
+								pixelId: request.tracking?.pixelId,
+							},
+						),
 					touched,
 				);
 			}
@@ -762,27 +1059,32 @@ export async function executeClaimedAdCreationOperation(
 		});
 		if (phasePlan.includes("creative")) {
 			platformCreativeId = await createProviderObject(
+				env,
 				db,
 				claim,
 				"creative",
-				() =>
-					adapter.creation.createCreative(accessToken, platformAdAccountId, {
-						name: providerName,
-						headline: request.headline,
-						body: request.body,
-						callToAction: request.callToAction,
-						linkUrl: request.linkUrl,
-						imageUrl: request.imageUrl,
-						videoUrl: request.videoUrl,
-						platformPostId:
-							operation.kind === "boost_post"
-								? requiredRequestString(
-									request.platformPostId,
-									"platformPostId",
-								)
-								: undefined,
-						urlTags: request.tracking?.urlTags,
-					}),
+				(context) =>
+					context.adapter.creation.createCreative(
+						context.accessToken,
+						context.platformAdAccountId,
+						{
+							name: providerName,
+							headline: request.headline,
+							body: request.body,
+							callToAction: request.callToAction,
+							linkUrl: request.linkUrl,
+							imageUrl: request.imageUrl,
+							videoUrl: request.videoUrl,
+							platformPostId:
+								operation.kind === "boost_post"
+									? requiredRequestString(
+											request.platformPostId,
+											"platformPostId",
+										)
+									: undefined,
+							urlTags: request.tracking?.urlTags,
+						},
+					),
 				touched,
 			);
 		}
@@ -794,19 +1096,24 @@ export async function executeClaimedAdCreationOperation(
 		}
 		if (phasePlan.includes("ad")) {
 			platformAdId = await createProviderObject(
+				env,
 				db,
 				claim,
 				"ad",
-				() =>
-					adapter.creation.createAd(accessToken, platformAdAccountId, {
-						adSetId: platformAdSetId,
-						creativeId: requiredRequestString(
-							platformCreativeId,
-							"platformCreativeId",
-						),
-						name: providerName,
-						active: operation.kind === "boost_post",
-					}),
+				(context) =>
+					context.adapter.creation.createAd(
+						context.accessToken,
+						context.platformAdAccountId,
+						{
+							adSetId: platformAdSetId,
+							creativeId: requiredRequestString(
+								platformCreativeId,
+								"platformCreativeId",
+							),
+							name: providerName,
+							active: operation.kind === "boost_post",
+						},
+					),
 				touched,
 			);
 		}
@@ -818,12 +1125,20 @@ export async function executeClaimedAdCreationOperation(
 		}
 
 		if (phasePlan.includes("activation")) {
-			await markAdProviderBoundary(db, claim, "activation");
+			const context = await markAdProviderBoundary(
+				env,
+				db,
+				claim,
+				"activation",
+			);
 			touched();
-			await adapter.creation.activateBoost(
-				accessToken,
+			await context.adapter.creation.activateBoost(
+				context.accessToken,
 				platformCampaignId,
 				platformAdSetId,
+				async () =>
+					(await markAdProviderBoundary(env, db, claim, "activation"))
+						.accessToken,
 			);
 			await confirmAdProviderBoundary(db, claim, {});
 		}
@@ -847,7 +1162,7 @@ export async function executeClaimedAdCreationOperation(
 			platform: operation.platform,
 			platformAdId,
 			name: baseName,
-			status: "pending_review",
+			status: operation.kind === "boost_post" ? "pending_review" : "paused",
 			targeting: request.targeting as typeof ads.$inferInsert.targeting,
 			dailyBudgetCents: request.dailyBudgetCents,
 			lifetimeBudgetCents: request.lifetimeBudgetCents,
@@ -901,8 +1216,12 @@ export async function failAdCreationOperation(
 	error: unknown,
 	providerTouched: boolean,
 ): Promise<void> {
-	const attempts = claim.row.attempts + 1;
-	const status = providerTouched ? "unknown" : "failed";
+	const attempts = claim.row.attempts;
+	const status = providerTouched
+		? "unknown"
+		: attempts >= 5
+			? "manual_review"
+			: "failed";
 	await db
 		.update(adCreationOperations)
 		.set({
@@ -966,6 +1285,7 @@ function hasProviderProgress(operation: Operation): boolean {
 }
 
 async function resumeReconciledOperation(
+	env: Env,
 	db: Database,
 	operation: Operation,
 	adapter: AdPlatformAdapter,
@@ -992,13 +1312,44 @@ async function resumeReconciledOperation(
 				platformAdSetId,
 			);
 			if (!activated) {
-				// These are absolute status assignments, so replay is safe after the
-				// exact read above shows the earlier activation was incomplete.
-				await adapter.creation.activateBoost(
-					accessToken,
-					platformCampaignId,
-					platformAdSetId,
+				const claim = { row: operation, leaseToken: operation.leaseToken };
+				const context = await markAdProviderBoundary(
+					env,
+					db,
+					claim,
+					"activation",
 				);
+				try {
+					await context.adapter.creation.activateBoost(
+						context.accessToken,
+						platformCampaignId,
+						platformAdSetId,
+						async () =>
+							(await markAdProviderBoundary(env, db, claim, "activation"))
+								.accessToken,
+					);
+					await confirmAdProviderBoundary(db, claim, {});
+				} catch (error) {
+					await failAdCreationOperation(db, claim, error, true).catch(() => {});
+					throw error;
+				}
+				const [resumed] = await db
+					.select()
+					.from(adCreationOperations)
+					.where(
+						and(
+							eq(adCreationOperations.id, operation.id),
+							eq(adCreationOperations.status, "processing"),
+							eq(adCreationOperations.leaseToken, operation.leaseToken),
+							eq(
+								adCreationOperations.authorityRevision,
+								operation.authorityRevision,
+							),
+						),
+					)
+					.limit(1);
+				if (!resumed) throw new Error("Ad activation resume fence lost");
+				return { row: resumed, leaseToken: resumed.leaseToken };
 			}
 		} else {
 			const id = await adapter.creation.findCreatedObject(
@@ -1053,13 +1404,19 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 		.where(
 			and(
 				inArray(adCreationOperations.status, [
+					"pending",
+					"failed",
 					"unknown",
 					"request_may_have_been_sent",
 					"processing",
 				]),
 				lte(adCreationOperations.nextAttemptAt, now),
 				or(
-					eq(adCreationOperations.status, "unknown"),
+					inArray(adCreationOperations.status, [
+						"pending",
+						"failed",
+						"unknown",
+					]),
 					lte(adCreationOperations.leaseExpiresAt, now),
 				),
 			),
@@ -1108,12 +1465,18 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 					eq(adCreationOperations.id, candidate.id),
 					eq(adCreationOperations.leaseToken, candidate.leaseToken),
 					inArray(adCreationOperations.status, [
+						"pending",
+						"failed",
 						"unknown",
 						"request_may_have_been_sent",
 						"processing",
 					]),
 					or(
-						eq(adCreationOperations.status, "unknown"),
+						inArray(adCreationOperations.status, [
+							"pending",
+							"failed",
+							"unknown",
+						]),
 						lte(adCreationOperations.leaseExpiresAt, claimedAt),
 					),
 				),
@@ -1140,6 +1503,14 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 					and(
 						eq(adAccounts.id, operation.adAccountId),
 						eq(adAccounts.organizationId, operation.organizationId),
+						operation.workspaceId
+							? eq(adAccounts.workspaceId, operation.workspaceId)
+							: isNull(adAccounts.workspaceId),
+						eq(adAccounts.platform, operation.platform),
+						eq(adAccounts.status, "active"),
+						operation.workspaceId
+							? eq(socialAccounts.workspaceId, operation.workspaceId)
+							: isNull(socialAccounts.workspaceId),
 						eq(socialAccounts.lifecycleStatus, "active"),
 						eq(organization.lifecycleStatus, "active"),
 					),
@@ -1159,10 +1530,7 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 						and(
 							eq(adCreationOperations.id, operation.id),
 							eq(adCreationOperations.status, "reconciling"),
-							eq(
-								adCreationOperations.leaseToken,
-								operation.leaseToken,
-							),
+							eq(adCreationOperations.leaseToken, operation.leaseToken),
 						),
 					);
 				continue;
@@ -1175,6 +1543,7 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 				env,
 			);
 			const resumed = await resumeReconciledOperation(
+				env,
 				db,
 				operation,
 				adapter,
@@ -1191,11 +1560,9 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 				continue;
 			}
 			await executeClaimedAdCreationOperation({
+				env,
 				db,
 				claim: resumed,
-				adapter,
-				accessToken,
-				platformAdAccountId: account.adAccount.platformAdAccountId,
 			});
 		} catch (error) {
 			await deferAdReconciliation(db, operation, operation.leaseToken, error);

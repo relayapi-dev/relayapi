@@ -22,12 +22,12 @@ https://dash.cloudflare.com/caching/cache-reserve
 ```bash
 # Enable
 curl -X PATCH "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/cache/cache_reserve" \
-  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
   -d '{"value": "on"}'
 
 # Check status
 curl -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/cache/cache_reserve" \
-  -H "Authorization: Bearer $API_TOKEN"
+  --header @/secure/bearer-auth-header
 ```
 
 ### TypeScript SDK

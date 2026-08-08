@@ -15,8 +15,17 @@ export interface SelfHostConfig {
 		rootDomain: string;
 		apiHostname: string;
 		appHostname: string;
+		publicHostname: string;
 		mediaHostname: string;
 		thumbnailHostname: string;
+		r2Jurisdiction: "default" | "eu";
+		/**
+		 * Non-secret Cloudflare certificate-authority bundle ID used to pin the
+		 * Hyperdrive server trust anchor. Optional only while reading legacy operator
+		 * configs; a clean create requires it and an existing config adopts the exact
+		 * ID already attached to its pinned Hyperdrive.
+		 */
+		hyperdriveCaCertificateId?: string;
 	};
 	features: SelfHostFeatures;
 	github?: {
@@ -42,20 +51,36 @@ export interface CliOptions {
 	nonInteractive: boolean;
 	dryRun: boolean;
 	source?: string;
+	/** Explicit CA intent supplied by the operator for create or pinned rotation. */
+	hyperdriveCaCertificateId?: string;
 }
 
 export interface CloudflareResourcePlan {
 	kv: { name: string; id?: string; action: "create" | "reuse" };
-	buckets: Array<{ name: string; action: "create" | "reuse" }>;
+	buckets: Array<{
+		name: string;
+		jurisdiction: "default" | "eu";
+		action: "create" | "reuse";
+	}>;
 	queues: Array<{
 		logicalName: QueueName;
 		name: string;
 		id?: string;
+		messageRetentionSeconds: number;
+		currentMessageRetentionSeconds?: number;
 		action: "create" | "reuse";
 	}>;
 	hyperdrive: {
 		name: string;
 		id?: string;
-		action: "create" | "reuse";
+		/** CA certificate observed from Cloudflare while producing this plan. */
+		currentCaCertificateId?: string;
+		caCertificateId: string;
+		caCertificateAction: "set" | "retain" | "adopt" | "rotate";
+		action: "create" | "reconcile";
+		/** Readable Cloudflare fields that differ from the desired configuration. */
+		visibleDrift: string[];
+		/** Passwords are write-only, so an existing config is always re-attested. */
+		credentialAction: "set" | "reapply_write_only";
 	};
 }

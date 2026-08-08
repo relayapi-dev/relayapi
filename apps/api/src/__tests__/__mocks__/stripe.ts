@@ -52,8 +52,10 @@ export function createMockInvoice(
 	overrides?: Partial<{
 		id: string;
 		status: "draft" | "open" | "paid" | "uncollectible" | "void";
+		customerId: string | null;
 		subscriptionId: string | null;
 		amountDue: number;
+		currency: string;
 		hostedUrl: string | null;
 		periodStart: number;
 		periodEnd: number;
@@ -68,10 +70,16 @@ export function createMockInvoice(
 	return {
 		id: overrides?.id ?? "in_test_123",
 		status: overrides?.status ?? "open",
+		customer:
+			overrides?.customerId === undefined
+				? "cus_test_123"
+				: overrides.customerId,
 		parent: subscriptionId
 			? { subscription_details: { subscription: subscriptionId } }
 			: null,
 		amount_due: overrides?.amountDue ?? 500,
+		currency: overrides?.currency ?? "usd",
+		lines: { data: [], has_more: false },
 		hosted_invoice_url:
 			overrides?.hostedUrl ?? "https://stripe.com/invoice/mock",
 		period_start: overrides?.periodStart ?? now - 30 * 86400,
@@ -93,26 +101,57 @@ export function createMockSubscription(
 		metadata: Record<string, string>;
 		customer: string;
 		items: {
-			data: Array<{ current_period_start: number; current_period_end: number }>;
+			data: Array<{
+				current_period_start: number;
+				current_period_end: number;
+				price?: {
+					id: string;
+					product: string;
+					currency: string;
+					unit_amount: number;
+					tax_behavior: "unspecified";
+				};
+			}>;
 		};
 	}>,
 ) {
 	const now = Math.floor(Date.now() / 1000);
+	const defaultMetadata = {
+		relayapi_managed_by: "relayapi",
+		relayapi_role: "base",
+		organizationId: "org_test_123",
+	};
+	const defaultPrice = {
+		id: "price_pro_monthly",
+		product: "prod_relayapi",
+		currency: "usd",
+		unit_amount: 500,
+		tax_behavior: "unspecified" as const,
+	};
+	const defaultItem = {
+		current_period_start: now - 30 * 86400,
+		current_period_end: now + 30 * 86400,
+		price: defaultPrice,
+	};
 	return {
-		id: "sub_test_123",
-		status: "active",
-		cancel_at_period_end: false,
-		metadata: {},
-		customer: "cus_test_123",
+		id: overrides?.id ?? "sub_test_123",
+		status: overrides?.status ?? "active",
+		cancel_at_period_end: overrides?.cancel_at_period_end ?? false,
+		metadata:
+			overrides?.metadata === undefined
+				? defaultMetadata
+				: {
+						relayapi_managed_by: "relayapi",
+						relayapi_role: "base",
+						...overrides.metadata,
+					},
+		customer: overrides?.customer ?? "cus_test_123",
 		items: {
-			data: [
-				{
-					current_period_start: now - 30 * 86400,
-					current_period_end: now + 30 * 86400,
-				},
-			],
+			data: (overrides?.items?.data ?? [defaultItem]).map((item) => ({
+				...item,
+				price: item.price ?? defaultPrice,
+			})),
 		},
-		...overrides,
 	};
 }
 
@@ -162,7 +201,11 @@ export function createSubscriptionUpdatedEvent(overrides?: {
 				id: overrides?.subscriptionId ?? "sub_test_123",
 				status: overrides?.status ?? "active",
 				cancel_at_period_end: overrides?.cancelAtPeriodEnd ?? false,
-				metadata: overrides?.metadata ?? {},
+				metadata: overrides?.metadata ?? {
+					relayapi_managed_by: "relayapi",
+					relayapi_role: "base",
+					organizationId: "org_test_123",
+				},
 				items: {
 					data: [
 						{
@@ -188,7 +231,11 @@ export function createSubscriptionDeletedEvent(overrides?: {
 				id: overrides?.subscriptionId ?? "sub_test_123",
 				status: "canceled",
 				cancel_at_period_end: false,
-				metadata: {},
+				metadata: {
+					relayapi_managed_by: "relayapi",
+					relayapi_role: "base",
+					organizationId: "org_test_123",
+				},
 				items: {
 					data: [
 						{
@@ -214,6 +261,7 @@ export function createInvoiceFinalizedEvent(overrides?: {
 	return {
 		id: eventId(),
 		type: "invoice.finalized",
+		created: now,
 		data: {
 			object: {
 				id: overrides?.invoiceId ?? "in_test_123",
@@ -242,9 +290,11 @@ export function createInvoicePaidEvent(overrides?: {
 	invoiceId?: string;
 	subscriptionId?: string;
 }): Stripe.Event {
+	const now = Math.floor(Date.now() / 1000);
 	return {
 		id: eventId(),
 		type: "invoice.paid",
+		created: now,
 		data: {
 			object: {
 				id: overrides?.invoiceId ?? "in_test_123",
@@ -262,9 +312,11 @@ export function createInvoicePaymentFailedEvent(overrides?: {
 	invoiceId?: string;
 	subscriptionId?: string;
 }): Stripe.Event {
+	const now = Math.floor(Date.now() / 1000);
 	return {
 		id: eventId(),
 		type: "invoice.payment_failed",
+		created: now,
 		data: {
 			object: {
 				id: overrides?.invoiceId ?? "in_test_123",

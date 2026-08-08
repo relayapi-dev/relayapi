@@ -28,6 +28,7 @@ export async function reconcileIdempotencyReceipts(
 				),
 			),
 		)
+		.orderBy(idempotencyReceipts.createdAt, idempotencyReceipts.id)
 		.limit(boundedLimit);
 	let reconciled = 0;
 	if (stale.length > 0) {
@@ -56,6 +57,7 @@ export async function reconcileIdempotencyReceipts(
 		.select({ id: idempotencyReceipts.id })
 		.from(idempotencyReceipts)
 		.where(lt(idempotencyReceipts.expiresAt, now))
+		.orderBy(idempotencyReceipts.expiresAt, idempotencyReceipts.id)
 		.limit(boundedLimit);
 	let deleted = 0;
 	if (expired.length > 0) {

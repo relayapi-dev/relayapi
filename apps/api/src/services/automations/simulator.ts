@@ -4,6 +4,7 @@
 // sends, no queue enqueues — just a deterministic walk through the graph that
 // records each visit. Used by the builder preview and the simulate endpoint.
 
+import { type AutomationNodeKind, isAutomationNodeKind } from "@relayapi/db";
 import type {
 	Graph,
 	GraphEdge,
@@ -19,7 +20,7 @@ import {
 
 export type SimulateStep = {
 	node_key: string;
-	node_kind: string;
+	node_kind: AutomationNodeKind;
 	entered_via_port_key: string | null;
 	exited_via_port_key: string | null;
 	outcome:
@@ -85,7 +86,7 @@ export async function simulate(input: SimulateInput): Promise<SimulateResult> {
 
 		steps.push({
 			node_key: node.key,
-			node_kind: node.kind,
+			node_kind: isAutomationNodeKind(node.kind) ? node.kind : "unknown",
 			entered_via_port_key: enteredPort,
 			exited_via_port_key: walkResult.exitPort,
 			outcome: walkResult.outcome,

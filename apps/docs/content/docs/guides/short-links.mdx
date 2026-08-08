@@ -28,7 +28,7 @@ curl -X PUT https://api.relayapi.dev/v1/short-links/config \
     "api_key": "dub_xxxxxxxxxxxxxxxx"
   }'
 
-# Test the connection
+# Test the connection with a read-only provider probe (no link is created)
 curl -X POST https://api.relayapi.dev/v1/short-links/test \
   -H "Authorization: Bearer $RELAY_API_KEY"
 ```
@@ -172,7 +172,7 @@ await client.shortLinks.updateConfig({
 
 // Test the connection
 const test = await client.shortLinks.testConfig();
-console.log(test.success, test.short_url);
+console.log(test.success, test.error);
 
 // List all short links
 const links = await client.shortLinks.list({ limit: 20 });
@@ -196,7 +196,7 @@ await client.posts.create({
 |--------|----------|-------------|
 | `GET` | `/v1/short-links/config` | Get short link configuration |
 | `PUT` | `/v1/short-links/config` | Create or update configuration |
-| `POST` | `/v1/short-links/test` | Test the configured provider |
+| `POST` | `/v1/short-links/test` | Read-only provider credential probe |
 | `GET` | `/v1/short-links` | List all short links (paginated) |
 | `GET` | `/v1/short-links/by-post/:postId` | List short links for a post |
 | `POST` | `/v1/short-links/shorten` | Manually shorten a URL |

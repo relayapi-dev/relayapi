@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { WEBHOOK_ATTEMPT_KINDS, WEBHOOK_ATTEMPT_OUTCOMES } from "@relayapi/db";
 import { paginatedResponse } from "./common";
 
 // --- Webhook event types ---
@@ -30,7 +31,10 @@ export const WebhookEventEnum = z.enum([
 export const CreateWebhookBody = z.object({
 	url: z.string().url().describe("Webhook endpoint URL"),
 	events: z.array(WebhookEventEnum).min(1).describe("Events to subscribe to"),
-	workspace_id: z.string().optional().describe("Workspace ID to scope this webhook to"),
+	workspace_id: z
+		.string()
+		.optional()
+		.describe("Workspace ID to scope this webhook to"),
 });
 
 // --- Update webhook ---
@@ -72,12 +76,38 @@ export const WebhookCreatedResponse = z.object({
 export const WebhookLogEntry = z.object({
 	id: z.string().describe("Log entry ID"),
 	webhook_id: z.string().describe("Webhook ID"),
+	delivery_id: z
+		.string()
+		.nullable()
+		.describe("Durable delivery ID; null only for an explicit test attempt"),
 	event: z.string().describe("Event type that triggered the delivery"),
-	status_code: z.number().int().nullable().describe("HTTP status code from delivery"),
-	response_time_ms: z.number().int().nullable().describe("Response time in milliseconds"),
+	attempt_ordinal: z
+		.number()
+		.int()
+		.positive()
+		.describe("One-based HTTP attempt ordinal within the delivery"),
+	attempt_kind: z
+		.enum(WEBHOOK_ATTEMPT_KINDS)
+		.describe("Whether this was a durable delivery or an explicit test"),
+	outcome: z
+		.enum(WEBHOOK_ATTEMPT_OUTCOMES)
+		.describe("Persisted outcome of this exact HTTP attempt"),
+	status_code: z
+		.number()
+		.int()
+		.nullable()
+		.describe("HTTP status code from delivery"),
+	response_time_ms: z
+		.number()
+		.int()
+		.nullable()
+		.describe("Response time in milliseconds"),
 	success: z.boolean().describe("Whether the delivery was successful"),
 	error: z.string().nullable().describe("Error message if delivery failed"),
-	payload: z.unknown().nullable().describe("Request body sent to the webhook URL"),
+	payload: z
+		.unknown()
+		.nullable()
+		.describe("Request body sent to the webhook URL"),
 	created_at: z.string().datetime().describe("Delivery timestamp"),
 });
 

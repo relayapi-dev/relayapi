@@ -51,6 +51,7 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -625,11 +626,11 @@ describe("automation-runs stop (integration)", () => {
 		if (!auto) throw new Error("automation insert failed");
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "stop-test-contact",
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 

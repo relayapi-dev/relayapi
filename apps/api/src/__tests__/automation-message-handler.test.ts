@@ -31,8 +31,12 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import {
+	protectedContactChannelFixture,
+	protectedContactFixture,
+} from "./helpers/protected-contact-fixtures";
 
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -98,21 +102,22 @@ async function createContactWithChannel(
 ) {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "msg-handler-test-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
-	await db.insert(contactChannels).values({
+	await db.insert(contactChannels).values(await protectedContactChannelFixture({
 		organizationId: orgId,
+		workspaceId,
 		contactId: ct.id,
 		socialAccountId,
 		platform: platform as typeof contactChannels.$inferInsert.platform,
 		identifier,
-	});
-	await recordContactConsent(db, {
+	}));
+	await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 		organizationId: orgId,
 		workspaceId,
 		contactId: ct.id,
@@ -377,11 +382,11 @@ describe("automation message handler", () => {
 		// Contact has NO channel membership — handler should return `fail`.
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "no-channel-contact",
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 

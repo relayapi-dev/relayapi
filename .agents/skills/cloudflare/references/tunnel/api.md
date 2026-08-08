@@ -6,7 +6,7 @@
 
 **Authentication**:
 ```bash
-Authorization: Bearer ${CF_API_TOKEN}
+Authorization: Bearer <redacted-token>
 ```
 
 ## TypeScript SDK
@@ -28,7 +28,7 @@ const accountId = process.env.CF_ACCOUNT_ID;
 ### cURL
 ```bash
 curl -X POST "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   --data '{
     "name": "my-tunnel",
@@ -52,7 +52,7 @@ console.log(`Tunnel ID: ${tunnel.id}`);
 ### cURL
 ```bash
 curl -X GET "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}"
+  --header @/secure/bearer-auth-header
 ```
 
 ### TypeScript
@@ -71,7 +71,7 @@ for (const tunnel of tunnels.result) {
 ### cURL
 ```bash
 curl -X GET "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels/{tunnel_id}" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}"
+  --header @/secure/bearer-auth-header
 ```
 
 ### TypeScript
@@ -89,7 +89,7 @@ console.log(`Connections: ${tunnel.connections?.length || 0}`);
 ### cURL
 ```bash
 curl -X PUT "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels/{tunnel_id}/configurations" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   --data '{
     "config": {
@@ -122,7 +122,7 @@ const config = await cf.zeroTrust.tunnels.configurations.update(
 ### cURL
 ```bash
 curl -X DELETE "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels/{tunnel_id}" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}"
+  --header @/secure/bearer-auth-header
 ```
 
 ### TypeScript
@@ -140,19 +140,21 @@ Token-based tunnels store config in Cloudflare dashboard instead of local files.
 1. **Zero Trust** > **Networks** > **Tunnels**
 2. **Create a tunnel** > **Cloudflared**
 3. Configure routes in dashboard
-4. Copy token
-5. Run on origin:
+4. Store the token in a root-readable file supplied by your secret manager
+5. Run on origin (`cloudflared` 2025.4.0 or later):
 ```bash
-cloudflared service install <TOKEN>
+cloudflared tunnel --no-autoupdate run --token-file /run/secrets/cloudflared-token
 ```
 
 ### Via Token
 ```bash
-# Run with token (no config file needed)
-cloudflared tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+# Run with token file (no config file needed)
+cloudflared tunnel --no-autoupdate run --token-file /run/secrets/cloudflared-token
 
 # Docker
-docker run cloudflare/cloudflared:latest tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+docker run --read-only -v /secure/cloudflared-token:/run/secrets/cloudflared-token:ro \
+  cloudflare/cloudflared:latest tunnel --no-autoupdate run \
+  --token-file /run/secrets/cloudflared-token
 ```
 
 ### Get Tunnel Token (TypeScript)
@@ -171,12 +173,12 @@ const token = tunnel.token;
 ```bash
 # Create DNS route
 curl -X POST "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels/{tunnel_id}/connections" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
+  --header @/secure/bearer-auth-header \
   --data '{"hostname": "app.example.com"}'
 
 # Delete route
 curl -X DELETE "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels/{tunnel_id}/connections/{route_id}" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}"
+  --header @/secure/bearer-auth-header
 ```
 
 ## Private Network Routes API
@@ -184,10 +186,10 @@ curl -X DELETE "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunne
 ```bash
 # Add IP route
 curl -X POST "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels/{tunnel_id}/routes" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
+  --header @/secure/bearer-auth-header \
   --data '{"ip_network": "10.0.0.0/8"}'
 
 # List IP routes
 curl -X GET "https://api.cloudflare.com/client/v4/accounts/{account_id}/tunnels/{tunnel_id}/routes" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}"
+  --header @/secure/bearer-auth-header
 ```

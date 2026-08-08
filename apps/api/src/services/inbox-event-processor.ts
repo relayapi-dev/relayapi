@@ -10,6 +10,7 @@ import {
 import { and, asc, eq, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountToken } from "../lib/account-token-crypto";
+import { deriveProtectedContactSubjectLocator } from "../lib/consent-hmac";
 import { notifyRealtime } from "../lib/notify-post-update";
 import type { NormalizedInboxQueueMessage as InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
@@ -22,7 +23,10 @@ import type {
 	InboundEvent,
 	InboundEventKind,
 } from "./automations/trigger-matcher";
-import { rehostTransientAvatar } from "./avatar-store";
+import {
+	conversationAvatarKey,
+	rehostTransientAvatar,
+} from "./avatar-store";
 import { ensureContactForAuthor } from "./contact-linker";
 import {
 	insertMessage,
@@ -413,9 +417,6 @@ export async function processInboxEvent(
 ): Promise<void> {
 	// Handle YouTube subscription requests (not a webhook event)
 	if (message.type === "youtube_subscribe") {
-		const payload = message.payload as {
-			callback_url: string;
-		};
 		const hubSecret = env.YOUTUBE_HUB_SECRET;
 		if (!hubSecret) {
 			throw new Error(
@@ -424,7 +425,7 @@ export async function processInboxEvent(
 		}
 		const result = await subscribeYouTubeChannel(
 			message.platform_account_id,
-			payload.callback_url,
+			`${(env.API_BASE_URL || "https://api.relayapi.dev").replace(/\/$/, "")}/webhooks/platform/youtube`,
 			hubSecret,
 		);
 		if (!result.success) {
@@ -503,20 +504,28 @@ export async function processInboxEvent(
 		let hadPriorInboundOnChannel: boolean | null = null;
 		try {
 			if (isPersistedEvent) {
-				conversation = await upsertConversation(db, {
-					organizationId: event.organization_id,
-					workspaceId: sa.workspaceId,
-					accountId: event.account_id,
-					platform: event.platform as UpsertConversationData["platform"],
-					type: event.type === "comment" ? "comment_thread" : "dm",
-					platformConversationId:
-						event.post_id || event.conversation_id || event.platform_event_id,
-					participantName: conversationPartner?.name ?? null,
-					participantPlatformId: conversationPartner?.id ?? null,
-					participantAvatar:
-						conversationPartner?.avatar_url ?? event.author?.avatar_url ?? null,
-					postPlatformId: event.post_id ?? null,
-				});
+				conversation = await upsertConversation(
+					db,
+					{
+						organizationId: event.organization_id,
+						workspaceId: sa.workspaceId,
+						accountId: event.account_id,
+						platform: event.platform as UpsertConversationData["platform"],
+						type: event.type === "comment" ? "comment_thread" : "dm",
+						platformConversationId:
+							event.post_id ||
+							event.conversation_id ||
+							event.platform_event_id,
+						participantName: conversationPartner?.name ?? null,
+						participantPlatformId: conversationPartner?.id ?? null,
+						participantAvatar:
+							conversationPartner?.avatar_url ??
+							event.author?.avatar_url ??
+							null,
+						postPlatformId: event.post_id ?? null,
+					},
+					env.ENCRYPTION_KEY,
+				);
 				if (conversation) {
 					// "First inbound on channel ever" — the binding-router welcome
 					// scope spans the contact's whole history on that channel. When
@@ -793,12 +802,15 @@ async function enrichMetaParticipantProfile(
 			// public /avatars/:id route. Keyed by conversation id — one participant
 			// per DM — and intentionally governed by the media retention lifecycle.
 			// Falls back to the raw URL so we never regress to no avatar.
+			const rehostedAvatarUrl = await rehostTransientAvatar(
+				env,
+				conversation.organizationId,
+				conversation.workspaceId,
+				conversation.id,
+				profile.avatarUrl,
+			);
 			const storedAvatarUrl =
-				(await rehostTransientAvatar(
-					env,
-					conversation.id,
-					profile.avatarUrl,
-				)) ??
+				rehostedAvatarUrl ??
 				profile.avatarUrl ??
 				null;
 
@@ -807,6 +819,13 @@ async function enrichMetaParticipantProfile(
 			}
 			if (storedAvatarUrl) {
 				conversationPatch.participantAvatar = storedAvatarUrl;
+			}
+			if (rehostedAvatarUrl) {
+				conversationPatch.participantAvatarObjectKey = conversationAvatarKey(
+					conversation.organizationId,
+					conversation.workspaceId,
+					conversation.id,
+				);
 			}
 
 			await db
@@ -941,6 +960,7 @@ async function dispatchAutomationMatch(
 				event.platform,
 				authorId,
 				event.author?.name ?? null,
+				env.ENCRYPTION_KEY,
 			);
 		}
 		if (!contactId) return;
@@ -952,9 +972,14 @@ async function dispatchAutomationMatch(
 		// the same contact and must never point at an unlinked conversation.
 		let internalConversationId = meta?.internal_conversation_id ?? null;
 		if (internalConversationId) {
+			const subjectLocator = await deriveProtectedContactSubjectLocator(
+				env.ENCRYPTION_KEY,
+				event.organization_id,
+				contactId,
+			);
 			const [linkedConversation] = await db
 				.update(inboxConversations)
-				.set({ contactId })
+				.set({ contactId, ...subjectLocator })
 				.where(
 					and(
 						eq(inboxConversations.id, internalConversationId),

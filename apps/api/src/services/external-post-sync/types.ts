@@ -11,22 +11,8 @@ export interface SyncPostsMessage {
 	social_account_id: string;
 	organization_id: string;
 	platform: string;
-	/** If set, this was triggered by a webhook rather than a poll */
-	webhook_triggered?: boolean;
-	/** Platform-specific hint (e.g. a specific post ID to fetch) */
-	hint?: {
-		platform_post_id?: string;
-		event_type?: string;
-	};
-}
-
-export interface RefreshMetricsMessage {
-	type: "refresh_metrics";
-	organization_id: string;
-	social_account_id: string;
-	platform: string;
-	/** External post IDs to refresh (batch of up to 50) */
-	external_post_ids: string[];
+	/** Exact PostgreSQL producer generation. Manual/webhook work claims on read. */
+	poll_generation?: number;
 }
 
 export interface GenerateExternalPreviewMessage {
@@ -42,11 +28,11 @@ export interface SyncAutomationBindingMessage {
 	binding_id: string;
 	organization_id: string;
 	revision: number;
+	dispatch_generation: number;
 }
 
 export type SyncQueueMessage =
 	| SyncPostsMessage
-	| RefreshMetricsMessage
 	| GenerateExternalPreviewMessage
 	| SyncAutomationBindingMessage;
 

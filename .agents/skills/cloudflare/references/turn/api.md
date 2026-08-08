@@ -60,7 +60,7 @@ DELETE /accounts/{account_id}/calls/turn_keys/{key_id}
 ## Generate Temporary Credentials
 
 ```
-POST https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/generate
+POST https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/generate-ice-servers
 Authorization: Bearer {key_secret}
 Content-Type: application/json
 
@@ -81,19 +81,26 @@ Content-Type: application/json
 
 ```json
 {
-  "iceServers": {
-    "urls": [
-      "stun:stun.cloudflare.com:3478",
-      "turn:turn.cloudflare.com:3478?transport=udp",
-      "turn:turn.cloudflare.com:3478?transport=tcp",
-      "turn:turn.cloudflare.com:53?transport=udp",
-      "turn:turn.cloudflare.com:80?transport=tcp",
-      "turns:turn.cloudflare.com:5349?transport=tcp",
-      "turns:turn.cloudflare.com:443?transport=tcp"
-    ],
-    "username": "1738035200:user123",
-    "credential": "base64encodedhmac=="
-  }
+  "iceServers": [
+    {
+      "urls": [
+        "stun:stun.cloudflare.com:3478",
+        "stun:stun.cloudflare.com:53"
+      ]
+    },
+    {
+      "urls": [
+        "turn:turn.cloudflare.com:3478?transport=udp",
+        "turn:turn.cloudflare.com:53?transport=udp",
+        "turn:turn.cloudflare.com:3478?transport=tcp",
+        "turn:turn.cloudflare.com:80?transport=tcp",
+        "turns:turn.cloudflare.com:5349?transport=tcp",
+        "turns:turn.cloudflare.com:443?transport=tcp"
+      ],
+      "username": "short-lived-username",
+      "credential": "short-lived-credential"
+    }
+  ]
 }
 ```
 
@@ -102,13 +109,8 @@ Content-Type: application/json
 ## Revoke Credentials
 
 ```
-POST https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/revoke
+POST https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/{username}/revoke
 Authorization: Bearer {key_secret}
-Content-Type: application/json
-
-{
-  "username": "1738035200:user123"
-}
 ```
 
 **Response**: 204 No Content
@@ -129,11 +131,11 @@ interface TURNCredentialsRequest {
 }
 
 interface TURNCredentialsResponse {
-  iceServers: {
+  iceServers: Array<{
     urls: string[];
-    username: string;
-    credential: string;
-  };
+    username?: string;
+    credential?: string;
+  }>;
 }
 
 interface RTCIceServer {
@@ -149,6 +151,10 @@ interface TURNKeyResponse {
   name: string;
   created: string;
   modified: string;
+}
+
+function isBrowserBlockedPort53Url(turnUrl: string): boolean {
+  return /:53(?:\?|$)/.test(turnUrl);
 }
 ```
 
@@ -191,7 +197,7 @@ async function fetchTURNServers(
   }
 
   const response = await fetch(
-    `https://rtc.live.cloudflare.com/v1/turn/keys/${config.keyId}/credentials/generate`,
+    `https://rtc.live.cloudflare.com/v1/turn/keys/${config.keyId}/credentials/generate-ice-servers`,
     {
       method: 'POST',
       headers: {
@@ -206,22 +212,14 @@ async function fetchTURNServers(
     throw new Error(`TURN credential generation failed: ${response.status}`);
   }
 
-  const data = await response.json();
+  const data = await response.json() as TURNCredentialsResponse;
   
   // Filter port 53 for browser clients
-  const filteredUrls = data.iceServers.urls.filter(
-    (url: string) => !url.includes(':53')
-  );
-
-  const iceServers = [
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    {
-      urls: filteredUrls,
-      username: data.iceServers.username,
-      credential: data.iceServers.credential,
-      credentialType: 'password' as const
-    }
-  ];
+  const iceServers = data.iceServers.map(server => ({
+    ...server,
+    urls: server.urls.filter(url => !isBrowserBlockedPort53Url(url)),
+    ...(server.credential ? { credentialType: 'password' as const } : {})
+  }));
 
   // Validate before returning
   if (!iceServers.every(validateRTCIceServer)) {

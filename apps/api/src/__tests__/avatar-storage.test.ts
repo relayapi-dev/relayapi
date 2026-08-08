@@ -83,7 +83,7 @@ describe("avatar storage lifecycle", () => {
 
 		expect(url).toBe("https://api.test.dev/avatars/acc_123");
 		expect(durableWrites).toEqual([
-			{ key: "avatars/acc_123", contentType: "image/png" },
+			{ key: "account/acc_123/avatar", contentType: "image/png" },
 		]);
 		expect(mediaWrites).toEqual([]);
 	});
@@ -109,36 +109,32 @@ describe("avatar storage lifecycle", () => {
 
 		await rehostTransientAvatar(
 			env,
+			"org_123",
+			"ws_123",
 			"conv_123",
 			"https://provider.test/participant",
 		);
 
-		expect(mediaWrites).toEqual(["avatars/conv_123"]);
+		expect(mediaWrites).toEqual([
+			"org_123/workspaces/ws_123/conversations/conv_123/avatar",
+		]);
 		expect(durableWrites).toEqual([]);
 	});
 
-	it("checks the durable object and deletes durable plus legacy copies", async () => {
+	it("checks and deletes the independently addressable durable object", async () => {
 		const deleted: string[] = [];
 		const env = envFixture({
 			AVATAR_BUCKET: fixture<R2Bucket>({
-				head: async () => fixture<R2Object>({ key: "avatars/acc_123" }),
+				head: async () => fixture<R2Object>({ key: "account/acc_123/avatar" }),
 				delete: async (key: string) => {
 					deleted.push(`durable:${key}`);
-				},
-			}),
-			MEDIA_BUCKET: fixture<R2Bucket>({
-				delete: async (key: string) => {
-					deleted.push(`legacy:${key}`);
 				},
 			}),
 		});
 
 		expect(await hasStoredAvatar(env, "acc_123")).toBe(true);
 		await deleteStoredAvatar(env, "acc_123");
-		expect(deleted.sort()).toEqual([
-			"durable:avatars/acc_123",
-			"legacy:avatars/acc_123",
-		]);
+		expect(deleted).toEqual(["durable:account/acc_123/avatar"]);
 	});
 });
 
@@ -155,22 +151,34 @@ describe("public avatar routing", () => {
 						return imageObject("durable");
 					},
 				}),
-				MEDIA_BUCKET: fixture<R2Bucket>({
-					get: async (key: string) => {
-						reads.push(`legacy:${key}`);
-						return null;
-					},
-				}),
 			}),
 		);
 
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe("durable");
 		expect(response.headers.get("etag")).toBe('"avatar-etag"');
-		expect(reads).toEqual(["durable:avatars/acc_123"]);
+		expect(response.headers.get("cache-control")).toBe("private, no-cache");
+		expect(reads).toEqual(["durable:account/acc_123/avatar"]);
 	});
 
-	it("falls back to legacy account objects during migration", async () => {
+	it("revalidates account avatars without a shared edge-cache store", async () => {
+		const response = await avatars.request(
+			"/acc_123",
+			{ headers: { "If-None-Match": '"avatar-etag"' } },
+			envFixture({
+				AVATAR_BUCKET: fixture<R2Bucket>({
+					get: async () => imageObject("durable"),
+				}),
+			}),
+		);
+
+		expect(response.status).toBe(304);
+		expect(response.headers.get("etag")).toBe('"avatar-etag"');
+		expect(response.headers.get("cache-control")).toBe("private, no-cache");
+		expect(await response.text()).toBe("");
+	});
+
+	it("does not preserve a pre-live legacy-bucket fallback", async () => {
 		const reads: string[] = [];
 		const response = await avatars.request(
 			"/acc_legacy",
@@ -182,26 +190,18 @@ describe("public avatar routing", () => {
 						return null;
 					},
 				}),
-				MEDIA_BUCKET: fixture<R2Bucket>({
-					get: async (key: string) => {
-						reads.push(`legacy:${key}`);
-						return imageObject("legacy");
-					},
-				}),
 			}),
 		);
 
-		expect(await response.text()).toBe("legacy");
-		expect(reads).toEqual([
-			"durable:avatars/acc_legacy",
-			"legacy:avatars/acc_legacy",
-		]);
+		expect(response.status).toBe(404);
+		expect(reads).toEqual(["durable:account/acc_legacy/avatar"]);
 	});
 
 	it("serves conversation avatars only from the media bucket", async () => {
 		let durableReads = 0;
+		const mediaReads: string[] = [];
 		const response = await avatars.request(
-			"/conv_123",
+			"/conversations/org_123/workspace-ws_123/conv_123",
 			{},
 			envFixture({
 				AVATAR_BUCKET: fixture<R2Bucket>({
@@ -211,13 +211,29 @@ describe("public avatar routing", () => {
 					},
 				}),
 				MEDIA_BUCKET: fixture<R2Bucket>({
-					get: async () => imageObject("conversation"),
+					get: async (key: string) => {
+						mediaReads.push(key);
+						return imageObject("conversation");
+					},
 				}),
 			}),
 		);
 
 		expect(await response.text()).toBe("conversation");
+		expect(response.headers.get("cache-control")).toBe("private, no-cache");
 		expect(durableReads).toBe(0);
+		expect(mediaReads).toEqual([
+			"org_123/workspaces/ws_123/conversations/conv_123/avatar",
+		]);
+	});
+
+	it("does not use the Workers Cache API for avatar responses", () => {
+		const source = readFileSync(
+			new URL("../routes/avatars.ts", import.meta.url),
+			"utf8",
+		);
+		expect(source).not.toContain("caches.default");
+		expect(source).not.toContain(".put(c.req.raw");
 	});
 });
 
@@ -251,6 +267,15 @@ describe("avatar repair and cleanup wiring", () => {
 
 		expect(revocation).toContain("deleteStoredAvatar(env, job.accountId)");
 		expect(workspace).toContain("env.AVATAR_BUCKET.delete(");
+		expect(workspace).toContain('phase === "workspace_media"');
 		expect(tenant).toContain("env.AVATAR_BUCKET.delete(avatarKeys)");
+		expect(tenant).toContain(
+			[
+				"`organization/",
+				"$",
+				"{encodeURIComponent(job.organizationId)}",
+				"/`",
+			].join(""),
+		);
 	});
 });

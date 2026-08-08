@@ -10,8 +10,8 @@
 		"prepare:deploy": "bun ./scripts/prepare-wrangler-deploy.ts",
 		"deploy": "bun run prepare:deploy && wrangler deploy --config dist/server/wrangler.json",
 		"deploy:dry-run": "bun run prepare:deploy && wrangler deploy --config dist/server/wrangler.json --dry-run",
-		"types": "wrangler types worker-configuration.d.ts --env-file /dev/null --env-interface AppWorkerEnv --include-runtime=false",
-		"types:check": "wrangler types worker-configuration.d.ts --env-file /dev/null --env-interface AppWorkerEnv --include-runtime=false --check",
+		"types": "wrangler types worker-configuration.d.ts --env-file /dev/null --env-interface AppWorkerEnv --include-runtime=false --config wrangler.jsonc --config ../api/wrangler.jsonc",
+		"types:check": "wrangler types worker-configuration.d.ts --env-file /dev/null --env-interface AppWorkerEnv --include-runtime=false --check --config wrangler.jsonc --config ../api/wrangler.jsonc",
 		"test": "bun test"
 	},
 	"dependencies": {
@@ -55,9 +55,7 @@
 		"react": "catalog:",
 		"react-dom": "catalog:",
 		"reactflow": "catalog:",
-		"resend": "catalog:",
 		"simple-icons": "catalog:",
-		"stripe": "catalog:",
 		"svg-dotted-map": "catalog:",
 		"tailwind-merge": "catalog:",
 		"three": "catalog:"

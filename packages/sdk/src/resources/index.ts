@@ -1,6 +1,50 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 export {
+  Admin,
+  type AdminOrganization,
+  type AdminOrganizationListParams,
+  type AdminOrganizationListResponse,
+  type AdminOrganizationUpdateParams,
+  type AdminSubscription,
+  type AdminSubscriptionListResponse,
+  type AdminSubscriptionUpdateParams,
+  type AdminMutationResponse,
+  type AdminAutomationWebhookFailure,
+  type AdminAutomationWebhookFailureListParams,
+  type AdminAutomationWebhookFailureListResponse,
+  type AdminOperatorResolutionTargetType,
+  type AdminOperatorResolutionAction,
+  type AdminOperatorResolutionItem,
+  type AdminOperatorResolutionListParams,
+  type AdminOperatorResolutionListResponse,
+  type AdminOperatorResolutionState,
+  type AdminOperatorResolutionEvidence,
+  type AdminOperatorResolutionEvidenceListParams,
+  type AdminOperatorResolutionEvidenceListResponse,
+  type AdminOperatorResolutionRequest,
+  type AdminOperatorResolutionResponse,
+  type AdminErasureHold,
+  type AdminErasureHoldListParams,
+  type AdminErasureHoldListResponse,
+  type AdminErasureHoldCreateParams,
+  type AdminErasureHoldReleaseParams,
+} from './admin';
+export {
+  Privacy,
+  type PrivacyListActiveErasureHoldsParams,
+  type ErasureHoldSummary,
+  type ErasureHoldSummaryListResponse,
+} from './privacy';
+export {
+  Billing,
+  type BillingSubscription,
+  type BillingInvoice,
+  type BillingStatusResponse,
+  type BillingURLResponse,
+  type BillingSyncResponse,
+} from './billing';
+export {
   AutoPostRules,
   type AutoPostRuleResponse,
   type AutoPostRuleListResponse,
@@ -51,9 +95,16 @@ export {
   InviteTokens,
   type InviteTokenCreateResponse,
   type InviteTokenListResponse,
+  type InviteTokenRedeemResponse,
   type InviteTokenCreateParams,
   type InviteTokenListParams,
+  type InviteTokenRedeemParams,
 } from './invite-tokens';
+export {
+  EmailIntents,
+  type StagedEmailResponse,
+  type OnDemandPlatformRequest,
+} from './email-intents';
 export {
   Workspaces,
   type WorkspaceCreateResponse,
@@ -224,6 +275,11 @@ export {
   type PostBulkCsvUploadParams,
 } from './posts/posts';
 export {
+  PostTags,
+  type PostTagListResponse,
+  type PostTagListParams,
+} from './posts/tags';
+export {
   Queue,
   type QueueGetNextSlotResponse,
   type QueuePreviewResponse,
@@ -362,6 +418,27 @@ export {
   type SegmentFilterPredicate,
 } from './segments';
 export {
+  SubscriptionLists,
+  SubscriptionListMembers,
+  type SubscriptionList,
+  type SubscriptionListChannel,
+  type SubscriptionListCreateParams,
+  type SubscriptionListUpdateParams,
+  type SubscriptionListListParams,
+  type SubscriptionListListResponse,
+  type SubscriptionListMember,
+  type SubscriptionListMemberStatus,
+  type SubscriptionListMemberSource,
+  type SubscriptionListMemberAddParams,
+  type SubscriptionListMemberListParams,
+  type SubscriptionListMemberListResponse,
+} from './subscription-lists';
+export {
+  Byos,
+  type ByosConfigParams,
+  type ByosConfigResponse,
+} from './byos';
+export {
   AiKnowledge,
   AiKnowledgeDocuments,
   type KnowledgeBaseCreateParams,
@@ -373,15 +450,55 @@ export {
   type KnowledgeDocumentListParams,
   type KnowledgeDocumentResponse,
   type KnowledgeDocumentListResponse,
+  type KnowledgeDocumentStatus,
+  type KnowledgeSearchParams,
+  type KnowledgeSearchResult,
+  type KnowledgeSearchResponse,
 } from './ai-knowledge';
 export {
+  AiAgents,
+  type AiAgentGuardrails,
+  type AiAgentHandoff,
+  type AiAgentCreateParams,
+  type AiAgentUpdateParams,
+  type AiAgentListParams,
+  type AiAgentResponse,
+  type AiAgentListResponse,
+  type AiAgentTurn,
+  type AiAgentRespondParams,
+  type AiAgentHandoffReason,
+  type AiAgentRespondResponse,
+} from './ai-agents';
+export {
   RefUrls,
+  type RefUrlDestination,
   type RefUrlCreateParams,
   type RefUrlUpdateParams,
   type RefUrlListParams,
+  type RefUrlClickParams,
   type RefUrlResponse,
   type RefUrlListResponse,
 } from './ref-urls';
+export {
+  QrCodes,
+  type QrCodeCreateParams,
+  type QrCodeUpdateParams,
+  type QrCodeListParams,
+  type QrCodeResponse,
+  type QrCodeListResponse,
+} from './qr-codes';
+export {
+  LandingPages,
+  type LandingPageTheme,
+  type LandingPageFormField,
+  type LandingPageBlock,
+  type LandingPageConfig,
+  type LandingPageCreateParams,
+  type LandingPageUpdateParams,
+  type LandingPageListParams,
+  type LandingPageResponse,
+  type LandingPageListResponse,
+} from './landing-pages';
 export {
   ShortLinks,
   type ShortLinkConfigResponse,
@@ -394,7 +511,6 @@ export {
   type ShortLinkUpdateConfigParams,
   type ShortLinkListParams,
   type ShortLinkShortenParams,
-  type ShortLinkTestConfigParams,
 } from './short-links';
 export {
   Signatures,
@@ -456,6 +572,7 @@ export {
   type IdeaResponse,
   type IdeaListResponse,
   type IdeaConvertResponse,
+  type IdeaActorResponse,
   type IdeaCommentResponse,
   type IdeaCommentListResponse,
   type IdeaActivityResponse,

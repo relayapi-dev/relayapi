@@ -89,7 +89,7 @@ Current docs show the standard Cloudflare v4 response envelope around REST resul
 
 ```bash
 curl --request POST "$ARTIFACTS_BASE_URL/repos" \
-  --header "Authorization: Bearer $ARTIFACTS_JWT" \
+  --header @/secure/bearer-auth-header \
   --header "Content-Type: application/json" \
   --data '{"name":"starter-repo"}'
 ```
@@ -115,13 +115,15 @@ Use **read** tokens for clone, fetch, pull, and indexing workflows. Use **write*
 
 Artifacts returns repo `remote` URLs that work with standard git-over-HTTPS tooling.
 
-Recommended current auth pattern for local workflows:
+Recommended current auth pattern for local workflows (with an askpass helper
+that reads a short-lived token from the environment without logging it):
 
 ```bash
-git -c http.extraHeader="Authorization: Bearer $ARTIFACTS_TOKEN" clone "$ARTIFACTS_REMOTE" artifacts-clone
+GIT_ASKPASS=/secure/path/artifacts-askpass GIT_TERMINAL_PROMPT=0 \
+  git clone "$ARTIFACTS_REMOTE" artifacts-clone
 ```
 
-Use a self-contained Basic-auth remote only for short-lived commands that need credentials embedded in the URL.
+Never put the token in a self-contained URL or `http.extraHeader` command argument.
 
 `read` tokens support `clone`, `fetch`, and `pull`. `git push` requires a `write` token.
 

@@ -53,7 +53,7 @@ No wrangler config needed. Get API token with "Browser Rendering - Edit" permiss
 ```bash
 curl -X POST \
   'https://api.cloudflare.com/client/v4/accounts/{accountId}/browser-rendering/screenshot' \
-  -H 'Authorization: Bearer TOKEN' \
+  --header @/secure/bearer-auth-header \
   -d '{"url": "https://example.com"}' --output screenshot.png
 ```
 

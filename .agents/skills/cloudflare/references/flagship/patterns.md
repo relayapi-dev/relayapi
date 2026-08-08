@@ -125,7 +125,7 @@ All examples use `api.cloudflare.com`. Set `CLOUDFLARE_ACCOUNT_ID`, `FLAGSHIP_AP
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{
     "key": "new-feature",
@@ -142,7 +142,7 @@ curl -s -X POST \
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{
     "key": "beta-feature",
@@ -167,7 +167,7 @@ curl -s -X POST \
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d '{
     "key": "rate-limits",
@@ -194,21 +194,21 @@ curl -s -X POST \
 ### Read a Flag
 
 ```bash
-curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+curl -s --header @/secure/bearer-auth-header \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags/new-feature" | jq .
 ```
 
 ### List All Flags (with pagination)
 
 ```bash
-curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+curl -s --header @/secure/bearer-auth-header \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags?limit=50" | jq .
 ```
 
 If `result_info.cursor` is non-null, fetch the next page:
 
 ```bash
-curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+curl -s --header @/secure/bearer-auth-header \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags?limit=50&cursor=<cursor>" | jq .
 ```
 
@@ -218,7 +218,7 @@ Updates use PUT with the full `FlagDefinition`. Always GET first, modify, then P
 
 ```bash
 # 1. Read current flag
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+FLAG=$(curl -s --header @/secure/bearer-auth-header \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags/new-feature" | jq '.result')
 
 # 2. Modify (e.g., enable the flag)
@@ -226,7 +226,7 @@ UPDATED=$(echo "$FLAG" | jq '.enabled = true')
 
 # 3. PUT back
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags/new-feature" | jq .
@@ -239,10 +239,10 @@ Read-modify-write to set `enabled: true`:
 ```bash
 BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags"
 
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$BASE/new-feature" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$BASE/new-feature" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.enabled = true')
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- "$BASE/new-feature" | jq .
 ```
@@ -254,10 +254,10 @@ Same pattern, set `enabled: false`. The flag immediately returns its default var
 ```bash
 BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags"
 
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$BASE/new-feature" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$BASE/new-feature" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.enabled = false')
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- "$BASE/new-feature" | jq .
 ```
@@ -269,14 +269,14 @@ Append a rule to the existing rules array. Pick a priority that doesn't collide 
 ```bash
 BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags"
 
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$BASE/new-feature" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$BASE/new-feature" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.rules += [{
   "priority": 2,
   "conditions": [{ "attribute": "plan", "operator": "equals", "value": "enterprise" }],
   "serve_variation": "on"
 }]')
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- "$BASE/new-feature" | jq .
 ```
@@ -288,10 +288,10 @@ Update the rollout percentage on an existing rule (e.g., rule at index 0):
 ```bash
 BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags"
 
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$BASE/gradual-rollout" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$BASE/gradual-rollout" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.rules[0].rollout.percentage = 50')
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- "$BASE/gradual-rollout" | jq .
 ```
@@ -301,10 +301,10 @@ echo "$UPDATED" | curl -s -X PUT \
 ```bash
 BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags"
 
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$BASE/new-feature" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$BASE/new-feature" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.default_variation = "on"')
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- "$BASE/new-feature" | jq .
 ```
@@ -314,10 +314,10 @@ echo "$UPDATED" | curl -s -X PUT \
 ```bash
 BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags"
 
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$BASE/checkout-flow" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$BASE/checkout-flow" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.variations["treatment-c"] = "minimal"')
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- "$BASE/checkout-flow" | jq .
 ```
@@ -329,10 +329,10 @@ Remove a rule by filtering on priority:
 ```bash
 BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags"
 
-FLAG=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$BASE/new-feature" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$BASE/new-feature" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.rules = [.rules[] | select(.priority != 2)]')
 echo "$UPDATED" | curl -s -X PUT \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   -d @- "$BASE/new-feature" | jq .
 ```
@@ -341,7 +341,7 @@ echo "$UPDATED" | curl -s -X PUT \
 
 ```bash
 curl -s -X DELETE \
-  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/flagship/apps/$FLAGSHIP_APP_ID/flags/old-feature" | jq .
 ```
 

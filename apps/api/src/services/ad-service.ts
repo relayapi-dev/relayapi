@@ -16,6 +16,8 @@ import {
 	socialAccounts,
 } from "@relayapi/db";
 import { and, inArray, sql } from "drizzle-orm";
+import { isSafeAdBudget, normalizeSupportedAdCurrency } from "../lib/ad-money";
+import type { DurableCredentialAuthorityAdmission } from "../lib/durable-credential-authority";
 import {
 	canAccessWorkspaceScope,
 	workspaceScopeSqlCondition,
@@ -27,6 +29,13 @@ import {
 	executeClaimedAdCreationOperation,
 } from "./ad-creation-operations";
 import {
+	type CancelAdMutationPayload,
+	type CancelCampaignMutationPayload,
+	executeAdMutation,
+	type UpdateAdMutationPayload,
+	type UpdateCampaignMutationPayload,
+} from "./ad-mutation-operations";
+import {
 	getAdPlatformAdapter,
 	socialPlatformToAdPlatform,
 } from "./ad-platforms";
@@ -36,18 +45,145 @@ import type {
 	PlatformAdAccount,
 	PromotablePage,
 } from "./ad-platforms/types";
-import { AdPlatformError } from "./ad-platforms/types";
+import {
+	AdAuthoritativeNotAppliedError,
+	AdPlatformError,
+} from "./ad-platforms/types";
+import {
+	settleDurableUsageReservation,
+	type UsageReservation,
+} from "./usage-meter";
 
 // Re-export for route handlers
 export { AdPlatformError };
 
 type Database = ReturnType<typeof createDb>;
 
-async function getAccountWithToken(
+interface ExistingSpendState {
+	status: string;
+	dailyBudgetCents: number | null;
+	lifetimeBudgetCents: number | null;
+}
+
+interface RequestedSpendMutation {
+	status?: "active" | "paused";
+	dailyBudgetCents?: number;
+	lifetimeBudgetCents?: number;
+	hasNonEmergencyChanges?: boolean;
+}
+
+export interface SpendMutationAssessment {
+	hasIncrease: boolean;
+	hasDecrease: boolean;
+	mixedStopAndIncrease: boolean;
+	emergencySafe: boolean;
+}
+
+function isBudgetIncrease(
+	current: number | null,
+	requested: number | undefined,
+): boolean {
+	return requested !== undefined && (current === null || requested > current);
+}
+
+function isBudgetDecrease(
+	current: number | null,
+	requested: number | undefined,
+): boolean {
+	return requested !== undefined && current !== null && requested < current;
+}
+
+/**
+ * Classify a mutation at the provider-cost boundary. A caller without an
+ * eligible Pro entitlement may only stop delivery or lower an existing cap;
+ * creation, activation, new caps, and unrelated edits remain blocked.
+ */
+export function assessSpendMutation(
+	existing: ExistingSpendState,
+	requested: RequestedSpendMutation,
+): SpendMutationAssessment {
+	const hasIncrease =
+		requested.status === "active" ||
+		isBudgetIncrease(existing.dailyBudgetCents, requested.dailyBudgetCents) ||
+		isBudgetIncrease(
+			existing.lifetimeBudgetCents,
+			requested.lifetimeBudgetCents,
+		);
+	const hasDecrease =
+		isBudgetDecrease(existing.dailyBudgetCents, requested.dailyBudgetCents) ||
+		isBudgetDecrease(
+			existing.lifetimeBudgetCents,
+			requested.lifetimeBudgetCents,
+		);
+	const stopsDelivery = requested.status === "paused";
+	return {
+		hasIncrease,
+		hasDecrease,
+		mixedStopAndIncrease: stopsDelivery && hasIncrease,
+		emergencySafe:
+			!hasIncrease &&
+			!requested.hasNonEmergencyChanges &&
+			(stopsDelivery || hasDecrease),
+	};
+}
+
+function requireProviderContext<T>(
+	value: T | null | undefined,
+	resource: string,
+): T {
+	if (value) return value;
+	throw new AdPlatformError(
+		"MANUAL_REVIEW_REQUIRED",
+		`${resource} cannot be mutated because its provider credential or adapter is unavailable`,
+	);
+}
+
+function authoritativeAdCurrency(
+	providerCurrency: string | null | undefined,
+	requestedCurrency: string | undefined,
+	budgets: readonly (number | undefined)[],
+): string {
+	const currency = normalizeSupportedAdCurrency(providerCurrency);
+	if (!currency) {
+		throw new AdAuthoritativeNotAppliedError(
+			"UNSUPPORTED_CURRENCY",
+			"This ad account currency is not supported by the cents-based budget contract",
+		);
+	}
+	if (
+		requestedCurrency !== undefined &&
+		requestedCurrency.trim().toUpperCase() !== currency
+	) {
+		throw new AdAuthoritativeNotAppliedError(
+			"CURRENCY_MISMATCH",
+			"The requested currency does not match the provider ad account currency",
+		);
+	}
+	if (budgets.some((budget) => !isSafeAdBudget(budget))) {
+		throw new AdAuthoritativeNotAppliedError(
+			"INVALID_BUDGET",
+			"Ad budgets must be positive safe integers within PostgreSQL int4 minor-unit bounds",
+		);
+	}
+	return currency;
+}
+
+function assertCampaignCurrencySnapshot(
+	campaignCurrency: string | null,
+	providerCurrency: string,
+): void {
+	if (campaignCurrency?.trim().toUpperCase() !== providerCurrency) {
+		throw new AdAuthoritativeNotAppliedError(
+			"CURRENCY_MISMATCH",
+			"The campaign currency snapshot does not match its provider ad account",
+		);
+	}
+}
+
+async function getAdAccountContext(
 	db: Database,
 	adAccountId: string,
 	orgId: string,
-	env: Env,
 ) {
 	const [adAcc] = await db
 		.select({
@@ -67,6 +203,7 @@ async function getAccountWithToken(
 			and(
 				eq(adAccounts.id, adAccountId),
 				eq(adAccounts.organizationId, orgId),
+				eq(adAccounts.status, "active"),
 				eq(socialAccounts.lifecycleStatus, "active"),
 				eq(organization.lifecycleStatus, "active"),
 			),
@@ -75,11 +212,8 @@ async function getAccountWithToken(
 
 	if (!adAcc) return null;
 
-	const accessToken = await resolveAdsAccessToken(adAcc.socialAccount, env);
-
 	return {
 		...adAcc,
-		accessToken,
 		adPlatform: adAcc.adAccount.platform,
 	};
 }
@@ -115,7 +249,7 @@ async function upsertAdAccounts(
 					platform: adPlatform,
 					platformAdAccountId: pa.id,
 					name: pa.name,
-					currency: pa.currency ?? "USD",
+					currency: pa.currency?.trim().toUpperCase() ?? null,
 					timezone: pa.timezone,
 					status: pa.status ?? "active",
 					metadata,
@@ -414,13 +548,36 @@ export async function createCampaign(
 		operationKey?: string;
 	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
 ) {
-	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
-	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
+	if (!authorityAdmission)
+		throw new AdAuthoritativeNotAppliedError(
+			"CREDENTIAL_NO_LONGER_AUTHORIZED",
+			"Paid operation admission requires live credential authority",
+		);
+	const ctx = await getAdAccountContext(db, params.adAccountId, orgId);
+	if (!ctx) {
+		throw new AdAuthoritativeNotAppliedError(
+			"NOT_FOUND",
+			"Ad account not found",
+		);
+	}
 
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
-	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
-	const { operationKey, ...request } = params;
+	if (!adapter) {
+		throw new AdAuthoritativeNotAppliedError(
+			"UNSUPPORTED_PLATFORM",
+			"No adapter",
+		);
+	}
+	const currency = authoritativeAdCurrency(
+		ctx.adAccount.currency,
+		params.currency,
+		[params.dailyBudgetCents, params.lifetimeBudgetCents],
+	);
+	const { operationKey, ...baseRequest } = params;
+	const request = { ...baseRequest, currency };
 	const operation = await beginAdCreationOperation({
 		db,
 		organizationId: orgId,
@@ -430,6 +587,8 @@ export async function createCampaign(
 		platform: ctx.adPlatform,
 		operationKey,
 		request,
+		usageReservation,
+		authorityAdmission,
 	});
 	if ("completed" in operation) {
 		if (!operation.completed.localCampaignId) {
@@ -455,11 +614,9 @@ export async function createCampaign(
 		);
 	}
 	const result = await executeClaimedAdCreationOperation({
+		env,
 		db,
 		claim: operation,
-		adapter,
-		accessToken: ctx.accessToken,
-		platformAdAccountId: ctx.adAccount.platformAdAccountId,
 	});
 	if (result.kind !== "create_campaign") {
 		throw new Error("Campaign operation returned an ad result");
@@ -495,13 +652,60 @@ export async function createAd(
 		operationKey?: string;
 	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
 ) {
-	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
-	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
+	if (!authorityAdmission)
+		throw new AdAuthoritativeNotAppliedError(
+			"CREDENTIAL_NO_LONGER_AUTHORIZED",
+			"Paid operation admission requires live credential authority",
+		);
+	const ctx = await getAdAccountContext(db, params.adAccountId, orgId);
+	if (!ctx) {
+		throw new AdAuthoritativeNotAppliedError(
+			"NOT_FOUND",
+			"Ad account not found",
+		);
+	}
 
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
-	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
-	const { operationKey, ...request } = params;
+	if (!adapter) {
+		throw new AdAuthoritativeNotAppliedError(
+			"UNSUPPORTED_PLATFORM",
+			"No adapter",
+		);
+	}
+	if (params.targeting && adapter.canonicalizeTargeting) {
+		// Validate the complete provider projection before the durable operation
+		// can stage a request boundary.
+		adapter.canonicalizeTargeting(params.targeting);
+	}
+	const currency = authoritativeAdCurrency(ctx.adAccount.currency, undefined, [
+		params.dailyBudgetCents,
+		params.lifetimeBudgetCents,
+	]);
+	const { operationKey, ...baseRequest } = params;
+	const request = { ...baseRequest, currency };
+	if (params.campaignId) {
+		const [campaign] = await db
+			.select({ currency: adCampaigns.currency })
+			.from(adCampaigns)
+			.where(
+				and(
+					eq(adCampaigns.id, params.campaignId),
+					eq(adCampaigns.organizationId, orgId),
+					eq(adCampaigns.adAccountId, params.adAccountId),
+				),
+			)
+			.limit(1);
+		if (!campaign) {
+			throw new AdAuthoritativeNotAppliedError(
+				"NOT_FOUND",
+				"Campaign not found",
+			);
+		}
+		assertCampaignCurrencySnapshot(campaign.currency, currency);
+	}
 	const operation = await beginAdCreationOperation({
 		db,
 		organizationId: orgId,
@@ -511,6 +715,8 @@ export async function createAd(
 		platform: ctx.adPlatform,
 		operationKey,
 		request,
+		usageReservation,
+		authorityAdmission,
 	});
 	if ("completed" in operation) {
 		if (!operation.completed.localAdId) {
@@ -536,11 +742,9 @@ export async function createAd(
 		);
 	}
 	const result = await executeClaimedAdCreationOperation({
+		env,
 		db,
 		claim: operation,
-		adapter,
-		accessToken: ctx.accessToken,
-		platformAdAccountId: ctx.adAccount.platformAdAccountId,
 	});
 	if (result.kind !== "create_ad") {
 		throw new Error("Ad operation returned the wrong result kind");
@@ -571,7 +775,14 @@ export async function boostPost(
 		operationKey?: string;
 	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
 ) {
+	if (!authorityAdmission)
+		throw new AdAuthoritativeNotAppliedError(
+			"CREDENTIAL_NO_LONGER_AUTHORIZED",
+			"Paid operation admission requires live credential authority",
+		);
 	// Resolve the platform post id to boost from either a RelayAPI post target
 	// (post_target_id) or a natively-published post synced into external_posts
 	// (external_post_id). Exactly one is provided (enforced by BoostPostBody).
@@ -591,9 +802,14 @@ export async function boostPost(
 			)
 			.limit(1);
 
-		if (!ext) throw new AdPlatformError("NOT_FOUND", "External post not found");
+		if (!ext) {
+			throw new AdAuthoritativeNotAppliedError(
+				"NOT_FOUND",
+				"External post not found",
+			);
+		}
 		if (!ext.platformPostId) {
-			throw new AdPlatformError(
+			throw new AdAuthoritativeNotAppliedError(
 				"INVALID_STATE",
 				"Post has no platform post ID",
 			);
@@ -605,7 +821,10 @@ export async function boostPost(
 		// Exactly one of externalPostId/postTargetId is provided (enforced by
 		// BoostPostBody); in this branch postTargetId must be present.
 		if (!params.postTargetId) {
-			throw new AdPlatformError("NOT_FOUND", "Post target not found");
+			throw new AdAuthoritativeNotAppliedError(
+				"NOT_FOUND",
+				"Post target not found",
+			);
 		}
 		// Verify the post target exists, is published, and belongs to this org
 		const [targetRow] = await db
@@ -621,16 +840,20 @@ export async function boostPost(
 			.limit(1);
 		const target = targetRow?.target;
 
-		if (!target)
-			throw new AdPlatformError("NOT_FOUND", "Post target not found");
+		if (!target) {
+			throw new AdAuthoritativeNotAppliedError(
+				"NOT_FOUND",
+				"Post target not found",
+			);
+		}
 		if (target.status !== "published") {
-			throw new AdPlatformError(
+			throw new AdAuthoritativeNotAppliedError(
 				"INVALID_STATE",
 				"Can only boost published posts",
 			);
 		}
 		if (!target.platformPostId) {
-			throw new AdPlatformError(
+			throw new AdAuthoritativeNotAppliedError(
 				"INVALID_STATE",
 				"Post has no platform post ID",
 			);
@@ -640,10 +863,15 @@ export async function boostPost(
 		sourceWorkspaceId = targetRow.workspaceId;
 	}
 
-	const ctx = await getAccountWithToken(db, params.adAccountId, orgId, env);
-	if (!ctx) throw new AdPlatformError("NOT_FOUND", "Ad account not found");
+	const ctx = await getAdAccountContext(db, params.adAccountId, orgId);
+	if (!ctx) {
+		throw new AdAuthoritativeNotAppliedError(
+			"NOT_FOUND",
+			"Ad account not found",
+		);
+	}
 	if (sourceWorkspaceId !== ctx.adAccount.workspaceId) {
-		throw new AdPlatformError(
+		throw new AdAuthoritativeNotAppliedError(
 			"INVALID_STATE",
 			"The promoted post must belong to the ad account workspace",
 		);
@@ -660,16 +888,32 @@ export async function boostPost(
 		postSocialAccountId &&
 		!boostableIds.includes(postSocialAccountId)
 	) {
-		throw new AdPlatformError(
+		throw new AdAuthoritativeNotAppliedError(
 			"INVALID_STATE",
 			"This post's account cannot be promoted through the selected ad account",
 		);
 	}
 
 	const adapter = getAdPlatformAdapter(ctx.adPlatform);
-	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
+	if (!adapter) {
+		throw new AdAuthoritativeNotAppliedError(
+			"UNSUPPORTED_PLATFORM",
+			"No adapter",
+		);
+	}
+	if (params.targeting && adapter.canonicalizeTargeting) {
+		// Unsupported targeting is a clean pre-boundary rejection, not an
+		// ambiguous paid-object attempt.
+		adapter.canonicalizeTargeting(params.targeting);
+	}
 
-	const { operationKey, ...request } = params;
+	const currency = authoritativeAdCurrency(
+		ctx.adAccount.currency,
+		params.currency,
+		[params.dailyBudgetCents, params.lifetimeBudgetCents],
+	);
+	const { operationKey, ...baseRequest } = params;
+	const request = { ...baseRequest, currency };
 	const operation = await beginAdCreationOperation({
 		db,
 		organizationId: orgId,
@@ -679,6 +923,8 @@ export async function boostPost(
 		platform: ctx.adPlatform,
 		operationKey,
 		request: { ...request, platformPostId },
+		usageReservation,
+		authorityAdmission,
 	});
 	if ("completed" in operation) {
 		if (!operation.completed.localAdId) {
@@ -704,11 +950,9 @@ export async function boostPost(
 		);
 	}
 	const result = await executeClaimedAdCreationOperation({
+		env,
 		db,
 		claim: operation,
-		adapter,
-		accessToken: ctx.accessToken,
-		platformAdAccountId: ctx.adAccount.platformAdAccountId,
 	});
 	if (result.kind !== "boost_post") {
 		throw new Error("Boost operation returned the wrong result kind");
@@ -726,9 +970,18 @@ export async function updateAd(
 		dailyBudgetCents?: number;
 		lifetimeBudgetCents?: number;
 		targeting?: AdTargeting;
+		allowSpendIncrease?: boolean;
+		operationKey?: string;
 	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
 ) {
+	if (!authorityAdmission)
+		throw new AdAuthoritativeNotAppliedError(
+			"CREDENTIAL_NO_LONGER_AUTHORIZED",
+			"Paid operation admission requires live credential authority",
+		);
 	const [ad] = await db
 		.select()
 		.from(ads)
@@ -743,40 +996,107 @@ export async function updateAd(
 			`Cannot update ad with status "${ad.status}"`,
 		);
 	}
-
-	// Push changes to platform
-	if (ad.platformAdId) {
-		const ctx = await getAccountWithToken(db, ad.adAccountId, orgId, env);
-		if (ctx) {
-			const adapter = getAdPlatformAdapter(ctx.adPlatform);
-			if (adapter) {
-				await adapter.updateAd(ctx.accessToken, ad.platformAdId, {
-					name: params.name,
-					status: params.status,
-					dailyBudgetCents: params.dailyBudgetCents,
-					lifetimeBudgetCents: params.lifetimeBudgetCents,
-					targeting: params.targeting,
-				});
-			}
-		}
+	const assessment = assessSpendMutation(ad, {
+		status: params.status,
+		dailyBudgetCents: params.dailyBudgetCents,
+		lifetimeBudgetCents: params.lifetimeBudgetCents,
+		hasNonEmergencyChanges:
+			params.name !== undefined || params.targeting !== undefined,
+	});
+	if (assessment.mixedStopAndIncrease) {
+		throw new AdPlatformError(
+			"INVALID_STATE",
+			"A single request cannot stop delivery and increase spend",
+		);
+	}
+	if (params.allowSpendIncrease === false && !assessment.emergencySafe) {
+		throw new AdPlatformError(
+			"PLAN_UPGRADE_REQUIRED",
+			"After Pro access ends, ads may only be paused, cancelled, or reduced in spend",
+		);
 	}
 
-	// Update DB
-	const updateData: Record<string, unknown> = { updatedAt: new Date() };
-	if (params.name) updateData.name = params.name;
-	if (params.status) updateData.status = params.status;
-	if (params.dailyBudgetCents)
-		updateData.dailyBudgetCents = params.dailyBudgetCents;
-	if (params.lifetimeBudgetCents)
-		updateData.lifetimeBudgetCents = params.lifetimeBudgetCents;
-	if (params.targeting) updateData.targeting = params.targeting;
-
+	const platformAdId = requireProviderContext(ad.platformAdId, "The ad");
+	const ctx = requireProviderContext(
+		await getAdAccountContext(db, ad.adAccountId, orgId),
+		"The ad",
+	);
+	const adapter = requireProviderContext(
+		getAdPlatformAdapter(ctx.adPlatform),
+		"The ad",
+	);
+	const [campaign] = await db
+		.select()
+		.from(adCampaigns)
+		.where(
+			and(
+				eq(adCampaigns.id, ad.campaignId),
+				eq(adCampaigns.organizationId, orgId),
+			),
+		)
+		.limit(1);
+	if (!campaign) throw new AdPlatformError("NOT_FOUND", "Campaign not found");
+	if (
+		params.status === "active" ||
+		params.dailyBudgetCents !== undefined ||
+		params.lifetimeBudgetCents !== undefined
+	) {
+		const currency = authoritativeAdCurrency(
+			ctx.adAccount.currency,
+			undefined,
+			[
+				params.dailyBudgetCents ??
+					(params.status === "active"
+						? (ad.dailyBudgetCents ?? undefined)
+						: undefined),
+				params.lifetimeBudgetCents ??
+					(params.status === "active"
+						? (ad.lifetimeBudgetCents ?? undefined)
+						: undefined),
+			],
+		);
+		assertCampaignCurrencySnapshot(campaign.currency, currency);
+	}
+	const payload: UpdateAdMutationPayload = {
+		kind: "update_ad",
+		adId,
+		campaignId: ad.campaignId,
+		adAccountId: ad.adAccountId,
+		platformAdId,
+		platformCampaignId: campaign.platformCampaignId ?? undefined,
+		platformAdSetId: (campaign.metadata as { platformAdSetId?: string } | null)
+			?.platformAdSetId,
+		changes: {
+			name: params.name,
+			status: params.status,
+			dailyBudgetCents: params.dailyBudgetCents,
+			lifetimeBudgetCents: params.lifetimeBudgetCents,
+			targeting: params.targeting,
+		},
+		expectedProviderTargeting:
+			params.targeting && adapter.canonicalizeTargeting
+				? adapter.canonicalizeTargeting(params.targeting)
+				: undefined,
+	};
+	await executeAdMutation({
+		env,
+		db,
+		organizationId: orgId,
+		targetType: "ad",
+		targetId: adId,
+		workspaceId: ad.workspaceId,
+		platform: ctx.adPlatform,
+		operationKey: params.operationKey,
+		payload,
+		usageReservation,
+		authorityAdmission,
+		requiresLiveAuthority: !assessment.emergencySafe,
+	});
 	const [updated] = await db
-		.update(ads)
-		.set(updateData)
-		.where(eq(ads.id, adId))
-		.returning();
-
+		.select()
+		.from(ads)
+		.where(and(eq(ads.id, adId), eq(ads.organizationId, orgId)))
+		.limit(1);
 	return updated;
 }
 
@@ -784,8 +1104,16 @@ export async function cancelAd(
 	env: Env,
 	orgId: string,
 	adId: string,
+	operationKey?: string,
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
 ) {
+	if (!authorityAdmission)
+		throw new AdAuthoritativeNotAppliedError(
+			"CREDENTIAL_NO_LONGER_AUTHORIZED",
+			"Paid operation admission requires live credential authority",
+		);
 	const [ad] = await db
 		.select()
 		.from(ads)
@@ -793,35 +1121,66 @@ export async function cancelAd(
 		.limit(1);
 
 	if (!ad) throw new AdPlatformError("NOT_FOUND", "Ad not found");
-
-	// Cancel on platform
-	if (ad.platformAdId) {
-		const ctx = await getAccountWithToken(db, ad.adAccountId, orgId, env);
-		if (ctx) {
-			const adapter = getAdPlatformAdapter(ctx.adPlatform);
-			if (adapter) {
-				try {
-					await adapter.cancelAd(ctx.accessToken, ad.platformAdId);
-				} catch {
-					// Best effort — platform might already be cancelled
-				}
-			}
+	if (ad.status === "cancelled") {
+		if (usageReservation) {
+			await settleDurableUsageReservation(db, {
+				reservationId: usageReservation.id,
+				organizationId: usageReservation.organizationId,
+				committedUnits: 0,
+			});
 		}
+		return;
 	}
 
-	await db
-		.update(ads)
-		.set({ status: "cancelled", updatedAt: new Date() })
-		.where(eq(ads.id, adId));
+	const platformAdId = requireProviderContext(ad.platformAdId, "The ad");
+	const ctx = requireProviderContext(
+		await getAdAccountContext(db, ad.adAccountId, orgId),
+		"The ad",
+	);
+	requireProviderContext(getAdPlatformAdapter(ctx.adPlatform), "The ad");
+	const payload: CancelAdMutationPayload = {
+		kind: "cancel_ad",
+		adId,
+		adAccountId: ad.adAccountId,
+		platformAdId,
+	};
+	await executeAdMutation({
+		env,
+		db,
+		organizationId: orgId,
+		targetType: "ad",
+		targetId: adId,
+		workspaceId: ad.workspaceId,
+		platform: ctx.adPlatform,
+		operationKey,
+		payload,
+		usageReservation,
+		authorityAdmission,
+		requiresLiveAuthority: false,
+	});
 }
 
-export async function updateCampaignStatus(
+export async function updateCampaign(
 	env: Env,
 	orgId: string,
 	campaignId: string,
-	status: "active" | "paused",
+	params: {
+		name?: string;
+		status?: "active" | "paused";
+		dailyBudgetCents?: number;
+		lifetimeBudgetCents?: number;
+		allowSpendIncrease?: boolean;
+		operationKey?: string;
+	},
 	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
 ) {
+	if (!authorityAdmission)
+		throw new AdAuthoritativeNotAppliedError(
+			"CREDENTIAL_NO_LONGER_AUTHORIZED",
+			"Paid operation admission requires live credential authority",
+		);
 	const [campaign] = await db
 		.select()
 		.from(adCampaigns)
@@ -832,55 +1191,195 @@ export async function updateCampaignStatus(
 			),
 		)
 		.limit(1);
-
 	if (!campaign) throw new AdPlatformError("NOT_FOUND", "Campaign not found");
 
-	if (campaign.platformCampaignId) {
-		const ctx = await getAccountWithToken(db, campaign.adAccountId, orgId, env);
-		if (ctx) {
-			const adapter = getAdPlatformAdapter(ctx.adPlatform);
-			if (adapter) {
-				if (status === "paused") {
-					await adapter.pauseCampaign(
-						ctx.accessToken,
-						campaign.platformCampaignId,
-					);
-				} else {
-					await adapter.resumeCampaign(
-						ctx.accessToken,
-						campaign.platformCampaignId,
-					);
-				}
-			}
-		}
+	const assessment = assessSpendMutation(campaign, {
+		status: params.status,
+		dailyBudgetCents: params.dailyBudgetCents,
+		lifetimeBudgetCents: params.lifetimeBudgetCents,
+		hasNonEmergencyChanges: params.name !== undefined,
+	});
+	if (assessment.mixedStopAndIncrease) {
+		throw new AdPlatformError(
+			"INVALID_STATE",
+			"A single request cannot stop delivery and increase spend",
+		);
+	}
+	if (params.allowSpendIncrease === false && !assessment.emergencySafe) {
+		throw new AdPlatformError(
+			"PLAN_UPGRADE_REQUIRED",
+			"After Pro access ends, campaigns may only be paused, cancelled, or reduced in spend",
+		);
 	}
 
-	// Update campaign + child ads in DB
-	await db
-		.update(adCampaigns)
-		.set({ status, updatedAt: new Date() })
-		.where(eq(adCampaigns.id, campaignId));
+	const platformCampaignId = requireProviderContext(
+		campaign.platformCampaignId,
+		"The campaign",
+	);
+	const ctx = requireProviderContext(
+		await getAdAccountContext(db, campaign.adAccountId, orgId),
+		"The campaign",
+	);
+	requireProviderContext(getAdPlatformAdapter(ctx.adPlatform), "The campaign");
+	const platformAdSetId = (
+		campaign.metadata as { platformAdSetId?: string } | null
+	)?.platformAdSetId;
+	const childAds = await db
+		.select({ id: ads.id, platformAdId: ads.platformAdId, status: ads.status })
+		.from(ads)
+		.where(and(eq(ads.campaignId, campaignId), eq(ads.organizationId, orgId)));
+	if (
+		params.status === "active" ||
+		params.dailyBudgetCents !== undefined ||
+		params.lifetimeBudgetCents !== undefined
+	) {
+		const currency = authoritativeAdCurrency(
+			ctx.adAccount.currency,
+			undefined,
+			[
+				params.dailyBudgetCents ??
+					(params.status === "active"
+						? (campaign.dailyBudgetCents ?? undefined)
+						: undefined),
+				params.lifetimeBudgetCents ??
+					(params.status === "active"
+						? (campaign.lifetimeBudgetCents ?? undefined)
+						: undefined),
+			],
+		);
+		assertCampaignCurrencySnapshot(campaign.currency, currency);
+	}
 
-	// Bulk update non-terminal ads in the campaign
-	const result = await db
-		.update(ads)
-		.set({ status, updatedAt: new Date() })
+	const payload: UpdateCampaignMutationPayload = {
+		kind: "update_campaign",
+		campaignId,
+		adAccountId: campaign.adAccountId,
+		platformCampaignId,
+		platformAdSetId,
+		childPlatformAdIds: childAds
+			.filter(
+				(child) =>
+					child.platformAdId &&
+					!["completed", "rejected", "cancelled"].includes(child.status),
+			)
+			.map((child) => child.platformAdId as string),
+		changes: {
+			name: params.name,
+			status: params.status,
+			dailyBudgetCents: params.dailyBudgetCents,
+			lifetimeBudgetCents: params.lifetimeBudgetCents,
+		},
+	};
+	await executeAdMutation({
+		env,
+		db,
+		organizationId: orgId,
+		targetType: "campaign",
+		targetId: campaignId,
+		workspaceId: campaign.workspaceId,
+		platform: ctx.adPlatform,
+		operationKey: params.operationKey,
+		payload,
+		usageReservation,
+		authorityAdmission,
+		requiresLiveAuthority: !assessment.emergencySafe,
+	});
+	const updated =
+		params.status === undefined
+			? 1
+			: childAds.filter(
+					(child) =>
+						!["completed", "rejected", "cancelled"].includes(child.status),
+				).length;
+	return {
+		updated,
+		skipped: params.status === undefined ? 0 : childAds.length - updated,
+	};
+}
+
+export async function updateCampaignStatus(
+	env: Env,
+	orgId: string,
+	campaignId: string,
+	status: "active" | "paused",
+	operationKey?: string,
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
+) {
+	return updateCampaign(
+		env,
+		orgId,
+		campaignId,
+		{ status, operationKey },
+		db,
+		usageReservation,
+		authorityAdmission,
+	);
+}
+
+export async function cancelCampaign(
+	env: Env,
+	orgId: string,
+	campaignId: string,
+	operationKey: string | undefined,
+	db: Database = createDb(env.HYPERDRIVE.connectionString),
+	usageReservation?: UsageReservation,
+	authorityAdmission?: DurableCredentialAuthorityAdmission,
+): Promise<void> {
+	if (!authorityAdmission)
+		throw new AdAuthoritativeNotAppliedError(
+			"CREDENTIAL_NO_LONGER_AUTHORIZED",
+			"Paid operation admission requires live credential authority",
+		);
+	const [campaign] = await db
+		.select()
+		.from(adCampaigns)
 		.where(
 			and(
-				eq(ads.campaignId, campaignId),
-				sql`${ads.status} NOT IN ('completed', 'rejected', 'cancelled')`,
+				eq(adCampaigns.id, campaignId),
+				eq(adCampaigns.organizationId, orgId),
 			),
 		)
-		.returning({ id: ads.id });
-
-	// Count skipped (terminal) ads
-	const [totalCount] = await db
-		.select({ count: sql<number>`count(*)::int` })
-		.from(ads)
-		.where(eq(ads.campaignId, campaignId));
-
-	const updated = result.length;
-	const skipped = (totalCount?.count ?? 0) - updated;
-
-	return { updated, skipped };
+		.limit(1);
+	if (!campaign) throw new AdPlatformError("NOT_FOUND", "Campaign not found");
+	if (campaign.status === "cancelled") {
+		if (usageReservation) {
+			await settleDurableUsageReservation(db, {
+				reservationId: usageReservation.id,
+				organizationId: usageReservation.organizationId,
+				committedUnits: 0,
+			});
+		}
+		return;
+	}
+	const platformCampaignId = requireProviderContext(
+		campaign.platformCampaignId,
+		"The campaign",
+	);
+	const ctx = requireProviderContext(
+		await getAdAccountContext(db, campaign.adAccountId, orgId),
+		"The campaign",
+	);
+	requireProviderContext(getAdPlatformAdapter(ctx.adPlatform), "The campaign");
+	const payload: CancelCampaignMutationPayload = {
+		kind: "cancel_campaign",
+		campaignId,
+		adAccountId: campaign.adAccountId,
+		platformCampaignId,
+	};
+	await executeAdMutation({
+		env,
+		db,
+		organizationId: orgId,
+		targetType: "campaign",
+		targetId: campaignId,
+		workspaceId: campaign.workspaceId,
+		platform: ctx.adPlatform,
+		operationKey,
+		payload,
+		usageReservation,
+		authorityAdmission,
+		requiresLiveAuthority: false,
+	});
 }

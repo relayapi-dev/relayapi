@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { decryptToken, encryptToken } from "../lib/crypto";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const dbModule = await import("../../../../packages/db/src/index");
 
@@ -48,7 +49,7 @@ class EnrollmentBlockedError extends Error {
 	}
 }
 
-const ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 const NOW = new Date();
 const WEBHOOK_ENTRYPOINT_ID = "aep_webhook";
 const WEBHOOK_SECRET = "durability-secret";
@@ -62,6 +63,18 @@ const WRONG_ENTRYPOINT_CIPHERTEXT = await encryptToken(
 	ENCRYPTION_KEY,
 	{ recordId: "aep_other", field: "webhook_secret" },
 );
+const PROTECTED_WEBHOOK_CONTACT = {
+	...(await protectedContactFixture(
+		{
+			id: "ct_webhook",
+			organizationId: "org_webhook",
+			workspaceId: "ws_webhook",
+			name: "Webhook contact",
+		},
+		ENCRYPTION_KEY,
+	)),
+	scopeKey: "ws/ws_webhook",
+};
 const match = {
 	entrypoint: {
 		id: WEBHOOK_ENTRYPOINT_ID,
@@ -190,10 +203,7 @@ function makeDb() {
 				findFirst: async () => state.receipts[0],
 			},
 			contacts: {
-				findFirst: async () => ({
-					id: "ct_webhook",
-					organizationId: match.automation.organizationId,
-				}),
+				findFirst: async () => PROTECTED_WEBHOOK_CONTACT,
 			},
 			workspaces: { findFirst: async () => null },
 			customFieldDefinitions: { findFirst: async () => null },
@@ -589,8 +599,12 @@ describe("automation run occurrence contract", () => {
 			"eq(automationRuns.triggerOccurrenceId, args.triggerOccurrenceId)",
 		);
 		expect(source).toContain("if (args.deferRun)");
-		expect(source).toContain("initial-trigger:");
-		expect(source).toContain("args.triggerOccurrenceId");
-		expect(source).toContain(".onConflictDoNothing()");
+		expect(source).toContain("initial-run:${runId}");
+		expect(source).toContain(
+			"automationDeferredEnrollmentOccurrenceId(run.id)",
+		);
+		expect(source).toContain(
+			".onConflictDoNothing({ target: automationScheduledJobs.occurrenceId })",
+		);
 	});
 });

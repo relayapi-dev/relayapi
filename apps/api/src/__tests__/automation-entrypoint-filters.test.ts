@@ -39,6 +39,7 @@ import {
 	type InboundEventKind,
 	matchAndEnroll,
 } from "../services/automations/trigger-matcher";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 import {
 	deleteOwnedFixtureOrganization,
 	deleteOwnedFixtureWorkspaces,
@@ -141,11 +142,11 @@ async function makeAutomation(name: string) {
 async function makeContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "epf-test-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;

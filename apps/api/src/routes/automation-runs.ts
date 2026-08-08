@@ -9,7 +9,12 @@
 // - POST /v1/automation-runs/{id}/stop  — force-exit an active/waiting run
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { automationRuns, automationStepRuns, automations } from "@relayapi/db";
+import {
+	AUTOMATION_NODE_KINDS,
+	automationRuns,
+	automationStepRuns,
+	automations,
+} from "@relayapi/db";
 import { and, asc, desc, eq, type SQL, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
@@ -53,7 +58,7 @@ const StepResponseSchema = z.object({
 	run_id: z.string(),
 	automation_id: z.string(),
 	node_key: z.string(),
-	node_kind: z.string(),
+	node_kind: z.enum(AUTOMATION_NODE_KINDS),
 	entered_via_port_key: z.string().nullable(),
 	exited_via_port_key: z.string().nullable(),
 	outcome: z.string(),
@@ -348,7 +353,12 @@ app.openapi(listSteps, async (c) => {
 				executedAt: sql<string>`${automationStepRuns.executedAt}::text`,
 			})
 			.from(automationStepRuns)
-			.where(eq(automationStepRuns.id, cursorId))
+			.where(
+				and(
+					eq(automationStepRuns.id, cursorId),
+					eq(automationStepRuns.runId, id),
+				),
+			)
 			.limit(1);
 		if (cursorRow) {
 			conditions.push(

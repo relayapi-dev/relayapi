@@ -96,6 +96,11 @@ export type RelayMediaViolation = Omit<RelayMediaReference, "reason"> & {
 export type ReadyRelayMedia = {
 	id: string;
 	storageKey: string;
+	storageProvider: "r2" | "byos";
+	storageBucketLocator: string;
+	storageRegion: string;
+	storageLocationId: string | null;
+	storageCredentialVersion: number | null;
 	mimeType: string;
 	size: number;
 };
@@ -190,6 +195,11 @@ export async function loadRelayMediaPolicy(
 		.select({
 			id: media.id,
 			storageKey: media.storageKey,
+			storageProvider: media.storageProvider,
+			storageBucketLocator: media.storageBucketLocator,
+			storageRegion: media.storageRegion,
+			storageLocationId: media.storageLocationId,
+			storageCredentialVersion: media.storageCredentialVersion,
 			mimeType: media.mimeType,
 			size: media.size,
 		})
@@ -215,6 +225,11 @@ export async function loadRelayMediaPolicy(
 		readyMediaByStorageKey.set(row.storageKey, {
 			id: row.id,
 			storageKey: row.storageKey,
+			storageProvider: row.storageProvider,
+			storageBucketLocator: row.storageBucketLocator,
+			storageRegion: row.storageRegion,
+			storageLocationId: row.storageLocationId,
+			storageCredentialVersion: row.storageCredentialVersion,
 			mimeType: normalizeMediaMimeType(row.mimeType),
 			size: row.size,
 		});

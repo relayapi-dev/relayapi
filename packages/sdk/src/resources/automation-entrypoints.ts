@@ -42,7 +42,7 @@ export interface AutomationEntrypointResponse {
 	id: string;
 	automation_id: string;
 	channel: AutomationChannel;
-	kind: string;
+	kind: AutomationEntrypointKind;
 	status: string;
 	social_account_id: string | null;
 	config: Record<string, unknown> | null;
@@ -77,6 +77,10 @@ export interface AutomationEntrypointListResponse {
 export interface AutomationEntrypointCreateParams {
 	channel: AutomationChannel;
 	kind: AutomationEntrypointKind;
+	/**
+	 * Optional provider identity for provider-originated or webhook triggers.
+	 * Internal schedule, field, tag, ref-link, and conversion triggers reject it.
+	 */
 	social_account_id?: string;
 	config?: Record<string, unknown>;
 	filters?: Record<string, unknown>;

@@ -45,11 +45,12 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -143,11 +144,11 @@ async function makeAutomation(name = "auto") {
 async function makeContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "matcher-test-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -1447,6 +1448,8 @@ describe("processScheduledJobs", () => {
 
 		// Queue a resume_run job that is due.
 		await db.insert(automationScheduledJobs).values({
+			organizationId: run.organizationId,
+			scopeKey: run.scopeKey,
 			runId: run.id,
 			jobType: "resume_run",
 			automationId: auto.id,
@@ -1488,6 +1491,8 @@ describe("processScheduledJobs", () => {
 		const [stuck] = await db
 			.insert(automationScheduledJobs)
 			.values({
+				organizationId: run.organizationId,
+				scopeKey: run.scopeKey,
 				runId: run.id,
 				jobType: "resume_run",
 				automationId: auto.id,

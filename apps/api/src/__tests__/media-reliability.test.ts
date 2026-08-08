@@ -27,7 +27,13 @@ function fixture<T>(value: unknown): T {
 }
 
 function envFixture(value: Partial<Env>): Env {
-	return value as Env;
+	return {
+		R2_MEDIA_BUCKET_NAME: "relayapi-media",
+		R2_MEDIA_BUCKET_JURISDICTION: "default",
+		R2_THUMBNAIL_BUCKET_NAME: "relayapi-media-thumbnails",
+		R2_THUMBNAIL_BUCKET_JURISDICTION: "default",
+		...value,
+	} as Env;
 }
 
 function updateOnlyDb(updates: Array<Record<string, unknown>>): Database {
@@ -51,11 +57,18 @@ function updateOnlyDb(updates: Array<Record<string, unknown>>): Database {
  * upload-write behavior explicit in its own DB fixture.
  */
 function optionalWorkspacePolicyQuery() {
+	let joined = false;
 	const query = {
 		from: () => query,
+		innerJoin: () => {
+			joined = true;
+			return query;
+		},
 		where: () => query,
+		orderBy: () => query,
 		for: () => query,
-		limit: async () => [{ requireWorkspaceId: false, revision: 0 }],
+		limit: async () =>
+			joined ? [] : [{ requireWorkspaceId: false, revision: 0 }],
 	};
 	return query;
 }
@@ -178,8 +191,15 @@ describe("media retry and lifecycle state", () => {
 		let rowDeleted = false;
 		const row = {
 			id: "med_delete_1",
+			organizationId: "org_1",
+			storageProvider: "r2" as const,
+			storageBucketLocator: "relayapi-media",
+			storageRegion: "default",
 			storageKey: "org_1/file_1/photo.png",
 			thumbnailKey: "org_1/file_1/photo.png.avif",
+			thumbnailStorageProvider: "r2" as const,
+			thumbnailStorageBucketLocator: "relayapi-media-thumbnails",
+			thumbnailStorageRegion: "default",
 			createdAt: new Date("2026-07-01T10:00:00Z"),
 			deletionRequestedAt: new Date("2026-07-13T10:00:00Z"),
 			originalDeletionConfirmedAt: null,
@@ -243,8 +263,15 @@ describe("media retry and lifecycle state", () => {
 		let thumbnailDeleteCalls = 0;
 		const row = {
 			id: "med_delete_2",
+			organizationId: "org_1",
+			storageProvider: "r2" as const,
+			storageBucketLocator: "relayapi-media",
+			storageRegion: "default",
 			storageKey: "org_1/file_2/photo.png",
 			thumbnailKey: "org_1/file_2/photo.png.avif",
+			thumbnailStorageProvider: "r2" as const,
+			thumbnailStorageBucketLocator: "relayapi-media-thumbnails",
+			thumbnailStorageRegion: "default",
 			createdAt: new Date("2026-07-01T10:00:00Z"),
 			deletionRequestedAt: new Date("2026-07-13T10:00:00Z"),
 			originalDeletionConfirmedAt: new Date("2026-07-13T10:01:00Z"),
@@ -296,8 +323,14 @@ describe("media retry and lifecycle state", () => {
 		const row = {
 			id: "med_delete_recent",
 			organizationId: "org_1",
+			storageProvider: "r2" as const,
+			storageBucketLocator: "relayapi-media",
+			storageRegion: "default",
 			storageKey: "org_1/media/file_1/photo.png",
 			thumbnailKey: "org_1/media/file_1/photo.png.avif",
+			thumbnailStorageProvider: "r2" as const,
+			thumbnailStorageBucketLocator: "relayapi-media-thumbnails",
+			thumbnailStorageRegion: "default",
 			createdAt,
 			deletionRequestedAt: now,
 			originalDeletionConfirmedAt: null,
@@ -360,6 +393,12 @@ describe("media retry and lifecycle state", () => {
 			envFixture({}),
 			{
 				id: "med_1",
+				organizationId: "org_1",
+				storageProvider: "r2",
+				storageBucketLocator: "relayapi-media",
+				storageRegion: "default",
+				storageLocationId: null,
+				storageCredentialVersion: null,
 				storageKey: "org_1/file_1/photo.png",
 				mimeType: "image/png",
 				thumbnailUrl: null,
@@ -436,6 +475,12 @@ describe("media retry and lifecycle state", () => {
 		});
 		const row = {
 			id: "med_race",
+			organizationId: "org_1",
+			storageProvider: "r2" as const,
+			storageBucketLocator: "relayapi-media",
+			storageRegion: "default",
+			storageLocationId: null,
+			storageCredentialVersion: null,
 			storageKey: "org_1/file_1/photo.png",
 			mimeType: "image/png",
 			thumbnailUrl: null,

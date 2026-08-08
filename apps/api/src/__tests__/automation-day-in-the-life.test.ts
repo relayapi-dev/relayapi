@@ -59,6 +59,10 @@ import { buildGraphFromTemplate } from "../services/automations/templates";
 import { computeSpecificity } from "../services/automations/trigger-matcher";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
 import { recordContactConsent } from "../services/contact-consent";
+import {
+	deriveContactChannelIdentifierHash,
+	deriveContactEmailHash,
+} from "../services/contact-protection";
 import { processInboxEvent } from "../services/inbox-event-processor";
 import type { SendMessageRequest } from "../services/message-sender";
 import type { Env } from "../types";
@@ -67,6 +71,10 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import {
+	protectedContactChannelFixture,
+	protectedContactFixture,
+} from "./helpers/protected-contact-fixtures";
 
 // ---------------------------------------------------------------------------
 // Fixture plumbing
@@ -75,7 +83,7 @@ import {
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -621,7 +629,7 @@ describe("day-in-the-life", () => {
 
 		// Synthesize the comment.
 		aliceChatId = "alice_ig_id";
-		await recordContactConsent(db, {
+		await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 			organizationId: orgId,
 			workspaceId,
 			contactId: null,
@@ -784,7 +792,7 @@ describe("day-in-the-life", () => {
 		// PART 1 + 2: synthesize a comment, then resume the resulting run via
 		// a button-tap direct call.
 		const bobChatId = "bob_ig_id";
-		await recordContactConsent(db, {
+		await recordContactConsent(db, TEST_ENCRYPTION_KEY, {
 			organizationId: orgId,
 			workspaceId,
 			contactId: null,
@@ -809,6 +817,11 @@ describe("day-in-the-life", () => {
 
 		// Find bob's run on the comment automation and resume it via the
 		// subscribe button.
+		const bobIdentifierHash = await deriveContactChannelIdentifierHash(
+			TEST_ENCRYPTION_KEY,
+			orgId,
+			bobChatId,
+		);
 		const [bobContact] = await db
 			.select({ id: contacts.id, tags: contacts.tags })
 			.from(contacts)
@@ -816,7 +829,7 @@ describe("day-in-the-life", () => {
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
-					eq(contactChannels.identifier, bobChatId),
+					eq(contactChannels.identifierHash, bobIdentifierHash),
 				),
 			);
 		expect(bobContact).toBeTruthy();
@@ -993,20 +1006,21 @@ describe("day-in-the-life", () => {
 		// pre-creating makes the assertion path cleaner.
 		const [charliePre] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "charlie",
-			})
+			}))
 			.returning();
 		if (!charliePre) throw new Error("charlie pre-create failed");
-		await db.insert(contactChannels).values({
+		await db.insert(contactChannels).values(await protectedContactChannelFixture({
 			organizationId: orgId,
+			workspaceId,
 			contactId: charliePre.id,
 			socialAccountId: accountAId,
 			platform: "instagram",
 			identifier: charlieChatId,
-		});
+		}));
 
 		// First-ever inbound message from charlie on account A.
 		const charlieDm = buildInstagramDmEvent({
@@ -1018,6 +1032,11 @@ describe("day-in-the-life", () => {
 		await processInboxEvent(charlieDm, testEnv, db);
 
 		// Confirm charlie was created + a conversation exists.
+		const charlieIdentifierHash = await deriveContactChannelIdentifierHash(
+			TEST_ENCRYPTION_KEY,
+			orgId,
+			charlieChatId,
+		);
 		const [charlieContact] = await db
 			.select({ id: contacts.id })
 			.from(contacts)
@@ -1025,7 +1044,7 @@ describe("day-in-the-life", () => {
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
-					eq(contactChannels.identifier, charlieChatId),
+					eq(contactChannels.identifierHash, charlieIdentifierHash),
 				),
 			);
 		expect(charlieContact).toBeTruthy();
@@ -1305,13 +1324,18 @@ describe("day-in-the-life", () => {
 		expect(result.status).toBe("ok");
 
 		// Dave was auto-created in the org's default workspace.
+		const daveEmailHash = await deriveContactEmailHash(
+			TEST_ENCRYPTION_KEY,
+			orgId,
+			"dave@example.com",
+		);
 		const [dave] = await db
 			.select({ id: contacts.id, workspaceId: contacts.workspaceId })
 			.from(contacts)
 			.where(
 				and(
 					eq(contacts.organizationId, orgId),
-					eq(contacts.email, "dave@example.com"),
+					eq(contacts.emailHash, daveEmailHash),
 				),
 			);
 		expect(dave).toBeTruthy();

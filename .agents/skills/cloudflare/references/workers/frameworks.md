@@ -47,9 +47,37 @@ app.use('*', logger());
 app.use('/api/*', cors({ origin: '*' }));
 
 // Custom middleware
+type Principal = { subject: string; scopes: string[] };
+interface AccessTokenVerifier {
+  verifyAccessToken(
+    token: string,
+    constraints: { issuer: string; audience: string }
+  ): Promise<Principal | null>;
+}
+
+// ACCESS_TOKENS is an established auth library/service that verifies the
+// token's signature, issuer, audience, expiry, and revocation. Parsing the
+// Authorization scheme alone is never authentication.
+type AuthEnv = {
+  ACCESS_TOKENS: AccessTokenVerifier;
+  ACCESS_TOKEN_ISSUER: string;
+  ACCESS_TOKEN_AUDIENCE: string;
+};
+
 app.use('/protected/*', async (c, next) => {
-  const auth = c.req.header('Authorization');
-  if (!auth?.startsWith('Bearer ')) return c.text('Unauthorized', 401);
+  const match = /^Bearer ([^\s]+)$/.exec(c.req.header('Authorization') ?? '');
+  if (!match) return c.text('Unauthorized', 401);
+
+  const principal = await (c.env as AuthEnv).ACCESS_TOKENS.verifyAccessToken(
+    match[1],
+    {
+      issuer: (c.env as AuthEnv).ACCESS_TOKEN_ISSUER,
+      audience: (c.env as AuthEnv).ACCESS_TOKEN_AUDIENCE
+    }
+  );
+  if (!principal) return c.text('Unauthorized', 401);
+
+  c.set('principal', principal);
   await next();
 });
 ```

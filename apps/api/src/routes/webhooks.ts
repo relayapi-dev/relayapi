@@ -6,6 +6,8 @@ import {
 	webhookLogs,
 } from "@relayapi/db";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
+import type { Context } from "hono";
+import { withCredentialMutationAuthority } from "../lib/credential-mutation-authority";
 import { activeEncryptionKeyId, maybeEncrypt } from "../lib/crypto";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
 import {
@@ -22,6 +24,7 @@ import {
 	WORKSPACE_ACCESS_DENIED_BODY,
 	workspaceScopeSqlCondition,
 } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	CreateWebhookBody,
@@ -30,13 +33,21 @@ import {
 	UpdateWebhookBody,
 	WebhookCreatedResponse,
 	WebhookListResponse,
+	WebhookLogListResponse,
 	WebhookResponse,
 } from "../schemas/webhooks";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // --- Helpers ---
+
+function markWebhookTestNotApplied(c: AppContext): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "not_applied",
+	});
+}
 
 function generateWebhookSecret(): string {
 	const bytes = new Uint8Array(32);
@@ -226,23 +237,6 @@ const testWebhookRoute = createRoute({
 	},
 });
 
-const WebhookLogEntry = z.object({
-	id: z.string(),
-	webhook_id: z.string(),
-	event: z.string(),
-	status_code: z.number().nullable(),
-	response_time_ms: z.number().nullable(),
-	success: z.boolean(),
-	error: z.string().nullable(),
-	created_at: z.string().datetime(),
-});
-
-const WebhookLogListResponse = z.object({
-	data: z.array(WebhookLogEntry),
-	next_cursor: z.string().nullable(),
-	has_more: z.boolean(),
-});
-
 const getWebhookLogs = createRoute({
 	operationId: "getWebhookLogs",
 	method: "get",
@@ -343,7 +337,6 @@ app.openapi(listWebhooks, async (c) => {
 app.openapi(createWebhookRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const db = c.get("db");
 
 	const scope = await resolveOperationalCreateScope(
 		c,
@@ -374,18 +367,29 @@ app.openapi(createWebhookRoute, async (c) => {
 	if (!encryptedSecret)
 		throw new Error("Webhook secret encryption returned empty");
 
-	const [webhook] = await db
-		.insert(webhookEndpoints)
-		.values({
-			id: webhookId,
-			organizationId: orgId,
-			workspaceId: scope.workspaceId,
-			url: body.url,
-			secretCiphertext: encryptedSecret,
-			secretKeyId: activeEncryptionKeyId(c.env.ENCRYPTION_KEY),
-			events: body.events,
-		})
-		.returning();
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
+		const [inserted] = await tx
+			.insert(webhookEndpoints)
+			.values({
+				id: webhookId,
+				organizationId: orgId,
+				workspaceId: scope.workspaceId,
+				url: body.url,
+				secretCiphertext: encryptedSecret,
+				secretKeyId: activeEncryptionKeyId(c.env.ENCRYPTION_KEY),
+				events: body.events,
+			})
+			.returning();
+		return inserted;
+	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const webhook = authority.value;
 	if (!webhook) {
 		return c.json(
 			{
@@ -441,21 +445,32 @@ app.openapi(rotateWebhookSecretRoute, async (c) => {
 	});
 	if (!secretCiphertext)
 		throw new Error("Webhook secret encryption returned empty");
-	const [updated] = await db
-		.update(webhookEndpoints)
-		.set({
-			secretCiphertext,
-			secretKeyId: activeEncryptionKeyId(c.env.ENCRYPTION_KEY),
-			enabled: true,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(webhookEndpoints.id, id),
-				eq(webhookEndpoints.organizationId, orgId),
-			),
-		)
-		.returning();
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
+		const [rotated] = await tx
+			.update(webhookEndpoints)
+			.set({
+				secretCiphertext,
+				secretKeyId: activeEncryptionKeyId(c.env.ENCRYPTION_KEY),
+				enabled: true,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(webhookEndpoints.id, id),
+					eq(webhookEndpoints.organizationId, orgId),
+				),
+			)
+			.returning();
+		return rotated;
+	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const updated = authority.value;
 	if (!updated) throw new Error("Webhook secret rotation failed");
 	return c.json(
 		{
@@ -516,13 +531,42 @@ app.openapi(updateWebhookRoute, async (c) => {
 	if (body.events !== undefined) updates.events = body.events;
 	if (body.enabled !== undefined) updates.enabled = body.enabled;
 
-	const updatedRows = await db
-		.update(webhookEndpoints)
-		.set(updates)
-		.where(eq(webhookEndpoints.id, id))
-		.returning();
-
-	const w = updatedRows[0] ?? existing;
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
+		const [updated] = await tx
+			.update(webhookEndpoints)
+			.set(updates)
+			.where(
+				and(
+					eq(webhookEndpoints.id, id),
+					eq(webhookEndpoints.organizationId, orgId),
+					existing.workspaceId === null
+						? sql`${webhookEndpoints.workspaceId} IS NULL`
+						: eq(webhookEndpoints.workspaceId, existing.workspaceId),
+				),
+			)
+			.returning();
+		return updated;
+	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const w = authority.value;
+	if (!w) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "NOT_FOUND",
+					message: "Webhook no longer exists in the authorized scope.",
+				},
+			} as never,
+			404 as never,
+		);
+	}
 
 	return c.json(
 		{
@@ -589,6 +633,7 @@ app.openapi(testWebhookRoute, async (c) => {
 		.limit(1);
 
 	if (!webhook) {
+		markWebhookTestNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Webhook not found" } },
 			404,
@@ -596,10 +641,14 @@ app.openapi(testWebhookRoute, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, webhook.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markWebhookTestNotApplied(c);
+		return denied;
+	}
 
 	// SECURITY: Block requests to private/internal URLs
 	if (await isBlockedUrlWithDns(webhook.url)) {
+		markWebhookTestNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -614,6 +663,7 @@ app.openapi(testWebhookRoute, async (c) => {
 	const start = Date.now();
 	let statusCode: number | null = null;
 	let success = false;
+	let deliveryResponseReceived = false;
 
 	try {
 		const response = await fetchWithTimeout(webhook.url, {
@@ -627,6 +677,7 @@ app.openapi(testWebhookRoute, async (c) => {
 			}),
 			timeout: 5_000,
 		});
+		deliveryResponseReceived = true;
 		statusCode = response.status;
 		success = response.ok;
 		await response.body?.cancel().catch(() => {});
@@ -638,6 +689,7 @@ app.openapi(testWebhookRoute, async (c) => {
 
 	// Store the test occurrence once and keep only attempt-specific data in the
 	// log row, matching the normal delivery path.
+	let occurrenceCommitted = false;
 	try {
 		const webhookEventId = generateId("whe_");
 		await db.transaction(async (tx) => {
@@ -652,16 +704,30 @@ app.openapi(testWebhookRoute, async (c) => {
 			await tx.insert(webhookLogs).values({
 				webhookId: webhook.id,
 				webhookEventId,
+				deliveryId: null,
 				organizationId: orgId,
+				attemptOrdinal: 1,
+				attemptKind: "test",
+				outcome: success
+					? "succeeded"
+					: statusCode === null
+						? "unknown"
+						: "failed",
 				statusCode,
 				responseTimeMs,
-				success,
 				error: success ? null : `HTTP ${statusCode ?? "connection failed"}`,
 			});
 		});
+		occurrenceCommitted = true;
 	} catch {
 		// Non-critical: log failure is ok
 	}
+
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome(
+		deliveryResponseReceived || occurrenceCommitted
+			? { kind: "committed", units: 1 }
+			: { kind: "unknown" },
+	);
 
 	return c.json(
 		{
@@ -705,10 +771,13 @@ app.openapi(getWebhookLogs, async (c) => {
 					.select({
 						id: webhookLogs.id,
 						webhookId: webhookLogs.webhookId,
+						deliveryId: webhookLogs.deliveryId,
 						event: webhookEvents.event,
+						attemptOrdinal: webhookLogs.attemptOrdinal,
+						attemptKind: webhookLogs.attemptKind,
+						outcome: webhookLogs.outcome,
 						statusCode: webhookLogs.statusCode,
 						responseTimeMs: webhookLogs.responseTimeMs,
-						success: webhookLogs.success,
 						error: webhookLogs.error,
 						payload: webhookEvents.payload,
 						createdAt: webhookLogs.createdAt,
@@ -729,10 +798,13 @@ app.openapi(getWebhookLogs, async (c) => {
 					.select({
 						id: webhookLogs.id,
 						webhookId: webhookLogs.webhookId,
+						deliveryId: webhookLogs.deliveryId,
 						event: webhookEvents.event,
+						attemptOrdinal: webhookLogs.attemptOrdinal,
+						attemptKind: webhookLogs.attemptKind,
+						outcome: webhookLogs.outcome,
 						statusCode: webhookLogs.statusCode,
 						responseTimeMs: webhookLogs.responseTimeMs,
-						success: webhookLogs.success,
 						error: webhookLogs.error,
 						payload: webhookEvents.payload,
 						createdAt: webhookLogs.createdAt,
@@ -767,10 +839,14 @@ app.openapi(getWebhookLogs, async (c) => {
 			data: data.map((l) => ({
 				id: l.id,
 				webhook_id: l.webhookId,
+				delivery_id: l.deliveryId,
 				event: l.event,
+				attempt_ordinal: l.attemptOrdinal,
+				attempt_kind: l.attemptKind,
+				outcome: l.outcome,
 				status_code: l.statusCode,
 				response_time_ms: l.responseTimeMs,
-				success: l.success,
+				success: l.outcome === "succeeded",
 				error: l.error,
 				payload: l.payload,
 				created_at: l.createdAt.toISOString(),

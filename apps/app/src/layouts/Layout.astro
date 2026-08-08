@@ -15,12 +15,6 @@ const { title, description } = Astro.props;
 <BaseLayout>
 	<Fragment slot="head">
 		<SEO title={title} description={description} />
-		<link rel="preconnect" href="https://fonts.googleapis.com" />
-		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-		<link
-			rel="stylesheet"
-			href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap"
-		/>
 		{/* Page-specific head content (e.g. hero image preloads). */}
 		<slot name="head" />
 	</Fragment>
@@ -31,7 +25,6 @@ const { title, description } = Astro.props;
 			"min-h-screen overflow-x-hidden text-landing-ink",
 			"selection:bg-landing-ink selection:text-[#f3f1ea]",
 			"[&_a]:text-inherit [&_a]:no-underline",
-			'[--font-newsreader:"Newsreader",Georgia,"Times_New_Roman",serif]',
 			"[--font-mono-landing:var(--font-geist-mono),ui-monospace,monospace]",
 		]}
 	>

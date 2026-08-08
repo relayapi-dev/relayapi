@@ -12,6 +12,7 @@ type Row = Record<string, unknown>;
 
 let executeResults: Row[][] = [];
 let insertedRows: Row[] = [];
+let encryptedPayloadInputs: Row[] = [];
 
 interface FakeDb {
 	execute: () => Promise<Row[]>;
@@ -38,6 +39,7 @@ const columns = (...names: string[]) =>
 	Object.fromEntries(names.map((name) => [name, { name }]));
 
 mock.module("@relayapi/db", () => ({
+	SOCIAL_PLATFORM_IDS: ["twitter", "facebook"],
 	createDb: () => fakeDb,
 	inboxEventEffects: columns(
 		"id",
@@ -60,6 +62,27 @@ mock.module("@relayapi/db", () => ({
 	webhookEvents: columns("id"),
 	webhookLogs: columns("id"),
 }));
+mock.module("../queues/failures", () => ({
+	encryptQueueFailurePayload: async (
+		_env: unknown,
+		queueName: string,
+		messageId: string,
+		payload: unknown,
+	) => {
+		encryptedPayloadInputs.push({ queueName, messageId, payload });
+		return {
+			payloadCiphertext: "encrypted-test-payload",
+			payloadKeyId: "test",
+			payloadExpiresAt: new Date("2026-07-29T00:00:00.000Z"),
+		};
+	},
+}));
+mock.module("../services/operator-alerts", () => ({
+	dispatchCustomerWebhookRepairExhaustedAlert: async () => {},
+}));
+mock.module("../services/inbox-event-processor", () => ({
+	processInboxEvent: async () => {},
+}));
 
 const { reconcileCustomerWebhookDeliveries } = await import(
 	"../services/webhook-delivery"
@@ -78,6 +101,7 @@ const env = {
 beforeEach(() => {
 	executeResults = [];
 	insertedRows = [];
+	encryptedPayloadInputs = [];
 });
 
 afterAll(() => errorSpy.mockRestore());
@@ -85,7 +109,7 @@ afterAll(() => errorSpy.mockRestore());
 describe("unknown-outcome reconciliation", () => {
 	it("surfaces an ambiguous customer delivery in the scoped failure ledger", async () => {
 		executeResults = [
-			[{ status: "unknown" }],
+			[{ status: "manual_review" }],
 			[
 				{
 					id: "whd_1",
@@ -147,6 +171,13 @@ describe("unknown-outcome reconciliation", () => {
 				organizationIds: ["org_1"],
 				operationId: "ief_1",
 				failureKind: "unknown_external_outcome",
+				payloadCiphertext: "encrypted-test-payload",
+			}),
+		]);
+		expect(encryptedPayloadInputs).toEqual([
+			expect.objectContaining({
+				queueName: "relayapi-inbox",
+				messageId: "effect:ief_1",
 				payload: expect.objectContaining({
 					effect_id: "ief_1",
 					effect: "realtime",

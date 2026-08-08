@@ -11,9 +11,6 @@ type DeploymentEnv = Pick<
 	| "THUMBNAIL_PUBLIC_HOST"
 >;
 
-export const SELF_HOSTED_CALLS_INCLUDED = Number.MAX_SAFE_INTEGER;
-export const SELF_HOSTED_DAILY_TOOL_LIMIT = Number.MAX_SAFE_INTEGER;
-
 export function isSelfHosted(
 	env: Pick<DeploymentEnv, "DEPLOYMENT_MODE">,
 ): boolean {
@@ -48,16 +45,18 @@ export function appPublicOrigin(env: Pick<Env, "APP_BASE_URL">): string {
 
 export function deploymentEntitlements(env: DeploymentEnv): {
 	plan: "pro";
-	callsIncluded: number;
+	quotaMode: "unlimited";
+	callsIncluded: null;
 	aiEnabled: boolean;
-	dailyToolLimit: number;
+	dailyToolLimit: null;
 } | null {
 	if (!isSelfHosted(env)) return null;
 	return {
 		plan: "pro",
-		callsIncluded: SELF_HOSTED_CALLS_INCLUDED,
+		quotaMode: "unlimited",
+		callsIncluded: null,
 		aiEnabled: selfHostedFeatureEnabled(env, "ai"),
-		dailyToolLimit: SELF_HOSTED_DAILY_TOOL_LIMIT,
+		dailyToolLimit: null,
 	};
 }
 

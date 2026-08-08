@@ -17,21 +17,10 @@ npm install tus-js-client
 
 ## Environment Variables
 
-```bash
-# Required
-CF_ACCOUNT_ID=your-account-id
-CF_API_TOKEN=your-api-token
-
-# For signed URLs (high volume)
-STREAM_KEY_ID=your-key-id
-STREAM_JWK=base64-encoded-jwk
-
-# For webhooks
-WEBHOOK_SECRET=your-webhook-secret
-
-# Customer subdomain (from dashboard)
-STREAM_CUSTOMER_CODE=your-customer-code
-```
+Keep `CF_ACCOUNT_ID` and `STREAM_CUSTOMER_CODE` in ordinary configuration.
+Inject `CF_API_TOKEN`, `STREAM_KEY_ID`, `STREAM_JWK`, and `WEBHOOK_SECRET`
+directly from a secret manager or enter them through Wrangler's masked
+interactive `secret put` prompt. Never print or commit those values.
 
 ## Wrangler Configuration
 
@@ -54,14 +43,10 @@ STREAM_CUSTOMER_CODE=your-customer-code
 
 Create once for self-signing tokens (thousands of daily users).
 
-**Create key**
-```bash
-curl -X POST \
-  "https://api.cloudflare.com/client/v4/accounts/{account_id}/stream/keys" \
-  -H "Authorization: Bearer <API_TOKEN>"
-
-# Save `id` and `jwk` (base64) from response
-```
+**Create key:** Use the Stream dashboard and import the returned ID and private
+JWK directly into the secret manager. For automated creation, use a trusted
+secret-broker job with response logging disabled; do not print the API response
+to a terminal or CI log.
 
 **Store in secrets**
 ```bash
@@ -71,16 +56,10 @@ wrangler secret put STREAM_JWK
 
 ## Webhooks
 
-**Setup webhook URL**
-```bash
-curl -X PUT \
-  "https://api.cloudflare.com/client/v4/accounts/{account_id}/stream/webhook" \
-  -H "Authorization: Bearer <API_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"notificationUrl": "https://your-worker.workers.dev/webhook"}'
-
-# Save the returned `secret` for signature verification
-```
+**Setup webhook URL:** Use the Stream dashboard and import the returned signing
+secret directly into the secret manager. Automated setup must use a trusted
+secret-broker job with response logging disabled; the API response contains the
+long-lived webhook secret and must not be printed.
 
 **Store secret**
 ```bash

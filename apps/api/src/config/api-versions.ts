@@ -8,6 +8,8 @@
 
 export const API_VERSIONS = {
 	// https://developers.facebook.com/docs/graph-api/changelog/versions/
+	// v26.0 is newest as of 2026-08-03. v25.0 remains supported through
+	// 2028-07-29 and is retained until the compatibility review is complete.
 	meta_graph: "v25.0",
 	// https://developers.facebook.com/docs/threads/
 	threads_graph: "v1.0",
@@ -28,6 +30,7 @@ export const GRAPH_BASE = {
 	facebook: `https://graph.facebook.com/${API_VERSIONS.meta_graph}`,
 	instagram: `https://graph.instagram.com/${API_VERSIONS.meta_graph}`,
 	// https://developers.facebook.com/docs/threads/posts
-	// Current publishing examples use https://graph.threads.com/v1.0/...
-	threads: `https://graph.threads.com/${API_VERSIONS.threads_graph}`,
+	// Section "Create a Threads media container": current publishing examples
+	// use https://graph.threads.net/v1.0/... (verified 2026-08-03).
+	threads: `https://graph.threads.net/${API_VERSIONS.threads_graph}`,
 } as const;

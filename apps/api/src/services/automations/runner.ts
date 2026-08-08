@@ -14,6 +14,7 @@
 // plus: integer-revision CAS concurrency, 200-visit infinite-loop cap.
 
 import {
+	type AutomationNodeKind,
 	automationBindings,
 	automationContactControls,
 	automationEffects,
@@ -29,6 +30,7 @@ import {
 	customFieldValues,
 	type Database,
 	inboxConversations,
+	isAutomationNodeKind,
 	socialAccounts,
 } from "@relayapi/db";
 import {
@@ -44,12 +46,22 @@ import {
 	sql,
 } from "drizzle-orm";
 import type { Graph, GraphEdge } from "../../schemas/automation-graph";
+import { decryptContactRow } from "../contact-protection";
+import { getContactSegmentIds } from "../segment-memberships";
 import { getHandler } from "./manifest";
-import type { HandlerResult, RunContext, RunStatus } from "./types";
+import {
+	AutomationExternalEffectBusyError,
+	type AutomationExternalEffectDescriptor,
+	AutomationExternalEffectKnownFailureError,
+	type AutomationExternalEffectOutcome,
+	AutomationExternalEffectUnknownError,
+	type HandlerResult,
+	type RunContext,
+	type RunStatus,
+} from "./types";
 
 const MAX_VISITS_PER_LOOP = 200;
 const NODE_EXECUTION_LEASE_MS = 5 * 60 * 1000;
-const NODE_HANDLER_EFFECT_KEY = "node-handler:v1";
 
 type AutomationRunRow = typeof automationRuns.$inferSelect;
 type NodeExecutionRow = typeof automationNodeExecutions.$inferSelect;
@@ -87,7 +99,7 @@ type NodeExecutionClaim =
 	| {
 			state: "owned";
 			execution: NodeExecutionRow;
-			effect: AutomationEffectRow;
+			effectIdempotencyKey: string;
 	  }
 	| {
 			state: "replay";
@@ -107,6 +119,7 @@ class LostNodeExecutionClaimError extends Error {}
 
 export type EnrollmentBlockedReason =
 	| "active_run"
+	| "automation_inactive"
 	| "reentry_disabled"
 	| "reentry_cooldown"
 	| "daily_cap";
@@ -237,8 +250,10 @@ export function deserializeAutomationHandlerResult(
 
 export function automationEffectIdempotencyKey(
 	nodeExecutionId: string,
+	effectKey?: string,
 ): string {
-	return `relayapi:automation:${nodeExecutionId}:${NODE_HANDLER_EFFECT_KEY}`;
+	const base = `relayapi:automation:${nodeExecutionId}`;
+	return effectKey ? `${base}:${encodeURIComponent(effectKey)}` : base;
 }
 
 function storedNodeCompletion(value: unknown): StoredNodeCompletion | null {
@@ -260,6 +275,7 @@ function storedNodeCompletion(value: unknown): StoredNodeCompletion | null {
 		result !== "advance" &&
 		result !== "wait_input" &&
 		result !== "wait_delay" &&
+		result !== "wait_event" &&
 		result !== "end" &&
 		result !== "fail"
 	) {
@@ -295,6 +311,17 @@ export function automationExecutionRecoveryDisposition(
 	return "reclaim";
 }
 
+function nodeExecutionRecoveryDisposition(
+	execution: NodeExecutionRow,
+	now: Date,
+): "completed" | "busy" | "reclaim" | "unknown" {
+	if (execution.status === "succeeded" || execution.status === "failed") {
+		return "completed";
+	}
+	if (execution.status === "unknown") return "unknown";
+	return leaseIsExpired(execution.leaseExpiresAt, now) ? "reclaim" : "busy";
+}
+
 async function loadNodeExecution(
 	db: Db,
 	runId: string,
@@ -317,6 +344,7 @@ async function loadNodeExecution(
 async function loadNodeEffect(
 	db: Db,
 	nodeExecutionId: string,
+	effectKey: string,
 ): Promise<AutomationEffectRow | undefined> {
 	const [row] = await db
 		.select()
@@ -324,7 +352,7 @@ async function loadNodeEffect(
 		.where(
 			and(
 				eq(automationEffects.nodeExecutionId, nodeExecutionId),
-				eq(automationEffects.effectKey, NODE_HANDLER_EFFECT_KEY),
+				eq(automationEffects.effectKey, effectKey),
 			),
 		)
 		.limit(1);
@@ -339,24 +367,6 @@ async function markNodeExecutionUnknown(
 ): Promise<boolean> {
 	try {
 		await db.transaction(async (tx) => {
-			// Keep lock order aligned with persistNodeCompletion (effect, then node)
-			// and roll the effect update back when the node fence lost a race to a
-			// just-completed handler.
-			await tx
-				.update(automationEffects)
-				.set({
-					status: "unknown",
-					leaseExpiresAt: null,
-					lastError: reason,
-					completedAt: sql`CURRENT_TIMESTAMP`,
-					updatedAt: sql`CURRENT_TIMESTAMP`,
-				})
-				.where(
-					and(
-						eq(automationEffects.nodeExecutionId, execution.id),
-						inArray(automationEffects.status, ["claimed", "in_flight"]),
-					),
-				);
 			const [marked] = await tx
 				.update(automationNodeExecutions)
 				.set({
@@ -370,7 +380,7 @@ async function markNodeExecutionUnknown(
 					and(
 						eq(automationNodeExecutions.id, execution.id),
 						eq(automationNodeExecutions.leaseToken, execution.leaseToken),
-						inArray(automationNodeExecutions.status, ["claimed", "in_flight"]),
+						eq(automationNodeExecutions.status, "claimed"),
 						requireExpiredLease
 							? or(
 									isNull(automationNodeExecutions.leaseExpiresAt),
@@ -394,24 +404,28 @@ async function markNodeExecutionUnknown(
 
 type EffectClaim =
 	| { state: "owned"; effect: AutomationEffectRow }
+	| { state: "replay"; effect: AutomationEffectRow }
 	| { state: "busy" }
-	| { state: "unknown"; reason: string };
+	| { state: "unknown"; effectId: string; reason: string };
 
-async function claimNodeEffect(
+async function claimExternalEffect(
 	db: Db,
 	execution: NodeExecutionRow,
-	nodeKind: string,
+	descriptor: AutomationExternalEffectDescriptor,
 	now: Date,
 ): Promise<EffectClaim> {
-	const providerIdempotencyKey = automationEffectIdempotencyKey(execution.id);
+	const providerIdempotencyKey = automationEffectIdempotencyKey(
+		execution.id,
+		descriptor.effectKey,
+	);
 	const [inserted] = await db
 		.insert(automationEffects)
 		.values({
 			nodeExecutionId: execution.id,
 			organizationId: execution.organizationId,
 			scopeKey: execution.scopeKey,
-			effectKey: NODE_HANDLER_EFFECT_KEY,
-			kind: nodeKind,
+			effectKey: descriptor.effectKey,
+			kind: descriptor.kind,
 			providerIdempotencyKey,
 			status: "claimed",
 			leaseToken: 1,
@@ -421,21 +435,44 @@ async function claimNodeEffect(
 		.returning();
 	if (inserted) return { state: "owned", effect: inserted };
 
-	const existing = await loadNodeEffect(db, execution.id);
+	const existing = await loadNodeEffect(db, execution.id, descriptor.effectKey);
 	if (!existing) return { state: "busy" };
 	if (
-		existing.kind !== nodeKind ||
+		existing.kind !== descriptor.kind ||
 		existing.providerIdempotencyKey !== providerIdempotencyKey
 	) {
 		return {
 			state: "unknown",
+			effectId: existing.id,
 			reason: "automation effect identity does not match its node execution",
 		};
 	}
 	const recovery = automationExecutionRecoveryDisposition(existing, now);
 	if (recovery === "unknown") {
+		if (existing.status !== "unknown") {
+			const reason =
+				existing.lastError ??
+				"automation effect lease expired after its provider boundary";
+			await db
+				.update(automationEffects)
+				.set({
+					status: "unknown",
+					leaseExpiresAt: null,
+					lastError: reason,
+					completedAt: sql`CURRENT_TIMESTAMP`,
+					updatedAt: sql`CURRENT_TIMESTAMP`,
+				})
+				.where(
+					and(
+						eq(automationEffects.id, existing.id),
+						eq(automationEffects.leaseToken, existing.leaseToken),
+						inArray(automationEffects.status, ["claimed", "in_flight"]),
+					),
+				);
+		}
 		return {
 			state: "unknown",
+			effectId: existing.id,
 			reason:
 				existing.lastError ??
 				(existing.status === "in_flight" || existing.requestMayHaveBeenSentAt
@@ -444,10 +481,7 @@ async function claimNodeEffect(
 		};
 	}
 	if (recovery === "completed") {
-		return {
-			state: "unknown",
-			reason: "automation effect completed without a matching node completion",
-		};
+		return { state: "replay", effect: existing };
 	}
 	if (recovery === "busy") return { state: "busy" };
 	const [reclaimed] = await db
@@ -473,11 +507,152 @@ async function claimNodeEffect(
 	return reclaimed ? { state: "owned", effect: reclaimed } : { state: "busy" };
 }
 
+function storedExternalEffectValue(value: unknown): unknown {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const candidate = value as { version?: unknown; value?: unknown };
+	return candidate.version === 1 ? candidate.value : null;
+}
+
+async function executeAutomationExternalEffect<T>(
+	db: Db,
+	execution: NodeExecutionRow,
+	descriptor: AutomationExternalEffectDescriptor,
+	operation: (
+		providerIdempotencyKey: string,
+	) => Promise<AutomationExternalEffectOutcome<T>>,
+): Promise<T> {
+	const claim = await claimExternalEffect(
+		db,
+		execution,
+		descriptor,
+		new Date(),
+	);
+	if (claim.state === "busy") throw new AutomationExternalEffectBusyError();
+	if (claim.state === "unknown") {
+		throw new AutomationExternalEffectUnknownError(
+			claim.effectId,
+			claim.reason,
+		);
+	}
+	if (claim.state === "replay") {
+		const value = storedExternalEffectValue(claim.effect.result) as T;
+		if (claim.effect.status === "failed") {
+			throw new Error(
+				claim.effect.lastError ?? "automation external effect failed",
+			);
+		}
+		return value;
+	}
+
+	const requestBoundary = new Date();
+	const [armed] = await db
+		.update(automationEffects)
+		.set({
+			status: "in_flight",
+			attempts: sql`${automationEffects.attempts} + 1`,
+			requestMayHaveBeenSentAt: requestBoundary,
+			leaseExpiresAt: nodeExecutionLeaseExpirySql(),
+			updatedAt: requestBoundary,
+		})
+		.where(
+			and(
+				eq(automationEffects.id, claim.effect.id),
+				eq(automationEffects.status, "claimed"),
+				eq(automationEffects.leaseToken, claim.effect.leaseToken),
+			),
+		)
+		.returning({ id: automationEffects.id });
+	if (!armed) throw new AutomationExternalEffectBusyError();
+
+	let outcome: AutomationExternalEffectOutcome<T>;
+	try {
+		outcome = await operation(claim.effect.providerIdempotencyKey);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		if (error instanceof AutomationExternalEffectKnownFailureError) {
+			const [failed] = await db
+				.update(automationEffects)
+				.set({
+					status: "failed",
+					leaseExpiresAt: null,
+					result: { version: 1, value: null },
+					lastError: reason,
+					completedAt: sql`CURRENT_TIMESTAMP`,
+					updatedAt: sql`CURRENT_TIMESTAMP`,
+				})
+				.where(
+					and(
+						eq(automationEffects.id, claim.effect.id),
+						eq(automationEffects.status, "in_flight"),
+						eq(automationEffects.leaseToken, claim.effect.leaseToken),
+					),
+				)
+				.returning({ id: automationEffects.id });
+			if (!failed) {
+				throw new AutomationExternalEffectUnknownError(
+					claim.effect.id,
+					"known provider failure lost its local completion fence",
+				);
+			}
+			throw new Error(reason);
+		}
+		await db
+			.update(automationEffects)
+			.set({
+				status: "unknown",
+				leaseExpiresAt: null,
+				lastError: reason,
+				completedAt: sql`CURRENT_TIMESTAMP`,
+				updatedAt: sql`CURRENT_TIMESTAMP`,
+			})
+			.where(
+				and(
+					eq(automationEffects.id, claim.effect.id),
+					eq(automationEffects.status, "in_flight"),
+					eq(automationEffects.leaseToken, claim.effect.leaseToken),
+				),
+			);
+		throw new AutomationExternalEffectUnknownError(claim.effect.id, reason);
+	}
+
+	const terminalStatus =
+		outcome.outcome === "succeeded" ? "succeeded" : "failed";
+	const [completed] = await db
+		.update(automationEffects)
+		.set({
+			status: terminalStatus,
+			leaseExpiresAt: null,
+			providerReference:
+				outcome.outcome === "succeeded"
+					? (outcome.providerReference ?? null)
+					: null,
+			result: { version: 1, value: toJsonSafe(outcome.value) },
+			lastError: outcome.outcome === "failed" ? outcome.error : null,
+			completedAt: sql`CURRENT_TIMESTAMP`,
+			updatedAt: sql`CURRENT_TIMESTAMP`,
+		})
+		.where(
+			and(
+				eq(automationEffects.id, claim.effect.id),
+				eq(automationEffects.status, "in_flight"),
+				eq(automationEffects.leaseToken, claim.effect.leaseToken),
+			),
+		)
+		.returning({ id: automationEffects.id });
+	if (!completed) {
+		throw new AutomationExternalEffectUnknownError(
+			claim.effect.id,
+			"automation effect completed remotely but lost its local completion fence",
+		);
+	}
+	if (outcome.outcome === "failed") throw new Error(outcome.error);
+	return outcome.value;
+}
+
 async function claimNodeExecution(
 	db: Db,
 	run: AutomationRunRow,
 	nodeKey: string,
-	nodeKind: string,
 ): Promise<NodeExecutionClaim> {
 	const now = new Date();
 	let execution = await loadNodeExecution(db, run.id, run.revision);
@@ -520,7 +695,7 @@ async function claimNodeExecution(
 
 	const recovery = ownsExecutionClaim
 		? "reclaim"
-		: automationExecutionRecoveryDisposition(execution, now);
+		: nodeExecutionRecoveryDisposition(execution, now);
 	if (recovery === "completed") {
 		const completion = storedNodeCompletion(execution.result);
 		if (completion) {
@@ -539,12 +714,7 @@ async function claimNodeExecution(
 		};
 	}
 	if (recovery === "unknown") {
-		const crossedBoundary =
-			execution.status === "in_flight" ||
-			Boolean(execution.requestMayHaveBeenSentAt);
-		const reason = crossedBoundary
-			? "automation node lease expired after its handler side-effect boundary"
-			: "automation node outcome is unknown";
+		const reason = "automation node outcome is unknown";
 		if (execution.status !== "unknown") {
 			const marked = await markNodeExecutionUnknown(
 				db,
@@ -553,7 +723,7 @@ async function claimNodeExecution(
 				true,
 			);
 			if (!marked) {
-				return claimNodeExecution(db, run, nodeKey, nodeKind);
+				return claimNodeExecution(db, run, nodeKey);
 			}
 		}
 		return {
@@ -592,18 +762,11 @@ async function claimNodeExecution(
 		execution = reclaimed;
 	}
 
-	const effectClaim = await claimNodeEffect(db, execution, nodeKind, now);
-	if (effectClaim.state === "busy") return { state: "busy" };
-	if (effectClaim.state === "unknown") {
-		await markNodeExecutionUnknown(db, execution, effectClaim.reason);
-		return {
-			state: "unknown",
-			execution,
-			effectIdempotencyKey: providerIdempotencyKey,
-			reason: effectClaim.reason,
-		};
-	}
-	return { state: "owned", execution, effect: effectClaim.effect };
+	return {
+		state: "owned",
+		execution,
+		effectIdempotencyKey: providerIdempotencyKey,
+	};
 }
 
 async function armNodeExecution(
@@ -632,9 +795,7 @@ async function armNodeExecution(
 			const [armedExecution] = await tx
 				.update(automationNodeExecutions)
 				.set({
-					status: "in_flight",
 					attempts: sql`${automationNodeExecutions.attempts} + 1`,
-					requestMayHaveBeenSentAt: sql`CURRENT_TIMESTAMP`,
 					leaseExpiresAt: nodeExecutionLeaseExpirySql(),
 					updatedAt: sql`CURRENT_TIMESTAMP`,
 				})
@@ -647,25 +808,6 @@ async function armNodeExecution(
 				)
 				.returning({ id: automationNodeExecutions.id });
 			if (!armedExecution) throw new LostNodeExecutionClaimError();
-
-			const [armedEffect] = await tx
-				.update(automationEffects)
-				.set({
-					status: "in_flight",
-					attempts: sql`${automationEffects.attempts} + 1`,
-					requestMayHaveBeenSentAt: sql`CURRENT_TIMESTAMP`,
-					leaseExpiresAt: nodeExecutionLeaseExpirySql(),
-					updatedAt: sql`CURRENT_TIMESTAMP`,
-				})
-				.where(
-					and(
-						eq(automationEffects.id, claim.effect.id),
-						eq(automationEffects.status, "claimed"),
-						eq(automationEffects.leaseToken, claim.effect.leaseToken),
-					),
-				)
-				.returning({ id: automationEffects.id });
-			if (!armedEffect) throw new LostNodeExecutionClaimError();
 		});
 		return true;
 	} catch (error) {
@@ -706,26 +848,6 @@ async function persistNodeCompletion(
 			: null;
 	try {
 		await db.transaction(async (tx) => {
-			const [completedEffect] = await tx
-				.update(automationEffects)
-				.set({
-					status: terminalStatus,
-					leaseExpiresAt: null,
-					result: completion,
-					lastError: result.result === "fail" ? result.error.message : null,
-					completedAt: sql`CURRENT_TIMESTAMP`,
-					updatedAt: sql`CURRENT_TIMESTAMP`,
-				})
-				.where(
-					and(
-						eq(automationEffects.id, claim.effect.id),
-						eq(automationEffects.status, "in_flight"),
-						eq(automationEffects.leaseToken, claim.effect.leaseToken),
-					),
-				)
-				.returning({ id: automationEffects.id });
-			if (!completedEffect) throw new LostNodeExecutionClaimError();
-
 			const [completedExecution] = await tx
 				.update(automationNodeExecutions)
 				.set({
@@ -739,7 +861,7 @@ async function persistNodeCompletion(
 				.where(
 					and(
 						eq(automationNodeExecutions.id, claim.execution.id),
-						eq(automationNodeExecutions.status, "in_flight"),
+						eq(automationNodeExecutions.status, "claimed"),
 						eq(automationNodeExecutions.leaseToken, claim.execution.leaseToken),
 					),
 				)
@@ -894,6 +1016,8 @@ export async function runLoop(
 			await writeStepRun(db, {
 				runId: run.id,
 				automationId: run.automationId,
+				organizationId: run.organizationId,
+				scopeKey: run.scopeKey,
 				nodeKey: currentKey,
 				nodeKind: "unknown",
 				enteredViaPortKey: run.currentPortKey,
@@ -919,14 +1043,8 @@ export async function runLoop(
 
 		// 4. Claim this exact run-revision/node visit before dispatching a handler.
 		// The unique (run_id, run_revision, visit_ordinal) ledger row is the
-		// concurrency fence. A completed row is replayed from its durable result;
-		// an expired post-boundary row is never dispatched again.
-		const executionClaim = await claimNodeExecution(
-			db,
-			run,
-			node.key,
-			node.kind,
-		);
+		// pure-orchestration fence. Actual provider effects claim component rows.
+		const executionClaim = await claimNodeExecution(db, run, node.key);
 		if (executionClaim.state === "busy") {
 			return { status: "active", exit_reason: null };
 		}
@@ -975,10 +1093,7 @@ export async function runLoop(
 		if (effectiveEnv.socialAccountId == null && persistedAccountId) {
 			effectiveEnv.socialAccountId = persistedAccountId;
 		}
-		const effectIdempotencyKey =
-			executionClaim.state === "replay"
-				? executionClaim.effectIdempotencyKey
-				: executionClaim.effect.providerIdempotencyKey;
+		const effectIdempotencyKey = executionClaim.effectIdempotencyKey;
 		effectiveEnv.automationEffectIdempotencyKey = effectIdempotencyKey;
 		effectiveEnv.effectIdempotencyKey = effectIdempotencyKey;
 		const ctx: RunContext = {
@@ -996,6 +1111,16 @@ export async function runLoop(
 			effectIdempotencyKey,
 			effectIdempotencyKeyFor: (component) =>
 				`${effectIdempotencyKey}:${encodeURIComponent(component)}`,
+			executeExternalEffect:
+				executionClaim.state === "owned"
+					? (descriptor, operation) =>
+							executeAutomationExternalEffect(
+								db,
+								executionClaim.execution,
+								descriptor,
+								operation,
+							)
+					: undefined,
 			// Mirror the db handle into env as a convenience for legacy callers
 			// that still read `env.db`, but ctx.db is the canonical source now.
 			env: effectiveEnv,
@@ -1025,6 +1150,38 @@ export async function runLoop(
 						ctx,
 					);
 				} catch (err) {
+					if (err instanceof AutomationExternalEffectBusyError) {
+						return { status: "active", exit_reason: null };
+					}
+					if (err instanceof AutomationExternalEffectUnknownError) {
+						await markNodeExecutionUnknown(
+							db,
+							executionClaim.execution,
+							err.message,
+						);
+						const manualContext = {
+							...ctx.context,
+							_automation_manual_reconciliation: {
+								node_execution_id: executionClaim.execution.id,
+								effect_id: err.effectId,
+								node_key: node.key,
+								reason: err.message,
+								detected_at: new Date().toISOString(),
+							},
+						};
+						const failed = await transitionRunTerminal(
+							db,
+							run.id,
+							run.revision,
+							run.automationId,
+							"failed",
+							"node_effect_unknown",
+							{ context: manualContext },
+						);
+						return failed
+							? { status: "failed", exit_reason: "node_effect_unknown" }
+							: { status: "active", exit_reason: null };
+					}
 					result = {
 						result: "fail",
 						error: err instanceof Error ? err : new Error(String(err)),
@@ -1041,8 +1198,10 @@ export async function runLoop(
 				{
 					runId: run.id,
 					automationId: run.automationId,
+					organizationId: run.organizationId,
+					scopeKey: run.scopeKey,
 					nodeKey: node.key,
-					nodeKind: node.kind,
+					nodeKind: isAutomationNodeKind(node.kind) ? node.kind : "unknown",
 					enteredViaPortKey: run.currentPortKey,
 					exitedViaPortKey:
 						result.result === "advance" ? result.via_port : null,
@@ -1124,6 +1283,8 @@ export async function runLoop(
 						.insert(automationScheduledJobs)
 						.values({
 							occurrenceId: `node-execution:${executionClaim.execution.id}:input-timeout`,
+							organizationId: run.organizationId,
+							scopeKey: run.scopeKey,
 							runId: run.id,
 							jobType: "input_timeout",
 							automationId: run.automationId,
@@ -1151,6 +1312,8 @@ export async function runLoop(
 					.insert(automationScheduledJobs)
 					.values({
 						occurrenceId: `node-execution:${executionClaim.execution.id}:resume`,
+						organizationId: run.organizationId,
+						scopeKey: run.scopeKey,
 						runId: run.id,
 						jobType: "resume_run",
 						automationId: run.automationId,
@@ -1181,6 +1344,8 @@ export async function runLoop(
 						.insert(automationScheduledJobs)
 						.values({
 							occurrenceId: `node-execution:${executionClaim.execution.id}:event-timeout`,
+							organizationId: run.organizationId,
+							scopeKey: run.scopeKey,
 							runId: run.id,
 							jobType: "event_timeout",
 							automationId: run.automationId,
@@ -1266,6 +1431,31 @@ export async function runLoop(
 	return { status: "failed", exit_reason: "infinite_loop_cap" };
 }
 
+export function automationDeferredEnrollmentOccurrenceId(
+	runId: string,
+): string {
+	return `initial-run:${runId}`;
+}
+
+async function stageDeferredEnrollment(
+	db: Pick<Db, "insert">,
+	run: typeof automationRuns.$inferSelect,
+): Promise<void> {
+	await db
+		.insert(automationScheduledJobs)
+		.values({
+			occurrenceId: automationDeferredEnrollmentOccurrenceId(run.id),
+			organizationId: run.organizationId,
+			scopeKey: run.scopeKey,
+			runId: run.id,
+			automationId: run.automationId,
+			jobType: "resume_run",
+			runAt: new Date(),
+			payload: { source: "deferred_enrollment" },
+		})
+		.onConflictDoNothing({ target: automationScheduledJobs.occurrenceId });
+}
+
 export async function enrollContact(
 	db: Db,
 	args: {
@@ -1317,6 +1507,22 @@ export async function enrollContact(
 			reentryCooldownMin: number;
 			dailyCap: number | null;
 		};
+		/**
+		 * Optional caller authority fence executed inside the exact admission
+		 * transaction, before the automation row is locked. API callers use this
+		 * to linearize credential/session revocation with run creation without
+		 * holding those authority rows across the later runLoop/provider work.
+		 */
+		admissionAuthority?: (
+			tx: Parameters<Parameters<Db["transaction"]>[0]>[0],
+		) => Promise<void>;
+		/**
+		 * Request-local accounting observers. Preflight completion means every
+		 * remaining failure crosses the admission transaction boundary; admission
+		 * commitment means the durable run exists even if inline execution fails.
+		 */
+		onPreflightComplete?: () => void;
+		onAdmissionCommitted?: (runId: string) => void;
 	},
 ): Promise<{ runId: string }> {
 	const auto = await db.query.automations.findFirst({
@@ -1400,14 +1606,6 @@ export async function enrollContact(
 		throw new Error("social account does not belong to automation tenant");
 	if (args.conversationId && !conversation)
 		throw new Error("conversation does not belong to automation tenant");
-	const graph = (auto.graph ?? {
-		schema_version: 1,
-		root_node_key: null,
-		nodes: [],
-		edges: [],
-	}) as Graph;
-	const rootKey = graph.root_node_key;
-
 	// Hydrate the run context with the contact row, inline tags, and keyed
 	// custom fields before inserting. Merge-tag resolution and condition
 	// predicates that read `{{contact.*}}` / tags / fields depend on this.
@@ -1416,6 +1614,11 @@ export async function enrollContact(
 		args.contactId,
 		args.organizationId,
 		args.contextOverrides ?? {},
+		typeof args.env.ENCRYPTION_KEY === "string"
+			? args.env.ENCRYPTION_KEY
+			: (() => {
+					throw new Error("ENCRYPTION_KEY is required");
+				})(),
 		args.prehydrated,
 	);
 	const initialContext = {
@@ -1428,6 +1631,7 @@ export async function enrollContact(
 		_triggering_social_account_id: args.socialAccountId ?? null,
 	};
 
+	args.onPreflightComplete?.();
 	let admissionResult: {
 		row: typeof automationRuns.$inferSelect;
 		created: boolean;
@@ -1439,6 +1643,7 @@ export async function enrollContact(
 			await tx.execute(
 				sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${args.organizationId}:${args.automationId}:${args.contactId}`}, 0))`,
 			);
+			await args.admissionAuthority?.(tx);
 
 			if (args.triggerOccurrenceId) {
 				const [existingOccurrence] = await tx
@@ -1452,9 +1657,48 @@ export async function enrollContact(
 					)
 					.limit(1);
 				if (existingOccurrence) {
+					if (args.deferRun) {
+						await stageDeferredEnrollment(tx, existingOccurrence);
+					}
 					return { row: existingOccurrence, created: false };
 				}
 			}
+
+			// A status check performed before admission can be held open while the
+			// automation is paused or its graph is replaced. Lock and re-read the
+			// authoritative row at the run-creation boundary, then start at the root
+			// of that exact graph snapshot. FOR UPDATE also serializes totalEnrolled.
+			const [admissionAutomation] = await tx
+				.select({
+					id: automations.id,
+					channel: automations.channel,
+					status: automations.status,
+					graph: automations.graph,
+				})
+				.from(automations)
+				.where(
+					and(
+						eq(automations.id, args.automationId),
+						eq(automations.organizationId, args.organizationId),
+					),
+				)
+				.for("update")
+				.limit(1);
+			if (!admissionAutomation) {
+				throw new Error(`automation ${args.automationId} not found`);
+			}
+			if (admissionAutomation.channel !== args.channel) {
+				throw new Error("enrollment channel does not match automation channel");
+			}
+			if (admissionAutomation.status !== "active") {
+				throw new EnrollmentBlockedError("automation_inactive");
+			}
+			const admissionGraph = (admissionAutomation.graph ?? {
+				schema_version: 1,
+				root_node_key: null,
+				nodes: [],
+				edges: [],
+			}) as Graph;
 
 			if (args.admission) {
 				const priorRuns = await tx
@@ -1532,7 +1776,7 @@ export async function enrollContact(
 					conversationId: args.conversationId,
 					triggerOccurrenceId: args.triggerOccurrenceId ?? null,
 					status: "active",
-					currentNodeKey: rootKey,
+					currentNodeKey: admissionGraph.root_node_key,
 					currentPortKey: null,
 					context: initialContext,
 				})
@@ -1554,6 +1798,9 @@ export async function enrollContact(
 				.update(automations)
 				.set({ totalEnrolled: sql`${automations.totalEnrolled} + 1` })
 				.where(eq(automations.id, args.automationId));
+			if (args.deferRun) {
+				await stageDeferredEnrollment(tx, inserted);
+			}
 			return { row: inserted, created: true };
 		});
 	} catch (error) {
@@ -1570,9 +1817,13 @@ export async function enrollContact(
 			),
 		});
 		if (!existingOccurrence) throw error;
+		if (args.deferRun) {
+			await stageDeferredEnrollment(db, existingOccurrence);
+		}
 		admissionResult = { row: existingOccurrence, created: false };
 	}
 	const inserted = admissionResult.row;
+	args.onAdmissionCommitted?.(inserted.id);
 
 	// Ensure downstream handlers invoked from runLoop can still find `db` on
 	// ctx.env if they haven't been migrated yet — but the canonical source is
@@ -1584,19 +1835,6 @@ export async function enrollContact(
 		envForRun.socialAccountId = args.socialAccountId;
 	}
 	if (args.deferRun) {
-		await db
-			.insert(automationScheduledJobs)
-			.values({
-				occurrenceId: args.triggerOccurrenceId
-					? `initial-trigger:${args.triggerOccurrenceId}`
-					: `initial-run:${inserted.id}`,
-				runId: inserted.id,
-				automationId: inserted.automationId,
-				jobType: "resume_run",
-				runAt: new Date(),
-				payload: { source: "deferred_enrollment" },
-			})
-			.onConflictDoNothing();
 		return { runId: inserted.id };
 	}
 	await runLoop(db, inserted.id, envForRun, args.runLoopOptions);
@@ -1629,7 +1867,7 @@ export async function resumeExternalEventRuns(
 		automationId: string | null;
 		env: Record<string, unknown>;
 	},
-): Promise<{ resumed: number }> {
+): Promise<{ activated: number; resumed: number }> {
 	const parked = await db
 		.select({
 			id: automationRuns.id,
@@ -1649,6 +1887,7 @@ export async function resumeExternalEventRuns(
 		);
 
 	let resumed = 0;
+	let activated = 0;
 	for (const row of parked) {
 		try {
 			// Re-read the run for its current revision, flip it back to active
@@ -1670,6 +1909,7 @@ export async function resumeExternalEventRuns(
 				waitingUntil: null,
 			});
 			if (!ok) continue;
+			activated += 1;
 			await runLoop(db, fresh.id, { db, ...args.env });
 			resumed += 1;
 		} catch (err) {
@@ -1679,7 +1919,7 @@ export async function resumeExternalEventRuns(
 			);
 		}
 	}
-	return { resumed };
+	return { activated, resumed };
 }
 
 /**
@@ -1720,6 +1960,7 @@ export async function reconcileExternalEventWaits(
 		.select({
 			id: automationRuns.id,
 			organizationId: automationRuns.organizationId,
+			scopeKey: automationRuns.scopeKey,
 			contactId: automationRuns.contactId,
 			automationId: automationRuns.automationId,
 		})
@@ -1766,6 +2007,8 @@ export async function reconcileExternalEventWaits(
 				.insert(automationScheduledJobs)
 				.values({
 					occurrenceId: `external-event-reconcile:${fresh.id}:revision:${fresh.revision}`,
+					organizationId: fresh.organizationId,
+					scopeKey: fresh.scopeKey,
 					runId: fresh.id,
 					automationId: fresh.automationId,
 					jobType: "resume_run",
@@ -1798,6 +2041,8 @@ export async function reconcileExpiredAutomationNodeExecutions(
 			leaseToken: automationNodeExecutions.leaseToken,
 			runId: automationRuns.id,
 			automationId: automationRuns.automationId,
+			organizationId: automationRuns.organizationId,
+			scopeKey: automationRuns.scopeKey,
 		})
 		.from(automationNodeExecutions)
 		.innerJoin(
@@ -1816,7 +2061,7 @@ export async function reconcileExpiredAutomationNodeExecutions(
 		.where(
 			and(
 				eq(automationRuns.status, "active"),
-				inArray(automationNodeExecutions.status, ["claimed", "in_flight"]),
+				eq(automationNodeExecutions.status, "claimed"),
 				or(
 					isNull(automationNodeExecutions.leaseExpiresAt),
 					lte(automationNodeExecutions.leaseExpiresAt, now),
@@ -1835,6 +2080,8 @@ export async function reconcileExpiredAutomationNodeExecutions(
 			.insert(automationScheduledJobs)
 			.values({
 				occurrenceId: `node-execution-recovery:${row.executionId}:lease:${row.leaseToken}`,
+				organizationId: row.organizationId,
+				scopeKey: row.scopeKey,
 				runId: row.runId,
 				automationId: row.automationId,
 				jobType: "resume_run",
@@ -1868,6 +2115,7 @@ async function buildInitialRunContext(
 	contactId: string,
 	organizationId: string,
 	overrides: Record<string, unknown>,
+	keyConfig: string,
 	prehydrated?: {
 		contact: Record<string, unknown> | null;
 		tags: string[];
@@ -1889,7 +2137,7 @@ async function buildInitialRunContext(
 	// The contact row and the custom-field map are independent reads — issue
 	// them in parallel to save one DB round trip on every enrollment (this path
 	// runs per inbound message / internal event / scheduled contact).
-	const [contact, fieldRows] = await Promise.all([
+	const [contact, fieldRows, segmentIdsMap] = await Promise.all([
 		db.query.contacts.findFirst({
 			where: and(
 				eq(contacts.id, contactId),
@@ -1915,17 +2163,24 @@ async function buildInitialRunContext(
 					eq(customFieldValues.organizationId, organizationId),
 				),
 			),
+		getContactSegmentIds(db, organizationId, [contactId]),
 	]);
 
 	// Tags live inline on `contacts.tags` (text[]); no separate join table.
 	const tags = contact?.tags ?? [];
+	const plaintextContact = contact
+		? {
+				...(await decryptContactRow(keyConfig, contact)),
+				segment_ids: segmentIdsMap.get(contactId) ?? [],
+			}
+		: null;
 	const fields: Record<string, string> = {};
 	for (const row of fieldRows) {
 		if (row.slug) fields[row.slug] = row.value;
 	}
 
 	return {
-		contact: contact ?? null,
+		contact: plaintextContact,
 		tags,
 		fields,
 		// Overrides win — callers (start_automation, webhook receiver, trigger
@@ -1977,7 +2232,10 @@ function findOutgoingEdge(
 	);
 }
 
-function stepOutcomeFromResult(result: HandlerResult): string {
+type AutomationStepOutcome =
+	(typeof automationStepRuns.$inferSelect)["outcome"];
+
+function stepOutcomeFromResult(result: HandlerResult): AutomationStepOutcome {
 	switch (result.result) {
 		case "advance":
 			return "ok";
@@ -2109,11 +2367,13 @@ async function writeStepRun(
 	row: {
 		runId: string;
 		automationId: string;
+		organizationId: string;
+		scopeKey: string;
 		nodeKey: string;
-		nodeKind: string;
+		nodeKind: AutomationNodeKind;
 		enteredViaPortKey: string | null;
 		exitedViaPortKey: string | null;
-		outcome: string;
+		outcome: AutomationStepOutcome;
 		durationMs: number;
 		payload: unknown;
 		error: unknown;
@@ -2122,6 +2382,8 @@ async function writeStepRun(
 	await db.insert(automationStepRuns).values({
 		runId: row.runId,
 		automationId: row.automationId,
+		organizationId: row.organizationId,
+		scopeKey: row.scopeKey,
 		nodeKey: row.nodeKey,
 		nodeKind: row.nodeKind,
 		enteredViaPortKey: row.enteredViaPortKey,

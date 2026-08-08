@@ -5,6 +5,7 @@ import { APIResource } from "../core/resource";
 import { APIPromise } from "../core/api-promise";
 import { RequestOptions } from "../internal/request-options";
 import { path } from "../internal/utils/path";
+import type { AutomationNodeKind } from "./automations";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,7 +43,7 @@ export interface AutomationRunStepResponse {
 	run_id: string;
 	automation_id: string;
 	node_key: string;
-	node_kind: string;
+	node_kind: AutomationNodeKind;
 	entered_via_port_key: string | null;
 	exited_via_port_key: string | null;
 	outcome: string;

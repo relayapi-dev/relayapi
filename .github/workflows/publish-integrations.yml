@@ -56,10 +56,10 @@ jobs:
           clawhub whoami
 
       - name: Publish OpenClaw skill
+        env:
+          BUMP: ${{ inputs.bump || 'patch' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
-          BUMP="${{ inputs.bump || 'patch' }}"
-          DRY_RUN="${{ inputs.dry_run || 'false' }}"
-
           # ClawHub derives a new skill's slug and display name from its folder.
           # Stage this integration as "RelayAPI" so it does not try the reserved
           # "openclaw" slug while retaining the product's display-name casing.

@@ -1,4 +1,7 @@
 import { z } from "@hono/zod-openapi";
+import { AD_AUDIENCE_TYPES } from "@relayapi/db";
+import { AD_BUDGET_MAX_MINOR_UNITS } from "../lib/ad-money";
+import { isContactPhone } from "../lib/contact-phone";
 import { paginatedResponse } from "./common";
 
 // ---------------------------------------------------------------------------
@@ -39,6 +42,16 @@ export const AD_OBJECTIVES = [
 
 export const AdObjectiveEnum = z.enum(AD_OBJECTIVES);
 
+const AdBudgetMinorUnits = z
+	.number()
+	.int()
+	.positive()
+	.max(AD_BUDGET_MAX_MINOR_UNITS);
+const RequestedAdCurrency = z
+	.string()
+	.regex(/^[A-Za-z]{3}$/)
+	.transform((value) => value.toUpperCase());
+
 // ---------------------------------------------------------------------------
 // Targeting
 // ---------------------------------------------------------------------------
@@ -56,9 +69,7 @@ export const AdTargetingSchema = z.object({
 			}),
 		)
 		.optional(),
-	interests: z
-		.array(z.object({ id: z.string(), name: z.string() }))
-		.optional(),
+	interests: z.array(z.object({ id: z.string(), name: z.string() })).optional(),
 	custom_audiences: z.array(z.string()).optional(),
 	excluded_audiences: z.array(z.string()).optional(),
 	languages: z.array(z.string()).optional(),
@@ -103,7 +114,11 @@ export const ListAdAccountsParams = z.object({
 		.optional()
 		.describe("Filter by social account ID"),
 	workspace_id: z.string().optional().describe("Filter by workspace ID"),
-	q: z.string().max(200).optional().describe("Search by name or platform account ID"),
+	q: z
+		.string()
+		.max(200)
+		.optional()
+		.describe("Search by name or platform account ID"),
 	cursor: z.string().optional(),
 	limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -116,9 +131,9 @@ export const CreateCampaignBody = z.object({
 	ad_account_id: z.string().describe("Ad account ID"),
 	name: z.string().min(1).max(255),
 	objective: AdObjectiveEnum,
-	daily_budget_cents: z.number().int().positive().optional(),
-	lifetime_budget_cents: z.number().int().positive().optional(),
-	currency: z.string().length(3).default("USD"),
+	daily_budget_cents: AdBudgetMinorUnits.optional(),
+	lifetime_budget_cents: AdBudgetMinorUnits.optional(),
+	currency: RequestedAdCurrency.optional(),
 	start_date: z.string().datetime({ offset: true }).optional(),
 	end_date: z.string().datetime({ offset: true }).optional(),
 	special_ad_categories: z.array(z.string()).optional(),
@@ -127,8 +142,8 @@ export const CreateCampaignBody = z.object({
 export const UpdateCampaignBody = z.object({
 	name: z.string().min(1).max(255).optional(),
 	status: z.enum(["active", "paused"]).optional(),
-	daily_budget_cents: z.number().int().positive().optional(),
-	lifetime_budget_cents: z.number().int().positive().optional(),
+	daily_budget_cents: AdBudgetMinorUnits.optional(),
+	lifetime_budget_cents: AdBudgetMinorUnits.optional(),
 });
 
 export const CampaignResponse = z.object({
@@ -178,9 +193,16 @@ export const CampaignListParams = z.object({
 
 export const CreateAdBody = z.object({
 	ad_account_id: z.string(),
-	campaign_id: z.string().optional().describe("Auto-creates campaign if omitted"),
+	campaign_id: z
+		.string()
+		.optional()
+		.describe(
+			"Auto-creates a campaign if omitted. When supplied, campaign/ad-set settings (objective, targeting, budgets, duration, and schedule) cannot be overridden.",
+		),
 	name: z.string().min(1).max(255),
-	objective: AdObjectiveEnum.optional().describe("Required if campaign_id is omitted"),
+	objective: AdObjectiveEnum.optional().describe(
+		"Required if campaign_id is omitted",
+	),
 	headline: z.string().max(255).optional(),
 	body: z.string().optional(),
 	call_to_action: z.string().optional(),
@@ -188,8 +210,8 @@ export const CreateAdBody = z.object({
 	image_url: z.string().url().optional(),
 	video_url: z.string().url().optional(),
 	targeting: AdTargetingSchema.optional(),
-	daily_budget_cents: z.number().int().positive().optional(),
-	lifetime_budget_cents: z.number().int().positive().optional(),
+	daily_budget_cents: AdBudgetMinorUnits.optional(),
+	lifetime_budget_cents: AdBudgetMinorUnits.optional(),
 	duration_days: z.number().int().min(1).max(365).optional(),
 	start_date: z.string().datetime({ offset: true }).optional(),
 	end_date: z.string().datetime({ offset: true }).optional(),
@@ -209,9 +231,9 @@ export const BoostPostBody = z
 		name: z.string().max(255).optional(),
 		objective: AdObjectiveEnum.default("engagement"),
 		targeting: AdTargetingSchema.optional(),
-		daily_budget_cents: z.number().int().positive(),
-		lifetime_budget_cents: z.number().int().positive().optional(),
-		currency: z.string().length(3).default("USD"),
+		daily_budget_cents: AdBudgetMinorUnits,
+		lifetime_budget_cents: AdBudgetMinorUnits.optional(),
+		currency: RequestedAdCurrency.optional(),
 		duration_days: z.number().int().min(1).max(365),
 		start_date: z.string().datetime({ offset: true }).optional(),
 		end_date: z.string().datetime({ offset: true }).optional(),
@@ -231,8 +253,8 @@ export const BoostPostBody = z
 export const UpdateAdBody = z.object({
 	name: z.string().min(1).max(255).optional(),
 	status: z.enum(["active", "paused"]).optional(),
-	daily_budget_cents: z.number().int().positive().optional(),
-	lifetime_budget_cents: z.number().int().positive().optional(),
+	daily_budget_cents: AdBudgetMinorUnits.optional(),
+	lifetime_budget_cents: AdBudgetMinorUnits.optional(),
 	targeting: AdTargetingSchema.optional(),
 });
 
@@ -343,7 +365,7 @@ export const InterestResponse = z.object({
 export const CreateAudienceBody = z.object({
 	ad_account_id: z.string(),
 	name: z.string().min(1).max(255),
-	type: z.enum(["customer_list", "website", "lookalike"]),
+	type: z.enum(AD_AUDIENCE_TYPES),
 	description: z.string().optional(),
 	pixel_id: z.string().optional().describe("Required for website audiences"),
 	retention_days: z.number().int().min(1).max(180).optional(),
@@ -363,7 +385,7 @@ export const AudienceResponse = z.object({
 	platform: AdPlatformEnum,
 	platform_audience_id: z.string().nullable(),
 	name: z.string(),
-	type: z.enum(["customer_list", "website", "lookalike"]),
+	type: z.enum(AD_AUDIENCE_TYPES),
 	description: z.string().nullable(),
 	size: z.number().nullable(),
 	status: z.string().nullable(),
@@ -376,7 +398,15 @@ export const AddAudienceUsersBody = z.object({
 		.array(
 			z.object({
 				email: z.string().email().optional(),
-				phone: z.string().optional(),
+				phone: z
+					.string()
+					.refine(
+						(value) => isContactPhone(value, { allowBareInternational: true }),
+						{
+							message: "Phone must carry an international country calling code",
+						},
+					)
+					.optional(),
 			}),
 		)
 		.min(1)

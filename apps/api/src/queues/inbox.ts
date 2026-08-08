@@ -1,7 +1,10 @@
 import { createDb, inboundWebhookEvents, organization } from "@relayapi/db";
 import { and, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { decryptToken } from "../lib/crypto";
-import type { AnyInboxQueueMessage as InboxQueueMessage } from "../routes/platform-webhooks";
+import type {
+	AnyInboxQueueMessage as InboxQueueMessage,
+	NormalizedInboxQueueMessage,
+} from "../routes/platform-webhooks";
 import { processInboxEvent } from "../services/inbox-event-processor";
 import type { Env } from "../types";
 import { recordQueueFailure } from "./failures";
@@ -18,26 +21,60 @@ function captureOrganizationId(value: unknown, ids: Set<string>): void {
 	}
 }
 
-/** Track the tenant fan-out without adding lookups to the provider ACK path. */
-function createTrackedInboxEnv(env: Env, organizationIds: Set<string>): Env {
+/**
+ * Process normalized fan-out inline from the durable encrypted receipt.
+ *
+ * Platform parsers historically enqueued a second message containing the
+ * provider payload. The raw receipt already owns that payload and retry clock,
+ * so the extra Queue hop only duplicated personal data. This proxy preserves
+ * the parser interface while making `send` an in-process, awaited dispatch.
+ */
+function createInlineInboxEnv(
+	env: Env,
+	db: ReturnType<typeof createDb>,
+	organizationIds: Set<string>,
+): Env {
 	const trackedQueue = new Proxy(env.INBOX_QUEUE, {
 		get(target, property) {
 			if (property === "send") {
-				return (body: unknown, options?: QueueSendOptions) => {
+				return async (body: unknown, _options?: QueueSendOptions) => {
 					captureOrganizationId(body, organizationIds);
-					return target.send(body, options);
+					if (
+						!body ||
+						typeof body !== "object" ||
+						Array.isArray(body) ||
+						(body as { type?: unknown }).type === "raw_platform_webhook"
+					) {
+						throw new Error("Normalized inbox dispatch is malformed");
+					}
+					await processInboxEvent(body as NormalizedInboxQueueMessage, env, db);
 				};
 			}
 			if (property === "sendBatch") {
-				return (
+				return async (
 					messages: Iterable<MessageSendRequest<unknown>>,
-					options?: QueueSendBatchOptions,
+					_options?: QueueSendBatchOptions,
 				) => {
 					const buffered = [...messages];
-					for (const message of buffered) {
-						captureOrganizationId(message.body, organizationIds);
-					}
-					return target.sendBatch(buffered, options);
+					await Promise.all(
+						buffered.map(async (message) => {
+							captureOrganizationId(message.body, organizationIds);
+							if (
+								!message.body ||
+								typeof message.body !== "object" ||
+								Array.isArray(message.body) ||
+								(message.body as { type?: unknown }).type ===
+									"raw_platform_webhook"
+							) {
+								throw new Error("Normalized inbox dispatch is malformed");
+							}
+							await processInboxEvent(
+								message.body as NormalizedInboxQueueMessage,
+								env,
+								db,
+							);
+						}),
+					);
 				};
 			}
 			const value = Reflect.get(target, property, target);
@@ -200,7 +237,7 @@ export async function consumeInboxQueue(
 									await processRawPlatformWebhook(
 										receipt.provider,
 										payload,
-										createTrackedInboxEnv(env, organizationIds),
+										createInlineInboxEnv(env, db, organizationIds),
 										receipt.signatureMetadata,
 									);
 									await persistRawReceiptOutcome(

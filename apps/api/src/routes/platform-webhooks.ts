@@ -79,7 +79,7 @@ export interface NormalizedInboxQueueMessage {
 	organization_id: string;
 	account_id: string;
 	event_type: string;
-	payload: unknown;
+	payload?: unknown;
 	received_at: string;
 }
 
@@ -414,12 +414,6 @@ export async function processFacebookWebhook(
 							social_account_id: lookup.accountId,
 							organization_id: lookup.orgId,
 							platform,
-							webhook_triggered: true,
-							hint: {
-								event_type: eventType,
-								platform_post_id:
-									(change.value as { post_id?: string })?.post_id ?? undefined,
-							},
 						} satisfies SyncPostsMessage);
 					}
 					syncTriggered = true;
@@ -817,11 +811,6 @@ export async function processYouTubeWebhook(
 				social_account_id: lookup.accountId,
 				organization_id: lookup.orgId,
 				platform: "youtube",
-				webhook_triggered: true,
-				hint: {
-					event_type: "video_update",
-					platform_post_id: videoId ?? undefined,
-				},
 			} satisfies SyncPostsMessage);
 		}
 	}

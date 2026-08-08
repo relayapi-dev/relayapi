@@ -1,9 +1,10 @@
 import type { APIRoute } from "astro";
-import { handleSdkError, requireClient } from "@/lib/api-utils";
+import { handleSdkError, requireSessionBoundClient } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
-	const client = await requireClient(ctx);
-	if (client instanceof Response) return client;
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) return boundClient;
+	const { client, requestOptions } = boundClient;
 	try {
 		const connectToken = ctx.url.searchParams.get("connect_token");
 		if (!connectToken)
@@ -13,9 +14,10 @@ export const GET: APIRoute = async (ctx) => {
 				},
 				{ status: 400 },
 			);
-		const data = await client.connect.facebook.pages.list({
-			connect_token: connectToken,
-		});
+		const data = await client.connect.facebook.pages.list(
+			{ connect_token: connectToken },
+			requestOptions,
+		);
 		return Response.json(data);
 	} catch (e) {
 		return handleSdkError(e);
@@ -23,11 +25,15 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 export const POST: APIRoute = async (ctx) => {
-	const client = await requireClient(ctx);
-	if (client instanceof Response) return client;
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) return boundClient;
+	const { client, requestOptions } = boundClient;
 	try {
 		const body = await ctx.request.json();
-		const data = await client.connect.facebook.pages.select(body);
+		const data = await client.connect.facebook.pages.select(
+			body,
+			requestOptions,
+		);
 		return Response.json(data);
 	} catch (e) {
 		return handleSdkError(e);

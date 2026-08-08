@@ -9,8 +9,7 @@
 **Zone ID**: Found in dashboard > Overview > API section (right sidebar)
 
 ```bash
-# Set environment variables
-export CF_API_TOKEN="your_api_token_here"
+# CF_API_TOKEN is injected directly into the SDK process by the secret manager.
 export ZONE_ID="your_zone_id_here"
 ```
 
@@ -32,7 +31,7 @@ await client.rulesets.create({
   phase: 'http_request_firewall_custom',
   name: 'Custom WAF',
   rules: [
-    { action: 'block', expression: 'cf.waf.score gt 50', enabled: true },
+    { action: 'block', expression: 'cf.waf.score le 20', enabled: true },
     { action: 'challenge', expression: 'http.request.uri.path eq "/admin"', enabled: true },
   ],
 });
@@ -81,7 +80,7 @@ resource "cloudflare_ruleset" "waf_custom" {
 
   rules {
     action     = "block"
-    expression = "cf.waf.score gt 50"
+    expression = "cf.waf.score le 20"
   }
 }
 ```
@@ -138,7 +137,7 @@ const wafCustom = new cloudflare.Ruleset('waf-custom', {
   zoneId,
   phase: 'http_request_firewall_custom',
   rules: [
-    { action: 'block', expression: 'cf.waf.score gt 50', enabled: true },
+    { action: 'block', expression: 'cf.waf.score le 20', enabled: true },
     { action: 'challenge', expression: 'http.request.uri.path eq "/admin"', enabled: true },
   ],
 });

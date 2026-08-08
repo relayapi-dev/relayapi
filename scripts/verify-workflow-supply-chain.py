@@ -42,6 +42,9 @@ EXPECTED_ACTIONS = {
     "actions/setup-python": {
         ("ece7cb06caefa5fff74198d8649806c4678c61a1", "v6.3.0"),
     },
+    "actions/upload-artifact": {
+        ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4.6.2"),
+    },
     "astral-sh/setup-uv": {
         ("f98e06938123ccabd21905ea5d0069192241f9f1", "v8.3.2"),
     },
@@ -69,6 +72,9 @@ ACTION_LINE = re.compile(
     r"([^@\s#]+)@([0-9a-f]{40})\s+#\s+(v\d+(?:\.\d+){1,2})\s*$"
 )
 USES_TOKEN = re.compile(r"(?:^|[\s{,\-])(?:uses|['\"]uses['\"]):")
+UNTRUSTED_RUN_EXPRESSION = re.compile(
+    r"\$\{\{\s*(?:inputs\.|github\.)"
+)
 EXPECTED_NODE_VERSIONS = {
     ".github/workflows/ci-packages.yml": ("18.20.8", "22.12.0"),
     ".github/workflows/publish-cli.yml": ("22.12.0",),
@@ -92,6 +98,16 @@ EXPECTED_JOB_PERMISSIONS = {
     },
     ".github/workflows/publish-zapier.yml": {
         "push": {"contents": "read"},
+    },
+}
+EXPECTED_READ_ONLY_WORKFLOW_PERMISSIONS = {
+    ".github/workflows/prelive-baseline-cutover.yml": {
+        "actions": "read",
+        "contents": "read",
+    },
+    ".github/workflows/prelive-destructive-inventory.yml": {
+        "actions": "read",
+        "contents": "read",
     },
 }
 
@@ -203,6 +219,46 @@ def verify_actions(path: str, text: str) -> None:
         fail(f"{path} must pin every setup-uv step to uv 0.11.29")
 
 
+def verify_untrusted_expressions_are_environment_bound(path: str, text: str) -> None:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if (
+            re.match(r"^\s*-\s*\{", line)
+            and re.search(r"(?:^|[,{]\s*)(?:run|['\"]run['\"])\s*:", line)
+            and UNTRUSTED_RUN_EXPRESSION.search(line)
+        ):
+            fail(
+                f"{path}:{index + 1} interpolates untrusted dispatch/event "
+                "data directly into a flow-style run; use a block step and env"
+            )
+        match = re.match(
+            r"^(?P<indent>\s*)(?P<sequence>-\s+)?"
+            r"(?:run|['\"]run['\"]):\s*(?P<value>.*)$",
+            line,
+        )
+        if match is None:
+            continue
+        run_indent = len(match.group("indent")) + (
+            2 if match.group("sequence") else 0
+        )
+        run_lines = [(index + 1, match.group("value"))]
+        for following_index in range(index + 1, len(lines)):
+            following = lines[following_index]
+            if not following.strip():
+                run_lines.append((following_index + 1, following))
+                continue
+            following_indent = len(following) - len(following.lstrip())
+            if following_indent <= run_indent:
+                break
+            run_lines.append((following_index + 1, following))
+        for line_number, run_line in run_lines:
+            if UNTRUSTED_RUN_EXPRESSION.search(run_line):
+                fail(
+                    f"{path}:{line_number} interpolates untrusted dispatch/event "
+                    "data directly into run; bind it through step env"
+                )
+
+
 def verify_release_permissions(path: str, text: str) -> None:
     before_jobs = text.split("\njobs:\n", maxsplit=1)[0]
     if not re.search(r"^permissions:\s*\{\}\s*$", before_jobs, re.MULTILINE):
@@ -248,22 +304,16 @@ def verify_direct_publish_permissions(path: str, text: str) -> None:
 def verify_read_only_permissions(path: str, text: str) -> None:
     before_jobs = text.split("\njobs:\n", maxsplit=1)[0]
     permissions = direct_permissions(before_jobs, 0)
-    if permissions != {"contents": "read"}:
+    expected_permissions = EXPECTED_READ_ONLY_WORKFLOW_PERMISSIONS.get(
+        path, {"contents": "read"}
+    )
+    if permissions != expected_permissions:
         fail(f"{path} workflow permissions are not read-only: {permissions}")
 
     try:
         jobs_text = text.split("\njobs:\n", maxsplit=1)[1]
     except IndexError:
         fail(f"{path} is missing its jobs mapping")
-    for match in re.finditer(
-        r"^ {4}(?:permissions|['\"]permissions['\"]):(.*)$",
-        jobs_text,
-        re.MULTILINE,
-    ):
-        if match.group(1).strip() != "{}":
-            fail(f"{path} must not elevate read-only permissions at job scope")
-
-    jobs_text = text.split("\njobs:\n", maxsplit=1)[1]
     for match in re.finditer(r"(?m)^  ([a-zA-Z0-9_-]+):\s*$", jobs_text):
         name = match.group(1)
         block = job_block(text, name)
@@ -275,11 +325,10 @@ def verify_read_only_permissions(path: str, text: str) -> None:
         if not declarations:
             continue
         inline = declarations[0].partition(":")[2].strip()
-        job_permissions = {} if inline == "{}" else direct_permissions(block, 4)
-        if job_permissions not in ({}, {"contents": "read"}):
+        if inline != "{}":
             fail(
-                f"{path} {name} escalates read-only workflow permissions: "
-                f"{job_permissions}"
+                f"{path} {name} must deny job-scope permissions explicitly or "
+                "inherit the reviewed read-only workflow permissions"
             )
 
 
@@ -303,6 +352,7 @@ def main() -> None:
     for path in WORKFLOWS:
         text = (REPO_ROOT / path).read_text(encoding="utf-8")
         verify_actions(path, text)
+        verify_untrusted_expressions_are_environment_bound(path, text)
         if path in RELEASE_WORKFLOWS:
             verify_release_permissions(path, text)
         elif path in EXPECTED_JOB_PERMISSIONS:
@@ -313,19 +363,27 @@ def main() -> None:
     deploy_api = (REPO_ROOT / ".github/workflows/deploy-api.yml").read_text(
         encoding="utf-8"
     )
-    required_images = (
-        "postgres:18-alpine@sha256:"
-        "9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
-        "cloudflare/cloudflared:2026.6.0@sha256:"
-        "ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f",
+    pgvector_postgres_image = (
+        "pgvector/pgvector:0.8.5-pg18-bookworm@sha256:"
+        "12a379b47ad65289572ea0756efc11b7c241a6662833e8af7038cd3b73d647e0"
     )
-    for image in required_images:
-        if image not in deploy_api:
-            fail(f"deploy-api.yml must use reviewed image {image}")
-
-    ci_db = (WORKFLOW_DIRECTORY / "ci-db-migrations.yml").read_text(encoding="utf-8")
-    if required_images[0] not in ci_db:
-        fail(f"ci-db-migrations.yml must use reviewed image {required_images[0]}")
+    cloudflared_image = (
+        "cloudflare/cloudflared:2026.6.0@sha256:"
+        "ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f"
+    )
+    if cloudflared_image not in deploy_api:
+        fail(f"deploy-api.yml must use reviewed image {cloudflared_image}")
+    for workflow_name in (
+        "ci-db-migrations.yml",
+        "deploy-api.yml",
+        "prelive-baseline-cutover.yml",
+    ):
+        workflow = (WORKFLOW_DIRECTORY / workflow_name).read_text(encoding="utf-8")
+        if pgvector_postgres_image not in workflow:
+            fail(
+                f"{workflow_name} must use reviewed PostgreSQL 18 + pgvector image "
+                f"{pgvector_postgres_image}"
+            )
 
     downloader = (WORKFLOW_DIRECTORY / "publish-downloader.yml").read_text(
         encoding="utf-8"

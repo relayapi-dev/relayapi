@@ -5,7 +5,7 @@
 ### "Assets Not Being Cached in Cache Reserve"
 
 **Cause:** Asset is not cacheable, TTL < 10 hours, Content-Length header missing, or blocking headers present (Set-Cookie, Vary: *)  
-**Solution:** Ensure minimum TTL of 10+ hours (`Cache-Control: public, max-age=36000`), add Content-Length header, remove Set-Cookie header, and set `Vary: Accept-Encoding` (not *)
+**Solution:** For an explicitly public static asset, configure the origin with a minimum TTL of 10+ hours (`Cache-Control: public, max-age=36000`), a Content-Length header, no `Set-Cookie`, and `Vary: Accept-Encoding` (not `*`). Never delete `Set-Cookie` or override `private`/`no-store` on a dynamic response; exclude that response from Cache Reserve instead.
 
 ### "Range Requests Not Working" (Video Seeking Fails)
 

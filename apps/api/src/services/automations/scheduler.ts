@@ -1,8 +1,8 @@
 // apps/api/src/services/automations/scheduler.ts
 //
 // Cron-driven job processor for automation_scheduled_jobs (spec §8.7).
-// Supports job_types: resume_run, input_timeout, event_timeout, scheduled_trigger,
-// webhook_reception_failure. Uses row-level locking (FOR UPDATE SKIP LOCKED)
+// Supports run resumes/timeouts, durable internal events, scheduled triggers,
+// and webhook-reception alerts. Uses row-level locking (FOR UPDATE SKIP LOCKED)
 // to allow multiple workers to share the queue safely.
 
 import {
@@ -10,20 +10,27 @@ import {
 	automationRuns,
 	automationScheduledJobs,
 	automations as automationsTable,
-	contactSegmentMemberships,
 	contacts,
 	createDb,
 	type Database,
 } from "@relayapi/db";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { automationScheduledJobMayCrossExternalBoundary } from "../../lib/async-contract-registry";
 import type { Env } from "../../types";
+import { getContactsMatchingAnySegment } from "../dynamic-segments";
+import {
+	AUTOMATION_WEBHOOK_FAILURE_REASONS,
+	type AutomationWebhookFailureReason,
+	dispatchAutomationWebhookReceptionFailureAlert,
+} from "../operator-alerts";
 import { matchAndEnrollOrBinding } from "./binding-router";
+import { parseDurableInternalEventPayload } from "./internal-events";
 import { runLoop, transitionRunTerminal, updateRunOptimistic } from "./runner";
 import {
 	isValidAutomationTimezone,
 	parseAutomationCron,
 } from "./schedule-expression";
-import type { InboundEvent } from "./trigger-matcher";
+import { type InboundEvent, matchAndEnroll } from "./trigger-matcher";
 
 type Db = Database;
 
@@ -128,10 +135,13 @@ export async function processScheduledJobs(
 		       error = NULL
 		  FROM claimed
 		 WHERE j.id = claimed.id
-		RETURNING j.id, j.run_id, j.job_type, j.automation_id, j.entrypoint_id,
+		RETURNING j.id, j.organization_id, j.scope_key, j.run_id, j.job_type,
+		          j.automation_id, j.entrypoint_id,
 		          j.run_at, j.occurrence_id, j.lease_token, j.attempts, j.payload
 	`)) as unknown as Array<{
 		id: string;
+		organization_id: string;
+		scope_key: string;
 		run_id: string | null;
 		job_type: string;
 		automation_id: string | null;
@@ -154,6 +164,11 @@ export async function processScheduledJobs(
 		let effectStarted = false;
 		const markEffectStarted = async (): Promise<void> => {
 			if (effectStarted) return;
+			if (!automationScheduledJobMayCrossExternalBoundary(job.job_type)) {
+				throw new Error(
+					`Pure orchestration job ${job.job_type} cannot cross an external-effect boundary`,
+				);
+			}
 			const [armed] = await db
 				.update(automationScheduledJobs)
 				.set({ effectStartedAt: sql`CURRENT_TIMESTAMP` })
@@ -238,6 +253,8 @@ async function dispatchJob(
 	env: Record<string, unknown>,
 	job: {
 		id: string;
+		organization_id: string;
+		scope_key: string;
 		run_id: string | null;
 		job_type: string;
 		automation_id: string | null;
@@ -253,7 +270,6 @@ async function dispatchJob(
 	switch (job.job_type) {
 		case "resume_run": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
-			await markEffectStarted();
 			// A delay node parks the run with waitingFor='delay' and leaves
 			// currentNodeKey pointing at the delay node itself. If we call runLoop
 			// directly it would re-dispatch the delay handler, which recomputes a
@@ -326,7 +342,6 @@ async function dispatchJob(
 
 		case "input_timeout": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
-			await markEffectStarted();
 			const run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, job.run_id),
 			});
@@ -405,7 +420,6 @@ async function dispatchJob(
 
 		case "event_timeout": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
-			await markEffectStarted();
 			const run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, job.run_id),
 			});
@@ -463,6 +477,84 @@ async function dispatchJob(
 			return "done";
 		}
 
+		case "internal_event": {
+			if (!job.run_id || !job.automation_id) {
+				return {
+					failed: true,
+					error: "internal event is missing its authoritative run parent",
+				};
+			}
+			const payload = parseDurableInternalEventPayload(job.payload);
+			if (!payload) {
+				return { failed: true, error: "internal event payload is invalid" };
+			}
+			const [source] = await db
+				.select({
+					contactId: automationRuns.contactId,
+					conversationId: automationRuns.conversationId,
+					context: automationRuns.context,
+					channel: automationsTable.channel,
+				})
+				.from(automationRuns)
+				.innerJoin(
+					automationsTable,
+					and(
+						eq(automationsTable.id, automationRuns.automationId),
+						eq(automationsTable.organizationId, automationRuns.organizationId),
+						eq(automationsTable.scopeKey, automationRuns.scopeKey),
+					),
+				)
+				.where(
+					and(
+						eq(automationRuns.id, job.run_id),
+						eq(automationRuns.automationId, job.automation_id),
+						eq(automationRuns.organizationId, job.organization_id),
+						eq(automationRuns.scopeKey, job.scope_key),
+					),
+				)
+				.limit(1);
+			if (!source) return "done";
+			const context =
+				source.context && typeof source.context === "object"
+					? (source.context as Record<string, unknown>)
+					: {};
+			const socialAccountId =
+				typeof context._triggering_social_account_id === "string" &&
+				context._triggering_social_account_id.length > 0
+					? context._triggering_social_account_id
+					: null;
+			const event: InboundEvent = {
+				kind: payload.kind,
+				channel: source.channel as InboundEvent["channel"],
+				organizationId: job.organization_id,
+				socialAccountId,
+				contactId: source.contactId,
+				conversationId: source.conversationId,
+				triggerOccurrenceId: job.occurrence_id,
+				payload: {
+					source: "automation",
+					automation_id: job.automation_id,
+					run_id: job.run_id,
+					action_id: payload.action_id,
+					_event_depth: payload.event_depth,
+				},
+				...(payload.kind === "field_changed"
+					? {
+							fieldKey: payload.field_key,
+							fieldValueBefore: payload.field_value_before,
+							fieldValueAfter: payload.field_value_after,
+						}
+					: { tagId: payload.tag_id }),
+			};
+
+			// Enrollment is occurrence-idempotent and its initial resume job is
+			// staged in the same transaction as the child run. Therefore this
+			// job remains safely retryable and never crosses an unknown-effect
+			// boundary.
+			await matchAndEnroll(db, event, env, { deferRun: true });
+			return "done";
+		}
+
 		case "scheduled_trigger": {
 			if (!job.entrypoint_id) {
 				return { failed: true, error: "missing entrypoint_id" };
@@ -474,12 +566,93 @@ async function dispatchJob(
 				job.occurrence_id,
 				job.run_at,
 				job.payload,
-				markEffectStarted,
 			);
 		}
 
 		case "webhook_reception_failure": {
-			// Audit-only record; mark done so it doesn't retry.
+			if (!job.entrypoint_id || !job.automation_id) {
+				return {
+					failed: true,
+					error:
+						"webhook reception failure is missing its authoritative parent",
+				};
+			}
+			const [source] = await db
+				.select({
+					entrypointId: automationEntrypoints.id,
+					automationId: automationsTable.id,
+					organizationId: automationsTable.organizationId,
+					channel: automationsTable.channel,
+					socialAccountId: automationEntrypoints.socialAccountId,
+				})
+				.from(automationEntrypoints)
+				.innerJoin(
+					automationsTable,
+					eq(automationEntrypoints.automationId, automationsTable.id),
+				)
+				.where(
+					and(
+						eq(automationEntrypoints.id, job.entrypoint_id),
+						eq(automationEntrypoints.kind, "webhook_inbound"),
+						eq(automationsTable.id, job.automation_id),
+						eq(automationsTable.organizationId, job.organization_id),
+						eq(automationsTable.scopeKey, job.scope_key),
+					),
+				)
+				.limit(1);
+			if (!source) {
+				return {
+					failed: true,
+					error: "webhook reception failure parent no longer matches",
+				};
+			}
+			const payload =
+				job.payload && typeof job.payload === "object"
+					? (job.payload as Record<string, unknown>)
+					: null;
+			const reason =
+				typeof payload?.reason === "string" &&
+				AUTOMATION_WEBHOOK_FAILURE_REASONS.includes(
+					payload.reason as AutomationWebhookFailureReason,
+				)
+					? (payload.reason as AutomationWebhookFailureReason)
+					: null;
+			const requestDigest =
+				typeof payload?.request_digest === "string" &&
+				/^[a-f0-9]{64}$/.test(payload.request_digest)
+					? payload.request_digest
+					: null;
+			const receivedAt =
+				typeof payload?.received_at === "string" &&
+				!Number.isNaN(Date.parse(payload.received_at))
+					? new Date(payload.received_at).toISOString()
+					: null;
+			if (!reason || !requestDigest || !receivedAt) {
+				return {
+					failed: true,
+					error: "webhook reception failure payload is invalid",
+				};
+			}
+
+			// A rejected request is untrusted and cannot create or resolve a
+			// product contact. Dispatch a sanitized operator event tied to the
+			// authoritative entrypoint instead of contact enrollment.
+			await markEffectStarted();
+			await dispatchAutomationWebhookReceptionFailureAlert(
+				{
+					type: "automation_webhook_reception_failure",
+					organizationId: source.organizationId,
+					automationId: source.automationId,
+					entrypointId: source.entrypointId,
+					channel: source.channel,
+					socialAccountId: source.socialAccountId,
+					requestDigest,
+					reason,
+					receivedAt,
+					occurrenceId: job.occurrence_id,
+				},
+				env as unknown as Env,
+			);
 			return "done";
 		}
 
@@ -502,19 +675,6 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 		env as unknown as Record<string, unknown>,
 	);
 	return processed;
-}
-
-/**
- * Input-timeout sweeps now flow through automation_scheduled_jobs with
- * job_type='input_timeout', enqueued by the runner when a wait_input node
- * sets a timeout_at. This function is preserved as a no-op for cron wiring
- * compatibility; callers should migrate to processScheduledJobs directly.
- */
-export async function processAutomationInputTimeouts(
-	_env: Env,
-): Promise<number> {
-	// Handled inside processScheduledJobs via job_type=input_timeout.
-	return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +717,6 @@ async function dispatchScheduledTrigger(
 	occurrenceId: string,
 	scheduledFor: Date,
 	jobPayload: unknown,
-	markEffectStarted: () => Promise<void>,
 ): Promise<DispatchOutcome> {
 	const ep = await db.query.automationEntrypoints.findFirst({
 		where: eq(automationEntrypoints.id, entrypointId),
@@ -615,7 +774,14 @@ async function dispatchScheduledTrigger(
 		if (!nextRun) {
 			return { failed: true, error: "unsupported cron pattern" };
 		}
-		await insertNextScheduledJobIfNotExists(db, ep.id, nextRun, auto.id);
+		await insertNextScheduledJobIfNotExists(
+			db,
+			ep.id,
+			nextRun,
+			auto.id,
+			auto.organizationId,
+			auto.scopeKey,
+		);
 	}
 
 	// 2. Require a filter — enrolling an entire org is never intended.
@@ -662,6 +828,8 @@ async function dispatchScheduledTrigger(
 			.insert(automationScheduledJobs)
 			.values({
 				occurrenceId: `${rootOccurrenceId}:page:${nextOffset}`,
+				organizationId: auto.organizationId,
+				scopeKey: auto.scopeKey,
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,
@@ -675,11 +843,9 @@ async function dispatchScheduledTrigger(
 			})
 			.onConflictDoNothing();
 	}
-	if (batch.length > 0) await markEffectStarted();
-
 	// 3. Fire enroll-or-binding for each candidate in this batch. Continue through
-	//    the page to maximize progress, but preserve any partial page as unknown so
-	//    it is never silently acknowledged or blindly replayed.
+	//    the page to maximize progress. Each contact occurrence is independently
+	//    idempotent, so a partial page remains safely retryable.
 	let enrollmentFailures = 0;
 	try {
 		for (const contactId of batch) {
@@ -718,7 +884,7 @@ async function dispatchScheduledTrigger(
 	}
 	if (enrollmentFailures > 0) {
 		throw new Error(
-			`${enrollmentFailures} scheduled contacts have an unknown enrollment outcome`,
+			`${enrollmentFailures} scheduled contacts require idempotent retry`,
 		);
 	}
 
@@ -735,11 +901,15 @@ async function insertNextScheduledJobIfNotExists(
 	entrypointId: string,
 	runAt: Date,
 	automationId: string,
+	organizationId: string,
+	scopeKey: string,
 ): Promise<void> {
 	await db
 		.insert(automationScheduledJobs)
 		.values({
 			occurrenceId: automationScheduleOccurrenceId(entrypointId, runAt),
+			organizationId,
+			scopeKey,
 			jobType: "scheduled_trigger",
 			automationId,
 			entrypointId,
@@ -933,24 +1103,14 @@ async function enumerateContactsForScheduleFilter(
 		const segmentIds = Array.isArray(predicate.value)
 			? predicate.value
 			: [predicate.value];
-		const rows = await db
-			.select({ id: contactSegmentMemberships.contactId })
-			.from(contactSegmentMemberships)
-			.innerJoin(
-				contacts,
-				and(
-					eq(contactSegmentMemberships.contactId, contacts.id),
-					eq(contactSegmentMemberships.organizationId, contacts.organizationId),
-				),
-			)
-			.where(
-				and(
-					eq(contactSegmentMemberships.organizationId, organizationId),
-					contactScope,
-					inArray(contactSegmentMemberships.segmentId, segmentIds),
-				),
-			);
-		return new Set(rows.map((row) => row.id));
+		return new Set(
+			await getContactsMatchingAnySegment(
+				db,
+				organizationId,
+				workspaceId,
+				segmentIds,
+			),
+		);
 	};
 
 	const allSets: Set<string>[] = [];
@@ -1243,6 +1403,8 @@ export async function armScheduleEntrypoint(
 			entrypointId,
 			nextRun,
 			ep.automationId,
+			ep.organizationId,
+			ep.scopeKey,
 		);
 		return { queued: true, runAt: nextRun };
 	});

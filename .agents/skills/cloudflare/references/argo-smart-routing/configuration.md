@@ -109,17 +109,9 @@ Before enabling Argo Smart Routing, ensure billing is configured for the account
 
 ## Environment Variable Setup
 
-**Required Environment Variables:**
-```bash
-# .env
-CLOUDFLARE_API_TOKEN=your_api_token_here
-CLOUDFLARE_ZONE_ID=your_zone_id_here
-CLOUDFLARE_ACCOUNT_ID=your_account_id_here
-
-# Optional
-ARGO_ENABLED=true
-ARGO_TIERED_CACHE=true
-```
+Inject `CLOUDFLARE_API_TOKEN` directly into the process from a secret manager.
+`CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_ACCOUNT_ID`, `ARGO_ENABLED`, and
+`ARGO_TIERED_CACHE` are non-secret configuration.
 
 **TypeScript Configuration Loader:**
 ```typescript

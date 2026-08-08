@@ -17,11 +17,15 @@ import {
 } from "@relayapi/db";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { Context } from "hono";
+import { withCredentialMutationAuthority } from "../lib/credential-mutation-authority";
 import { encryptToken } from "../lib/crypto";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import {
 	EntrypointCreateSchema,
+	EntrypointKindSchema,
 	EntrypointUpdateSchema,
+	entrypointKindAllowsSocialAccount,
 	isEntrypointKindSupportedOnChannel,
 	validateEntrypointConfig,
 } from "../schemas/automation-entrypoints";
@@ -64,7 +68,7 @@ const EntrypointResponseSchema = z.object({
 	id: z.string(),
 	automation_id: z.string(),
 	channel: z.enum(["instagram", "facebook", "whatsapp", "telegram"]),
-	kind: z.string(),
+	kind: EntrypointKindSchema,
 	status: z.string(),
 	social_account_id: z.string().nullable(),
 	config: z.record(z.string(), z.any()).nullable(),
@@ -438,26 +442,37 @@ automationScopedEntrypoints.openapi(createEntrypoint, async (c) => {
 		body.social_account_id ?? null,
 	);
 
-	const [inserted] = await db
-		.insert(automationEntrypoints)
-		.values({
-			id: entrypointId,
-			organizationId: scoped.row.organizationId,
-			scopeKey: scoped.row.scopeKey,
-			automationId,
-			channel: body.channel,
-			kind: body.kind,
-			socialAccountId: body.social_account_id ?? null,
-			config,
-			filters: body.filters ?? null,
-			allowReentry: body.allow_reentry ?? true,
-			reentryCooldownMin: body.reentry_cooldown_min ?? 60,
-			dailyCap: body.daily_cap ?? null,
-			priority: body.priority ?? 100,
-			specificity,
-			status: body.status ?? "active",
-		})
-		.returning();
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
+		const [created] = await tx
+			.insert(automationEntrypoints)
+			.values({
+				id: entrypointId,
+				organizationId: scoped.row.organizationId,
+				scopeKey: scoped.row.scopeKey,
+				automationId,
+				channel: body.channel,
+				kind: body.kind,
+				socialAccountId: body.social_account_id ?? null,
+				config,
+				filters: body.filters ?? null,
+				allowReentry: body.allow_reentry ?? true,
+				reentryCooldownMin: body.reentry_cooldown_min ?? 60,
+				dailyCap: body.daily_cap ?? null,
+				priority: body.priority ?? 100,
+				specificity,
+				status: body.status ?? "active",
+			})
+			.returning();
+		return created;
+	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const inserted = authority.value;
 	if (!inserted) {
 		return c.json(
 			{
@@ -570,6 +585,20 @@ app.openapi(updateEntrypoint, async (c) => {
 		body.social_account_id !== undefined
 			? (body.social_account_id ?? null)
 			: existing.socialAccountId;
+	if (
+		prospectiveAccountId !== null &&
+		!entrypointKindAllowsSocialAccount(prospectiveKind)
+	) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_ACCOUNT",
+					message: `${prospectiveKind} is an internal trigger and cannot be bound to a social account`,
+				},
+			},
+			400,
+		);
+	}
 	if (prospectiveChannel !== automation.channel) {
 		return c.json(
 			{
@@ -749,6 +778,7 @@ app.openapi(updateEntrypoint, async (c) => {
 	}
 
 	const db = c.get("db");
+	const orgId = c.get("orgId");
 
 	// If this PATCH results in a webhook_inbound entrypoint with a slug, ensure
 	// it doesn't collide with another entrypoint — mirror the create-path guard
@@ -806,11 +836,16 @@ app.openapi(updateEntrypoint, async (c) => {
 		(existing.kind !== prospectiveKind ||
 			existing.status !== prospectiveStatus ||
 			cronChanged);
-	const updated = await db.transaction(async (tx) => {
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
 		const [row] = await tx
 			.update(automationEntrypoints)
 			.set(patch)
-			.where(eq(automationEntrypoints.id, id))
+			.where(
+				and(
+					eq(automationEntrypoints.id, id),
+					eq(automationEntrypoints.organizationId, orgId),
+				),
+			)
 			.returning();
 		if (row && shouldRetirePendingScheduleJobs) {
 			await tx
@@ -825,6 +860,14 @@ app.openapi(updateEntrypoint, async (c) => {
 		}
 		return row;
 	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const updated = authority.value;
 	if (!updated) return notFound(c);
 
 	// Re-arm on transitions that could have introduced or changed a
@@ -942,12 +985,28 @@ app.openapi(rotateSecret, async (c) => {
 		webhook_secret: stored,
 	};
 
-	const db = c.get("db");
-	const [updated] = await db
-		.update(automationEntrypoints)
-		.set({ config: nextConfig, updatedAt: new Date() })
-		.where(eq(automationEntrypoints.id, id))
-		.returning();
+	const orgId = c.get("orgId");
+	const authority = await withCredentialMutationAuthority(c, {}, async (tx) => {
+		const [rotated] = await tx
+			.update(automationEntrypoints)
+			.set({ config: nextConfig, updatedAt: new Date() })
+			.where(
+				and(
+					eq(automationEntrypoints.id, id),
+					eq(automationEntrypoints.organizationId, orgId),
+				),
+			)
+			.returning();
+		return rotated;
+	});
+	if (!authority.ok) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{ error: { code: authority.code, message: authority.message } } as never,
+			authority.status as never,
+		);
+	}
+	const updated = authority.value;
 	if (!updated) return notFound(c);
 
 	return c.json(serializeEntrypoint(updated, { revealSecret: plaintext }), 200);

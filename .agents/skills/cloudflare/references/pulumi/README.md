@@ -43,10 +43,10 @@ const provider = new cloudflare.Provider("cf", { apiUserServiceKey: process.env.
 ```yaml
 name: my-cloudflare-app
 runtime: nodejs
-config:
-  cloudflare:apiToken:
-    value: ${CLOUDFLARE_API_TOKEN}
 ```
+
+Inject `CLOUDFLARE_API_TOKEN` at runtime from the deployment secret manager; do
+not persist the plaintext token in `Pulumi.yaml` or a stack config file.
 
 **Pulumi.<stack>.yaml:**
 ```yaml

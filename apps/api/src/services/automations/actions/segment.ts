@@ -25,6 +25,11 @@ async function assertSegmentScope(
 		),
 	});
 	if (!segment) throw new Error("segment does not belong to automation tenant");
+	if (segment.isDynamic) {
+		throw new Error(
+			"dynamic segment membership is derived and cannot be mutated by an action",
+		);
+	}
 }
 
 const segmentAdd: ActionHandler<SegmentAddAction> = async (action, ctx) => {

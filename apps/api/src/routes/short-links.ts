@@ -6,7 +6,9 @@ import {
 	shortLinks,
 } from "@relayapi/db";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { encryptToken, maybeDecrypt } from "../lib/crypto";
+import { withCredentialMutationAuthority } from "../lib/credential-mutation-authority";
+import { encryptToken } from "../lib/crypto";
+import { SingleUnitProviderMutationAggregate } from "../lib/mutation-provider-boundary";
 import {
 	assertAllWorkspaceScope,
 	resolveOperationalCreateScope,
@@ -15,6 +17,7 @@ import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
 	ShortenUrlBody,
@@ -24,9 +27,17 @@ import {
 	ShortLinkListResponse,
 	ShortLinkResponse,
 	ShortLinkStatsResponse,
-	ShortLinkTestQuery,
 	ShortLinkTestResponse,
 } from "../schemas/short-links";
+import {
+	resolveExternalShortLinkProvider,
+	updateVersionedShortLinkConfigInTransaction,
+} from "../services/short-link-configuration";
+import {
+	analyticsTargetForShortLink,
+	createTrackedExternalShortLink,
+	type ExternalShortLinkProviderType,
+} from "../services/short-link-lifecycle";
 import type { ShortLinkProvider } from "../services/short-link-providers";
 import {
 	createRelayApiProvider,
@@ -42,8 +53,9 @@ const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 async function resolveProvider(
 	config: {
 		provider: string | null;
-		apiKey: string | null;
 		domain: string | null;
+		providerConfigVersion: number;
+		credentialVersion: number | null;
 	},
 	env: Env,
 	db: Database,
@@ -53,7 +65,10 @@ async function resolveProvider(
 	if (!config.provider) return null;
 
 	if (config.provider === "relayapi") {
-		const baseUrl = env.API_BASE_URL || "https://api.relayapi.dev";
+		const baseUrl =
+			env.PUBLIC_LINK_BASE_URL ||
+			env.API_BASE_URL ||
+			"https://api.relayapi.dev";
 		return {
 			provider: createRelayApiProvider({
 				db,
@@ -61,17 +76,23 @@ async function resolveProvider(
 				baseUrl,
 				organizationId,
 				workspaceId,
+				providerConfigVersion: config.providerConfigVersion,
 			}),
 			apiKey: "builtin",
 		};
 	}
 
-	if (!config.apiKey) return null;
-	const provider = getProvider(config.provider as "dub" | "short_io" | "bitly");
-	if (!provider) return null;
-	const apiKey = await maybeDecrypt(config.apiKey, env.ENCRYPTION_KEY);
-	if (!apiKey) return null;
-	return { provider, apiKey };
+	if (!config.credentialVersion) return null;
+	const resolved = await resolveExternalShortLinkProvider({
+		db,
+		organizationId,
+		provider: config.provider as ExternalShortLinkProviderType,
+		credentialVersion: config.credentialVersion,
+		encryptionKey: env.ENCRYPTION_KEY,
+	});
+	return resolved
+		? { provider: resolved.provider, apiKey: resolved.apiKey }
+		: null;
 }
 
 // --- Route definitions ---
@@ -141,9 +162,8 @@ const testConfigRoute = createRoute({
 	tags: ["Short Links"],
 	summary: "Test short link configuration",
 	description:
-		"Test the configured provider by shortening a test URL. Returns the shortened URL on success.",
+		"Test the configured provider with a read-only credential probe. No remote link is created.",
 	security: [{ Bearer: [] }],
-	request: { query: ShortLinkTestQuery },
 	responses: {
 		200: {
 			description: "Test result",
@@ -157,12 +177,8 @@ const testConfigRoute = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
-		400: {
-			description: "Workspace ID required",
-			content: { "application/json": { schema: ErrorResponse } },
-		},
 		403: {
-			description: "Workspace access denied",
+			description: "All-workspace access required",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -286,6 +302,10 @@ const statsRoute = createRoute({
 			description: "Short link not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		409: {
+			description: "Short link creation requires reconciliation",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		403: {
 			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -336,7 +356,7 @@ app.openapi(getConfigRoute, async (c) => {
 				| "short_io"
 				| "bitly"
 				| null,
-			has_api_key: !!config.apiKey,
+			has_api_key: config.credentialVersion !== null,
 			domain: config.domain,
 			created_at: config.createdAt.toISOString(),
 			updated_at: config.updatedAt.toISOString(),
@@ -352,20 +372,23 @@ app.openapi(updateConfigRoute, async (c) => {
 	const body = c.req.valid("json");
 	const db = c.get("db");
 
-	// Validate: if mode is not "never", provider + api_key are required
-	// (either from this request or from an existing saved config)
-	if (body.mode !== "never") {
-		const [existing] = await db
-			.select({
-				provider: shortLinkConfigs.provider,
-				apiKey: shortLinkConfigs.apiKey,
-			})
-			.from(shortLinkConfigs)
-			.where(eq(shortLinkConfigs.organizationId, orgId))
-			.limit(1);
+	const [existing] = await db
+		.select({
+			provider: shortLinkConfigs.provider,
+			credentialVersion: shortLinkConfigs.credentialVersion,
+		})
+		.from(shortLinkConfigs)
+		.where(eq(shortLinkConfigs.organizationId, orgId))
+		.limit(1);
 
-		const effectiveProvider = body.provider ?? existing?.provider;
-		const effectiveApiKey = body.api_key ?? existing?.apiKey;
+	const effectiveProvider = body.provider ?? existing?.provider;
+	// Validate the effective provider/credential before entering the versioned
+	// configuration transaction.
+	if (body.mode !== "never") {
+		const hasEffectiveApiKey =
+			Boolean(body.api_key) ||
+			(Boolean(existing?.credentialVersion) &&
+				effectiveProvider === existing?.provider);
 
 		// Built-in provider doesn't need an API key; third-party providers do
 		if (!effectiveProvider) {
@@ -379,7 +402,7 @@ app.openapi(updateConfigRoute, async (c) => {
 				400,
 			);
 		}
-		if (effectiveProvider !== "relayapi" && !effectiveApiKey) {
+		if (effectiveProvider !== "relayapi" && !hasEffectiveApiKey) {
 			return c.json(
 				{
 					error: {
@@ -392,37 +415,81 @@ app.openapi(updateConfigRoute, async (c) => {
 		}
 	}
 
+	// A replacement credential becomes active only after a documented read-only
+	// provider probe. A failed probe leaves the prior immutable version active.
+	if (body.api_key && effectiveProvider && effectiveProvider !== "relayapi") {
+		const provider = getProvider(effectiveProvider);
+		if (!provider) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_CONFIG",
+						message: "Unsupported short-link provider",
+					},
+				},
+				400,
+			);
+		}
+		try {
+			await provider.probeCredential(body.api_key);
+		} catch (error) {
+			return c.json(
+				{
+					error: {
+						code: "INVALID_CREDENTIAL",
+						message:
+							error instanceof Error
+								? error.message
+								: "Short-link credential probe failed",
+					},
+				},
+				400,
+			);
+		}
+	}
+
 	// Encrypt API key if provided
 	const encryptedApiKey = body.api_key
 		? await encryptToken(body.api_key, c.env.ENCRYPTION_KEY)
 		: undefined;
 
-	const values: Record<string, unknown> = {
-		mode: body.mode,
-		updatedAt: new Date(),
-	};
-	if (body.provider !== undefined) values.provider = body.provider;
-	if (encryptedApiKey !== undefined) values.apiKey = encryptedApiKey;
-	if (body.domain !== undefined) values.domain = body.domain;
-
-	// Upsert: insert or update on conflict
-	const rows = await db
-		.insert(shortLinkConfigs)
-		.values({
-			organizationId: orgId,
-			mode: body.mode,
-			provider: body.provider ?? null,
-			apiKey: encryptedApiKey ?? null,
-			domain: body.domain ?? null,
-		})
-		.onConflictDoUpdate({
-			target: shortLinkConfigs.organizationId,
-			set: values,
-		})
-		.returning();
-
-	const config = rows[0];
-	if (!config) throw new Error("Failed to upsert short link config");
+	let config: typeof shortLinkConfigs.$inferSelect;
+	try {
+		const authority = await withCredentialMutationAuthority(
+			c,
+			{ requireAllWorkspaceScope: true },
+			(tx) =>
+				updateVersionedShortLinkConfigInTransaction(tx, orgId, {
+					mode: body.mode,
+					...(body.provider !== undefined ? { provider: body.provider } : {}),
+					...(body.domain !== undefined ? { domain: body.domain } : {}),
+					...(encryptedApiKey ? { encryptedApiKey } : {}),
+				}),
+		);
+		if (!authority.ok) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: { code: authority.code, message: authority.message },
+				} as never,
+				authority.status as never,
+			);
+		}
+		config = authority.value;
+	} catch (error) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_CONFIG",
+					message:
+						error instanceof Error
+							? error.message
+							: "Failed to save short-link configuration",
+				},
+			},
+			400,
+		);
+	}
 
 	return c.json(
 		{
@@ -434,7 +501,7 @@ app.openapi(updateConfigRoute, async (c) => {
 				| "short_io"
 				| "bitly"
 				| null,
-			has_api_key: !!config.apiKey,
+			has_api_key: config.credentialVersion !== null,
 			domain: config.domain,
 			created_at: config.createdAt.toISOString(),
 			updated_at: config.updatedAt.toISOString(),
@@ -444,15 +511,10 @@ app.openapi(updateConfigRoute, async (c) => {
 });
 
 app.openapi(testConfigRoute, async (c) => {
+	const denied = assertAllWorkspaceScope(c);
+	if (denied) return denied as never;
 	const orgId = c.get("orgId");
 	const db = c.get("db");
-	const { workspace_id } = c.req.valid("query");
-	const scope = await resolveOperationalCreateScope(
-		c,
-		workspace_id,
-		"short link",
-	);
-	if (!scope.ok) return scope.response as never;
 
 	const [config] = await db
 		.select()
@@ -467,13 +529,7 @@ app.openapi(testConfigRoute, async (c) => {
 		);
 	}
 
-	const resolved = await resolveProvider(
-		config,
-		c.env,
-		db,
-		orgId,
-		scope.workspaceId,
-	);
+	const resolved = await resolveProvider(config, c.env, db, orgId, null);
 	if (!resolved) {
 		return c.json(
 			{
@@ -486,12 +542,8 @@ app.openapi(testConfigRoute, async (c) => {
 	}
 
 	try {
-		const shortUrl = await resolved.provider.shorten(
-			resolved.apiKey,
-			config.domain,
-			"https://example.com/test",
-		);
-		return c.json({ success: true, short_url: shortUrl, error: null }, 200);
+		await resolved.provider.probeCredential(resolved.apiKey);
+		return c.json({ success: true, short_url: null, error: null }, 200);
 	} catch (err) {
 		return c.json(
 			{
@@ -545,6 +597,7 @@ app.openapi(listShortLinksRoute, async (c) => {
 				workspace_id: sl.workspaceId,
 				original_url: sl.originalUrl,
 				short_url: sl.shortUrl,
+				status: sl.creationStatus,
 				post_id: sl.postId,
 				click_count: sl.clickCount,
 				created_at: sl.createdAt.toISOString(),
@@ -592,6 +645,7 @@ app.openapi(listByPostRoute, async (c) => {
 				workspace_id: sl.workspaceId,
 				original_url: sl.originalUrl,
 				short_url: sl.shortUrl,
+				status: sl.creationStatus,
 				post_id: sl.postId,
 				click_count: sl.clickCount,
 				created_at: sl.createdAt.toISOString(),
@@ -610,7 +664,10 @@ app.openapi(shortenRoute, async (c) => {
 		body.workspace_id,
 		"short link",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) {
+		markMutationInputNotApplied(c);
+		return scope.response as never;
+	}
 
 	const [config] = await db
 		.select()
@@ -619,6 +676,7 @@ app.openapi(shortenRoute, async (c) => {
 		.limit(1);
 
 	if (!config?.provider) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -639,6 +697,7 @@ app.openapi(shortenRoute, async (c) => {
 		scope.workspaceId,
 	);
 	if (!resolved) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -649,34 +708,44 @@ app.openapi(shortenRoute, async (c) => {
 			400,
 		);
 	}
+	const providerMutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	try {
-		const shortUrl = await resolved.provider.shorten(
-			resolved.apiKey,
-			config.domain,
-			body.url,
-		);
-		const shortCode = new URL(shortUrl).pathname
-			.split("/")
-			.filter(Boolean)
-			.at(-1);
-		if (!shortCode)
-			throw new Error("Short-link provider returned an invalid URL");
-
-		// RelayAPI allocation is already durable before `shorten` returns. External
-		// providers still need their result recorded locally.
-		if (config.provider !== "relayapi") {
-			await db.insert(shortLinks).values({
-				organizationId: orgId,
-				workspaceId: scope.workspaceId,
-				originalUrl: body.url,
-				provider: config.provider,
-				shortCode,
-				shortUrl,
-			});
+		if (config.provider === "relayapi") {
+			const created = await resolved.provider.shorten(
+				resolved.apiKey,
+				config.domain,
+				body.url,
+				crypto.randomUUID(),
+			);
+			providerMutation.markCommitted();
+			return c.json(
+				{ original_url: body.url, short_url: created.shortUrl },
+				200,
+			);
 		}
-
-		return c.json({ original_url: body.url, short_url: shortUrl }, 200);
+		if (!config.credentialVersion) {
+			throw new Error("Short-link provider credential version is missing");
+		}
+		const created = await createTrackedExternalShortLink({
+			db,
+			organizationId: orgId,
+			workspaceId: scope.workspaceId,
+			originalUrl: body.url,
+			providerType: config.provider as ExternalShortLinkProviderType,
+			providerConfigVersion: config.providerConfigVersion,
+			credentialVersion: config.credentialVersion,
+			domain: config.domain,
+			apiKey: resolved.apiKey,
+			provider: resolved.provider,
+			providerMutation,
+		});
+		if (!created.shortUrl) {
+			throw new Error("Short-link provider returned no active URL");
+		}
+		return c.json({ original_url: body.url, short_url: created.shortUrl }, 200);
 	} catch (err) {
 		return c.json(
 			{
@@ -687,6 +756,15 @@ app.openapi(shortenRoute, async (c) => {
 			},
 			400,
 		);
+	} finally {
+		// The durable pending-row insert precedes provider egress. If it fails,
+		// preserve the request's ambiguity instead of manufacturing K=0.
+		if (
+			providerMutation.hasAttempts() ||
+			providerMutation.hasCommittedEffect()
+		) {
+			providerMutation.finalize();
+		}
 	}
 });
 
@@ -709,34 +787,62 @@ app.openapi(statsRoute, async (c) => {
 	}
 	const denied = assertWorkspaceScope(c, link.workspaceId);
 	if (denied) return denied as never;
+	if (link.creationStatus !== "active" || !link.shortUrl) {
+		return c.json(
+			{
+				error: {
+					code: "SHORT_LINK_NOT_ACTIVE",
+					message:
+						"Short-link creation is not active and requires reconciliation",
+				},
+			},
+			409,
+		);
+	}
 
 	// Built-in (relayapi) links count clicks directly in short_links.click_count
 	// (the redirect handler's atomic increment) — that DB value is authoritative,
 	// so don't overwrite it with the provider's KV counter (no longer written).
 	// Only external providers keep counts off-platform and need a live fetch.
 	let clickCount = link.clickCount;
+	let lastSyncedAt = link.lastClickSyncAt;
 	try {
-		const [config] = await db
-			.select()
-			.from(shortLinkConfigs)
-			.where(eq(shortLinkConfigs.organizationId, orgId))
-			.limit(1);
+		if (link.provider !== "relayapi" && link.credentialVersion !== null) {
+			const resolved = await resolveExternalShortLinkProvider({
+				db,
+				organizationId: orgId,
+				provider: link.provider as ExternalShortLinkProviderType,
+				credentialVersion: link.credentialVersion,
+				encryptionKey: c.env.ENCRYPTION_KEY,
+			});
+			const target = analyticsTargetForShortLink(link);
 
-		if (config?.provider && config.provider !== "relayapi") {
-			const resolved = await resolveProvider(config, c.env, db, orgId);
-
-			if (resolved) {
+			if (resolved && target) {
 				clickCount = await resolved.provider.getClickCount(
 					resolved.apiKey,
-					link.shortUrl,
+					target,
 				);
+				lastSyncedAt = new Date();
 
 				// Update cached count
 				c.executionCtx.waitUntil(
 					db
 						.update(shortLinks)
-						.set({ clickCount, lastClickSyncAt: new Date() })
-						.where(eq(shortLinks.id, id)),
+						.set({
+							clickCount,
+							lastClickSyncAt: lastSyncedAt,
+							nextClickSyncAt: new Date(
+								lastSyncedAt.getTime() + 60 * 60 * 1000,
+							),
+							clickSyncLeaseExpiresAt: null,
+							clickSyncStartedAt: null,
+							clickSyncAttempts: 0,
+							clickSyncLastError: null,
+							clickSyncLastErrorClass: null,
+						})
+						.where(
+							and(eq(shortLinks.id, id), eq(shortLinks.organizationId, orgId)),
+						),
 				);
 			}
 		}
@@ -750,7 +856,7 @@ app.openapi(statsRoute, async (c) => {
 			short_url: link.shortUrl,
 			original_url: link.originalUrl,
 			click_count: clickCount,
-			last_synced_at: link.lastClickSyncAt?.toISOString() ?? null,
+			last_synced_at: lastSyncedAt?.toISOString() ?? null,
 		},
 		200,
 	);

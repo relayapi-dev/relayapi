@@ -3,27 +3,34 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = resolve(packageDirectory, "src/index.ts");
+const sources = [
+	[resolve(packageDirectory, "src/index.ts"), "index"],
+	[resolve(packageDirectory, "src/internal.ts"), "internal"],
+];
 const outputDirectory = resolve(packageDirectory, "dist");
 
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
 
-for (const [format, filename] of [
-	["esm", "index.mjs"],
-	["cjs", "index.cjs"],
-]) {
-	const result = await Bun.build({
-		entrypoints: [source],
-		format,
-		target: "node",
-		outdir: outputDirectory,
-		naming: filename,
-		sourcemap: "external",
-	});
-	if (!result.success) {
-		for (const message of result.logs) console.error(message);
-		throw new Error(`Failed to build the ${format.toUpperCase()} SDK bundle`);
+for (const [source, basename] of sources) {
+	for (const [format, extension] of [
+		["esm", "mjs"],
+		["cjs", "cjs"],
+	]) {
+		const result = await Bun.build({
+			entrypoints: [source],
+			format,
+			target: "node",
+			outdir: outputDirectory,
+			naming: `${basename}.${extension}`,
+			sourcemap: "external",
+		});
+		if (!result.success) {
+			for (const message of result.logs) console.error(message);
+			throw new Error(
+				`Failed to build the ${basename} ${format.toUpperCase()} SDK bundle`,
+			);
+		}
 	}
 }
 

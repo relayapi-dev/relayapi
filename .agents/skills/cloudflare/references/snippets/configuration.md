@@ -24,14 +24,14 @@
 # Create/update snippet
 curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets/$SNIPPET_NAME" \
   --request PUT \
-  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   --form "files=@example.js" \
   --form "metadata={\"main_module\": \"example.js\"}"
 
 # Create snippet rule
 curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets/snippet_rules" \
   --request PUT \
-  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   --header "Content-Type: application/json" \
   --data '{
     "rules": [
@@ -46,12 +46,12 @@ curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets/snippet_rules
 
 # List snippets
 curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets" \
-  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+  --header @/secure/bearer-auth-header
 
 # Delete snippet
 curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/snippets/$SNIPPET_NAME" \
   --request DELETE \
-  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+  --header @/secure/bearer-auth-header
 ```
 
 ### 3. Terraform
@@ -214,14 +214,11 @@ not http.headers["user-agent"] contains "bot"
 ## Authentication
 
 ### API Token (Recommended)
-```bash
-# Create token at: https://dash.cloudflare.com/profile/api-tokens
-# Required permissions: Zone.Snippets:Edit, Zone.Rules:Edit
-export CLOUDFLARE_API_TOKEN="your_token_here"
-```
+Create a scoped token at `https://dash.cloudflare.com/profile/api-tokens` with
+Zone Snippets Edit and Zone Rules Edit, then provision the root skill's
+`/secure/bearer-auth-header` file directly from the secret manager.
 
 ### API Key (Legacy)
-```bash
-export CLOUDFLARE_EMAIL="your@email.com"
-export CLOUDFLARE_API_KEY="your_global_api_key"
-``` 
+Avoid global API keys. If legacy access is unavoidable, provision the root
+skill's `/secure/cloudflare-global-auth-headers` file directly from the secret
+manager.

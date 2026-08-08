@@ -6,7 +6,7 @@ Query Worker placement status via Cloudflare API:
 
 ```bash
 curl -X GET "https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/workers/services/{WORKER_NAME}" \
-  -H "Authorization: Bearer <TOKEN>" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json"
 ```
 
@@ -128,7 +128,7 @@ wrangler tail your-worker-name --status error
 wrangler tail your-worker-name --header cf-placement
 
 # Check placement status via API
-curl -H "Authorization: Bearer $TOKEN" \
+curl --header @/secure/bearer-auth-header \
   https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/services/$WORKER_NAME \
   | jq .result.placement_status
 ```

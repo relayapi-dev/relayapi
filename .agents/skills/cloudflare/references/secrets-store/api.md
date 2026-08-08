@@ -67,7 +67,7 @@ Base: `https://api.cloudflare.com/client/v4`
 ### Auth
 
 ```bash
-curl -H "Authorization: Bearer $CF_TOKEN" \
+curl --header @/secure/bearer-auth-header \
   https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/secrets_store/stores
 ```
 
@@ -95,7 +95,7 @@ GET /accounts/{account_id}/secrets_store/stores/{store_id}/secrets
 POST /accounts/{account_id}/secrets_store/stores/{store_id}/secrets
 {
   "name": "my_secret",
-  "value": "secret_value",
+  "value": "<redacted-secret-value>",
   "scopes": ["workers"],
   "comment": "Optional"
 }
@@ -103,8 +103,8 @@ POST /accounts/{account_id}/secrets_store/stores/{store_id}/secrets
 # Create (batch)
 POST /accounts/{account_id}/secrets_store/stores/{store_id}/secrets
 [
-  {"name": "secret_one", "value": "val1", "scopes": ["workers"]},
-  {"name": "secret_two", "value": "val2", "scopes": ["workers", "ai-gateway"]}
+  {"name": "secret_one", "value": "<redacted>", "scopes": ["workers"]},
+  {"name": "secret_two", "value": "<redacted>", "scopes": ["workers", "ai-gateway"]}
 ]
 
 # Get metadata

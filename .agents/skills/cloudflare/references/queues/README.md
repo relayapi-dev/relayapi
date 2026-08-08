@@ -43,8 +43,12 @@ export default {
 
 **Before using Queues, understand these production mistakes:**
 
-1. **Uncaught errors retry ENTIRE batch** (not just failed message). Always use per-message try/catch.
-2. **Messages not ack'd/retry'd will auto-retry forever** until max_retries. Always explicitly handle each message.
+1. **Uncaught errors retry every message without an explicit outcome** (not just
+   the failed message). Messages already acknowledged remain acknowledged.
+   Prefer per-message try/catch and explicit outcomes.
+2. **A successful handler return implicitly acknowledges unhandled messages.** Call
+   `retry()` in a per-message catch (or throw to fail the remaining batch) or a
+   failed message will be lost. Explicitly handle every message.
 
 See [gotchas.md](./gotchas.md) for detailed solutions.
 

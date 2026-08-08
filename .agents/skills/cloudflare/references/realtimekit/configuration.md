@@ -68,7 +68,7 @@ await meeting.join();
 ```bash
 curl -X POST 'https://api.cloudflare.com/client/v4/accounts/<account_id>/realtime/kit/apps' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <api_token>' \
+  --header @/secure/bearer-auth-header \
   -d '{"name": "My RealtimeKit App"}'
 ```
 
@@ -78,7 +78,7 @@ curl -X POST 'https://api.cloudflare.com/client/v4/accounts/<account_id>/realtim
 
 ```bash
 curl -X POST 'https://api.cloudflare.com/client/v4/accounts/<account_id>/realtime/kit/<app_id>/presets' \
-  -H 'Authorization: Bearer <api_token>' \
+  --header @/secure/bearer-auth-header \
   -d '{
     "name": "host",
     "permissions": {

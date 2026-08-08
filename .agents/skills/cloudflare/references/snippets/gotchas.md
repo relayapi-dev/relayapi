@@ -56,7 +56,7 @@ Snippets don't support `import`. Use inline code or Workers.
 newResponse.headers.set("X-Debug-Country", request.cf.country);
 ```
 ```bash
-curl -H "X-Test: true" https://example.com -v
+curl -sS -D - -H "X-Test: true" https://example.com
 ```
 
 ## Available APIs

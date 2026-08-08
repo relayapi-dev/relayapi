@@ -42,7 +42,7 @@ curl -X POST https://{stream-id}.ingest.cloudflare.com \
   -H "Content-Type: application/json" -d '{"event_id":"evt-3","amount":9.99}'
 ```
 
-If stream auth is enabled, add `-H "Authorization: Bearer $TOKEN"` (token needs **Workers Pipelines Send**). Standard HTTP status codes apply (400 invalid, 401 auth, 413 too large, 429 rate-limited, 5xx retry).
+If stream auth is enabled, add `--header @/secure/bearer-auth-header` (token needs **Workers Pipelines Send**). Standard HTTP status codes apply (400 invalid, 401 auth, 413 too large, 429 rate-limited, 5xx retry).
 
 > **JSON only** — no Avro, Protobuf, or CSV input.
 
@@ -52,17 +52,17 @@ Base: `https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pipelines/v1`
 
 ```bash
 # List
-curl -s "$BASE_URL/streams"   -H "Authorization: Bearer $API_TOKEN"
-curl -s "$BASE_URL/sinks"     -H "Authorization: Bearer $API_TOKEN"
-curl -s "$BASE_URL/pipelines" -H "Authorization: Bearer $API_TOKEN"
+curl -s "$BASE_URL/streams"   --header @/secure/bearer-auth-header
+curl -s "$BASE_URL/sinks"     --header @/secure/bearer-auth-header
+curl -s "$BASE_URL/pipelines" --header @/secure/bearer-auth-header
 
 # Get one (pipeline GET includes status + failure_reason — useful for debugging)
-curl -s "$BASE_URL/pipelines/{pipeline-id}" -H "Authorization: Bearer $API_TOKEN"
+curl -s "$BASE_URL/pipelines/{pipeline-id}" --header @/secure/bearer-auth-header
 
 # Delete in reverse order: pipeline → sink → stream
-curl -X DELETE "$BASE_URL/pipelines/{id}" -H "Authorization: Bearer $API_TOKEN"
-curl -X DELETE "$BASE_URL/sinks/{id}"     -H "Authorization: Bearer $API_TOKEN"
-curl -X DELETE "$BASE_URL/streams/{id}"   -H "Authorization: Bearer $API_TOKEN"
+curl -X DELETE "$BASE_URL/pipelines/{id}" --header @/secure/bearer-auth-header
+curl -X DELETE "$BASE_URL/sinks/{id}"     --header @/secure/bearer-auth-header
+curl -X DELETE "$BASE_URL/streams/{id}"   --header @/secure/bearer-auth-header
 ```
 
 > `wrangler pipelines delete` defaults to "no" non-interactively — use the REST API for automated cleanup. Deleting a stream removes buffered events and dependent pipelines.
@@ -103,16 +103,16 @@ Supported categories: string, regex, hashing (`sha256`), JSON extraction, timest
 
 ```bash
 # 1. Pipeline running (not initializing/failed)?
-curl -s "$BASE_URL/pipelines/{id}" -H "Authorization: Bearer $API_TOKEN"
+curl -s "$BASE_URL/pipelines/{id}" --header @/secure/bearer-auth-header
 
 # 2. Table created yet? (3–7 min on first flush)
 curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2-catalog/$BUCKET/namespaces/my_ns/tables" \
-  -H "Authorization: Bearer $API_TOKEN"
+  --header @/secure/bearer-auth-header
 
 # 3. Data present? (R2 SQL)
 curl -s -X POST \
   "https://api.sql.cloudflarestorage.com/api/v1/accounts/$ACCOUNT_ID/r2-sql/query/$BUCKET" \
-  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
   -d '{"query": "SELECT COUNT(*) AS total FROM my_ns.my_table"}'
 ```
 

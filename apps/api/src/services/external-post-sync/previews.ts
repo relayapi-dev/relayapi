@@ -191,6 +191,9 @@ async function persistResult(
 			.update(externalPosts)
 			.set({
 				previewThumbnailKey: result.thumbnailKey,
+				previewStorageProvider: result.storage.provider,
+				previewStorageBucketLocator: result.storage.bucket,
+				previewStorageRegion: result.storage.region,
 				previewThumbnailUrl: result.thumbnailUrl,
 				previewStatus: "generated",
 				previewNextRetryAt: null,

@@ -100,7 +100,7 @@ type PlacementStatus =
 wrangler deploy
 
 # Check placement status
-curl -H "Authorization: Bearer $TOKEN" \
+curl --header @/secure/bearer-auth-header \
   https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/services/$WORKER_NAME \
   | jq .result.placement_status
 

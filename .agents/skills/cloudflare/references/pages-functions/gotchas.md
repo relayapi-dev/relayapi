@@ -31,7 +31,8 @@ export const onRequest: PagesFunction<Env> = async (ctx) => { /* ... */ };
 **Cause:** `.dev.vars` is local-only, not deployed  
 **Solution:** Set production secrets:
 ```bash
-echo "value" | npx wrangler pages secret put SECRET_KEY --project-name=my-app
+# Enter the value at Wrangler's masked interactive prompt.
+npx wrangler pages secret put SECRET_KEY --project-name=my-app
 ```
 
 ## Debugging

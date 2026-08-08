@@ -112,13 +112,15 @@ export const onRequest: PagesFunction<Env> = async (ctx) => {
 ### Service Bindings & Env Vars
 
 ```typescript
-interface Env { AUTH: Fetcher; API_KEY: string; }
+interface Env { AUTH: Fetcher; API_BASE_URL: string; }
 export const onRequest: PagesFunction<Env> = async (ctx) => {
-  // Service binding: forward to another Worker
-  return ctx.env.AUTH.fetch(ctx.request);
-  
-  // Environment variable
-  return Response.json({ key: ctx.env.API_KEY });
+  // Service binding: forward auth routes to another Worker.
+  if (new URL(ctx.request.url).pathname.startsWith('/auth/')) {
+    return ctx.env.AUTH.fetch(ctx.request);
+  }
+
+  // Only non-secret environment variables belong in responses.
+  return Response.json({ apiBaseUrl: ctx.env.API_BASE_URL });
 };
 ```
 

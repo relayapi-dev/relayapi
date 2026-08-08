@@ -4,10 +4,17 @@ import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { CloudflareClient } from "./cloudflare.js";
-import { initialLock, readConfig, writeConfig, writeLock } from "./config.js";
+import {
+	initialLock,
+	readConfig,
+	validateHyperdriveCaCertificateId,
+	writeConfig,
+	writeLock,
+} from "./config.js";
 import { CLI_VERSION, CONFIG_FILENAME, RESOURCE_NAMES } from "./constants.js";
 import { deploy } from "./deploy.js";
-import { doctor } from "./doctor.js";
+import { doctor, validateRuntimeDatabaseUrl } from "./doctor.js";
+import { reconcileCloudflareResources } from "./reconcile.js";
 import {
 	configureGithubRepository,
 	generatedSecrets,
@@ -20,10 +27,10 @@ const HELP = `RelayAPI self-host deployment CLI
 
 Usage:
   relayapi-self-host init [--domain example.com] [--zone-id id] [--admin-email you@example.com] [--github owner/repo]
-  relayapi-self-host doctor
-  relayapi-self-host plan
-  relayapi-self-host configure
-  relayapi-self-host deploy [--source /path/to/relayapi]
+  relayapi-self-host doctor [--hyperdrive-ca-certificate-id UUID]
+  relayapi-self-host plan [--hyperdrive-ca-certificate-id UUID]
+  relayapi-self-host configure [--hyperdrive-ca-certificate-id UUID]
+  relayapi-self-host deploy [--source /path/to/relayapi] [--hyperdrive-ca-certificate-id UUID]
   relayapi-self-host upgrade
 
 Global options:
@@ -34,6 +41,10 @@ Global options:
   --email               Enable transactional email during init
   --ai                  Enable Workers AI during init
   --downloader          Enable the optional downloader during init
+  --r2-jurisdiction     R2 jurisdiction: default or eu (default: default)
+  --hyperdrive-ca-certificate-id
+                        Create with, or explicitly rotate the exact pinned
+                        Hyperdrive to, this uploaded Cloudflare CA UUID
   --deploy              Deploy immediately after init
   --version             Print the CLI version
   --help                Show this help
@@ -161,6 +172,21 @@ async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
 	if (!/^\S+@\S+\.\S+$/.test(adminEmail)) {
 		throw new Error("Initial administrator email is invalid");
 	}
+	const requestedR2Jurisdiction = value(args, "r2-jurisdiction") ?? "default";
+	if (
+		requestedR2Jurisdiction !== "default" &&
+		requestedR2Jurisdiction !== "eu"
+	) {
+		throw new Error('--r2-jurisdiction must be "default" or "eu"');
+	}
+	const hyperdriveCaCertificateId = validateHyperdriveCaCertificateId(
+		await promptValue(
+			"Hyperdrive CA certificate ID",
+			options.hyperdriveCaCertificateId,
+			options.nonInteractive,
+		),
+		"Hyperdrive CA certificate ID",
+	);
 	const config: SelfHostConfig = {
 		schemaVersion: 1,
 		instance: "relayapi",
@@ -170,9 +196,12 @@ async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
 			rootDomain,
 			apiHostname: value(args, "api-hostname") ?? `api.${rootDomain}`,
 			appHostname: value(args, "app-hostname") ?? `app.${rootDomain}`,
+			publicHostname: value(args, "public-hostname") ?? `go.${rootDomain}`,
 			mediaHostname: value(args, "media-hostname") ?? `media.${rootDomain}`,
 			thumbnailHostname:
 				value(args, "thumbnail-hostname") ?? `thumbs.${rootDomain}`,
+			r2Jurisdiction: requestedR2Jurisdiction,
+			hyperdriveCaCertificateId,
 		},
 		features: {
 			email: args.flags.has("--email"),
@@ -227,21 +256,37 @@ async function plan(options: CliOptions): Promise<void> {
 	const config = await readConfig(options.configPath);
 	const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
 	const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
-	if (!accountId || !token) {
+	const databaseUrl = process.env.RELAYAPI_RUNTIME_DATABASE_URL?.trim();
+	if (!accountId || !token || !databaseUrl) {
 		throw new Error(
-			"CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required",
+			"CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and RELAYAPI_RUNTIME_DATABASE_URL are required",
 		);
 	}
+	validateRuntimeDatabaseUrl(databaseUrl);
 	if (accountId !== config.cloudflare.accountId) {
 		throw new Error("Cloudflare account ID does not match the config");
 	}
 	const client = new CloudflareClient(accountId, token);
 	await client.verifyAccess(config.cloudflare.zoneId);
-	console.log(JSON.stringify(await client.plan(), null, 2));
+	console.log(
+		JSON.stringify(
+			await client.plan(
+				config,
+				databaseUrl,
+				options.hyperdriveCaCertificateId
+					? {
+							requestedCaCertificateId: options.hyperdriveCaCertificateId,
+						}
+					: {},
+			),
+			null,
+			2,
+		),
+	);
 }
 
 async function configure(options: CliOptions): Promise<void> {
-	let config = await readConfig(options.configPath);
+	const config = await readConfig(options.configPath);
 	const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
 	const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
 	const databaseUrl = process.env.RELAYAPI_RUNTIME_DATABASE_URL?.trim();
@@ -250,17 +295,31 @@ async function configure(options: CliOptions): Promise<void> {
 			"CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and RELAYAPI_RUNTIME_DATABASE_URL are required",
 		);
 	}
+	validateRuntimeDatabaseUrl(databaseUrl);
 	if (accountId !== config.cloudflare.accountId) {
 		throw new Error("Cloudflare account ID does not match the config");
 	}
 	const client = new CloudflareClient(accountId, token);
 	await client.verifyAccess(config.cloudflare.zoneId);
-	if (options.dryRun) {
-		console.log(JSON.stringify(await client.plan(), null, 2));
+	const reconciliation = await reconcileCloudflareResources({
+		config,
+		runtimeDatabaseUrl: databaseUrl,
+		client,
+		dryRun: options.dryRun,
+		...(options.hyperdriveCaCertificateId
+			? {
+					requestedCaCertificateId: options.hyperdriveCaCertificateId,
+				}
+			: {}),
+		persist: (appliedConfig) => writeConfig(appliedConfig, options.configPath),
+	});
+	if (!reconciliation.applied) {
+		console.log(JSON.stringify(reconciliation.plan, null, 2));
 		return;
 	}
-	config = { ...config, resources: await client.apply(config, databaseUrl) };
-	await writeConfig(config, options.configPath);
+	console.log(
+		`Hyperdrive CA certificate intent: ${reconciliation.plan.hyperdrive.caCertificateAction} ${reconciliation.plan.hyperdrive.caCertificateId}`,
+	);
 	console.log(
 		`Configured ${RESOURCE_NAMES.workers.api} and ${RESOURCE_NAMES.workers.app} resources`,
 	);
@@ -277,6 +336,13 @@ async function main(): Promise<void> {
 		return;
 	}
 	const configPath = value(args, "config") ?? CONFIG_FILENAME;
+	if (args.flags.has("--hyperdrive-ca-certificate-id")) {
+		throw new Error("--hyperdrive-ca-certificate-id requires a UUID value");
+	}
+	const requestedHyperdriveCaCertificateId = value(
+		args,
+		"hyperdrive-ca-certificate-id",
+	);
 	await loadEnvironment(
 		value(args, "env-file") ??
 			resolve(dirname(resolve(configPath)), ".relayapi", "secrets.env"),
@@ -286,6 +352,14 @@ async function main(): Promise<void> {
 		nonInteractive: args.flags.has("--non-interactive"),
 		dryRun: args.flags.has("--dry-run"),
 		...(value(args, "source") ? { source: value(args, "source") } : {}),
+		...(requestedHyperdriveCaCertificateId
+			? {
+					hyperdriveCaCertificateId: validateHyperdriveCaCertificateId(
+						requestedHyperdriveCaCertificateId,
+						"--hyperdrive-ca-certificate-id",
+					),
+				}
+			: {}),
 	};
 	switch (args.command) {
 		case "init":

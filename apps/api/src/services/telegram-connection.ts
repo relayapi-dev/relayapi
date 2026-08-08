@@ -59,6 +59,7 @@ export async function issueTelegramConnectionChallenge(
 	db: Database,
 	organizationId: string,
 	apiKeyId: string,
+	authoritySessionId: string | null,
 	initialWorkspaceScope: "all" | string[],
 	workspaceId: string | null,
 ): Promise<{ code: string; expiresAt: Date }> {
@@ -69,6 +70,7 @@ export async function issueTelegramConnectionChallenge(
 		id,
 		organizationId,
 		apiKeyId,
+		authoritySessionId,
 		initialWorkspaceScope,
 		workspaceId,
 		expiresAt,
@@ -296,6 +298,7 @@ export async function processTelegramConnectionChallenge(
 			tx as unknown as Database,
 			{
 				apiKeyId: challenge.apiKeyId,
+				authoritySessionId: challenge.authoritySessionId,
 				organizationId: challenge.organizationId,
 				workspaceId: challenge.workspaceId,
 				resourceName: "connected account",

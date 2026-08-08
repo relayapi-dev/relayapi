@@ -1,8 +1,33 @@
 import { describe, expect, it } from "bun:test";
-import type { Database, whatsappPhoneNumbers } from "@relayapi/db";
-import { stagePhoneRelease } from "../services/phone-number-operations";
+import {
+	type Database,
+	socialAccounts,
+	whatsappPhoneNumbers,
+	whatsappPhoneReleaseOperations,
+} from "@relayapi/db";
+import type { DurableCredentialAuthoritySnapshot } from "../lib/durable-credential-authority";
+import {
+	type PhoneRow,
+	stagePhoneRelease,
+} from "../services/phone-number-operations";
 
-type PhoneRow = typeof whatsappPhoneNumbers.$inferSelect;
+const releaseAuthority: DurableCredentialAuthoritySnapshot = {
+	organizationId: "org_1",
+	keyId: "key_1",
+	principalId: "principal_1",
+	principalType: "dashboard_user",
+	userId: "user_1",
+	authorityMemberId: "member_1",
+	authoritySessionId: "session_1",
+	authorityWorkspaceId: null,
+	authorityRequiresAllWorkspaceScope: true,
+	credentialVersion: "credential-v1",
+	admittedAt: new Date("2026-08-02T09:00:00.000Z"),
+	revision: 1,
+};
+
+const admitReleaseAuthority = async () =>
+	({ ok: true, value: releaseAuthority }) as const;
 
 function sqlHasParam(value: unknown, expected: string): boolean {
 	if (!value || typeof value !== "object") return false;
@@ -38,15 +63,27 @@ function releaseDb(phone: PhoneRow) {
 	const tx = {
 		select: (projection?: Record<string, unknown>) => {
 			let condition: unknown;
+			let sourceTable: unknown;
 			const builder = {
-				from: (_table: unknown) => builder,
+				from: (table: unknown) => {
+					sourceTable = table;
+					return builder;
+				},
+				innerJoin: (_table: unknown, _condition: unknown) => builder,
+				leftJoin: (_table: unknown, _condition: unknown) => builder,
 				where: (next: unknown) => {
 					condition = next;
 					return builder;
 				},
-				for: (_mode: string) => builder,
+				for: (_mode: string, _config?: unknown) => builder,
 				limit: async (_limit: number) => {
-					if (!projection) return [phone];
+					if (sourceTable === whatsappPhoneNumbers) {
+						return [{ phone, provisioning: phone, release: null }];
+					}
+					if (sourceTable !== socialAccounts || !projection) return [];
+					if (Object.hasOwn(projection, "workspaceId")) {
+						return [{ workspaceId: null }];
+					}
 					accountLookups.push(condition);
 					const account = accounts.find(({ id }) => sqlHasParam(condition, id));
 					return account ? [account] : [];
@@ -56,11 +93,25 @@ function releaseDb(phone: PhoneRow) {
 		},
 		update: (_table: unknown) => ({
 			set: (values: Partial<PhoneRow>) => {
-				stagedValues = values;
 				return {
 					where: (_condition: unknown) => ({
 						returning: async () => [{ ...phone, ...values }],
 					}),
+				};
+			},
+		}),
+		insert: (table: unknown) => ({
+			values: (values: Partial<PhoneRow>) => {
+				if (table === whatsappPhoneReleaseOperations) stagedValues = values;
+				return {
+					returning: async () => [
+						{
+							releaseOperationId: "wro_1",
+							releaseLeaseToken: 0,
+							releaseAttempts: 0,
+							...values,
+						},
+					],
 				};
 			},
 		}),
@@ -83,13 +134,12 @@ function phoneRow(overrides: Partial<PhoneRow> = {}): PhoneRow {
 		organizationId: "org_1",
 		status: "active",
 		provisioningState: "completed",
+		provisioningPhase: "completed",
+		provisioningLeaseToken: 3,
+		provisioningLeaseExpiresAt: null,
 		provisioningSourceAccountId: "acc_source_waba_a",
-		provisioningRequest: {
-			account_id: "acc_source_waba_a",
-			waba_id: "waba_a",
-			verified_name: "Source business",
-			country: "US",
-		},
+		provisioningSourceWabaId: "waba_a",
+		provisioningVerifiedName: null,
 		// Deliberately model a resulting account from a second WABA. Release must
 		// not prefer this row or scan the organization for a convenient token.
 		socialAccountId: "acc_result_waba_b",
@@ -116,6 +166,8 @@ describe("WhatsApp phone source-account isolation", () => {
 			phone.organizationId,
 			phone.id,
 			"user_requested",
+			undefined,
+			admitReleaseAuthority,
 		);
 
 		expect(accountLookups).toHaveLength(1);
@@ -129,7 +181,7 @@ describe("WhatsApp phone source-account isolation", () => {
 	});
 
 	it("fails closed when the recorded source is missing instead of using a compatibility fallback", async () => {
-		const phone = phoneRow({ provisioningSourceAccountId: null });
+		const phone = phoneRow({ provisioningSourceAccountId: "acc_missing" });
 		const { db, accountLookups } = releaseDb(phone);
 
 		const staged = await stagePhoneRelease(
@@ -139,20 +191,15 @@ describe("WhatsApp phone source-account isolation", () => {
 			"tenant_deleted",
 		);
 
-		expect(accountLookups).toHaveLength(0);
+		expect(accountLookups).toHaveLength(1);
 		expect(staged.releaseState).toBe("manual_review");
 		expect(staged.releaseSourceAccountId).toBeNull();
 		expect(staged.releaseAccessTokenCiphertext).toBeNull();
 	});
 
-	it("does not accept a recorded account whose WABA differs from the durable request", async () => {
+	it("does not accept a recorded account whose WABA differs from the durable source identity", async () => {
 		const phone = phoneRow({
-			provisioningRequest: {
-				account_id: "acc_source_waba_a",
-				waba_id: "waba_b",
-				verified_name: "Mismatched business",
-				country: "US",
-			},
+			provisioningSourceWabaId: "waba_b",
 		});
 		const { db, accountLookups } = releaseDb(phone);
 
@@ -161,6 +208,8 @@ describe("WhatsApp phone source-account isolation", () => {
 			phone.organizationId,
 			phone.id,
 			"user_requested",
+			undefined,
+			admitReleaseAuthority,
 		);
 
 		expect(accountLookups).toHaveLength(1);

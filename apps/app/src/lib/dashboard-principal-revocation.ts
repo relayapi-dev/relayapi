@@ -3,9 +3,11 @@ import {
 	session as authSession,
 	type createDb,
 	member,
+	organizationPrincipals,
+	principalWorkspaceGrants,
 } from "@relayapi/db";
-import { and, eq, sql } from "drizzle-orm";
-import { clearClientCache } from "./relay";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { clearClientCache } from "./relay-client-cache";
 
 type Database = ReturnType<typeof createDb>;
 
@@ -35,25 +37,63 @@ export async function revokeDashboardPrincipal(
 
 	const keys = await db.transaction(async (tx) => {
 		const rows = await tx
-			.select({ key: apikey.key })
+			.select({ key: apikey.key, principalId: apikey.principalId })
 			.from(apikey)
 			.where(
 				and(
 					eq(apikey.organizationId, organizationId),
 					eq(apikey.referenceId, userId),
-					sql`${apikey.metadata}->>'principal_type' = 'dashboard_user'`,
+					sql`EXISTS (
+						SELECT 1
+						FROM ${organizationPrincipals} AS principal_row
+						WHERE principal_row.id = ${apikey.principalId}
+							AND principal_row.organization_id = ${apikey.organizationId}
+							AND principal_row.kind = 'member'
+					)`,
 				),
 			);
-		await tx
-			.update(apikey)
-			.set({ enabled: false })
-			.where(
-				and(
-					eq(apikey.organizationId, organizationId),
-					eq(apikey.referenceId, userId),
-					sql`${apikey.metadata}->>'principal_type' = 'dashboard_user'`,
-				),
-			);
+		if (rows.length > 0) {
+			await tx
+				.update(apikey)
+				.set({ enabled: false })
+				.where(
+					and(
+						eq(apikey.organizationId, organizationId),
+						eq(apikey.referenceId, userId),
+						sql`EXISTS (
+							SELECT 1
+							FROM ${organizationPrincipals} AS principal_row
+							WHERE principal_row.id = ${apikey.principalId}
+								AND principal_row.organization_id = ${apikey.organizationId}
+								AND principal_row.kind = 'member'
+						)`,
+					),
+				);
+			const principalIds = [...new Set(rows.map((row) => row.principalId))];
+			await tx
+				.delete(principalWorkspaceGrants)
+				.where(
+					and(
+						eq(principalWorkspaceGrants.organizationId, organizationId),
+						inArray(principalWorkspaceGrants.principalId, principalIds),
+					),
+				);
+			await tx
+				.update(organizationPrincipals)
+				.set({
+					lifecycleStatus: "disabled",
+					disabledAt: new Date(),
+					updatedAt: new Date(),
+					memberId: null,
+				})
+				.where(
+					and(
+						eq(organizationPrincipals.organizationId, organizationId),
+						inArray(organizationPrincipals.id, principalIds),
+						eq(organizationPrincipals.kind, "member"),
+					),
+				);
+		}
 		await tx
 			.update(authSession)
 			.set({ activeOrganizationId: null, updatedAt: new Date() })

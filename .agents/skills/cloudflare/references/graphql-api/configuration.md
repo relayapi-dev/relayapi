@@ -15,7 +15,7 @@ Create tokens at: [dash.cloudflare.com > Account API Tokens](https://dash.cloudf
 ```bash
 # Verify token
 curl -s https://api.cloudflare.com/client/v4/graphql \
-  -H "Authorization: Bearer $CF_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   --data '{"query":"{ viewer { zones(filter: {zoneTag: \"ZONE_ID\"}) { httpRequestsAdaptiveGroups(limit: 1, filter: {datetime_gt: \"2025-01-01T00:00:00Z\"}) { count } } } }"}'
 ```
@@ -30,7 +30,7 @@ Not recommended. Use `X-Auth-Email` + `X-Auth-Key` headers instead of `Authoriza
 
 ```bash
 curl -s https://api.cloudflare.com/client/v4/graphql \
-  -H "Authorization: Bearer $CF_API_TOKEN" \
+  --header @/secure/bearer-auth-header \
   -H "Content-Type: application/json" \
   --data '{
     "query": "query($zoneTag: string!, $start: Time!, $end: Time!) { viewer { zones(filter: {zoneTag: $zoneTag}) { httpRequestsAdaptiveGroups(filter: {datetime_gt: $start, datetime_lt: $end}, limit: 10, orderBy: [datetimeFiveMinutes_DESC]) { count dimensions { datetimeFiveMinutes } } } } }",
@@ -106,8 +106,8 @@ Interactive explorer at [graphql.cloudflare.com](https://graphql.cloudflare.com/
 - **Account ID**: Dashboard > Account Home URL, or via API
 
 ```bash
-curl -s https://api.cloudflare.com/client/v4/zones -H "Authorization: Bearer $CF_API_TOKEN" | jq '.result[] | {name, id}'
-curl -s https://api.cloudflare.com/client/v4/accounts -H "Authorization: Bearer $CF_API_TOKEN" | jq '.result[] | {name, id}'
+curl -s https://api.cloudflare.com/client/v4/zones --header @/secure/bearer-auth-header | jq '.result[] | {name, id}'
+curl -s https://api.cloudflare.com/client/v4/accounts --header @/secure/bearer-auth-header | jq '.result[] | {name, id}'
 ```
 
 ## See Also

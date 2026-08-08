@@ -65,9 +65,12 @@ const data: AuthResponse = await response.json();
 ```bash
 # Set secret
 npx wrangler secret put API_KEY
-cat api-key.txt | npx wrangler secret put API_KEY
 npx wrangler secret put API_KEY --env staging
 ```
+
+Enter values at Wrangler's masked interactive prompt. For automation, use a
+locked-down, ignored secrets file with `wrangler secret bulk`; do not expand a
+secret into a shell command or log.
 
 ```typescript
 // Use secret

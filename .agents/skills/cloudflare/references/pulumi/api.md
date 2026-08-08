@@ -142,7 +142,8 @@ const worker = new cloudflare.WorkerScript("worker", {
 
 Store secrets:
 ```bash
-pulumi config set --secret apiKey "secret-value"
+# Omit the value so Pulumi reads it at its masked interactive prompt instead of argv.
+pulumi config set --secret apiKey
 ```
 
 ## Transform Pattern

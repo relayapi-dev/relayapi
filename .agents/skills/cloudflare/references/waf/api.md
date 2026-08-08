@@ -25,7 +25,7 @@ await client.rulesets.create({
   kind: 'zone',
   phase: 'http_request_firewall_custom',
   name: 'Custom WAF Rules',
-  rules: [{ action: 'block', expression: 'cf.waf.score gt 40', enabled: true }],
+  rules: [{ action: 'block', expression: 'cf.waf.score le 20', enabled: true }],
 });
 
 // Update ruleset (include rule id to keep existing, omit id for new rules)
@@ -33,7 +33,7 @@ await client.rulesets.update({
   zone_id: 'zone_id',
   ruleset_id: 'ruleset_id',
   rules: [
-    { id: 'rule_id', action: 'block', expression: 'cf.waf.score gt 40', enabled: true },
+    { id: 'rule_id', action: 'block', expression: 'cf.waf.score le 20', enabled: true },
     { action: 'challenge', expression: 'http.request.uri.path contains "/admin"', enabled: true },
   ],
 });
@@ -79,9 +79,9 @@ ip.geoip.country            // US, GB, etc.
 ip.geoip.continent          // NA, EU, etc.
 
 // Attack detection
-cf.waf.score                 // 0-100 attack score
-cf.waf.score.sqli           // SQL injection score
-cf.waf.score.xss            // XSS score
+cf.waf.score                 // 1-99: lower is more malicious; 100 is unscored
+cf.waf.score.sqli            // SQL injection score; lower is more malicious
+cf.waf.score.xss             // XSS score; lower is more malicious
 
 // Headers & Cookies
 http.request.headers["authorization"][0]
@@ -116,13 +116,13 @@ or              // Logical OR
 ### Expression Examples
 
 ```typescript
-'cf.waf.score gt 40' // Attack score
+'cf.waf.score le 20' // Recommended initial attack band (1-20)
 'http.request.uri.path eq "/api/login" and http.request.method eq "POST"' // Path + method
 'ip.src in {192.0.2.0/24 203.0.113.0/24}' // IP blocking
 'ip.geoip.country in {"CN" "RU" "KP"}' // Country blocking
 'http.user_agent contains "bot"' // User agent
 'not http.request.headers["authorization"][0]' // Header check
-'(cf.waf.score.sqli gt 20 or cf.waf.score.xss gt 20) and http.request.uri.path starts_with "/api"' // Complex
+'(cf.waf.score.sqli le 20 or cf.waf.score.xss le 20) and http.request.uri.path starts_with "/api"' // Complex
 ```
 
 ## Rate Limiting Configuration

@@ -42,6 +42,7 @@ import {
 	matchAndEnroll,
 } from "../services/automations/trigger-matcher";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 import {
 	deleteOwnedFixtureOrganization,
 	deleteOwnedFixtureWorkspaces,
@@ -51,7 +52,7 @@ import {
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -92,11 +93,11 @@ async function seedFixture() {
 
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "Jane Commenter",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	contactId = ct.id;

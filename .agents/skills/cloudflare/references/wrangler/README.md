@@ -75,7 +75,8 @@ wrangler r2 object get BUCKET/key
 ```bash
 wrangler queues create NAME
 wrangler vectorize create NAME --dimensions N --metric cosine
-wrangler hyperdrive create NAME --connection-string "..."
+wrangler hyperdrive list
+wrangler hyperdrive get ID
 wrangler workflows create NAME
 wrangler constellation create NAME
 wrangler pages project create NAME

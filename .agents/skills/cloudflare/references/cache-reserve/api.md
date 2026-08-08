@@ -78,7 +78,8 @@ const purgeCacheReserveByURL = async (
 };
 
 // Example usage
-await purgeCacheReserveByURL('zone123', 'token456', [
+// config.apiToken is injected by the runtime secret manager and never logged.
+await purgeCacheReserveByURL(config.zoneId, config.apiToken, [
   'https://example.com/image.jpg',
   'https://example.com/video.mp4'
 ]);

@@ -1,3 +1,6 @@
+import { member } from "@relayapi/db";
+import { and, eq } from "drizzle-orm";
+import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import {
 	assertAllWorkspaceScope,
@@ -5,6 +8,7 @@ import {
 	hasWriteAccess,
 } from "../lib/request-access";
 import type { Env, Variables } from "../types";
+import { markMutationInputNotApplied } from "./mutation-validation";
 import { collectWorkspaceIds } from "./workspace-validation";
 
 /**
@@ -34,7 +38,10 @@ export const requireWriteAccessMiddleware = createMiddleware<{
 	Variables: Variables;
 }>(async (c, next) => {
 	const denied = assertWriteAccess(c);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 	return next();
 });
 
@@ -43,7 +50,10 @@ export const requireAllWorkspaceScopeMiddleware = createMiddleware<{
 	Variables: Variables;
 }>(async (c, next) => {
 	const denied = assertAllWorkspaceScope(c);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 	return next();
 });
 
@@ -53,6 +63,7 @@ export const requireManageApiKeysMiddleware = createMiddleware<{
 	Variables: Variables;
 }>(async (c, next) => {
 	if (c.get("permissions").includes("manage_api_keys")) return next();
+	markMutationInputNotApplied(c);
 	return c.json(
 		{
 			error: {
@@ -63,6 +74,70 @@ export const requireManageApiKeysMiddleware = createMiddleware<{
 		403,
 	);
 });
+
+export type FinancialPermission =
+	| "view_billing"
+	| "manage_billing"
+	| "manage_spend";
+
+function roleHasFinancialPermission(
+	role: string,
+	permission: FinancialPermission,
+): boolean {
+	const roles = new Set(role.split(",").map((value) => value.trim()));
+	if (roles.has("owner")) return true;
+	return roles.has("admin") && permission === "manage_spend";
+}
+
+export async function hasLiveFinancialPermission(
+	c: Context<{ Bindings: Env; Variables: Variables }>,
+	permission: FinancialPermission,
+): Promise<boolean> {
+	if (c.get("principalType") === "service") {
+		return c.get("permissions").includes(permission);
+	}
+	const userId = c.get("principalUserId");
+	if (!userId) return false;
+	const [membership] = await c
+		.get("db")
+		.select({ role: member.role })
+		.from(member)
+		.where(
+			and(eq(member.userId, userId), eq(member.organizationId, c.get("orgId"))),
+		)
+		.limit(1);
+	return membership
+		? roleHasFinancialPermission(membership.role, permission)
+		: false;
+}
+
+function financialPermissionMiddleware(permission: FinancialPermission) {
+	return createMiddleware<{ Bindings: Env; Variables: Variables }>(
+		async (c, next) => {
+			if (await hasLiveFinancialPermission(c, permission)) return next();
+			// Global financial gates run before usage reservation, while a few
+			// route-local rechecks deliberately run after it to close role-change
+			// races. The latter are still pre-handler and therefore exact K=0.
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: `${permission.toUpperCase()}_REQUIRED`,
+						message: `This credential requires the ${permission} financial scope.`,
+					},
+				},
+				403,
+			);
+		},
+	);
+}
+
+export const requireViewBillingMiddleware =
+	financialPermissionMiddleware("view_billing");
+export const requireManageBillingMiddleware =
+	financialPermissionMiddleware("manage_billing");
+export const requireManageSpendMiddleware =
+	financialPermissionMiddleware("manage_spend");
 
 /**
  * Enforces workspace scoping on API keys.

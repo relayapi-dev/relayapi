@@ -44,6 +44,12 @@ export const QUEUE_NAMES = [
 
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
+// Cloudflare Free fixes Queue retention at 24 hours. Paid plans permit a longer
+// horizon, but using the same minimum everywhere keeps transient payload
+// residency bounded and makes self-hosted behavior plan-independent.
+export const QUEUE_MESSAGE_RETENTION_SECONDS = 86_400;
+export const INCOMPLETE_MULTIPART_RETENTION_SECONDS = 86_400;
+
 export function cloudflareQueueName(name: QueueName): string {
 	return `relayapi-selfhost-${name}`;
 }
@@ -51,7 +57,7 @@ export function cloudflareQueueName(name: QueueName): string {
 export const REQUIRED_LOCAL_SECRETS = [
 	"CLOUDFLARE_API_TOKEN",
 	"CLOUDFLARE_ACCOUNT_ID",
-	"RELAYAPI_DATABASE_URL",
+	"RELAYAPI_MIGRATION_DATABASE_URL",
 	"RELAYAPI_RUNTIME_DATABASE_URL",
 	"R2_ACCESS_KEY_ID",
 	"R2_SECRET_ACCESS_KEY",

@@ -1,11 +1,12 @@
 import { z } from "@hono/zod-openapi";
+import { INBOX_NOTE_ACTOR_TYPES } from "@relayapi/db";
 
 export const InboxNote = z
 	.object({
 		id: z.string().openapi({ example: "note_abc123" }),
 		conversation_id: z.string(),
 		organization_id: z.string(),
-		actor_type: z.enum(["dashboard_user", "service"]),
+		actor_type: z.enum(INBOX_NOTE_ACTOR_TYPES),
 		actor_id: z.string(),
 		user_id: z.string().nullable(),
 		author_name: z.string().nullable(),

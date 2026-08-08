@@ -37,12 +37,45 @@ function makeApiKeyRequest(key: string) {
 describe("API key admin hardening", () => {
 	let env: Env;
 	let app: Hono<{ Bindings: Env; Variables: Variables }>;
+	let livePrincipalRow: {
+		id: string;
+		permissions: string;
+		expiresAt: Date | null;
+		organizationLifecycleStatus: "active";
+		principalKind: "service";
+		principalLifecycleStatus: "active";
+		principalUserId: null;
+	} | null;
 
 	beforeEach(() => {
 		const mock = createMockEnv();
 		env = mock.env;
+		livePrincipalRow = null;
 
 		app = new Hono<{ Bindings: Env; Variables: Variables }>();
+		app.use("*", async (c, next) => {
+			const liveDb = {
+				select: () => ({
+					from() {
+						return this;
+					},
+					innerJoin() {
+						return this;
+					},
+					leftJoin() {
+						return this;
+					},
+					where() {
+						return this;
+					},
+					async limit() {
+						return livePrincipalRow ? [livePrincipalRow] : [];
+					},
+				}),
+			} as unknown as Variables["db"];
+			c.set("db", liveDb);
+			await next();
+		});
 		app.use("*", authMiddleware);
 		app.use("*", readOnlyMiddleware);
 		app.use("*", requireAllWorkspaceScopeMiddleware);
@@ -52,6 +85,22 @@ describe("API key admin hardening", () => {
 
 	async function seedKey(token: string, data: KVKeyData) {
 		const hashed = await hashKey(token);
+		livePrincipalRow = {
+			id: data.key_id,
+			permissions: data.permissions.join(","),
+			expiresAt: data.expires_at ? new Date(data.expires_at) : null,
+			organizationLifecycleStatus: "active",
+			principalKind: "service",
+			principalLifecycleStatus: "active",
+			principalUserId: null,
+		};
+		data.principal_id ??= `prn_${data.key_id}`;
+		data.principal_type ??= "service";
+		data.principal_user_id ??= null;
+		data.billing_authority_state ??= "ready";
+		data.billing_period_id ??= `bp_${data.key_id}`;
+		data.period_start ??= "2026-01-01T00:00:00.000Z";
+		data.period_end ??= "2099-01-01T00:00:00.000Z";
 		await seedApiKeyInKV(
 			env.KV as unknown as ReturnType<typeof createMockEnv>["kv"],
 			hashed,

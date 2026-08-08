@@ -7,6 +7,15 @@ import { defineConfig, fontProviders } from "astro/config";
 export default defineConfig({
 	site: process.env.APP_BASE_URL || "https://relayapi.dev",
 	output: "server",
+	// Dashboard authentication is Better Auth/PostgreSQL-backed and the app does
+	// not use Astro.session. Supplying Unstorage's supported null driver keeps
+	// that API deliberately non-persistent and prevents the Cloudflare adapter
+	// from auto-provisioning its default SESSION KV namespace.
+	session: {
+		driver: {
+			entrypoint: "unstorage/drivers/null",
+		},
+	},
 	// Geist is served via Astro's Fonts API (not @fontsource @import) so we can
 	// use font-display:"optional" + preload: the metric-matched fallback shows
 	// for the ~100ms block window and the font NEVER swaps in afterwards, while
@@ -79,6 +88,9 @@ export default defineConfig({
 			// Keep a single React copy across the SSR + client graphs (Astro 7 / Vite 8).
 			dedupe: ["react", "react-dom"],
 			alias: {
+				"@relayapi/sdk/internal": fileURLToPath(
+					new URL("../../packages/sdk/src/internal.ts", import.meta.url),
+				),
 				"@relayapi/sdk": fileURLToPath(
 					new URL("../../packages/sdk/src/index.ts", import.meta.url),
 				),

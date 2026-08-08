@@ -51,7 +51,7 @@ await env.IMAGES.input(baseImage)
 
 ```bash
 curl -X POST https://api.cloudflare.com/client/v4/accounts/{account_id}/images/v1 \
-  -H "Authorization: Bearer {token}" -F file=@image.jpg -F metadata='{"key":"value"}'
+  --header @/secure/bearer-auth-header -F file=@image.jpg -F metadata='{"key":"value"}'
 ```
 
 ### Other Operations

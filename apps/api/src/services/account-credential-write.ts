@@ -57,6 +57,7 @@ export async function upsertConnectedAccountWithCredentials(
 	keyConfig: string,
 	params: {
 		apiKeyId: string;
+		authoritySessionId: string | null;
 		authorizedWorkspaceScope: "all" | string[];
 		insert: Omit<AccountInsert, "accessToken" | "refreshToken">;
 		update: Partial<
@@ -82,6 +83,7 @@ export async function upsertConnectedAccountWithCredentials(
 ): Promise<typeof socialAccounts.$inferSelect | undefined> {
 	const liveValidation = await validatePersistedOperationalScope(db, {
 		apiKeyId: params.apiKeyId,
+		authoritySessionId: params.authoritySessionId,
 		organizationId: params.insert.organizationId,
 		workspaceId: params.insert.workspaceId ?? null,
 		resourceName: "connected account",

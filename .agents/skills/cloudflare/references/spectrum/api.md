@@ -98,9 +98,10 @@ const analytics = await client.spectrum.analytics.aggregate({
 ## Python SDK
 
 ```python
+import os
 from cloudflare import Cloudflare
 
-client = Cloudflare(api_token="your-api-token")
+client = Cloudflare(api_token=os.environ["CLOUDFLARE_API_TOKEN"])
 
 # Create
 app = client.spectrum.apps.create(
@@ -135,9 +136,12 @@ analytics = client.spectrum.analytics.aggregate(
 ## Go SDK
 
 ```go
-import "github.com/cloudflare/cloudflare-go"
+import (
+    "os"
+    "github.com/cloudflare/cloudflare-go"
+)
 
-api, _ := cloudflare.NewWithAPIToken("your-api-token")
+api, _ := cloudflare.NewWithAPIToken(os.Getenv("CLOUDFLARE_API_TOKEN"))
 
 // Create
 app, _ := api.CreateSpectrumApplication(ctx, "zone-id", cloudflare.SpectrumApplication{
@@ -172,7 +176,7 @@ _ = api.DeleteSpectrumApplication(ctx, "zone-id", app.ID)
 **Example:**
 ```bash
 curl "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/spectrum/analytics/aggregate/current?metrics=bytesIngress,bytesEgress,count&dimensions=appID" \
-  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+  --header @/secure/bearer-auth-header
 ```
 
 ## See Also

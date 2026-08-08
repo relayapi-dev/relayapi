@@ -14,6 +14,55 @@ export type RunStatus =
 	| "exited"
 	| "failed";
 
+export type AutomationExternalEffectDescriptor = {
+	effectKey: string;
+	kind: "message_block" | "http_request" | "automation_action";
+};
+
+export type AutomationExternalEffectOutcome<T> =
+	| {
+			outcome: "succeeded";
+			value: T;
+			providerReference?: string | null;
+	  }
+	| { outcome: "failed"; value: T; error: string };
+
+export class AutomationExternalEffectBusyError extends Error {
+	constructor() {
+		super("automation external effect is owned by another worker");
+		this.name = "AutomationExternalEffectBusyError";
+	}
+}
+
+export class AutomationExternalEffectUnknownError extends Error {
+	constructor(
+		public readonly effectId: string,
+		message: string,
+	) {
+		super(message);
+		this.name = "AutomationExternalEffectUnknownError";
+	}
+}
+
+/** Provider responded definitively that the mutation was not applied. */
+export class AutomationExternalEffectKnownFailureError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "AutomationExternalEffectKnownFailureError";
+	}
+}
+
+export function isAutomationExternalEffectControlError(
+	error: unknown,
+): error is
+	| AutomationExternalEffectBusyError
+	| AutomationExternalEffectUnknownError {
+	return (
+		error instanceof AutomationExternalEffectBusyError ||
+		error instanceof AutomationExternalEffectUnknownError
+	);
+}
+
 /** Direct-messaging channels supported by the automation dispatcher. */
 export type Channel = "instagram" | "facebook" | "whatsapp" | "telegram";
 
@@ -43,6 +92,16 @@ export type RunContext = {
 	effectIdempotencyKey?: string;
 	/** Derive a stable child key for one action/block inside a composite node. */
 	effectIdempotencyKeyFor?: (component: string) => string;
+	/**
+	 * Fenced provider boundary for one actual external block/action. Local
+	 * validation and pure orchestration stay outside this callback.
+	 */
+	executeExternalEffect?<T>(
+		descriptor: AutomationExternalEffectDescriptor,
+		operation: (
+			providerIdempotencyKey: string,
+		) => Promise<AutomationExternalEffectOutcome<T>>,
+	): Promise<T>;
 	// Remaining env bindings (KV, Queue, R2, encryption keys, etc.) flow here.
 	env: Record<string, unknown>;
 };

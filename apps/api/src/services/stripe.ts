@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import { STRIPE_API_VERSION } from "../config/billing";
 
 let cachedClient: Stripe | null = null;
 let cachedKey: string | null = null;
@@ -12,6 +13,7 @@ export async function createStripeClient(secretKey: string): Promise<Stripe> {
 	if (cachedClient && cachedKey === secretKey) return cachedClient;
 	const { default: StripeCtor } = await import("stripe");
 	cachedClient = new StripeCtor(secretKey, {
+		apiVersion: STRIPE_API_VERSION,
 		httpClient: StripeCtor.createFetchHttpClient(),
 	});
 	cachedKey = secretKey;

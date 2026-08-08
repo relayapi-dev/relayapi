@@ -5,7 +5,6 @@ import {
 	contactConsentEvents,
 	contactConsentStates,
 	contactSubscriptions,
-	contactSuppressions,
 	contacts,
 	socialAccounts,
 	tenantDeletionJobs,
@@ -54,14 +53,17 @@ describe("lifecycle and consent invariants", () => {
 		);
 		expect(
 			getTableConfig(contactConsentStates).indexes.some(
-				(index) => index.config.unique,
+				(index) =>
+					index.config.name === "contact_consent_states_identifier_idx" &&
+					index.config.unique,
 			),
 		).toBe(true);
 		expect(
-			getTableConfig(contactSuppressions).indexes.some(
-				(index) => index.config.unique,
+			getTableConfig(contactConsentStates).columns.some(
+				(column) => column.name === "contact_id",
 			),
-		).toBe(true);
+		).toBe(false);
+		expect(contactForeignKey(contactConsentEvents)?.onDelete).toBe("set null");
 	});
 
 	it("uses one organization-global consent identity across workspace provenance", async () => {
@@ -78,13 +80,12 @@ describe("lifecycle and consent invariants", () => {
 				contactConsentStates,
 				"contact_consent_states_identifier_idx",
 			),
-		).toEqual(["organization_id", "channel", "purpose", "identifier_hash"]);
-		expect(
-			identityColumns(
-				contactSuppressions,
-				"contact_suppressions_identifier_idx",
-			),
-		).toEqual(["organization_id", "channel", "purpose", "identifier_hash"]);
+		).toEqual([
+			"organization_id",
+			"channel",
+			"purpose",
+			"logical_identifier_hash",
+		]);
 
 		const [consentSource, replySource] = await Promise.all([
 			Bun.file(
@@ -101,7 +102,8 @@ describe("lifecycle and consent invariants", () => {
 			consentSource.indexOf("export async function getAllowedRecipientHashes"),
 		);
 		expect(authorizationLookup).not.toContain("scopeKey");
-		expect(replySource).not.toContain("contactSuppressions.scopeKey");
+		expect(replySource).not.toContain("contactSuppressions");
+		expect(consentSource).not.toContain("contactSuppressions");
 	});
 
 	it("accepts at most five minutes of future consent clock skew", async () => {
@@ -135,15 +137,30 @@ describe("lifecycle and consent invariants", () => {
 		expect(source).not.toContain('purpose: "all"');
 	});
 
-	it("normalizes equivalent recipient identifiers to one suppression key", async () => {
+	it("normalizes equivalent recipient identifiers to one consent identity", async () => {
+		const keyConfig = `active=${"a".repeat(64)},identity=${"b".repeat(64)}`;
 		expect(normalizeRecipientIdentifier("email", " User@Example.COM ")).toBe(
 			"user@example.com",
 		);
 		expect(
 			normalizeRecipientIdentifier("whatsapp", "+44 (0) 7700-900123"),
-		).toBe("+4407700900123");
-		expect(await hashRecipientIdentifier("sms", "+1 (415) 555-0100")).toBe(
-			await hashRecipientIdentifier("sms", "14155550100"),
+		).toBe("+447700900123");
+		expect(
+			await hashRecipientIdentifier(
+				keyConfig,
+				"org_1",
+				"sms",
+				"marketing",
+				"+1 (415) 555-0100",
+			),
+		).toBe(
+			await hashRecipientIdentifier(
+				keyConfig,
+				"org_1",
+				"sms",
+				"marketing",
+				"14155550100",
+			),
 		);
 	});
 

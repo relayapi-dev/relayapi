@@ -2,14 +2,21 @@ import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
 	type createDb,
 	postAnalytics,
-	postTargets,
 	posts,
+	postTargets,
 	socialAccounts,
 } from "@relayapi/db";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { decryptAccountToken } from "../lib/account-token-crypto";
+import {
+	cumulativeSnapshotsToDecay,
+	cumulativeTimelineByDay,
+} from "../lib/analytics-observations";
 import { mapConcurrently } from "../lib/concurrency";
-import { applyWorkspaceScope, assertWorkspaceScope } from "../lib/workspace-scope";
+import {
+	applyWorkspaceScope,
+	assertWorkspaceScope,
+} from "../lib/workspace-scope";
 import {
 	AnalyticsQuery,
 	AnalyticsResponse,
@@ -275,8 +282,12 @@ async function getOrgAnalyticsOverview(
 	total_clicks: number;
 	total_views: number;
 }> {
-	const startCond = startDate ? sql`AND p.published_at >= ${new Date(startDate)}` : sql``;
-	const endCond = endDate ? sql`AND p.published_at <= ${new Date(endDate)}` : sql``;
+	const startCond = startDate
+		? sql`AND p.published_at >= ${new Date(startDate)}`
+		: sql``;
+	const endCond = endDate
+		? sql`AND p.published_at <= ${new Date(endDate)}`
+		: sql``;
 	const platformCond = platform ? sql`AND pt.platform = ${platform}` : sql``;
 
 	const rows = await db.execute<{
@@ -304,7 +315,7 @@ async function getOrgAnalyticsOverview(
 				${startCond}
 				${endCond}
 				${platformCond}
-			ORDER BY pa.post_target_id, pa.collected_at DESC
+			ORDER BY pa.post_target_id, pa.collected_at DESC, pa.id DESC
 		),
 		target_count AS (
 			SELECT COUNT(*)::bigint AS n
@@ -376,7 +387,11 @@ async function getLatestAnalyticsForTargets(
 		})
 		.from(postAnalytics)
 		.where(inArray(postAnalytics.postTargetId, targetIds))
-		.orderBy(asc(postAnalytics.postTargetId), desc(postAnalytics.collectedAt));
+		.orderBy(
+			asc(postAnalytics.postTargetId),
+			desc(postAnalytics.collectedAt),
+			desc(postAnalytics.id),
+		);
 }
 
 // --- Route handlers ---
@@ -423,9 +438,7 @@ app.openapi(getAnalytics, async (c) => {
 	// Single batched query for latest analytics per target
 	const targetIds = targets.map((t) => t.id);
 	const analyticsRows = await getLatestAnalyticsForTargets(db, targetIds);
-	const analyticsMap = new Map(
-		analyticsRows.map((a) => [a.postTargetId, a]),
-	);
+	const analyticsMap = new Map(analyticsRows.map((a) => [a.postTargetId, a]));
 
 	const data = [];
 	for (const target of targets) {
@@ -484,9 +497,7 @@ app.openapi(getDailyMetrics, async (c) => {
 	// Batch fetch latest analytics for all targets
 	const targetIds = [...new Set(rows.map((r) => r.targetId))];
 	const analyticsRows = await getLatestAnalyticsForTargets(db, targetIds);
-	const analyticsMap = new Map(
-		analyticsRows.map((a) => [a.postTargetId, a]),
-	);
+	const analyticsMap = new Map(analyticsRows.map((a) => [a.postTargetId, a]));
 
 	// Group by date — track unique postIds per date for post_count
 	const dailyMap = new Map<
@@ -631,27 +642,15 @@ app.openapi(getContentDecay, async (c) => {
 		.select()
 		.from(postAnalytics)
 		.where(and(...snapshotConditions))
-		.orderBy(postAnalytics.collectedAt)
+		.orderBy(postAnalytics.collectedAt, postAnalytics.id)
 		.limit(500);
-
-	let cumulativeImpressions = 0;
-	let cumulativeEngagement = 0;
-
-	const data = snapshots.map((s, i) => {
-		const impressions = s.impressions ?? 0;
-		const engagement =
-			(s.likes ?? 0) + (s.comments ?? 0) + (s.shares ?? 0);
-		cumulativeImpressions += impressions;
-		cumulativeEngagement += engagement;
-
-		return {
-			day: i,
-			impressions,
-			engagement,
-			cumulative_impressions: cumulativeImpressions,
-			cumulative_engagement: cumulativeEngagement,
-		};
-	});
+	const data = cumulativeSnapshotsToDecay(
+		snapshots.map((snapshot) => ({
+			...snapshot,
+			postTargetId: snapshot.postTargetId,
+		})),
+		target.publishedAt,
+	);
 
 	return c.json(
 		{
@@ -659,9 +658,7 @@ app.openapi(getContentDecay, async (c) => {
 			platform: target.platform as string,
 			data,
 			half_life_days:
-				data.length > 1
-					? Math.round((data.length / 2) * 10) / 10
-					: null,
+				data.length > 1 ? Math.round((data.length / 2) * 10) / 10 : null,
 		},
 		200,
 	);
@@ -698,12 +695,16 @@ app.openapi(getPostTimeline, async (c) => {
 	// (the (post_target_id, collected_at) index covers this).
 	const snapshotConditions = [inArray(postAnalytics.postTargetId, targetIds)];
 	if (from_date)
-		snapshotConditions.push(gte(postAnalytics.collectedAt, new Date(from_date)));
+		snapshotConditions.push(
+			gte(postAnalytics.collectedAt, new Date(from_date)),
+		);
 	if (to_date)
 		snapshotConditions.push(lte(postAnalytics.collectedAt, new Date(to_date)));
 
 	const snapshots = await db
 		.select({
+			id: postAnalytics.id,
+			postTargetId: postAnalytics.postTargetId,
 			collectedAt: postAnalytics.collectedAt,
 			impressions: postAnalytics.impressions,
 			likes: postAnalytics.likes,
@@ -714,42 +715,7 @@ app.openapi(getPostTimeline, async (c) => {
 		})
 		.from(postAnalytics)
 		.where(and(...snapshotConditions));
-
-	// Aggregate by date in memory
-	const dateMap = new Map<
-		string,
-		{
-			impressions: number;
-			likes: number;
-			comments: number;
-			shares: number;
-			clicks: number;
-			views: number;
-		}
-	>();
-
-	for (const s of snapshots) {
-		const dateStr = s.collectedAt.toISOString().slice(0, 10);
-		const existing = dateMap.get(dateStr) ?? {
-			impressions: 0,
-			likes: 0,
-			comments: 0,
-			shares: 0,
-			clicks: 0,
-			views: 0,
-		};
-		existing.impressions += s.impressions ?? 0;
-		existing.likes += s.likes ?? 0;
-		existing.comments += s.comments ?? 0;
-		existing.shares += s.shares ?? 0;
-		existing.clicks += s.clicks ?? 0;
-		existing.views += s.views ?? 0;
-		dateMap.set(dateStr, existing);
-	}
-
-	const data = Array.from(dateMap.entries())
-		.map(([date, metrics]) => ({ date, ...metrics }))
-		.sort((a, b) => a.date.localeCompare(b.date));
+	const data = cumulativeTimelineByDay(snapshots);
 
 	return c.json({ post_id, data }, 200);
 });
@@ -796,7 +762,7 @@ app.openapi(getPostingFrequency, async (c) => {
 				${startCond}
 				${endCond}
 				${platformCond}
-			ORDER BY pa.post_target_id, pa.collected_at DESC
+			ORDER BY pa.post_target_id, pa.collected_at DESC, pa.id DESC
 		),
 		posts_in_scope AS (
 			SELECT DISTINCT p.id AS post_id, p.published_at
@@ -873,9 +839,7 @@ app.openapi(getPostingFrequency, async (c) => {
 				? Math.round((val.totalEngagement / val.weekCount) * 10) / 10
 				: 0,
 		avg_impressions:
-			val.weekCount > 0
-				? Math.round(val.totalImpressions / val.weekCount)
-				: 0,
+			val.weekCount > 0 ? Math.round(val.totalImpressions / val.weekCount) : 0,
 		sample_weeks: val.weekCount,
 	}));
 
@@ -920,6 +884,8 @@ app.openapi(getYouTubeDailyViews, async (c) => {
 	const targetIds = targets.map((t) => t.id);
 	const snapshots = await db
 		.select({
+			id: postAnalytics.id,
+			postTargetId: postAnalytics.postTargetId,
 			views: postAnalytics.views,
 			collectedAt: postAnalytics.collectedAt,
 		})
@@ -932,25 +898,13 @@ app.openapi(getYouTubeDailyViews, async (c) => {
 			),
 		);
 
-	const dateMap = new Map<
-		string,
-		{ views: number; watch_time_minutes: number; subscribers_gained: number }
-	>();
-
-	for (const s of snapshots) {
-		const dateStr = s.collectedAt.toISOString().slice(0, 10);
-		const existing = dateMap.get(dateStr) ?? {
-			views: 0,
-			watch_time_minutes: 0,
-			subscribers_gained: 0,
-		};
-		existing.views += s.views ?? 0;
-		dateMap.set(dateStr, existing);
-	}
-
-	const data = Array.from(dateMap.entries())
-		.map(([date, metrics]) => ({ date, ...metrics }))
-		.sort((a, b) => a.date.localeCompare(b.date));
+	const data = cumulativeTimelineByDay(snapshots).map((point) => ({
+		date: point.date,
+		views: point.views,
+		// These provider dimensions are not yet collected in post_analytics.
+		watch_time_minutes: 0,
+		subscribers_gained: 0,
+	}));
 
 	return c.json({ data }, 200);
 });
@@ -1015,7 +969,7 @@ interface CachedOverviewEnvelope {
 }
 
 function overviewCacheKey(accountId: string, dateRange: DateRange): string {
-	return `analytics:overview:${accountId}:${dateRange.from}:${dateRange.to}`;
+	return `analytics-overview:${accountId}:${dateRange.from}:${dateRange.to}`;
 }
 
 async function getCachedPlatformOverview(
@@ -1197,77 +1151,93 @@ app.openapi(getChannels, async (c) => {
 		})
 		.from(socialAccounts)
 		.where(and(...conditions));
-	const channelResults = await mapConcurrently(rawAccounts, 8, async (account) => {
-		const hasAnalytics = PLATFORMS_WITH_ANALYTICS.includes(account.platform);
-		let needsReconnect =
-			hasAnalytics && !hasAnalyticsScopes(account.platform, account.scopes);
+	const channelResults = await mapConcurrently(
+		rawAccounts,
+		8,
+		async (account) => {
+			const hasAnalytics = PLATFORMS_WITH_ANALYTICS.includes(account.platform);
+			let needsReconnect =
+				hasAnalytics && !hasAnalyticsScopes(account.platform, account.scopes);
 
-		let followers: number | null = null;
-		let impressions: number | null = null;
-		let engagementRate: number | null = null;
-		let engagement = 0;
+			let followers: number | null = null;
+			let impressions: number | null = null;
+			let engagementRate: number | null = null;
+			let engagement = 0;
 
-		if (hasAnalytics && !needsReconnect && account.accessToken) {
-			try {
-				const accessToken = await decryptAccountToken(
-					account.accessToken,
-					c.env.ENCRYPTION_KEY,
-					account.id,
-					"access_token",
-				);
-				if (accessToken) {
-					const overview = await getCachedPlatformOverview(
-						c.env,
-						c.executionCtx,
-						{
-							id: account.id,
-							platform: account.platform,
-							platformAccountId: account.platformAccountId,
-							accessToken,
-						},
-						dateRange,
+			if (hasAnalytics && !needsReconnect && account.accessToken) {
+				try {
+					const accessToken = await decryptAccountToken(
+						account.accessToken,
+						c.env.ENCRYPTION_KEY,
+						account.id,
+						"access_token",
 					);
-					if (overview) {
-						followers = overview.followers;
-						impressions = overview.impressions;
-						engagementRate = overview.engagement_rate;
-						engagement = overview.engagement ?? 0;
+					if (accessToken) {
+						const overview = await getCachedPlatformOverview(
+							c.env,
+							c.executionCtx,
+							{
+								id: account.id,
+								platform: account.platform,
+								platformAccountId: account.platformAccountId,
+								accessToken,
+							},
+							dateRange,
+						);
+						if (overview) {
+							followers = overview.followers;
+							impressions = overview.impressions;
+							engagementRate = overview.engagement_rate;
+							engagement = overview.engagement ?? 0;
+						}
 					}
+				} catch (err) {
+					if (
+						err instanceof PlatformAnalyticsError &&
+						(err.code === "TOKEN_EXPIRED" || err.code === "MISSING_PERMISSIONS")
+					) {
+						needsReconnect = true;
+					}
+					console.error(
+						`[Platform Analytics] Failed to fetch overview for ${account.platform}/${account.id}:`,
+						err,
+					);
 				}
-			} catch (err) {
-				if (err instanceof PlatformAnalyticsError && (err.code === "TOKEN_EXPIRED" || err.code === "MISSING_PERMISSIONS")) {
-					needsReconnect = true;
-				}
-				console.error(
-					`[Platform Analytics] Failed to fetch overview for ${account.platform}/${account.id}:`,
-					err,
-				);
 			}
-		}
 
-		return {
-			channel: {
-				account_id: account.id,
-				platform: account.platform,
-				username: account.username,
-				display_name: account.displayName,
-				avatar_url: account.avatarUrl,
-				followers,
-				impressions,
-				engagement_rate: engagementRate,
-				has_analytics: hasAnalytics,
-				needs_reconnect: needsReconnect,
-			},
-			followers: followers ?? 0,
-			impressions: impressions ?? 0,
-			engagement,
-		};
-	});
+			return {
+				channel: {
+					account_id: account.id,
+					platform: account.platform,
+					username: account.username,
+					display_name: account.displayName,
+					avatar_url: account.avatarUrl,
+					followers,
+					impressions,
+					engagement_rate: engagementRate,
+					has_analytics: hasAnalytics,
+					needs_reconnect: needsReconnect,
+				},
+				followers: followers ?? 0,
+				impressions: impressions ?? 0,
+				engagement,
+			};
+		},
+	);
 
 	const channels = channelResults.map((result) => result.channel);
-	const totalAudience = channelResults.reduce((sum, result) => sum + result.followers, 0);
-	const totalImpressions = channelResults.reduce((sum, result) => sum + result.impressions, 0);
-	const totalEngagement = channelResults.reduce((sum, result) => sum + result.engagement, 0);
+	const totalAudience = channelResults.reduce(
+		(sum, result) => sum + result.followers,
+		0,
+	);
+	const totalImpressions = channelResults.reduce(
+		(sum, result) => sum + result.impressions,
+		0,
+	);
+	const totalEngagement = channelResults.reduce(
+		(sum, result) => sum + result.engagement,
+		0,
+	);
 
 	return c.json(
 		{
@@ -1301,7 +1271,12 @@ app.openapi(getPlatformOverview, async (c) => {
 		"json",
 	);
 
-	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
+	const account = await getAccountWithToken(
+		db,
+		query.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+	);
 	if (!account) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
@@ -1373,8 +1348,16 @@ app.openapi(getPlatformOverview, async (c) => {
 		return c.json(overview, 200);
 	} catch (err) {
 		if (err instanceof PlatformAnalyticsError) {
-			const status = err.code === "TOKEN_EXPIRED" ? 401 : err.code === "MISSING_PERMISSIONS" ? 403 : 502;
-			return c.json({ error: { code: err.code, message: err.message } }, status);
+			const status =
+				err.code === "TOKEN_EXPIRED"
+					? 401
+					: err.code === "MISSING_PERMISSIONS"
+						? 403
+						: 502;
+			return c.json(
+				{ error: { code: err.code, message: err.message } },
+				status,
+			);
 		}
 		throw err;
 	}
@@ -1386,7 +1369,12 @@ app.openapi(getPlatformPosts, async (c) => {
 	const query = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
+	const account = await getAccountWithToken(
+		db,
+		query.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+	);
 	if (!account) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
@@ -1415,7 +1403,7 @@ app.openapi(getPlatformPosts, async (c) => {
 	// calls (one per post), so an uncached request can block for seconds.
 	// Cache the result per account + date range + limit, mirroring the
 	// overview cache. Ownership/scope checks above run on every request.
-	const cacheKey = `analytics:posts:${query.account_id}:${dateRange.from}:${dateRange.to}:${query.limit}`;
+	const cacheKey = `analytics-posts:${query.account_id}:${dateRange.from}:${dateRange.to}:${query.limit}`;
 	const cached = await c.env.KV.get<PlatformPostMetrics[]>(cacheKey, "json");
 	if (cached) {
 		return c.json({ data: cached }, 200);
@@ -1441,8 +1429,16 @@ app.openapi(getPlatformPosts, async (c) => {
 		return c.json({ data: platformPosts }, 200);
 	} catch (err) {
 		if (err instanceof PlatformAnalyticsError) {
-			const status = err.code === "TOKEN_EXPIRED" ? 401 : err.code === "MISSING_PERMISSIONS" ? 403 : 502;
-			return c.json({ error: { code: err.code, message: err.message } }, status);
+			const status =
+				err.code === "TOKEN_EXPIRED"
+					? 401
+					: err.code === "MISSING_PERMISSIONS"
+						? 403
+						: 502;
+			return c.json(
+				{ error: { code: err.code, message: err.message } },
+				status,
+			);
 		}
 		throw err;
 	}
@@ -1454,7 +1450,12 @@ app.openapi(getPlatformAudience, async (c) => {
 	const query = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
+	const account = await getAccountWithToken(
+		db,
+		query.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+	);
 	if (!account) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
@@ -1506,8 +1507,16 @@ app.openapi(getPlatformAudience, async (c) => {
 		return c.json({ ...audience, available: true }, 200);
 	} catch (err) {
 		if (err instanceof PlatformAnalyticsError) {
-			const status = err.code === "TOKEN_EXPIRED" ? 401 : err.code === "MISSING_PERMISSIONS" ? 403 : 502;
-			return c.json({ error: { code: err.code, message: err.message } }, status);
+			const status =
+				err.code === "TOKEN_EXPIRED"
+					? 401
+					: err.code === "MISSING_PERMISSIONS"
+						? 403
+						: 502;
+			return c.json(
+				{ error: { code: err.code, message: err.message } },
+				status,
+			);
 		}
 		throw err;
 	}
@@ -1519,7 +1528,12 @@ app.openapi(getPlatformDaily, async (c) => {
 	const query = c.req.valid("query");
 	const db = c.get("db");
 
-	const account = await getAccountWithToken(db, query.account_id, orgId, c.env.ENCRYPTION_KEY);
+	const account = await getAccountWithToken(
+		db,
+		query.account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+	);
 	if (!account) {
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
@@ -1552,8 +1566,16 @@ app.openapi(getPlatformDaily, async (c) => {
 		return c.json({ data: daily }, 200);
 	} catch (err) {
 		if (err instanceof PlatformAnalyticsError) {
-			const status = err.code === "TOKEN_EXPIRED" ? 401 : err.code === "MISSING_PERMISSIONS" ? 403 : 502;
-			return c.json({ error: { code: err.code, message: err.message } }, status);
+			const status =
+				err.code === "TOKEN_EXPIRED"
+					? 401
+					: err.code === "MISSING_PERMISSIONS"
+						? 403
+						: 502;
+			return c.json(
+				{ error: { code: err.code, message: err.message } },
+				status,
+			);
 		}
 		throw err;
 	}

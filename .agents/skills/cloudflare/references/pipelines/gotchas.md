@@ -16,9 +16,9 @@ HTTP 200 / `send()` resolves, but no data in the sink. Causes:
 Cannot modify stream schema, pipeline SQL, or sink config — delete and recreate. Use version naming (`events_v1`) and keep SQL in version control.
 
 ```bash
-curl -X DELETE "$BASE_URL/pipelines/{id}" -H "Authorization: Bearer $API_TOKEN"
-curl -X DELETE "$BASE_URL/sinks/{id}"     -H "Authorization: Bearer $API_TOKEN"
-curl -X DELETE "$BASE_URL/streams/{id}"   -H "Authorization: Bearer $API_TOKEN"
+curl -X DELETE "$BASE_URL/pipelines/{id}" --header @/secure/bearer-auth-header
+curl -X DELETE "$BASE_URL/sinks/{id}"     --header @/secure/bearer-auth-header
+curl -X DELETE "$BASE_URL/streams/{id}"   --header @/secure/bearer-auth-header
 ```
 
 ## Worker binding undefined (`env.MY_STREAM`)

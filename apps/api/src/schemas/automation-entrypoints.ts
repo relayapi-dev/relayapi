@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { AUTOMATION_ENTRYPOINT_KINDS } from "@relayapi/db";
 import { compileSafeAutomationRegex } from "../services/automations/safe-regex";
 import {
 	isValidAutomationTimezone,
@@ -193,8 +194,30 @@ export const ConversionEventEntrypointConfig = z
 // Empty config kinds
 export const EmptyEntrypointConfig = z.object({}).strict();
 
-// Registry
-export const EntrypointConfigByKind: Record<string, z.ZodSchema> = {
+export const EntrypointKindSchema = z.enum(AUTOMATION_ENTRYPOINT_KINDS);
+
+export type EntrypointKind = z.infer<typeof EntrypointKindSchema>;
+
+export const ACCOUNTLESS_ENTRYPOINT_KINDS = [
+	"ref_link_click",
+	"schedule",
+	"field_changed",
+	"tag_applied",
+	"tag_removed",
+	"conversion_event",
+] as const satisfies readonly EntrypointKind[];
+
+export function entrypointKindAllowsSocialAccount(
+	kind: EntrypointKind,
+): boolean {
+	return !ACCOUNTLESS_ENTRYPOINT_KINDS.includes(
+		kind as (typeof ACCOUNTLESS_ENTRYPOINT_KINDS)[number],
+	);
+}
+
+// Registry. `satisfies` makes adding a durable kind impossible without also
+// choosing its exact validation behavior.
+export const EntrypointConfigByKind = {
 	dm_received: DmReceivedEntrypointConfig,
 	comment_created: CommentCreatedEntrypointConfig,
 	story_reply: StoryReplyEntrypointConfig,
@@ -209,26 +232,7 @@ export const EntrypointConfigByKind: Record<string, z.ZodSchema> = {
 	tag_removed: TagEntrypointConfig,
 	conversion_event: ConversionEventEntrypointConfig,
 	webhook_inbound: WebhookInboundEntrypointConfig,
-};
-
-export const EntrypointKindSchema = z.enum([
-	"dm_received",
-	"comment_created",
-	"story_reply",
-	"story_mention",
-	"live_comment",
-	"ad_click",
-	"ref_link_click",
-	"share_to_dm",
-	"schedule",
-	"field_changed",
-	"tag_applied",
-	"tag_removed",
-	"conversion_event",
-	"webhook_inbound",
-]);
-
-export type EntrypointKind = z.infer<typeof EntrypointKindSchema>;
+} satisfies Record<EntrypointKind, z.ZodSchema>;
 
 export const AutomationChannelSchema = z.enum([
 	"instagram",
@@ -322,6 +326,16 @@ export const EntrypointCreateSchema = EntrypointWriteSchema.superRefine(
 				message: `${value.kind} is not supported on ${value.channel}`,
 			});
 		}
+		if (
+			value.social_account_id !== undefined &&
+			!entrypointKindAllowsSocialAccount(value.kind)
+		) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["social_account_id"],
+				message: `${value.kind} is an internal trigger and cannot be bound to a social account`,
+			});
+		}
 	},
 );
 
@@ -330,8 +344,8 @@ export const EntrypointCreateSchema = EntrypointWriteSchema.superRefine(
 export const EntrypointUpdateSchema = EntrypointWriteSchema.partial().strict();
 
 export function validateEntrypointConfig(kind: string, config: unknown) {
-	const schema = EntrypointConfigByKind[kind];
-	if (!schema)
+	const parsedKind = EntrypointKindSchema.safeParse(kind);
+	if (!parsedKind.success)
 		return {
 			success: false,
 			error: new z.ZodError([
@@ -343,5 +357,6 @@ export function validateEntrypointConfig(kind: string, config: unknown) {
 				},
 			]),
 		} as const;
+	const schema = EntrypointConfigByKind[parsedKind.data];
 	return schema.safeParse(config);
 }

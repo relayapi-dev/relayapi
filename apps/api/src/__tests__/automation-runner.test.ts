@@ -30,6 +30,7 @@ import {
 	deleteOwnedFixtureWorkspaces,
 	insertOwnedFixtureOrganization,
 } from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -99,11 +100,11 @@ async function createAutomation(graph: Graph, channel = "telegram") {
 async function createContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "runner-test-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -483,11 +484,10 @@ describe("automation runner", () => {
 			.where(
 				eq(automationEffects.nodeExecutionId, executions[0]?.id ?? "missing"),
 			);
-		expect(effects).toHaveLength(1);
-		expect(effects[0]?.status).toBe("succeeded");
+		expect(effects).toHaveLength(0);
 	});
 
-	it("never replays an expired post-boundary node claim", async () => {
+	it("parks a run when a component effect has an unknown outcome", async () => {
 		if (!dbAvailable) {
 			console.warn("skipping: DB fixture unavailable");
 			return;
@@ -527,11 +527,10 @@ describe("automation runner", () => {
 				runRevision: run.revision,
 				visitOrdinal: 0,
 				nodeKey: "effect",
-				status: "in_flight",
+				status: "claimed",
 				attempts: 1,
 				leaseToken: 1,
 				leaseExpiresAt: boundary,
-				requestMayHaveBeenSentAt: boundary,
 				claimedAt: boundary,
 			})
 			.returning();
@@ -540,22 +539,36 @@ describe("automation runner", () => {
 			nodeExecutionId: execution.id,
 			organizationId: run.organizationId,
 			scopeKey: run.scopeKey,
-			effectKey: "node-handler:v1",
-			kind,
-			providerIdempotencyKey: automationEffectIdempotencyKey(execution.id),
-			status: "in_flight",
+			effectKey: "action:test",
+			kind: "automation_action",
+			providerIdempotencyKey: automationEffectIdempotencyKey(
+				execution.id,
+				"action:test",
+			),
+			status: "unknown",
 			attempts: 1,
 			leaseToken: 1,
-			leaseExpiresAt: boundary,
 			requestMayHaveBeenSentAt: boundary,
 			createdAt: boundary,
+			completedAt: boundary,
 		});
 
 		let handlerCalls = 0;
+		let providerCalls = 0;
 		handlers[kind] = {
 			kind,
-			async handle() {
+			async handle(_node, ctx) {
 				handlerCalls += 1;
+				if (!ctx.executeExternalEffect) {
+					throw new Error("expected external-effect executor");
+				}
+				await ctx.executeExternalEffect(
+					{ effectKey: "action:test", kind: "automation_action" },
+					async () => {
+						providerCalls += 1;
+						return { outcome: "succeeded", value: null };
+					},
+				);
 				return { result: "end", exit_reason: "should_not_execute" };
 			},
 		};
@@ -568,7 +581,8 @@ describe("automation runner", () => {
 			delete handlers[kind];
 		}
 
-		expect(handlerCalls).toBe(0);
+		expect(handlerCalls).toBe(1);
+		expect(providerCalls).toBe(0);
 		const executionAfter = await db.query.automationNodeExecutions.findFirst({
 			where: eq(automationNodeExecutions.id, execution.id),
 		});
@@ -640,21 +654,6 @@ describe("automation runner", () => {
 			})
 			.returning();
 		if (!execution) throw new Error("expected node execution");
-		await db.insert(automationEffects).values({
-			nodeExecutionId: execution.id,
-			organizationId: run.organizationId,
-			scopeKey: run.scopeKey,
-			effectKey: "node-handler:v1",
-			kind,
-			providerIdempotencyKey: automationEffectIdempotencyKey(execution.id),
-			status: "succeeded",
-			attempts: 1,
-			leaseToken: 1,
-			result: completion,
-			createdAt: claimedAt,
-			completedAt,
-		});
-
 		let handlerCalls = 0;
 		handlers[kind] = {
 			kind,

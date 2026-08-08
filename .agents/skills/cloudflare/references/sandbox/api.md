@@ -10,7 +10,7 @@ const result = await sandbox.exec('python3 script.py');
 // With options
 await sandbox.exec('python3 test.py', {
   cwd: '/workspace/project',
-  env: { API_KEY: 'secret' },
+  env: { JOB_ID: jobId }, // Pass non-secret context; do not expose credentials.
   stream: true,
   onOutput: (stream, data) => console.log(data)
 });
@@ -71,9 +71,12 @@ await sandbox.getExposedPorts(request.hostname);
 await sandbox.unexposePort(8080);
 ```
 
-## Sessions (Isolated Contexts)
+## Sessions (Command Contexts, Not Security Boundaries)
 
-Each session maintains own shell state, env vars, cwd, process namespace.
+Each session tracks its own shell context, environment variables, working
+directory, and processes for convenience. Sessions within one sandbox still
+share the sandbox's filesystem and security boundary; never use them to isolate
+different tenants or mutually untrusted workloads.
 
 ```typescript
 // Create with context
@@ -194,5 +197,3 @@ try {
 
 // Retry pattern (see gotchas.md for full implementation)
 ```
-
-

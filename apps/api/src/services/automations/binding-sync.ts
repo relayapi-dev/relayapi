@@ -4,9 +4,13 @@ import {
 	type Database,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../../config/api-versions";
 import { decryptAccountToken } from "../../lib/account-token-crypto";
+import {
+	AUTOMATION_BINDING_MUTATION,
+	exponentialBackoffSeconds,
+} from "../../lib/async-policy";
 import {
 	BindingConfigByType,
 	getBindingConfigChannelError,
@@ -25,73 +29,181 @@ export async function enqueueAutomationBindingSync(
 		"id" | "organizationId" | "syncRevision"
 	>,
 ): Promise<void> {
-	await env.SYNC_QUEUE.send({
-		type: "sync_automation_binding",
-		binding_id: binding.id,
-		organization_id: binding.organizationId,
-		revision: binding.syncRevision,
-	} satisfies SyncAutomationBindingMessage);
-	await db
+	const now = new Date();
+	const leaseExpiresAt = new Date(
+		now.getTime() + AUTOMATION_BINDING_MUTATION.leaseSeconds * 1000,
+	);
+	const [claimed] = await db
 		.update(automationBindings)
-		.set({ lastEnqueuedAt: new Date() })
+		.set({
+			syncDispatchGeneration: sql`${automationBindings.syncDispatchGeneration} + 1`,
+			syncLeaseExpiresAt: leaseExpiresAt,
+			syncStartedAt: null,
+			updatedAt: now,
+		})
 		.where(
 			and(
 				eq(automationBindings.id, binding.id),
+				eq(automationBindings.organizationId, binding.organizationId),
 				eq(automationBindings.syncRevision, binding.syncRevision),
+				sql`${automationBindings.lastSyncedRevision} < ${automationBindings.syncRevision}`,
+				or(
+					isNull(automationBindings.syncNextAttemptAt),
+					lte(automationBindings.syncNextAttemptAt, now),
+				),
+				or(
+					isNull(automationBindings.syncLeaseExpiresAt),
+					lte(automationBindings.syncLeaseExpiresAt, now),
+				),
+				or(
+					isNull(automationBindings.syncErrorClass),
+					eq(automationBindings.syncErrorClass, "transient"),
+				),
+				sql`${automationBindings.syncAttempts} < ${AUTOMATION_BINDING_MUTATION.maxAutomaticAttempts}`,
 			),
-		);
+		)
+		.returning({
+			dispatchGeneration: automationBindings.syncDispatchGeneration,
+		});
+	if (!claimed) return;
+
+	try {
+		await env.SYNC_QUEUE.send({
+			type: "sync_automation_binding",
+			binding_id: binding.id,
+			organization_id: binding.organizationId,
+			revision: binding.syncRevision,
+			dispatch_generation: claimed.dispatchGeneration,
+		} satisfies SyncAutomationBindingMessage);
+	} catch (error) {
+		await db
+			.update(automationBindings)
+			.set({
+				syncLeaseExpiresAt: null,
+				syncStartedAt: null,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(automationBindings.id, binding.id),
+					eq(automationBindings.syncRevision, binding.syncRevision),
+					eq(
+						automationBindings.syncDispatchGeneration,
+						claimed.dispatchGeneration,
+					),
+					isNull(automationBindings.syncStartedAt),
+				),
+			);
+		throw error;
+	}
 }
 
 export async function reconcileAutomationBindingSyncs(
 	env: Env,
 ): Promise<number> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
+	const now = new Date();
+	const leaseExpiresAt = new Date(
+		now.getTime() + AUTOMATION_BINDING_MUTATION.leaseSeconds * 1000,
+	);
 	const rows = await db
-		.select({
-			id: automationBindings.id,
-			organizationId: automationBindings.organizationId,
-			syncRevision: automationBindings.syncRevision,
+		.update(automationBindings)
+		.set({
+			syncDispatchGeneration: sql`${automationBindings.syncDispatchGeneration} + 1`,
+			syncLeaseExpiresAt: leaseExpiresAt,
+			syncStartedAt: null,
+			updatedAt: now,
 		})
-		.from(automationBindings)
 		.where(
 			and(
 				sql`${automationBindings.bindingType} IN ('get_started', 'main_menu', 'ice_breaker')`,
 				sql`${automationBindings.lastSyncedRevision} < ${automationBindings.syncRevision}`,
 				or(
-					isNull(automationBindings.lastEnqueuedAt),
-					// Retry every unacknowledged revision after its backoff window. Do
-					// not require a newer row update: a queue message can be accepted and
-					// then exhausted/lost without touching `updated_at`, and that is the
-					// exact failure mode this reconciler must repair.
-					sql`${automationBindings.lastEnqueuedAt} < now() - (
-						INTERVAL '30 seconds' * power(2, LEAST(${automationBindings.syncAttempts}, 7))
-					)`,
+					isNull(automationBindings.syncNextAttemptAt),
+					lte(automationBindings.syncNextAttemptAt, now),
 				),
+				or(
+					isNull(automationBindings.syncLeaseExpiresAt),
+					lte(automationBindings.syncLeaseExpiresAt, now),
+				),
+				or(
+					isNull(automationBindings.syncErrorClass),
+					eq(automationBindings.syncErrorClass, "transient"),
+				),
+				sql`${automationBindings.syncAttempts} < ${AUTOMATION_BINDING_MUTATION.maxAutomaticAttempts}`,
+				sql`${automationBindings.id} IN (
+					SELECT ranked.id
+					FROM (
+						SELECT
+							b.id,
+							b.organization_id,
+							b.sync_next_attempt_at,
+							row_number() OVER (
+								PARTITION BY b.organization_id
+								ORDER BY b.sync_next_attempt_at NULLS FIRST, b.id
+							) AS tenant_rank
+						FROM automation_bindings b
+						WHERE b.binding_type IN ('get_started', 'main_menu', 'ice_breaker')
+							AND b.last_synced_revision < b.sync_revision
+							AND (
+								b.sync_next_attempt_at IS NULL
+								OR b.sync_next_attempt_at <= ${now}
+							)
+							AND (
+								b.sync_lease_expires_at IS NULL
+								OR b.sync_lease_expires_at <= ${now}
+							)
+							AND (
+								b.sync_error_class IS NULL
+								OR b.sync_error_class = 'transient'
+							)
+							AND b.sync_attempts < ${AUTOMATION_BINDING_MUTATION.maxAutomaticAttempts}
+					) ranked
+					WHERE ranked.tenant_rank <= ${AUTOMATION_BINDING_MUTATION.maxClaimsPerTenant}
+					ORDER BY
+						ranked.tenant_rank,
+						ranked.sync_next_attempt_at NULLS FIRST,
+						ranked.organization_id,
+						ranked.id
+					LIMIT ${AUTOMATION_BINDING_MUTATION.maxClaimsPerRun}
+				)`,
 			),
 		)
-		.limit(100);
+		.returning({
+			id: automationBindings.id,
+			organizationId: automationBindings.organizationId,
+			syncRevision: automationBindings.syncRevision,
+			dispatchGeneration: automationBindings.syncDispatchGeneration,
+		});
 	if (rows.length === 0) return 0;
-	await env.SYNC_QUEUE.sendBatch(
-		rows.map((row) => ({
-			body: {
-				type: "sync_automation_binding" as const,
-				binding_id: row.id,
-				organization_id: row.organizationId,
-				revision: row.syncRevision,
-			},
-		})),
-	);
-	const enqueuedAt = new Date();
-	for (const row of rows) {
+	try {
+		await env.SYNC_QUEUE.sendBatch(
+			rows.map((row) => ({
+				body: {
+					type: "sync_automation_binding" as const,
+					binding_id: row.id,
+					organization_id: row.organizationId,
+					revision: row.syncRevision,
+					dispatch_generation: row.dispatchGeneration,
+				},
+			})),
+		);
+	} catch (error) {
+		const ids = rows.map((row) => row.id);
 		await db
 			.update(automationBindings)
-			.set({ lastEnqueuedAt: enqueuedAt })
+			.set({
+				syncLeaseExpiresAt: null,
+				syncStartedAt: null,
+				updatedAt: new Date(),
+			})
 			.where(
 				and(
-					eq(automationBindings.id, row.id),
-					eq(automationBindings.syncRevision, row.syncRevision),
+					inArray(automationBindings.id, ids),
+					isNull(automationBindings.syncStartedAt),
 				),
 			);
+		throw error;
 	}
 	return rows.length;
 }
@@ -185,21 +297,56 @@ export function buildMetaBindingRequest(
 async function recordSyncFailure(
 	db: Database,
 	message: SyncAutomationBindingMessage,
+	claimStartedAt: Date,
+	attempts: number,
 	error: unknown,
+	errorClass: "transient" | "permanent" | "unknown",
+	requestMayHaveBeenSentAt?: Date,
 ): Promise<void> {
+	const failedAt = new Date();
+	const delaySeconds = exponentialBackoffSeconds(
+		attempts,
+		AUTOMATION_BINDING_MUTATION.retry,
+		`${message.binding_id}:${message.revision}:${attempts}`,
+	);
+	const budgetExhausted =
+		attempts >= AUTOMATION_BINDING_MUTATION.maxAutomaticAttempts;
+	const detail = error instanceof Error ? error.message : String(error);
 	await db
 		.update(automationBindings)
 		.set({
 			status: "sync_failed",
-			syncAttempts: sql`${automationBindings.syncAttempts} + 1`,
-			syncError:
-				error instanceof Error ? error.message.slice(0, 1_000) : String(error),
-			updatedAt: new Date(),
+			syncLeaseExpiresAt: null,
+			syncStartedAt: null,
+			syncNextAttemptAt:
+				errorClass === "transient" && !budgetExhausted
+					? new Date(failedAt.getTime() + delaySeconds * 1000)
+					: null,
+			syncRequestMayHaveBeenSentAt:
+				errorClass === "unknown"
+					? (requestMayHaveBeenSentAt ?? failedAt)
+					: null,
+			syncError: (budgetExhausted && errorClass === "transient"
+				? `Automatic binding-sync attempt budget reached; ${detail}`
+				: detail
+			).slice(0, 1_000),
+			syncErrorAt: failedAt,
+			syncErrorClass:
+				budgetExhausted && errorClass === "transient"
+					? "permanent"
+					: errorClass,
+			updatedAt: failedAt,
 		})
 		.where(
 			and(
 				eq(automationBindings.id, message.binding_id),
+				eq(automationBindings.organizationId, message.organization_id),
 				eq(automationBindings.syncRevision, message.revision),
+				eq(
+					automationBindings.syncDispatchGeneration,
+					message.dispatch_generation,
+				),
+				eq(automationBindings.syncStartedAt, claimStartedAt),
 			),
 		);
 }
@@ -209,6 +356,35 @@ export async function syncAutomationBinding(
 	message: SyncAutomationBindingMessage,
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
+	const claimStartedAt = new Date();
+	const [claim] = await db
+		.update(automationBindings)
+		.set({
+			syncStartedAt: claimStartedAt,
+			syncAttempts: sql`${automationBindings.syncAttempts} + 1`,
+			updatedAt: claimStartedAt,
+		})
+		.where(
+			and(
+				eq(automationBindings.id, message.binding_id),
+				eq(automationBindings.organizationId, message.organization_id),
+				eq(automationBindings.syncRevision, message.revision),
+				eq(
+					automationBindings.syncDispatchGeneration,
+					message.dispatch_generation,
+				),
+				isNull(automationBindings.syncStartedAt),
+				gt(automationBindings.syncLeaseExpiresAt, claimStartedAt),
+				sql`${automationBindings.syncAttempts} < ${AUTOMATION_BINDING_MUTATION.maxAutomaticAttempts}`,
+				or(
+					isNull(automationBindings.syncErrorClass),
+					eq(automationBindings.syncErrorClass, "transient"),
+				),
+			),
+		)
+		.returning({ attempts: automationBindings.syncAttempts });
+	if (!claim) return;
+
 	const [row] = await db
 		.select({ binding: automationBindings, account: socialAccounts })
 		.from(automationBindings)
@@ -227,12 +403,30 @@ export async function syncAutomationBinding(
 			),
 		)
 		.limit(1);
-	if (!row || row.binding.syncRevision !== message.revision) return;
+	if (!row || row.binding.syncRevision !== message.revision) {
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			new Error("Binding account relationship no longer resolves"),
+			"permanent",
+		);
+		return;
+	}
 	if (
 		row.binding.bindingType !== "get_started" &&
 		row.binding.bindingType !== "main_menu" &&
 		row.binding.bindingType !== "ice_breaker"
 	) {
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			new Error(`Unsupported provider binding type ${row.binding.bindingType}`),
+			"permanent",
+		);
 		return;
 	}
 	if (
@@ -254,16 +448,30 @@ export async function syncAutomationBinding(
 			const error = new Error(
 				"Facebook main menu requires an active, synchronized Get Started binding",
 			);
-			await recordSyncFailure(db, message, error);
-			throw error;
+			await recordSyncFailure(
+				db,
+				message,
+				claimStartedAt,
+				claim.attempts,
+				error,
+				"transient",
+			);
+			return;
 		}
 	}
 	if (!row.account.accessToken || row.account.lifecycleStatus !== "active") {
 		const error = new Error(
 			"binding sync account is inactive or missing a token",
 		);
-		await recordSyncFailure(db, message, error);
-		throw error;
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			"permanent",
+		);
+		return;
 	}
 	let token: string | null;
 	try {
@@ -274,13 +482,27 @@ export async function syncAutomationBinding(
 			"access_token",
 		);
 	} catch (error) {
-		await recordSyncFailure(db, message, error);
-		throw error;
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			"permanent",
+		);
+		return;
 	}
 	if (!token) {
 		const error = new Error("binding sync token could not be decrypted");
-		await recordSyncFailure(db, message, error);
-		throw error;
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			"permanent",
+		);
+		return;
 	}
 
 	const base =
@@ -293,8 +515,15 @@ export async function syncAutomationBinding(
 		const error = new Error(
 			`${bindingType} is not supported on ${row.binding.channel}`,
 		);
-		await recordSyncFailure(db, message, error);
-		throw error;
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			"permanent",
+		);
+		return;
 	}
 	let providerConfig: Record<string, unknown> = {};
 	if (row.binding.desiredActive) {
@@ -305,8 +534,15 @@ export async function syncAutomationBinding(
 			const error = new Error(
 				`binding config is invalid: ${parsedConfig?.error.issues.map((issue) => issue.message).join(", ") ?? "missing schema"}`,
 			);
-			await recordSyncFailure(db, message, error);
-			throw error;
+			await recordSyncFailure(
+				db,
+				message,
+				claimStartedAt,
+				claim.attempts,
+				error,
+				"permanent",
+			);
+			return;
 		}
 		providerConfig = parsedConfig.data as Record<string, unknown>;
 		const channelConfigError = getBindingConfigChannelError(
@@ -316,8 +552,15 @@ export async function syncAutomationBinding(
 		);
 		if (channelConfigError) {
 			const error = new Error(channelConfigError);
-			await recordSyncFailure(db, message, error);
-			throw error;
+			await recordSyncFailure(
+				db,
+				message,
+				claimStartedAt,
+				claim.attempts,
+				error,
+				"permanent",
+			);
+			return;
 		}
 		if (
 			bindingType === "main_menu" &&
@@ -326,8 +569,15 @@ export async function syncAutomationBinding(
 			const error = new Error(
 				"Messenger persistent menus support at most 20 items",
 			);
-			await recordSyncFailure(db, message, error);
-			throw error;
+			await recordSyncFailure(
+				db,
+				message,
+				claimStartedAt,
+				claim.attempts,
+				error,
+				"permanent",
+			);
+			return;
 		}
 	}
 	const fetchImpl =
@@ -341,8 +591,31 @@ export async function syncAutomationBinding(
 		row.binding.desiredActive,
 	);
 
+	const boundaryAt = new Date();
+	const [boundaryMarked] = await db
+		.update(automationBindings)
+		.set({
+			syncRequestMayHaveBeenSentAt: boundaryAt,
+			updatedAt: boundaryAt,
+		})
+		.where(
+			and(
+				eq(automationBindings.id, message.binding_id),
+				eq(automationBindings.organizationId, message.organization_id),
+				eq(automationBindings.syncRevision, message.revision),
+				eq(
+					automationBindings.syncDispatchGeneration,
+					message.dispatch_generation,
+				),
+				eq(automationBindings.syncStartedAt, claimStartedAt),
+			),
+		)
+		.returning({ id: automationBindings.id });
+	if (!boundaryMarked) return;
+
+	let response: Response;
 	try {
-		const response = await fetchImpl(request.endpoint, {
+		response = await fetchImpl(request.endpoint, {
 			method: request.method,
 			headers: {
 				Authorization: `Bearer ${token}`,
@@ -350,64 +623,111 @@ export async function syncAutomationBinding(
 			},
 			body: request.body ? JSON.stringify(request.body) : undefined,
 		});
-		const detail = await response.text();
-		if (!response.ok) {
-			throw new Error(
-				`Meta messenger_profile sync failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`,
-			);
-		}
-		if (row.binding.desiredActive) {
-			await db
-				.update(automationBindings)
-				.set({
-					status: "active",
-					lastSyncedAt: new Date(),
-					lastSyncedRevision: message.revision,
-					syncAttempts: sql`${automationBindings.syncAttempts} + 1`,
-					syncError: null,
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(automationBindings.id, message.binding_id),
-						eq(automationBindings.syncRevision, message.revision),
-					),
-				);
-		} else if (row.binding.deleteAfterSync) {
-			// A provider deletion is acknowledged before the local row is removed.
-			// The revision guard prevents an old DELETE delivery from erasing a row
-			// that was re-enabled or edited while the request was in flight.
-			await db
-				.delete(automationBindings)
-				.where(
-					and(
-						eq(automationBindings.id, message.binding_id),
-						eq(automationBindings.syncRevision, message.revision),
-						eq(automationBindings.desiredActive, false),
-					),
-				);
-		} else {
-			await db
-				.update(automationBindings)
-				.set({
-					status: "paused",
-					lastSyncedAt: new Date(),
-					lastSyncedRevision: message.revision,
-					syncAttempts: sql`${automationBindings.syncAttempts} + 1`,
-					syncError: null,
-					updatedAt: new Date(),
-				})
-				.where(
-					and(
-						eq(automationBindings.id, message.binding_id),
-						eq(automationBindings.syncRevision, message.revision),
-						eq(automationBindings.desiredActive, false),
-						eq(automationBindings.deleteAfterSync, false),
-					),
-				);
-		}
 	} catch (error) {
-		await recordSyncFailure(db, message, error);
-		throw error;
+		// A transport failure after the durable boundary cannot prove whether the
+		// remote mutation happened. Stop automatic retries for this revision.
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			"unknown",
+			boundaryAt,
+		);
+		return;
+	}
+
+	const detail = await response.text();
+	if (!response.ok) {
+		const error = new Error(
+			`Meta messenger_profile sync failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`,
+		);
+		const errorClass =
+			response.status === 408 ||
+			response.status === 425 ||
+			response.status === 429
+				? "transient"
+				: response.status >= 500
+					? "unknown"
+					: "permanent";
+		await recordSyncFailure(
+			db,
+			message,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			errorClass,
+			boundaryAt,
+		);
+		return;
+	}
+
+	const completedAt = new Date();
+	const terminalPatch = {
+		lastSyncedAt: completedAt,
+		lastSyncedRevision: message.revision,
+		syncLeaseExpiresAt: null,
+		syncStartedAt: null,
+		syncRequestMayHaveBeenSentAt: null,
+		syncNextAttemptAt: null,
+		syncError: null,
+		syncErrorClass: null,
+		syncErrorAt: null,
+		updatedAt: completedAt,
+	};
+	if (row.binding.desiredActive) {
+		await db
+			.update(automationBindings)
+			.set({ ...terminalPatch, status: "active" })
+			.where(
+				and(
+					eq(automationBindings.id, message.binding_id),
+					eq(automationBindings.organizationId, message.organization_id),
+					eq(automationBindings.syncRevision, message.revision),
+					eq(
+						automationBindings.syncDispatchGeneration,
+						message.dispatch_generation,
+					),
+					eq(automationBindings.syncStartedAt, claimStartedAt),
+				),
+			);
+	} else if (row.binding.deleteAfterSync) {
+		// A provider deletion is acknowledged before the local row is removed.
+		// The revision/generation guard prevents an old DELETE delivery from
+		// erasing a row re-enabled while the request was in flight.
+		await db
+			.delete(automationBindings)
+			.where(
+				and(
+					eq(automationBindings.id, message.binding_id),
+					eq(automationBindings.organizationId, message.organization_id),
+					eq(automationBindings.syncRevision, message.revision),
+					eq(
+						automationBindings.syncDispatchGeneration,
+						message.dispatch_generation,
+					),
+					eq(automationBindings.syncStartedAt, claimStartedAt),
+					eq(automationBindings.desiredActive, false),
+				),
+			);
+	} else {
+		await db
+			.update(automationBindings)
+			.set({ ...terminalPatch, status: "paused" })
+			.where(
+				and(
+					eq(automationBindings.id, message.binding_id),
+					eq(automationBindings.organizationId, message.organization_id),
+					eq(automationBindings.syncRevision, message.revision),
+					eq(
+						automationBindings.syncDispatchGeneration,
+						message.dispatch_generation,
+					),
+					eq(automationBindings.syncStartedAt, claimStartedAt),
+					eq(automationBindings.desiredActive, false),
+					eq(automationBindings.deleteAfterSync, false),
+				),
+			);
 	}
 }

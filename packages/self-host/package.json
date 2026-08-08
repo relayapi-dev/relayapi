@@ -22,6 +22,9 @@
 		"test:package": "bun run build && node tests/package-smoke.mjs",
 		"typecheck": "tsc --noEmit"
 	},
+	"dependencies": {
+		"postgres": "^3.4.9"
+	},
 	"devDependencies": {
 		"@types/bun": "^1.3.14",
 		"@types/node": "^26.1.1",

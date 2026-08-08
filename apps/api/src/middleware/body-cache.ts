@@ -17,14 +17,19 @@ export const bodyCacheMiddleware = createMiddleware<{
 	Variables: Variables;
 }>(async (c, next) => {
 	if (
-		(c.req.method === "POST" || c.req.method === "PUT" || c.req.method === "PATCH")
-		&& isJsonContentType(c.req.header("content-type"))
+		(c.req.method === "POST" ||
+			c.req.method === "PUT" ||
+			c.req.method === "PATCH") &&
+		isJsonContentType(c.req.header("content-type"))
 	) {
 		try {
 			const body = await c.req.json();
 			c.set("parsedBody", body as Record<string, unknown>);
 		} catch {
 			c.set("parsedBody", null);
+			// Reject before idempotency/usage middleware can reserve anything. The
+			// outer error-contract middleware preserves the established public code.
+			return c.text("Malformed JSON in request body", 400);
 		}
 	} else {
 		c.set("parsedBody", null);

@@ -5,7 +5,7 @@ Two APIs: the **control-plane REST API** (Cloudflare-specific) and the **Iceberg
 ## Control-Plane REST API
 
 Base: `https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/r2-catalog/{BUCKET}`
-Auth: `Authorization: Bearer $API_TOKEN`
+Auth wire format: `Authorization: Bearer <redacted-token>`
 
 | Operation | Method | Path |
 |-----------|--------|------|
@@ -22,16 +22,18 @@ List endpoints accept `?return_uuids=true`, `?return_details=true`, `?parent={ns
 ```bash
 # Catalog details (status, maintenance_config, credential_status)
 curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2-catalog/$BUCKET" \
-  -H "Authorization: Bearer $API_TOKEN"
+  --header @/secure/bearer-auth-header
 
-# Store token for compaction (pure-API setups)
+# Store token for compaction (pure-API setups). The JSON file is mode 0600 and
+# provisioned directly by the secret manager; never construct it by echoing the
+# token or put the token in curl's argv.
 curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2-catalog/$BUCKET/credential" \
-  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
-  -d '{"token": "'$API_TOKEN'"}'
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
+  --data-binary @/secure/r2-catalog-credential.json
 
 # Update maintenance config (all fields optional; table-level overrides catalog-level)
 curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2-catalog/$BUCKET/maintenance-configs" \
-  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  --header @/secure/bearer-auth-header -H "Content-Type: application/json" \
   -d '{"compaction": {"state": "enabled", "target_size_mb": "256"},
        "snapshot_expiration": {"state": "enabled", "min_snapshots_to_keep": 10, "max_snapshot_age": "7d"}}'
 ```
@@ -42,7 +44,7 @@ curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2-ca
 
 ```bash
 curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2-catalog/$BUCKET/namespaces/live/tables/earthquakes" \
-  -H "Authorization: Bearer $API_TOKEN"
+  --header @/secure/bearer-auth-header
 ```
 
 ```json

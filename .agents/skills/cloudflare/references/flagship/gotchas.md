@@ -70,9 +70,9 @@ const val = await env.FLAGS.getBooleanValue("gradual-rollout", false, {
 curl -X PUT -d '{"enabled": true}' ...
 
 # ✅ GOOD — GET first, modify, PUT back
-FLAG=$(curl -s -H "Authorization: Bearer $TOKEN" "$URL/flags/my-flag" | jq '.result')
+FLAG=$(curl -s --header @/secure/bearer-auth-header "$URL/flags/my-flag" | jq '.result')
 UPDATED=$(echo "$FLAG" | jq '.enabled = true')
-echo "$UPDATED" | curl -s -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d @- "$URL/flags/my-flag"
+echo "$UPDATED" | curl -s -X PUT --header @/secure/bearer-auth-header -H "Content-Type: application/json" -d @- "$URL/flags/my-flag"
 ```
 
 ### Reading REST Envelope Fields
