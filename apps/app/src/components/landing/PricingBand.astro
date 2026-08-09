@@ -1,4 +1,8 @@
 ---
+import {
+	PUBLIC_ACCESS_HREF,
+	PUBLIC_ACCESS_LABEL,
+} from "../../lib/public-access";
 import Container from "./Container.astro";
 import { compareRows, LANDING_LINKS } from "./data";
 ---
@@ -16,15 +20,15 @@ import { compareRows, LANDING_LINKS } from "./data";
 				Priced to scale, not to gouge.
 			</h2>
 			<p class="mb-7 max-w-[46ch] text-[1.0625rem] leading-[1.5] text-landing-muted">
-				Start free with 200 requests a month. Pro is $5/mo with 10,000
-				included — then $1 per 1,000 extra. Analytics and comments always
-				included.
+				The Free plan includes 200 requests a month. Pro is $5/mo with 10,000
+				included — then $1 per 1,000 extra. Analytics and comments are
+				included with Pro.
 			</p>
 			<div class="flex flex-wrap gap-3">
 				<a
-					href={LANDING_LINKS.signup}
+					href={PUBLIC_ACCESS_HREF}
 					class="rounded-full bg-landing-ink px-6 py-3 text-[0.9375rem] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
-					>Start free</a
+					>{PUBLIC_ACCESS_LABEL}</a
 				>
 				<a
 					href={LANDING_LINKS.pricing}
@@ -99,7 +103,7 @@ import { compareRows, LANDING_LINKS } from "./data";
 				</table>
 			</div>
 			<p class="mt-3 text-[0.8125rem] text-landing-muted">
-				Same 21 platforms. One bill, not one per account.
+				Same 21 publishing channels. One bill, not one per account.
 			</p>
 		</div>
 	</div>

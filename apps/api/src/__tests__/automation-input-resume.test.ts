@@ -19,6 +19,7 @@ import {
 import { eq } from "drizzle-orm";
 import type { Graph } from "../schemas/automation-graph";
 import {
+	resolveAttachmentForInputValidation,
 	resolveInputResume,
 	resumeWaitingRunOnInput,
 } from "../services/automations/input-resume";
@@ -35,6 +36,59 @@ import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 // ---------------------------------------------------------------------------
 
 describe("resolveInputResume", () => {
+	it("hydrates unknown size only for capped file inputs", async () => {
+		const attachment = { id: "wa_media", mime_type: "image/jpeg" };
+		let calls = 0;
+		const resolver = async () => {
+			calls++;
+			return { ...attachment, size_bytes: 1_024 };
+		};
+
+		expect(
+			await resolveAttachmentForInputValidation(
+				{ input_type: "text" },
+				attachment,
+				resolver,
+			),
+		).toEqual(attachment);
+		expect(
+			await resolveAttachmentForInputValidation(
+				{ input_type: "file" },
+				attachment,
+				resolver,
+			),
+		).toEqual(attachment);
+		expect(
+			await resolveAttachmentForInputValidation(
+				{ input_type: "file", max_size_mb: 1 },
+				attachment,
+				resolver,
+			),
+		).toEqual({ ...attachment, size_bytes: 1_024 });
+		expect(calls).toBe(1);
+	});
+
+	it("turns capped-file metadata failures into unknown-size validation", async () => {
+		const attachment = { id: "wa_media", mime_type: "image/jpeg" };
+		const config = {
+			input_type: "file" as const,
+			max_size_mb: 1,
+			max_retries: 1,
+		};
+		const unresolved = await resolveAttachmentForInputValidation(
+			config,
+			attachment,
+			async () => {
+				throw new Error("temporary provider failure");
+			},
+		);
+
+		expect(unresolved).toEqual(attachment);
+		expect(resolveInputResume(config, "", unresolved, 0)).toEqual({
+			port: "invalid",
+		});
+	});
+
 	it("accepts free text by default", () => {
 		const out = resolveInputResume({ field: "answer" }, "hello world", null, 0);
 		expect(out.port).toBe("captured");
@@ -246,21 +300,34 @@ describe("resolveInputResume", () => {
 		}
 	});
 
-	it("ignores size when attachment omits size_bytes (platform didn't supply one)", () => {
+	it("fails closed when a configured size cap cannot be verified", () => {
 		const cfg = {
 			field: "file",
 			input_type: "file" as const,
 			max_size_mb: 1,
 		};
-		// No size_bytes — should NOT reject; operator can't enforce what the
-		// platform doesn't surface.
 		const out = resolveInputResume(
 			cfg,
 			"",
 			{ mime_type: "image/jpeg", url: "https://example.com/a.jpg" },
 			0,
 		);
-		expect(out.port).toBe("captured");
+		expect(out.port).toBe("invalid");
+	});
+
+	it("retries an unverifiable file size when attempts remain", () => {
+		const out = resolveInputResume(
+			{
+				field: "file",
+				input_type: "file",
+				max_size_mb: 1,
+				max_retries: 2,
+			},
+			"",
+			{ id: "whatsapp-media-without-size", mime_type: "image/jpeg" },
+			0,
+		);
+		expect(out.port).toBe("retry");
 	});
 
 	it("goes invalid when no attachment at all (out of retries)", () => {
@@ -380,11 +447,13 @@ async function createAutomation(graph: Graph, channel = "telegram") {
 async function createContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values(await protectedContactFixture({
-			organizationId: orgId,
-			workspaceId,
-			name: "input-resume-test-contact",
-		}))
+		.values(
+			await protectedContactFixture({
+				organizationId: orgId,
+				workspaceId,
+				name: "input-resume-test-contact",
+			}),
+		)
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;

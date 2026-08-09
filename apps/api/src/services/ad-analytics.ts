@@ -53,7 +53,7 @@ export async function fetchAndStoreAdMetrics(
 		)
 		.limit(1);
 
-	if (!ad || !ad.ad.platformAdId) {
+	if (!ad?.ad.platformAdId) {
 		throw new AdPlatformError(
 			"INVALID_STATE",
 			"Ad metrics source is missing, inactive, or disconnected",
@@ -276,7 +276,7 @@ export async function getAdAnalyticsLive(
 		)
 		.limit(1);
 
-	if (!ad || !ad.ad.platformAdId) {
+	if (!ad?.ad.platformAdId) {
 		throw new AdPlatformError(
 			"NOT_FOUND",
 			"Ad not found or has no platform ID",

@@ -9,7 +9,6 @@ export const GET: APIRoute = async (ctx) => {
     const data = await client.contentTemplates.list({
       limit: Number(url.searchParams.get("limit")) || 20,
       cursor: url.searchParams.get("cursor") || undefined,
-      workspace_id: url.searchParams.get("workspace_id") || undefined,
       tag: url.searchParams.get("tag") || undefined,
     });
     return Response.json(data);

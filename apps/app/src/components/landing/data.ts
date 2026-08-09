@@ -1,7 +1,5 @@
-// Data for the Cursor-style marketing landing page.
-// Transcribed verbatim from the approved mockup
-// ("RelayAPI Landing.dc.html" → renderVals()). Copy is intentionally
-// kept as-is (playful placeholder testimonials).
+// Data for the public marketing landing page. Capability and platform copy
+// must reflect the shipped API contract rather than design placeholders.
 
 /** Brand-icon SVG path data (single `<path d>` per platform). */
 export const PLATFORM_PATHS = {
@@ -48,11 +46,9 @@ export interface HeroChannel {
 }
 
 /**
- * The channels shown fanning out in the animated hero dashboard.
- * "Channels" = connected accounts, so a few platforms appear more than once
- * (a Page, a second profile…) — this is how the real product works and lets
- * the cascade land on an honest "21 / 21". Ordered so duplicate glyphs never
- * sit adjacent in the 7-column grid.
+ * The 21 publishing channels from the shared platform contract. Newsletter
+ * and SMS channels use initials because the landing bundle has no brand glyph
+ * for them; no account/content variants are counted as extra platforms.
  */
 export const heroChannels: HeroChannel[] = [
 	{ name: "X", initial: "X", glyph: PLATFORM_PATHS.x },
@@ -71,11 +67,11 @@ export const heroChannels: HeroChannel[] = [
 	{ name: "Snapchat", initial: "S", glyph: PLATFORM_PATHS.snapchat },
 	{ name: "Discord", initial: "D", glyph: PLATFORM_PATHS.discord },
 	{ name: "Google Business", initial: "G", glyph: PLATFORM_PATHS.google },
-	{ name: "Instagram · Reels", initial: "IG", glyph: PLATFORM_PATHS.instagram },
-	{ name: "Facebook · Page", initial: "f", glyph: PLATFORM_PATHS.facebook },
-	{ name: "YouTube · Shorts", initial: "YT", glyph: PLATFORM_PATHS.youtube },
-	{ name: "LinkedIn · Company", initial: "in", glyph: PLATFORM_PATHS.linkedin },
 	{ name: "SMS", initial: "SM" },
+	{ name: "Beehiiv", initial: "BH" },
+	{ name: "Kit", initial: "K" },
+	{ name: "Mailchimp", initial: "MC" },
+	{ name: "Listmonk", initial: "LM" },
 ];
 
 export interface ReviewTask {
@@ -88,7 +84,7 @@ export const reviewTasks: ReviewTask[] = [
 	{
 		title: "Launch announcement",
 		time: "now",
-		sub: "Done. Delivered to 21 platforms.",
+		sub: "Done. Delivered to 21 publishing channels.",
 	},
 	{
 		title: "Weekly product digest",
@@ -103,7 +99,7 @@ export const reviewTasks: ReviewTask[] = [
 	{
 		title: "Instagram Reel · v2",
 		time: "10m",
-		sub: "Reformatted media for Reels + TikTok",
+		sub: "Prepared provider-ready media for Reels + TikTok",
 	},
 	{
 		title: "Set up auto-repost rule",
@@ -121,9 +117,13 @@ export interface PlatformLogo {
 	/** Display name shown next to the brand glyph. */
 	name: string;
 	/** Single-path simple-icons glyph, rendered monochrome via currentColor. */
-	glyph: string;
+	glyph?: string;
+	/** Short fallback when a brand glyph is not bundled. */
+	initial: string;
 	/** Platform-page slug (lib/platform-data) — drives `/product/${slug}` links. */
 	slug: string;
+	/** Override for channels documented outside the marketing platform pages. */
+	href?: string;
 }
 
 /**
@@ -132,25 +132,121 @@ export interface PlatformLogo {
  * reads as "every platform you publish to" rather than implying endorsement.
  */
 export const platformLogos: PlatformLogo[] = [
-	{ name: "X", glyph: PLATFORM_PATHS.x, slug: "twitter" },
-	{ name: "Instagram", glyph: PLATFORM_PATHS.instagram, slug: "instagram" },
-	{ name: "LinkedIn", glyph: PLATFORM_PATHS.linkedin, slug: "linkedin" },
-	{ name: "Facebook", glyph: PLATFORM_PATHS.facebook, slug: "facebook" },
-	{ name: "YouTube", glyph: PLATFORM_PATHS.youtube, slug: "youtube" },
-	{ name: "TikTok", glyph: PLATFORM_PATHS.tiktok, slug: "tiktok" },
-	{ name: "Threads", glyph: PLATFORM_PATHS.threads, slug: "threads" },
-	{ name: "Pinterest", glyph: PLATFORM_PATHS.pinterest, slug: "pinterest" },
-	{ name: "Reddit", glyph: PLATFORM_PATHS.reddit, slug: "reddit" },
-	{ name: "Bluesky", glyph: PLATFORM_PATHS.bluesky, slug: "bluesky" },
-	{ name: "Mastodon", glyph: PLATFORM_PATHS.mastodon, slug: "mastodon" },
-	{ name: "Telegram", glyph: PLATFORM_PATHS.telegram, slug: "telegram" },
-	{ name: "WhatsApp", glyph: PLATFORM_PATHS.whatsapp, slug: "whatsapp" },
-	{ name: "Snapchat", glyph: PLATFORM_PATHS.snapchat, slug: "snapchat" },
-	{ name: "Discord", glyph: PLATFORM_PATHS.discord, slug: "discord" },
+	{ name: "X", initial: "X", glyph: PLATFORM_PATHS.x, slug: "twitter" },
+	{
+		name: "Instagram",
+		initial: "IG",
+		glyph: PLATFORM_PATHS.instagram,
+		slug: "instagram",
+	},
+	{
+		name: "LinkedIn",
+		initial: "in",
+		glyph: PLATFORM_PATHS.linkedin,
+		slug: "linkedin",
+	},
+	{
+		name: "Facebook",
+		initial: "f",
+		glyph: PLATFORM_PATHS.facebook,
+		slug: "facebook",
+	},
+	{
+		name: "YouTube",
+		initial: "YT",
+		glyph: PLATFORM_PATHS.youtube,
+		slug: "youtube",
+	},
+	{
+		name: "TikTok",
+		initial: "TT",
+		glyph: PLATFORM_PATHS.tiktok,
+		slug: "tiktok",
+	},
+	{
+		name: "Threads",
+		initial: "T",
+		glyph: PLATFORM_PATHS.threads,
+		slug: "threads",
+	},
+	{
+		name: "Pinterest",
+		initial: "P",
+		glyph: PLATFORM_PATHS.pinterest,
+		slug: "pinterest",
+	},
+	{
+		name: "Reddit",
+		initial: "R",
+		glyph: PLATFORM_PATHS.reddit,
+		slug: "reddit",
+	},
+	{
+		name: "Bluesky",
+		initial: "BS",
+		glyph: PLATFORM_PATHS.bluesky,
+		slug: "bluesky",
+	},
+	{
+		name: "Mastodon",
+		initial: "M",
+		glyph: PLATFORM_PATHS.mastodon,
+		slug: "mastodon",
+	},
+	{
+		name: "Telegram",
+		initial: "TG",
+		glyph: PLATFORM_PATHS.telegram,
+		slug: "telegram",
+	},
+	{
+		name: "WhatsApp",
+		initial: "WA",
+		glyph: PLATFORM_PATHS.whatsapp,
+		slug: "whatsapp",
+	},
+	{
+		name: "Snapchat",
+		initial: "S",
+		glyph: PLATFORM_PATHS.snapchat,
+		slug: "snapchat",
+	},
+	{
+		name: "Discord",
+		initial: "D",
+		glyph: PLATFORM_PATHS.discord,
+		slug: "discord",
+	},
 	{
 		name: "Google Business",
+		initial: "GB",
 		glyph: PLATFORM_PATHS.google,
 		slug: "google-business",
+	},
+	{ name: "SMS", initial: "SM", slug: "twilio" },
+	{
+		name: "Beehiiv",
+		initial: "BH",
+		slug: "beehiiv",
+		href: "https://docs.relayapi.dev/platforms/beehiiv",
+	},
+	{
+		name: "Kit",
+		initial: "K",
+		slug: "convertkit",
+		href: "https://docs.relayapi.dev/platforms/convertkit",
+	},
+	{
+		name: "Mailchimp",
+		initial: "MC",
+		slug: "mailchimp",
+		href: "https://docs.relayapi.dev/platforms/mailchimp",
+	},
+	{
+		name: "Listmonk",
+		initial: "LM",
+		slug: "listmonk",
+		href: "https://docs.relayapi.dev/platforms/listmonk",
 	},
 ];
 
@@ -194,58 +290,50 @@ export const scheduleRows: ScheduleRow[] = [
 	},
 ];
 
-export interface Testimonial {
-	quote: string;
-	name: string;
-	role: string;
-	avatarBg: string;
-	initial: string;
+export interface ProductProof {
+	title: string;
+	detail: string;
+	status: string;
 }
 
-export const testimonials: Testimonial[] = [
+export const productProofs: ProductProof[] = [
 	{
-		quote:
-			"I used to mass-communicate through parables and word of mouth. With Relay, I can post to all 21 platforms at once. Truly a miracle.",
-		name: "Jesus Christ",
-		role: "Son of God at Heaven Inc.",
-		avatarBg: "#E4D8C2",
+		title: "Unified publishing contract",
+		detail:
+			"One post schema targets the 21 channel identifiers exposed by the API and SDK.",
+		status: "Available",
 	},
 	{
-		quote:
-			"I don't use APIs. APIs use me. But I made an exception for Relay because it's the only API that doesn't flinch when I send a request.",
-		name: "Chuck Norris",
-		role: "Chief Roundhouse Officer, Fists of Fury LLC",
-		avatarBg: "#D2BC9A",
+		title: "Durable delivery status",
+		detail:
+			"Per-target states, failure details, and webhook delivery logs make asynchronous work observable.",
+		status: "Available",
 	},
 	{
-		quote:
-			"I find your lack of cross-platform posting disturbing. Relay brought order to our galactic social media chaos.",
-		name: "Darth Vader",
-		role: "Dark Lord of the Sith, The Galactic Empire",
-		avatarBg: "#CCC2AD",
+		title: "Operator-owned deployment",
+		detail:
+			"The self-host package provisions a pinned RelayAPI release in your Cloudflare account.",
+		status: "Available",
 	},
 	{
-		quote:
-			"A wizard never mistimes a social post, nor sends it too early. He posts precisely when he means to. With Relay, of course.",
-		name: "Gandalf",
-		role: "Senior Wizard, Middle Earth Solutions",
-		avatarBg: "#DED7C7",
+		title: "Hosted public signup",
+		detail:
+			"The hosted service is still invite-only while production launch gates are completed.",
+		status: "Early access",
 	},
 	{
-		quote:
-			"Social media is like onions — it has layers. Relay handles all the layers for me so I can get back to me swamp.",
-		name: "Shrek",
-		role: "CEO, Swamp Enterprises",
-		avatarBg: "#C8A883",
+		title: "Analytics and comments",
+		detail:
+			"These hosted features are part of Pro; the Free plan covers the core publishing surface.",
+		status: "Pro",
 	},
 	{
-		quote:
-			"I work alone. But even I needed help posting across platforms. Relay is the Robin I actually wanted. Silent, efficient, no cape.",
-		name: "Batman",
-		role: "Vigilante & CTO, Wayne Enterprises",
-		avatarBg: "#E2D2BA",
+		title: "Machine-readable documentation",
+		detail:
+			"A pinned OpenAPI document drives the API reference and language-specific SDKs.",
+		status: "Available",
 	},
-].map((t) => ({ ...t, initial: t.name.charAt(0) }));
+];
 
 export interface FrontierCard {
 	title: string;
@@ -256,13 +344,13 @@ export interface FrontierCard {
 
 export const frontier: FrontierCard[] = [
 	{
-		title: "Every platform, one API",
-		body: "Consistent request format, unified error handling, and standardized responses across all 21 networks.",
+		title: "Every channel, one API",
+		body: "Consistent request format, unified error handling, and standardized responses across all 21 publishing channels.",
 		link: "See all platforms",
 	},
 	{
 		title: "Complete media understanding",
-		body: "Upload once — images and video get auto-resized and reformatted to each platform's exact specs.",
+		body: "Upload full-resolution originals once, reuse media IDs across posts, and render durable preview thumbnails. Prepare each asset for provider limits.",
 		link: "Media API docs",
 	},
 	{
@@ -293,24 +381,9 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
 	{
-		date: "Jun 10, 2026",
-		tag: "Platforms",
-		title: "Bluesky and Threads now support native video uploads",
-	},
-	{
-		date: "Jun 4, 2026",
-		tag: "Webhooks",
-		title: "Custom webhooks, retry policies, and per-platform scheduling",
-	},
-	{
-		date: "May 28, 2026",
-		tag: "Analytics",
-		title: "Analytics API v2 — cross-platform engagement in one call",
-	},
-	{
-		date: "May 14, 2026",
-		tag: "SDKs",
-		title: "New Go and Java SDKs, plus a faster media pipeline",
+		date: "Mar 2026",
+		tag: "Release",
+		title: "Initial release: unified publishing, media, webhooks, and API keys",
 	},
 ];
 
@@ -328,7 +401,7 @@ export const blog: BlogPost[] = [
 	},
 	{
 		tag: "Engineering",
-		title: "Delivering to 21 platforms in under 100ms",
+		title: "Delivering to 21 publishing channels in under 100ms",
 		meta: "Giulio Z. · 5 min read",
 	},
 	{
@@ -345,33 +418,53 @@ export const blog: BlogPost[] = [
 
 export interface FooterColumn {
 	title: string;
-	links: string[];
+	links: Array<{ label: string; href: string }>;
 }
 
 export const footerCols: FooterColumn[] = [
 	{
 		title: "Product",
 		links: [
-			"Posting API",
-			"Media API",
-			"Analytics API",
-			"Webhooks API",
-			"Pricing",
+			{ label: "Posting API", href: "/product/posting-api" },
+			{ label: "Media API", href: "/product/media-api" },
+			{ label: "Analytics API", href: "/product/analytics-api" },
+			{ label: "Webhooks API", href: "/product/webhooks-api" },
+			{ label: "Pricing", href: "/pricing" },
 		],
 	},
 	{
 		title: "Platforms",
-		links: ["Instagram", "X / Twitter", "LinkedIn", "TikTok", "All platforms"],
+		links: [
+			{ label: "Instagram", href: "/product/instagram" },
+			{ label: "X / Twitter", href: "/product/twitter" },
+			{ label: "LinkedIn", href: "/product/linkedin" },
+			{ label: "TikTok", href: "/product/tiktok" },
+			{
+				label: "All platform guides",
+				href: "https://docs.relayapi.dev/platforms",
+			},
+		],
 	},
 	{
 		title: "Resources",
-		links: ["Documentation", "API Reference", "Changelog", "Login", "Sign up"],
+		links: [
+			{ label: "Documentation", href: "https://docs.relayapi.dev" },
+			{
+				label: "API Reference",
+				href: "https://docs.relayapi.dev/api-reference",
+			},
+			{ label: "Changelog", href: "https://docs.relayapi.dev/changelog" },
+			{ label: "Login", href: "/login" },
+			{
+				label: "Request access",
+				href: "mailto:support@relayapi.dev?subject=RelayAPI%20early%20access",
+			},
+		],
 	},
 ];
 
 /** Shared external/internal link targets for the landing. */
 export const LANDING_LINKS = {
-	signup: "/signup",
 	login: "/login",
 	pricing: "/pricing",
 	docs: "https://docs.relayapi.dev",

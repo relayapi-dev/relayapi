@@ -1,6 +1,11 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { contactSegmentMemberships, segments } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { resolveOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -108,6 +113,10 @@ const listSegments = createRoute({
 			description: "List",
 			content: { "application/json": { schema: SegmentListResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -125,20 +134,18 @@ app.openapi(listSegments, async (c) => {
 	// microseconds to millisecond precision and would skip rows sharing the cursor's
 	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
-		const cursorRow = await db
-			.select({ createdAt: sql<string>`${segments.createdAt}::text` })
-			.from(segments)
-			.where(eq(segments.id, cursor))
-			.limit(1);
-		if (cursorRow[0]) {
-			conditions.push(
-				sql`(${segments.createdAt}, ${segments.id}) < (${cursorRow[0].createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${segments.createdAt}, ${segments.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(segments),
+			cursorTimestamp: sql<string>`to_char(${segments.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(segments)
 		.where(and(...conditions))
 		.orderBy(desc(segments.createdAt), desc(segments.id))
@@ -146,12 +153,17 @@ app.openapi(listSegments, async (c) => {
 
 	const hasMore = rows.length > limit;
 	const pageRows = rows.slice(0, limit);
+	const last = pageRows.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 	const counts = await getSegmentMemberCounts(db, pageRows);
 	const data = pageRows.map((row) => serialize(row, counts.get(row.id)));
 	return c.json(
 		{
 			data,
-			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,

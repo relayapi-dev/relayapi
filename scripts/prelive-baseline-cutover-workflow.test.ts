@@ -441,7 +441,7 @@ describe("pre-live baseline cutover workflow", () => {
 			"registeredTotalCases !== EXPECTED_TOTAL_CASES",
 		);
 		expect(requiredDatabaseFixtureRunner).toContain(
-			"contains ${registeredCases} databaseIt registrations",
+			`contains \${registeredCases} databaseIt registrations`,
 		);
 		expect(requiredDatabaseFixtureRunner).toContain(
 			"discoveredDatabaseFixtures",

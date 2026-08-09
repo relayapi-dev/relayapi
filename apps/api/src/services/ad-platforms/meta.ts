@@ -174,43 +174,91 @@ function mapMetaStatusToLocal(status: string): string {
 
 function buildTargetingSpec(targeting?: AdTargeting): Record<string, unknown> {
 	if (!targeting) return {};
-	const unsupported: string[] = [];
-	if (targeting.locations?.some((location) => location.cities?.length)) {
-		unsupported.push("locations.cities");
-	}
-	if (
-		targeting.locations?.some((location) => location.radiusMiles !== undefined)
-	) {
-		unsupported.push("locations.radius_miles");
-	}
-	if (targeting.languages?.length) unsupported.push("languages");
-	if (targeting.platformSpecific) unsupported.push("platform_specific");
-	if (unsupported.length > 0) {
-		throw new AdPlatformError(
-			"UNSUPPORTED_TARGETING",
-			`Meta targeting does not yet support: ${unsupported.join(", ")}`,
-		);
-	}
 
-	const spec: Record<string, unknown> = {};
+	// Meta Marketing API targeting reference:
+	// https://developers.facebook.com/docs/marketing-api/audiences/reference/targeting-specs
+	// Meta's generated Business SDK models city targets as key/radius/
+	// distance_unit and the targeting spec uses `locales` for language IDs.
+	// Raw platform-specific values are applied first so the normalized RelayAPI
+	// fields remain authoritative when both specify the same provider key.
+	const spec: Record<string, unknown> = { ...targeting.platformSpecific };
 
-	if (targeting.ageMin) spec.age_min = targeting.ageMin;
-	if (targeting.ageMax) spec.age_max = targeting.ageMax;
+	if (targeting.ageMin !== undefined) spec.age_min = targeting.ageMin;
+	if (targeting.ageMax !== undefined) spec.age_max = targeting.ageMax;
 
 	if (targeting.genders?.length) {
-		const genderMap: Record<string, number> = { male: 1, female: 2 };
-		spec.genders = targeting.genders.map((g) => genderMap[g]).filter(Boolean);
+		if (targeting.genders.includes("all")) {
+			// Omitting genders is Meta's representation for all genders. Remove a
+			// conflicting raw platform-specific value so the normalized field wins.
+			delete spec.genders;
+		} else {
+			const genderMap: Record<string, number> = { male: 1, female: 2 };
+			spec.genders = [
+				...new Set(targeting.genders.map((g) => genderMap[g]).filter(Boolean)),
+			];
+		}
 	}
 
 	if (targeting.locations?.length) {
 		const countries = targeting.locations.flatMap((l) => l.countries ?? []);
-		if (countries.length === 0) {
+		const cities = targeting.locations.flatMap((location) =>
+			(location.cities ?? []).map((key) => ({
+				key,
+				...(location.radiusMiles !== undefined
+					? {
+							radius: location.radiusMiles,
+							distance_unit: "mile",
+						}
+					: {}),
+			})),
+		);
+		if (
+			targeting.locations.some(
+				(location) =>
+					location.radiusMiles !== undefined && !location.cities?.length,
+			)
+		) {
 			throw new AdPlatformError(
-				"UNSUPPORTED_TARGETING",
-				"Meta targeting locations currently require at least one country",
+				"INVALID_TARGETING",
+				"Meta radius_miles requires at least one city key in the same location entry",
 			);
 		}
-		spec.geo_locations = { countries: [...new Set(countries)] };
+		if (countries.length === 0 && cities.length === 0) {
+			throw new AdPlatformError(
+				"INVALID_TARGETING",
+				"Meta targeting locations require at least one country or city key",
+			);
+		}
+		spec.geo_locations = {
+			...(countries.length > 0 ? { countries: [...new Set(countries)] } : {}),
+			...(cities.length > 0
+				? {
+						cities: [
+							...new Map(
+								cities.map((city) => [JSON.stringify(city), city]),
+							).values(),
+						],
+					}
+				: {}),
+		};
+	}
+
+	if (targeting.languages?.length) {
+		const locales = targeting.languages.map((language) => {
+			const locale = Number(language);
+			if (
+				!/^\d+$/.test(language) ||
+				!Number.isSafeInteger(locale) ||
+				locale <= 0
+			) {
+				throw new AdPlatformError(
+					"INVALID_TARGETING",
+					"Meta languages must be positive safe-integer ad-locale IDs encoded as strings",
+				);
+			}
+			return locale;
+		});
+		spec.locales = [...new Set(locales)];
 	}
 
 	if (targeting.interests?.length) {
@@ -240,6 +288,18 @@ function buildTargetingSpec(targeting?: AdTargeting): Record<string, unknown> {
 		spec.publisher_platforms = targeting.placements;
 	}
 
+	return spec;
+}
+
+function buildCompleteTargetingSpec(
+	targeting?: AdTargeting,
+): Record<string, unknown> {
+	const spec = buildTargetingSpec(targeting);
+	if (spec.geo_locations == null) {
+		// Meta requires a geography in every targeting spec. Preserve the existing
+		// US default when callers customize only another targeting dimension.
+		spec.geo_locations = { countries: ["US"] };
+	}
 	return spec;
 }
 
@@ -302,6 +362,10 @@ async function findCreatedObjectByMarker(
 
 export const metaAdAdapter: AdPlatformAdapter = {
 	platform: "meta",
+	// The pure projection of caller-supplied targeting, with no creation
+	// defaults. Post-mutation verification treats this as a subset of the remote
+	// spec, so it must not assert a geography the caller never asked for —
+	// updateAd preserves the ad set's existing geography instead.
 	canonicalizeTargeting: buildTargetingSpec,
 	creation: {
 		async createCampaign(
@@ -330,6 +394,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 			adAccountId: string,
 			params: CreateAdSetParams,
 		): Promise<string> {
+			const targeting = buildCompleteTargetingSpec(params.targeting);
 			const body: Record<string, unknown> = {
 				name: `${params.name} - Ad Set`,
 				campaign_id: params.campaignId,
@@ -337,9 +402,7 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				optimization_goal:
 					params.mode === "boost" ? "POST_ENGAGEMENT" : "REACH",
 				status: "PAUSED",
-				targeting: params.targeting
-					? buildTargetingSpec(params.targeting)
-					: { geo_locations: { countries: ["US"] } },
+				targeting,
 			};
 
 			if (params.dailyBudgetCents) {
@@ -659,8 +722,22 @@ export const metaAdAdapter: AdPlatformAdapter = {
 				adSetBody.daily_budget = params.dailyBudgetCents;
 			if (params.lifetimeBudgetCents)
 				adSetBody.lifetime_budget = params.lifetimeBudgetCents;
-			if (params.targeting)
-				adSetBody.targeting = buildTargetingSpec(params.targeting);
+			if (params.targeting) {
+				const spec = buildTargetingSpec(params.targeting);
+				if (spec.geo_locations == null) {
+					// Meta replaces the whole ad-set targeting spec, so a partial update
+					// that omits geography would clear it. Carry the ad set's current
+					// geography forward — defaulting here would silently relocate live
+					// spend to the US.
+					const adSet = await metaFetch<{
+						targeting?: { geo_locations?: unknown };
+					}>(`${GRAPH_API}/${adInfo.adset_id}?fields=targeting`, accessToken);
+					spec.geo_locations = adSet.targeting?.geo_locations ?? {
+						countries: ["US"],
+					};
+				}
+				adSetBody.targeting = spec;
+			}
 
 			if (Object.keys(adSetBody).length > 0) {
 				const adSetAccessToken = refreshAccessTokenBeforeAdSet

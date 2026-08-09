@@ -103,6 +103,10 @@ export function BearerInvitationPage({
 					</div>
 				) : (
 					<div className="mt-6 grid gap-3">
+						<p className="text-center text-xs leading-5 text-[#7d786f]">
+							Creating an account reserves this single-use invitation to that
+							account before you redeem it.
+						</p>
 						<a
 							className={PRIMARY}
 							href={`/login?redirect=${encodeURIComponent(`/invite/${token}`)}`}

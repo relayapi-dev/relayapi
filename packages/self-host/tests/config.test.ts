@@ -107,15 +107,43 @@ describe("self-host configuration", () => {
 	});
 
 	test("requires a stable semantic version lock", () => {
+		for (const version of [
+			"main",
+			"1.2.3-rc.1",
+			"01.2.3",
+			"1.02.3",
+			"1.2.03",
+		]) {
+			expect(() =>
+				validateLock({
+					schemaVersion: 1,
+					channel: "stable",
+					version,
+					sourceRepository: "relayapi-dev/relayapi",
+					updatedAt: new Date().toISOString(),
+				}),
+			).toThrow("stable semantic version");
+		}
+		expect(
+			validateLock({
+				schemaVersion: 1,
+				channel: "stable",
+				version: "1.2.3",
+				sourceRepository: "relayapi-dev/relayapi",
+				sourceArchiveSha256: "A".repeat(64),
+				updatedAt: new Date().toISOString(),
+			}).sourceArchiveSha256,
+		).toBe("a".repeat(64));
 		expect(() =>
 			validateLock({
 				schemaVersion: 1,
 				channel: "stable",
-				version: "main",
+				version: "1.2.3",
 				sourceRepository: "relayapi-dev/relayapi",
+				sourceArchiveSha256: "not-a-digest",
 				updatedAt: new Date().toISOString(),
 			}),
-		).toThrow("semantic version");
+		).toThrow("SHA-256 digest");
 	});
 
 	test("requires a GitHub owner/repository source lock", () => {
@@ -133,6 +161,12 @@ describe("self-host configuration", () => {
 	test("compares stable versions numerically for update selection", () => {
 		expect(compareVersions("1.10.0", "1.9.9")).toBeGreaterThan(0);
 		expect(compareVersions("2.0.0", "2.0.0")).toBe(0);
+		expect(
+			compareVersions("9007199254740993.0.0", "9007199254740992.999.999"),
+		).toBeGreaterThan(0);
+		expect(() => compareVersions("1.0.0-rc.1", "1.0.0")).toThrow(
+			"stable semantic version",
+		);
 	});
 });
 

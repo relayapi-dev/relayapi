@@ -5,10 +5,15 @@ import {
 	shortLinkConfigs,
 	shortLinks,
 } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
 import { withCredentialMutationAuthority } from "../lib/credential-mutation-authority";
 import { encryptToken } from "../lib/crypto";
 import { SingleUnitProviderMutationAggregate } from "../lib/mutation-provider-boundary";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import {
 	assertAllWorkspaceScope,
 	resolveOperationalCreateScope,
@@ -198,6 +203,10 @@ const listShortLinksRoute = createRoute({
 		200: {
 			description: "List of short links",
 			content: { "application/json": { schema: ShortLinkListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -568,20 +577,18 @@ app.openapi(listShortLinksRoute, async (c) => {
 	// microseconds to millisecond precision and would skip rows sharing the cursor's
 	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${shortLinks.createdAt}::text` })
-			.from(shortLinks)
-			.where(eq(shortLinks.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${shortLinks.createdAt}, ${shortLinks.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${shortLinks.createdAt}, ${shortLinks.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(shortLinks),
+			cursorTimestamp: sql<string>`to_char(${shortLinks.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(shortLinks)
 		.where(and(...conditions))
 		.orderBy(desc(shortLinks.createdAt), desc(shortLinks.id))
@@ -589,6 +596,11 @@ app.openapi(listShortLinksRoute, async (c) => {
 
 	const hasMore = rows.length > limit;
 	const data = rows.slice(0, limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	return c.json(
 		{
@@ -602,7 +614,7 @@ app.openapi(listShortLinksRoute, async (c) => {
 				click_count: sl.clickCount,
 				created_at: sl.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,

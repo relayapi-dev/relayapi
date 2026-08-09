@@ -28,7 +28,7 @@ export function SidebarFooter() {
 			<div className="flex items-center justify-between">
 				<div className="flex items-center gap-2">
 					<a
-						href="https://relayapi.dev/signup"
+						href="https://relayapi.dev/login"
 						target="_blank"
 						rel="noopener noreferrer"
 						className="inline-flex items-center justify-center rounded-md bg-fd-primary px-2 py-1.5 text-xs font-medium text-fd-primary-foreground transition-colors hover:bg-fd-primary/80"

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
 	CONFIG_FILENAME,
@@ -25,6 +25,21 @@ function string(value: unknown, label: string): string {
 function boolean(value: unknown, label: string): boolean {
 	if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
 	return value;
+}
+
+const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+export function validateStableVersion(
+	value: unknown,
+	label = "lock.version",
+): string {
+	const parsed = string(value, label);
+	if (!STABLE_SEMVER.test(parsed)) {
+		throw new Error(
+			`${label} must be a stable semantic version without prerelease or build metadata`,
+		);
+	}
+	return parsed;
 }
 
 function hostname(value: unknown, label: string): string {
@@ -201,10 +216,7 @@ export function validateLock(value: unknown): SelfHostLock {
 	if (root.schemaVersion !== 1 || root.channel !== "stable") {
 		throw new Error("lock file must use schemaVersion 1 and stable channel");
 	}
-	const version = string(root.version, "lock.version");
-	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-		throw new Error("lock.version must be a semantic version");
-	}
+	const version = validateStableVersion(root.version);
 	const sourceRepository = string(
 		root.sourceRepository,
 		"lock.sourceRepository",
@@ -212,11 +224,22 @@ export function validateLock(value: unknown): SelfHostLock {
 	if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(sourceRepository)) {
 		throw new Error("lock.sourceRepository must use owner/repository format");
 	}
+	let sourceArchiveSha256: string | undefined;
+	if (root.sourceArchiveSha256 !== undefined) {
+		sourceArchiveSha256 = string(
+			root.sourceArchiveSha256,
+			"lock.sourceArchiveSha256",
+		).toLowerCase();
+		if (!/^[a-f0-9]{64}$/.test(sourceArchiveSha256)) {
+			throw new Error("lock.sourceArchiveSha256 must be a SHA-256 digest");
+		}
+	}
 	return {
 		schemaVersion: 1,
 		channel: "stable",
 		version,
 		sourceRepository,
+		...(sourceArchiveSha256 ? { sourceArchiveSha256 } : {}),
 		updatedAt: string(root.updatedAt, "lock.updatedAt"),
 	};
 }
@@ -230,12 +253,15 @@ export async function readConfig(
 export async function writeConfig(
 	config: SelfHostConfig,
 	path = CONFIG_FILENAME,
+	options: { overwrite?: boolean } = {},
 ): Promise<void> {
+	const resolvedPath = resolve(path);
 	await writeFile(
-		resolve(path),
+		resolvedPath,
 		`${JSON.stringify(validateConfig(config), null, 2)}\n`,
-		{ mode: 0o600 },
+		{ mode: 0o600, flag: options.overwrite === false ? "wx" : "w" },
 	);
+	await chmod(resolvedPath, 0o600);
 }
 
 export async function readLock(
@@ -248,19 +274,33 @@ export async function readLock(
 export async function writeLock(
 	lock: SelfHostLock,
 	configPath = CONFIG_FILENAME,
+	options: { overwrite?: boolean } = {},
 ): Promise<void> {
 	const path = resolve(dirname(resolve(configPath)), LOCK_FILENAME);
 	await writeFile(path, `${JSON.stringify(validateLock(lock), null, 2)}\n`, {
 		mode: 0o600,
+		flag: options.overwrite === false ? "wx" : "w",
 	});
+	await chmod(path, 0o600);
 }
 
-export function initialLock(version: string): SelfHostLock {
+export function initialLock(
+	version: string,
+	sourceArchiveSha256: string,
+): SelfHostLock {
+	const digest = string(
+		sourceArchiveSha256,
+		"lock.sourceArchiveSha256",
+	).toLowerCase();
+	if (!/^[a-f0-9]{64}$/.test(digest)) {
+		throw new Error("lock.sourceArchiveSha256 must be a SHA-256 digest");
+	}
 	return {
 		schemaVersion: 1,
 		channel: "stable",
-		version,
+		version: validateStableVersion(version),
 		sourceRepository: DEFAULT_SOURCE_REPOSITORY,
+		sourceArchiveSha256: digest,
 		updatedAt: new Date().toISOString(),
 	};
 }

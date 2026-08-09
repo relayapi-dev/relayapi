@@ -148,7 +148,11 @@ bunx @relayapi/self-host init --github your-org/relayapi-deployment
 ```
 
 The CLI uploads environment values as GitHub secrets over stdin. It never puts
-secret values in command arguments or the checked-in configuration.
+secret values in command arguments or the checked-in configuration. Run this
+`--github` form only in a new empty directory: the CLI refuses an existing
+`.git` path or any pre-existing entry, even with `--force`, before changing Git
+state. Omit `--github` for collision-safe local initialization in an existing
+directory.
 
 ## 3. Choose optional features
 

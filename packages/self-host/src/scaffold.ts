@@ -1,6 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { constants, type Stats } from "node:fs";
+import {
+	chmod,
+	copyFile,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	writeFile,
+} from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { CONFIG_FILENAME, LOCK_FILENAME } from "./constants.js";
 import { run } from "./process.js";
 import type { SelfHostConfig } from "./types.js";
@@ -46,7 +56,8 @@ jobs:
 ${githubSecretNames.map((name) => `          ${name}: \${{ secrets.${name} }}`).join("\n")}
         run: |
           set -euo pipefail
-          version="$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.-]+)?$"))' ${LOCK_FILENAME})"
+          version="$(jq -er '.version | select(test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$"))' ${LOCK_FILENAME})"
+          jq -er '.sourceArchiveSha256 | select(test("^[a-f0-9]{64}$"))' ${LOCK_FILENAME} >/dev/null
           bunx "@relayapi/self-host@\${version}" doctor --non-interactive
           bunx "@relayapi/self-host@\${version}" deploy --non-interactive
 `;
@@ -79,16 +90,15 @@ jobs:
           GH_TOKEN: \${{ github.token }}
         run: |
           set -euo pipefail
-          repository="$(jq -er '.sourceRepository' ${LOCK_FILENAME})"
-          current="$(jq -er '.version' ${LOCK_FILENAME})"
-          latest="$(gh api --paginate "repos/\${repository}/releases?per_page=100" --jq '.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^self-host-v[0-9]+[.][0-9]+[.][0-9]+$"))) | .tag_name' | sed 's/^self-host-v//' | sort -V | tail -n 1)"
-          test -n "\${latest}"
-          if [ "\${latest}" = "\${current}" ]; then
+          current="$(jq -er '.version | select(test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$"))' ${LOCK_FILENAME})"
+          before="$(sha256sum ${LOCK_FILENAME} | cut -d ' ' -f 1)"
+          bunx "@relayapi/self-host@\${current}" upgrade --non-interactive
+          after="$(sha256sum ${LOCK_FILENAME} | cut -d ' ' -f 1)"
+          if [ "\${before}" = "\${after}" ]; then
             echo "changed=false" >> "\${GITHUB_OUTPUT}"
             exit 0
           fi
-          jq --arg version "\${latest}" --arg updatedAt "$(date -u +%FT%TZ)" '.version = $version | .updatedAt = $updatedAt' ${LOCK_FILENAME} > ${LOCK_FILENAME}.tmp
-          mv ${LOCK_FILENAME}.tmp ${LOCK_FILENAME}
+          latest="$(jq -er '.version' ${LOCK_FILENAME})"
           echo "changed=true" >> "\${GITHUB_OUTPUT}"
           echo "version=\${latest}" >> "\${GITHUB_OUTPUT}"
       - name: Open update pull request
@@ -114,23 +124,176 @@ jobs:
 `;
 }
 
-export async function writeScaffold(configPath: string): Promise<void> {
+interface InitPreparation {
+	overwrite: boolean;
+	mergeGitignore: boolean;
+	backupDirectory?: string;
+}
+
+function initManagedPaths(configPath: string): string[] {
 	const root = dirname(resolve(configPath));
+	const workflowDir = resolve(root, ".github", "workflows");
+	return [
+		resolve(configPath),
+		resolve(root, LOCK_FILENAME),
+		resolve(workflowDir, "deploy-relayapi.yml"),
+		resolve(workflowDir, "update-relayapi.yml"),
+		resolve(root, ".env.example"),
+		resolve(root, ".relayapi", "secrets.env"),
+	];
+}
+
+async function pathKind(
+	path: string,
+	expected: "file" | "directory",
+	root: string,
+): Promise<boolean> {
+	try {
+		const stats = await lstat(path);
+		const matches = expected === "file" ? stats.isFile() : stats.isDirectory();
+		if (!matches) {
+			throw new Error(
+				`Refusing to use non-${expected} init target ${relative(root, path)}`,
+			);
+		}
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+async function assertSafeManagedDirectories(root: string): Promise<void> {
+	for (const path of [
+		resolve(root, ".github"),
+		resolve(root, ".github", "workflows"),
+		resolve(root, ".relayapi"),
+		resolve(root, ".relayapi", "backups"),
+	]) {
+		await pathKind(path, "directory", root);
+	}
+}
+
+async function assertEmptyGithubInitTarget(root: string): Promise<void> {
+	let rootStats: Stats;
+	try {
+		rootStats = await lstat(root);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+	if (!rootStats.isDirectory()) {
+		throw new Error(
+			`--github requires a new empty target directory, but ${root} is not a directory`,
+		);
+	}
+
+	const entries = (await readdir(root)).sort();
+	if (entries.includes(".git")) {
+		throw new Error(
+			`Refusing --github init in ${root}: an existing .git path was found. Use a new empty directory, or omit --github to keep this repository's Git history untouched`,
+		);
+	}
+	if (entries.length > 0) {
+		const displayedEntries = entries.slice(0, 5).join(", ");
+		const suffix = entries.length > 5 ? ", ..." : "";
+		throw new Error(
+			`--github requires a new empty target directory, but ${root} contains ${displayedEntries}${suffix}. Use a new empty directory, or omit --github for collision-safe local initialization without Git changes`,
+		);
+	}
+}
+
+export async function prepareInitDirectory(
+	configPath: string,
+	options: { force: boolean; github?: boolean },
+): Promise<InitPreparation> {
+	const root = dirname(resolve(configPath));
+	if (options.github) await assertEmptyGithubInitTarget(root);
+	await assertSafeManagedDirectories(root);
+	const existing: string[] = [];
+	for (const path of initManagedPaths(configPath)) {
+		if (await pathKind(path, "file", root)) existing.push(path);
+	}
+	const gitignorePath = resolve(root, ".gitignore");
+	const mergeGitignore = await pathKind(gitignorePath, "file", root);
+	if (existing.length === 0) {
+		return { overwrite: false, mergeGitignore };
+	}
+	if (!options.force) {
+		throw new Error(
+			`init would replace existing files: ${existing.map((path) => relative(root, path)).join(", ")}; rerun with --force to back them up before replacement`,
+		);
+	}
+
+	const backupRoot = resolve(root, ".relayapi", "backups");
+	await mkdir(backupRoot, { recursive: true, mode: 0o700 });
+	const backupDirectory = await mkdtemp(resolve(backupRoot, "init-"));
+	for (const source of [
+		...existing,
+		...(mergeGitignore ? [gitignorePath] : []),
+	]) {
+		const relativePath = relative(root, source);
+		const destination = resolve(backupDirectory, relativePath);
+		const destinationRelative = relative(backupDirectory, destination);
+		if (
+			destinationRelative.startsWith("..") ||
+			isAbsolute(destinationRelative)
+		) {
+			throw new Error("Init backup target escaped the operator repository");
+		}
+		await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+		await copyFile(source, destination, constants.COPYFILE_EXCL);
+	}
+	return { overwrite: true, mergeGitignore, backupDirectory };
+}
+
+const REQUIRED_GITIGNORE_ENTRIES = [
+	".relayapi/generated/",
+	".relayapi/secrets.env",
+	".relayapi/backups/",
+] as const;
+
+function mergeGitignore(content: string): string {
+	const normalized = content.replace(/\r\n/g, "\n");
+	const existing = new Set(normalized.split("\n"));
+	const missing = REQUIRED_GITIGNORE_ENTRIES.filter(
+		(entry) => !existing.has(entry),
+	);
+	if (missing.length === 0) {
+		return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+	}
+	const prefix =
+		normalized.length === 0 ? "" : normalized.replace(/\n*$/, "\n");
+	return `${prefix}${missing.join("\n")}\n`;
+}
+
+export async function writeScaffold(
+	configPath: string,
+	options: { overwrite?: boolean; mergeGitignore?: boolean } = {},
+): Promise<void> {
+	const root = dirname(resolve(configPath));
+	await assertSafeManagedDirectories(root);
 	const workflowDir = resolve(root, ".github", "workflows");
 	await mkdir(workflowDir, { recursive: true });
 	await mkdir(resolve(root, ".relayapi"), { recursive: true, mode: 0o700 });
+	const flag = options.overwrite ? "w" : "wx";
+	const gitignorePath = resolve(root, ".gitignore");
+	const gitignore = options.mergeGitignore
+		? mergeGitignore(await readFile(gitignorePath, "utf8"))
+		: `${REQUIRED_GITIGNORE_ENTRIES.join("\n")}\n`;
 	await Promise.all([
 		writeFile(resolve(workflowDir, "deploy-relayapi.yml"), deployWorkflow(), {
 			mode: 0o600,
+			flag,
 		}),
 		writeFile(resolve(workflowDir, "update-relayapi.yml"), updateWorkflow(), {
 			mode: 0o600,
+			flag,
 		}),
-		writeFile(
-			resolve(root, ".gitignore"),
-			".relayapi/generated/\n.relayapi/secrets.env\n",
-			{ mode: 0o600 },
-		),
+		writeFile(gitignorePath, gitignore, {
+			mode: 0o600,
+			flag: options.mergeGitignore ? "w" : flag,
+		}),
 		writeFile(
 			resolve(root, ".env.example"),
 			`${[
@@ -182,8 +345,13 @@ export async function writeScaffold(configPath: string): Promise<void> {
 				"# FACEBOOK_WEBHOOK_VERIFY_TOKEN=",
 				"# YOUTUBE_HUB_SECRET=",
 			].join("\n")}\n`,
-			{ mode: 0o600 },
+			{ mode: 0o600, flag },
 		),
+	]);
+	await Promise.all([
+		chmod(resolve(workflowDir, "deploy-relayapi.yml"), 0o600),
+		chmod(resolve(workflowDir, "update-relayapi.yml"), 0o600),
+		chmod(resolve(root, ".env.example"), 0o600),
 	]);
 }
 

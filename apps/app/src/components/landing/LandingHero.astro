@@ -1,4 +1,8 @@
 ---
+import {
+	PUBLIC_ACCESS_HREF,
+	PUBLIC_ACCESS_LABEL,
+} from "../../lib/public-access";
 import Container from "./Container.astro";
 import { LANDING_LINKS, platformLogos } from "./data";
 ---
@@ -14,7 +18,7 @@ import { LANDING_LINKS, platformLogos } from "./data";
 	</h1>
 	<div class="flex flex-wrap justify-center gap-[0.625rem]">
 		<a
-			href={LANDING_LINKS.signup}
+			href={PUBLIC_ACCESS_HREF}
 			class="inline-flex items-center gap-2 rounded-full bg-[#1a1815] px-[1.375rem] py-[0.8125rem] text-[1rem] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
 		>
 			<svg
@@ -31,7 +35,7 @@ import { LANDING_LINKS, platformLogos } from "./data";
 				<line x1="2" y1="10" x2="22" y2="10"></line>
 				<line x1="2" y1="2" x2="22" y2="22"></line>
 			</svg>
-			Start free</a
+			{PUBLIC_ACCESS_LABEL}</a
 		>
 		<a
 			href={LANDING_LINKS.selfhost}
@@ -57,19 +61,25 @@ import { LANDING_LINKS, platformLogos } from "./data";
 		{
 			platformLogos.map((p) => (
 				<a
-					href={`/product/${p.slug}`}
+					href={p.href ?? `/product/${p.slug}`}
 					title={p.name}
 					aria-label={`${p.name} API`}
 					class="inline-flex text-[#8c887e]! transition-colors duration-200 hover:text-[#1a1815]!"
 				>
-					<svg
-						viewBox="0 0 24 24"
-						fill="currentColor"
-						aria-hidden="true"
-						class="size-[1.125rem]"
-					>
-						<path d={p.glyph} />
-					</svg>
+					{p.glyph ? (
+						<svg
+							viewBox="0 0 24 24"
+							fill="currentColor"
+							aria-hidden="true"
+							class="size-[1.125rem]"
+						>
+							<path d={p.glyph} />
+						</svg>
+					) : (
+						<span aria-hidden="true" class="text-[0.625rem] font-semibold">
+							{p.initial}
+						</span>
+					)}
 				</a>
 			))
 		}

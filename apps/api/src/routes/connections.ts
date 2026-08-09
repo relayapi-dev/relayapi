@@ -1,6 +1,21 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { connectionLogs, createDb } from "@relayapi/db";
-import { and, count, desc, eq, gte, lt, lte } from "drizzle-orm";
+import {
+	and,
+	count,
+	desc,
+	eq,
+	getTableColumns,
+	gte,
+	lt,
+	lte,
+	sql,
+} from "drizzle-orm";
+import {
+	decodeKeysetCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
 import { ErrorResponse, OffsetPaginationParams } from "../schemas/common";
 import type { Env, Variables } from "../types";
 
@@ -84,6 +99,10 @@ const listConnectionLogs = createRoute({
 				"application/json": { schema: ConnectionLogListResponse },
 			},
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -107,21 +126,25 @@ app.openapi(listConnectionLogs, async (c) => {
 	// `offset` enables random page access and takes precedence over `cursor`.
 	const useOffset = offset !== undefined;
 	const conditions = [...baseConditions];
-	// Keyset pagination: cursor is the createdAt of the last row from the previous
-	// page (results are ordered createdAt DESC). Guard against an invalid date so a
-	// malformed cursor doesn't produce an `IS NULL`-style no-op filter.
+	// Offset navigation intentionally takes precedence over the sequential cursor.
 	if (!useOffset && cursor) {
-		const cursorDate = new Date(cursor);
-		if (!Number.isNaN(cursorDate.getTime())) {
-			conditions.push(lt(connectionLogs.createdAt, cursorDate));
-		}
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			decoded.kind === "composite"
+				? sql`(${connectionLogs.createdAt}, ${connectionLogs.id}) < (${decoded.timestamp}::timestamptz, ${decoded.id})`
+				: lt(connectionLogs.createdAt, new Date(decoded.timestamp)),
+		);
 	}
 
 	const dataQuery = db
-		.select()
+		.select({
+			...getTableColumns(connectionLogs),
+			cursorTimestamp: sql<string>`to_char(${connectionLogs.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(connectionLogs)
 		.where(and(...conditions))
-		.orderBy(desc(connectionLogs.createdAt))
+		.orderBy(desc(connectionLogs.createdAt), desc(connectionLogs.id))
 		.limit(limit + 1);
 
 	const [rows, countRows] = await Promise.all([
@@ -153,7 +176,12 @@ app.openapi(listConnectionLogs, async (c) => {
 				created_at: l.createdAt.toISOString(),
 			})),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 			total,

@@ -7,11 +7,22 @@ import {
 	type QueueName,
 	RESOURCE_NAMES,
 } from "./constants.js";
+import { fetchBounded, parseJsonBytes } from "./http.js";
 import type { CloudflareResourcePlan, SelfHostConfig } from "./types.js";
+
+interface ApiResultInfo {
+	count?: number;
+	page?: number;
+	per_page?: number;
+	total_count?: number;
+	total_pages?: number;
+	cursor?: string;
+}
 
 interface ApiEnvelope<T> {
 	success: boolean;
 	result: T;
+	result_info?: ApiResultInfo;
 	errors?: Array<{ code?: number; message?: string }>;
 	messages?: Array<{ code?: number; message?: string }>;
 }
@@ -82,6 +93,8 @@ interface HyperdriveReconciliationOptions {
 }
 
 const HYPERDRIVE_VERIFY_DELAYS_MS = [500, 1_000, 2_000, 4_000] as const;
+const MAX_CLOUDFLARE_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_CLOUDFLARE_LIST_PAGES = 1_000;
 const SSLMODE_STRENGTH = {
 	require: 0,
 	"verify-ca": 1,
@@ -355,23 +368,33 @@ export class CloudflareClient {
 		this.baseUrl = baseUrl.replace(/\/$/, "");
 	}
 
-	private async request<T>(
+	private async requestEnvelope<T>(
 		method: "GET" | "POST" | "PUT" | "PATCH",
 		path: string,
 		body?: unknown,
 		headers?: Record<string, string>,
-	): Promise<T> {
+	): Promise<ApiEnvelope<T>> {
 		let response: Response;
+		let bytes: Uint8Array;
 		try {
-			response = await fetch(`${this.baseUrl}${path}`, {
-				method,
-				headers: {
-					Authorization: `Bearer ${this.token}`,
-					...(body === undefined ? {} : { "Content-Type": "application/json" }),
-					...headers,
+			({ response, bytes } = await fetchBounded(
+				`${this.baseUrl}${path}`,
+				{
+					method,
+					headers: {
+						Authorization: `Bearer ${this.token}`,
+						...(body === undefined
+							? {}
+							: { "Content-Type": "application/json" }),
+						...headers,
+					},
+					...(body === undefined ? {} : { body: JSON.stringify(body) }),
 				},
-				...(body === undefined ? {} : { body: JSON.stringify(body) }),
-			});
+				{
+					label: "Cloudflare API request",
+					maxBytes: MAX_CLOUDFLARE_RESPONSE_BYTES,
+				},
+			));
 		} catch (error) {
 			throw new Error(
 				redactSensitiveText(
@@ -384,7 +407,10 @@ export class CloudflareClient {
 		}
 		let envelope: ApiEnvelope<T>;
 		try {
-			envelope = (await response.json()) as ApiEnvelope<T>;
+			envelope = parseJsonBytes<ApiEnvelope<T>>(
+				bytes,
+				"Cloudflare API request",
+			);
 		} catch {
 			throw new Error(`Cloudflare API returned HTTP ${response.status}`);
 		}
@@ -393,7 +419,16 @@ export class CloudflareClient {
 				redactSensitiveText(errorMessage(envelope, response.status), body),
 			);
 		}
-		return envelope.result;
+		return envelope;
+	}
+
+	private async request<T>(
+		method: "GET" | "POST" | "PUT" | "PATCH",
+		path: string,
+		body?: unknown,
+		headers?: Record<string, string>,
+	): Promise<T> {
+		return (await this.requestEnvelope<T>(method, path, body, headers)).result;
 	}
 
 	private r2Request<T>(
@@ -403,6 +438,17 @@ export class CloudflareClient {
 		body?: unknown,
 	): Promise<T> {
 		return this.request(method, path, body, {
+			"cf-r2-jurisdiction": jurisdiction,
+		});
+	}
+
+	private r2RequestEnvelope<T>(
+		method: "GET" | "POST" | "PUT",
+		path: string,
+		jurisdiction: "default" | "eu",
+		body?: unknown,
+	): Promise<ApiEnvelope<T>> {
+		return this.requestEnvelope(method, path, body, {
 			"cf-r2-jurisdiction": jurisdiction,
 		});
 	}
@@ -424,29 +470,80 @@ export class CloudflareClient {
 	}
 
 	async listKvNamespaces(): Promise<KvNamespace[]> {
-		return this.request(
-			"GET",
-			this.account("/storage/kv/namespaces?per_page=100"),
+		return this.listPageNumbered<KvNamespace>(
+			this.account("/storage/kv/namespaces"),
+			1_000,
 		);
 	}
 
 	async listBuckets(jurisdiction: "default" | "eu"): Promise<R2Bucket[]> {
-		const result = await this.r2Request<{ buckets: R2Bucket[] }>(
-			"GET",
-			this.account("/r2/buckets?per_page=1000"),
-			jurisdiction,
+		const buckets: R2Bucket[] = [];
+		let cursor: string | undefined;
+		const seen = new Set<string>();
+		for (let page = 0; page < MAX_CLOUDFLARE_LIST_PAGES; page += 1) {
+			const query = new URLSearchParams({ per_page: "1000" });
+			if (cursor) query.set("cursor", cursor);
+			const envelope = await this.r2RequestEnvelope<{ buckets: R2Bucket[] }>(
+				"GET",
+				this.account(`/r2/buckets?${query}`),
+				jurisdiction,
+			);
+			buckets.push(...(envelope.result.buckets ?? []));
+			const next = envelope.result_info?.cursor;
+			if (!next) return buckets;
+			if (seen.has(next)) {
+				throw new Error("Cloudflare R2 bucket pagination repeated a cursor");
+			}
+			seen.add(next);
+			cursor = next;
+		}
+		throw new Error(
+			`Cloudflare R2 bucket pagination exceeded ${MAX_CLOUDFLARE_LIST_PAGES} pages`,
 		);
-		return result.buckets ?? [];
 	}
 
 	async listQueues(): Promise<Queue[]> {
-		return this.request("GET", this.account("/queues?per_page=100"));
+		return this.listPageNumbered<Queue>(this.account("/queues"), 100);
 	}
 
 	async listHyperdrives(): Promise<HyperdriveConfig[]> {
-		return this.request(
-			"GET",
-			this.account("/hyperdrive/configs?per_page=100"),
+		return this.listPageNumbered<HyperdriveConfig>(
+			this.account("/hyperdrive/configs"),
+			100,
+		);
+	}
+
+	private async listPageNumbered<T>(
+		path: string,
+		perPage: number,
+	): Promise<T[]> {
+		const results: T[] = [];
+		for (let page = 1; page <= MAX_CLOUDFLARE_LIST_PAGES; page += 1) {
+			const envelope = await this.requestEnvelope<T[]>(
+				"GET",
+				`${path}?per_page=${perPage}&page=${page}`,
+			);
+			if (!Array.isArray(envelope.result)) {
+				throw new Error("Cloudflare list request returned an invalid result");
+			}
+			results.push(...envelope.result);
+			const info = envelope.result_info;
+			const complete =
+				(info?.total_pages !== undefined && page >= info.total_pages) ||
+				(info?.total_count !== undefined &&
+					results.length >= info.total_count) ||
+				((info === undefined ||
+					(info.total_pages === undefined && info.total_count === undefined)) &&
+					envelope.result.length < perPage);
+			if (complete) return results;
+			if (envelope.result.length === 0) {
+				throw new Error(
+					"Cloudflare list pagination ended before the advertised total",
+				);
+			}
+		}
+		throw new Error(
+			`Cloudflare list pagination exceeded ${MAX_CLOUDFLARE_LIST_PAGES} pages`,
 		);
 	}
 

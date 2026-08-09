@@ -8,6 +8,10 @@ icon: FileText
 
 Content templates let you save reusable post content that can be applied when creating new posts. Unlike saving full post state, templates store just the content with optional platform overrides and variable placeholders — so they never break when accounts are reconnected.
 
+Templates are organization-shared definitions. Creating, updating, or deleting one requires an all-workspace API key; `workspace_id` is not accepted on create or update.
+
+Legacy templates created before this organization-shared contract can retain a workspace scope. Applying one to a post still requires the calling API key to have access to that workspace; organization-shared templates remain available to every non-empty workspace grant.
+
 ## How It Works
 
 1. **Create a template** with your post content, optional platform overrides, and tags
@@ -39,7 +43,7 @@ Variables use `{{variable_name}}` syntax in your template content. Built-in vari
 | `{{date}}` | Current date (ISO format) |
 | `{{account_name}}` | Display name of the social account |
 
-Custom variables can be defined in your template content and then substituted manually when applying the template, or resolved automatically when post-creation integration is enabled (coming soon).
+Pass custom values in `template_variables` when creating the post. RelayAPI substitutes them in both the base content and every platform override. Missing custom values remain as placeholders; `{{account_name}}` must resolve to one shared account label across the selected targets or be supplied explicitly.
 
 ## Platform Overrides
 
@@ -56,6 +60,8 @@ A single template can have different content per platform. When a post targets m
 ```
 
 If no override exists for a platform, the base `content` is used.
+
+Request-level `target_options.<target>.content` takes precedence over a stored template override, and an explicit top-level `content` skips the template content and its overrides entirely.
 
 ## Filtering by Tags
 

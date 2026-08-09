@@ -541,7 +541,12 @@ export async function doctor(options: CliOptions): Promise<void> {
 			"configuration",
 			async () => {
 				await readConfig(options.configPath);
-				await readLock(options.configPath);
+				const lock = await readLock(options.configPath);
+				if (!lock.sourceArchiveSha256) {
+					throw new Error(
+						"relayapi.lock.json is not sealed; run upgrade before doctor or deploy",
+					);
+				}
 			},
 		],
 		[

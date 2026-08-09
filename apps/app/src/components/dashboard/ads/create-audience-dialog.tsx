@@ -97,7 +97,7 @@ export function CreateAudienceDialog({
         setError("Source audience is required for lookalike audiences.");
         return;
       }
-      if (!country.trim() || country.trim().length !== 2) {
+      if (country.trim().length !== 2) {
         setError("Country must be a 2-character code.");
         return;
       }

@@ -63,18 +63,35 @@ export const AdTargetingSchema = z.object({
 	locations: z
 		.array(
 			z.object({
-				countries: z.array(z.string()).optional(),
-				cities: z.array(z.string()).optional(),
-				radius_miles: z.number().optional(),
+				countries: z.array(z.string().min(1)).optional(),
+				cities: z
+					.array(z.string().min(1))
+					.optional()
+					.describe(
+						"Meta location keys returned by the Marketing API targeting search, not display names",
+					),
+				radius_miles: z
+					.number()
+					.positive()
+					.optional()
+					.describe("Radius applied to each city key in this location entry"),
 			}),
 		)
 		.optional(),
 	interests: z.array(z.object({ id: z.string(), name: z.string() })).optional(),
 	custom_audiences: z.array(z.string()).optional(),
 	excluded_audiences: z.array(z.string()).optional(),
-	languages: z.array(z.string()).optional(),
+	languages: z
+		.array(z.string().regex(/^\d+$/))
+		.optional()
+		.describe("Meta numeric ad-locale IDs encoded as strings"),
 	placements: z.array(z.string()).optional(),
-	platform_specific: z.record(z.string(), z.any()).optional(),
+	platform_specific: z
+		.record(z.string(), z.any())
+		.optional()
+		.describe(
+			"Additional raw Meta targeting-spec fields; normalized RelayAPI fields take precedence on conflicts",
+		),
 });
 
 // ---------------------------------------------------------------------------

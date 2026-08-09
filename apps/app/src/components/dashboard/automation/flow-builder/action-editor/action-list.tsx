@@ -23,22 +23,27 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { ActionForm } from "./action-form";
 import {
+	type Action,
 	generateActionId,
+	type OnError,
 	reorder,
 	summarizeAction,
 	validateAction,
-	type Action,
-	type OnError,
 } from "./types";
 
 interface Props {
 	actions: Action[];
+	automationWorkspaceId: string | null;
 	onChange(next: Action[]): void;
 }
 
-export function ActionList({ actions, onChange }: Props) {
-	const [expandedId, setExpandedId] = useState<string | null>(() =>
-		actions[0]?.id ?? null,
+export function ActionList({
+	actions,
+	automationWorkspaceId,
+	onChange,
+}: Props) {
+	const [expandedId, setExpandedId] = useState<string | null>(
+		() => actions[0]?.id ?? null,
 	);
 	const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
@@ -66,7 +71,8 @@ export function ActionList({ actions, onChange }: Props) {
 		const removed = actions[idx];
 		if (removed && removed.id === expandedId) setExpandedId(null);
 	};
-	const move = (from: number, to: number) => onChange(reorder(actions, from, to));
+	const move = (from: number, to: number) =>
+		onChange(reorder(actions, from, to));
 	const duplicate = (idx: number) => {
 		const src = actions[idx];
 		if (!src) return;
@@ -118,9 +124,7 @@ export function ActionList({ actions, onChange }: Props) {
 									{idx + 1}
 								</span>
 								<span className="flex-1 truncate text-[12px] text-[#353a44]">
-									<span className="font-medium">
-										{summarizeAction(action)}
-									</span>
+									<span className="font-medium">{summarizeAction(action)}</span>
 								</span>
 								{hasProblems ? (
 									<span
@@ -144,9 +148,7 @@ export function ActionList({ actions, onChange }: Props) {
 
 							<RowMenu
 								open={openMenuId === action.id}
-								setOpen={(open) =>
-									setOpenMenuId(open ? action.id : null)
-								}
+								setOpen={(open) => setOpenMenuId(open ? action.id : null)}
 								canMoveUp={idx > 0}
 								canMoveDown={idx < actions.length - 1}
 								onDuplicate={() => {
@@ -173,6 +175,7 @@ export function ActionList({ actions, onChange }: Props) {
 							<div className="border-t border-[#eef2f7] bg-[#fbfcfe] p-3">
 								<ActionForm
 									action={action}
+									automationWorkspaceId={automationWorkspaceId}
 									onChange={(next) => updateAt(idx, next)}
 								/>
 							</div>

@@ -67,9 +67,8 @@ describe("self-host durable ad-mutation compatibility", () => {
 		);
 		expect(meta).toContain("acknowledgement.success !== true");
 		expect(meta).toContain('"META_MUTATION_NOT_ACKNOWLEDGED"');
-		expect(meta).toContain("buildTargetingSpec(params.targeting)");
-		expect(meta).toContain("Meta targeting does not yet support:");
-		expect(meta).toContain('"UNSUPPORTED_TARGETING"');
+		expect(meta).toContain("buildCompleteTargetingSpec(params.targeting)");
+		expect(meta).toContain("Meta requires a geography in every targeting spec");
 		expect(creation).toContain("hasAdCreationProviderEffect(operation)");
 		expect(usage).toContain("adCreationUsesInheritedContext");
 		expect(normalizedReadme).toContain("IDs inherited from an existing");

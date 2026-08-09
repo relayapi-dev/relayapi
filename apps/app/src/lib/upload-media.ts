@@ -1,8 +1,20 @@
 export interface UploadedMedia {
+	/**
+	 * The durable `med_` reference. Absent only on the proxy-upload fallback
+	 * against an API build that predates the id being returned — the app and API
+	 * Workers deploy independently, so that skew is reachable in production.
+	 * Callers that need a durable handle should fall back to `url`, which the
+	 * API resolves back to the same row by storage key.
+	 */
+	id?: string;
 	url: string;
 	type: string;
 	filename: string;
 	size: number;
+}
+
+export interface UploadMediaOptions {
+	workspaceId?: string | null;
 }
 
 async function abandonPresignedUpload(mediaId: string): Promise<void> {
@@ -23,7 +35,10 @@ async function abandonPresignedUpload(mediaId: string): Promise<void> {
 	}
 }
 
-export async function uploadMedia(file: File): Promise<UploadedMedia> {
+export async function uploadMedia(
+	file: File,
+	options: UploadMediaOptions = {},
+): Promise<UploadedMedia> {
 	let uploadedUrl: string | null = null;
 	let presignedIntent:
 		| {
@@ -41,7 +56,11 @@ export async function uploadMedia(file: File): Promise<UploadedMedia> {
 		const presignRes = await fetch("/api/media/presign", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ filename: file.name, content_type: file.type }),
+			body: JSON.stringify({
+				filename: file.name,
+				content_type: file.type,
+				workspace_id: options.workspaceId ?? undefined,
+			}),
 		});
 
 		if (presignRes.ok) {
@@ -138,6 +157,7 @@ export async function uploadMedia(file: File): Promise<UploadedMedia> {
 		}
 
 		return {
+			id: confirmedIntent.id,
 			url: uploadedUrl,
 			type: file.type,
 			filename: file.name,
@@ -146,10 +166,13 @@ export async function uploadMedia(file: File): Promise<UploadedMedia> {
 	}
 
 	// Fallback: direct upload through app proxy
-	const res = await fetch(
-		`/api/media/upload?filename=${encodeURIComponent(file.name)}`,
-		{ method: "POST", headers: { "Content-Type": file.type }, body: file },
-	);
+	const params = new URLSearchParams({ filename: file.name });
+	if (options.workspaceId) params.set("workspace_id", options.workspaceId);
+	const res = await fetch(`/api/media/upload?${params.toString()}`, {
+		method: "POST",
+		headers: { "Content-Type": file.type },
+		body: file,
+	});
 	if (!res.ok) {
 		const err = (await res.json().catch(() => null)) as
 			| { error?: { message?: string } }
@@ -162,6 +185,18 @@ export async function uploadMedia(file: File): Promise<UploadedMedia> {
 				: undefined;
 		throw new Error(message ?? `Upload failed: ${res.status}`);
 	}
-	const { url } = (await res.json()) as { url: string };
-	return { url, type: file.type, filename: file.name, size: file.size };
+	const { id, url } = (await res.json()) as { id?: string; url?: string };
+	// The bytes are already stored at this point, so a missing id must not be
+	// reported as a failed upload — that would surface an error for a successful
+	// upload and orphan the object. Only a missing url leaves nothing usable.
+	if (!url) {
+		throw new Error("Upload completed without a media URL.");
+	}
+	return {
+		...(id ? { id } : {}),
+		url,
+		type: file.type,
+		filename: file.name,
+		size: file.size,
+	};
 }

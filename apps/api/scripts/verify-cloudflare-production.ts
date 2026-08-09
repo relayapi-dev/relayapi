@@ -233,7 +233,7 @@ function assertManagedStripePrice(
 					metadata?: Record<string, string>;
 				})
 			: null;
-	if (!product || product.active !== true)
+	if (product?.active !== true)
 		failures.push("expanded active product");
 	if (product?.tax_code != null) failures.push("absence of product tax code");
 	if (

@@ -13,12 +13,35 @@ describe("production authentication security contract", () => {
 	it("enforces invitations for direct email and first-time OAuth identities", () => {
 		const middlewareSource = readRepoSource("apps/app/src/middleware/index.ts");
 		const authSource = readRepoSource("packages/auth/src/index.ts");
+		const bearerInviteSource = readRepoSource(
+			"packages/auth/src/bearer-invite-signup.ts",
+		);
 
 		expect(middlewareSource).toContain("requireInvitationForSignUp: true");
 		expect(authSource).toMatch(/lower\(\$\{invitation\.email\}\)/);
 		expect(authSource).toMatch(/\$\{invitation\.status\} = 'pending'/);
 		expect(authSource).toMatch(/\$\{invitation\.expiresAt\} > now\(\)/);
 		expect(authSource).toContain('code: "INVITATION_REQUIRED"');
+		expect(authSource).toContain("bearerInviteTokenFromSignUpContext(context)");
+		expect(authSource).toContain("claimLiveBearerInviteForSignUp(");
+		expect(bearerInviteSource).toContain(
+			'authContext?.path !== "/sign-up/email"',
+		);
+		expect(bearerInviteSource).toContain("crypto.subtle.digest(");
+		expect(bearerInviteSource).toContain(
+			'{ field: "tokenHash", value: tokenHash }',
+		);
+		expect(bearerInviteSource).toContain("candidate.usedAt");
+		expect(bearerInviteSource).toContain("candidate.expiresAt <= now");
+		expect(bearerInviteSource).toContain("!candidate.workspaceScopeValid");
+		expect(bearerInviteSource).toContain('model: "bearerInviteSignupClaim"');
+		expect(bearerInviteSource).toContain('model: "user"');
+		expect(bearerInviteSource).toContain('model: "member"');
+		expect(bearerInviteSource).toContain('model: "organization"');
+		expect(bearerInviteSource).toContain('model: "bearerInviteWorkspace"');
+		expect(bearerInviteSource).toContain('{ field: "usedAt", value: null }');
+		expect(bearerInviteSource).toContain("inviteSignupClaimForUser(userId)");
+		expect(bearerInviteSource).not.toContain("console.");
 	});
 
 	it("uses an atomic shared limiter and the trusted Cloudflare client IP", () => {
@@ -101,7 +124,7 @@ describe("production authentication security contract", () => {
 		expect(migration).toContain("UPDATE auth.apikey");
 		expect(migration).toContain("UPDATE auth.session");
 		expect(migration).toContain(
-			"CREATE CONSTRAINT TRIGGER ${identifier(activeOwner.triggerName)}",
+			`CREATE CONSTRAINT TRIGGER \${identifier(activeOwner.triggerName)}`,
 		);
 		expect(
 			readRepoSource("packages/db/src/provisioning-contracts.ts"),

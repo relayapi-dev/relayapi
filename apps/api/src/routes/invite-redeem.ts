@@ -2,6 +2,7 @@ import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
 	apikey,
 	generateId,
+	inviteSignupClaimForUser,
 	inviteTokens,
 	inviteTokenWorkspaces,
 	LEGACY_CREDENTIAL_VERSION,
@@ -489,6 +490,8 @@ app.openapi(redeemInviteToken, async (c) => {
 				role: inviteTokens.role,
 				scopeMode: inviteTokens.scopeMode,
 				usedAt: inviteTokens.usedAt,
+				usedBy: inviteTokens.usedBy,
+				redeemedByUserId: inviteTokens.redeemedByUserId,
 				expiresAt: inviteTokens.expiresAt,
 				issuerPrincipalId: organizationPrincipals.id,
 				issuerPrincipalStatus: organizationPrincipals.lifecycleStatus,
@@ -535,7 +538,12 @@ app.openapi(redeemInviteToken, async (c) => {
 				message: "Invitation token is invalid",
 			};
 		}
-		if (invitation.usedAt) {
+		const signupClaim = inviteSignupClaimForUser(identity.userId);
+		const ownsSignupClaim =
+			invitation.usedAt !== null &&
+			invitation.redeemedByUserId === null &&
+			invitation.usedBy === signupClaim;
+		if (invitation.usedAt && !ownsSignupClaim) {
 			return {
 				ok: false as const,
 				status: 409 as const,
@@ -543,7 +551,14 @@ app.openapi(redeemInviteToken, async (c) => {
 				message: "Invitation token has already been redeemed",
 			};
 		}
-		if (invitation.expiresAt <= redeemedAt) {
+		// Expiry is waived for the user who already claimed this token during
+		// signup. That claim burned the token for everyone else and created an
+		// account with no membership, so enforcing expiry here would leave that
+		// account permanently locked out with no way to reissue. The claim could
+		// only have been made while the token was live, so this honours a
+		// reservation rather than resurrecting a dead token, and every other
+		// caller is rejected as used at the check above before reaching here.
+		if (!ownsSignupClaim && invitation.expiresAt <= redeemedAt) {
 			return {
 				ok: false as const,
 				status: 410 as const,
@@ -666,9 +681,25 @@ app.openapi(redeemInviteToken, async (c) => {
 			.limit(1);
 		const principalId = existingPrincipal?.id ?? generateId("prn_");
 
-		// Consume before creating authority rows. Everything still lives in this
-		// transaction, so a later membership/principal/grant failure rolls the
-		// consume back, while a CAS miss cannot commit partial access.
+		// Consume (or finalize this user's signup claim) before creating authority
+		// rows. Everything still lives in this transaction, so a later failure rolls
+		// the mutation back, while a CAS miss cannot commit partial access.
+		// The owner branch carries no expiry predicate, matching the waiver above:
+		// single use is still fenced by the claim identity plus the unredeemed
+		// check, inside this transaction's row lock.
+		const consumptionFence = ownsSignupClaim
+			? and(
+					eq(inviteTokens.id, invitation.id),
+					eq(inviteTokens.organizationId, invitation.organizationId),
+					eq(inviteTokens.usedBy, signupClaim),
+					isNull(inviteTokens.redeemedByUserId),
+				)
+			: and(
+					eq(inviteTokens.id, invitation.id),
+					eq(inviteTokens.organizationId, invitation.organizationId),
+					isNull(inviteTokens.usedAt),
+					gt(inviteTokens.expiresAt, redeemedAt),
+				);
 		const [consumed] = await tx
 			.update(inviteTokens)
 			.set({
@@ -676,14 +707,7 @@ app.openapi(redeemInviteToken, async (c) => {
 				redeemedByUserId: identity.userId,
 				usedAt: redeemedAt,
 			})
-			.where(
-				and(
-					eq(inviteTokens.id, invitation.id),
-					eq(inviteTokens.organizationId, invitation.organizationId),
-					isNull(inviteTokens.usedAt),
-					gt(inviteTokens.expiresAt, redeemedAt),
-				),
-			)
+			.where(consumptionFence)
 			.returning({ id: inviteTokens.id });
 		if (!consumed) {
 			return {

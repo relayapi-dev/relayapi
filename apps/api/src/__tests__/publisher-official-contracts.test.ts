@@ -406,6 +406,35 @@ describe("official publisher contract validation", () => {
 		expect(statusUrl.searchParams.get("media_id")).toBe("1880028106020515840");
 	});
 
+	it("records LinkedIn link-preview suppression as unsupported", async () => {
+		globalThis.fetch = (async () =>
+			Response.json(
+				{},
+				{
+					status: 201,
+					headers: { "x-restli-id": "urn:li:share:preview-test" },
+				},
+			)) as unknown as typeof fetch;
+
+		const result = await linkedinPublisher.publish(
+			request("linkedin", {
+				content: "https://example.test",
+				targetOptions: { disable_link_preview: true },
+			}),
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.provider_outcome?.effects).toContainEqual({
+			name: "disable_link_preview",
+			status: "unsupported",
+			error: {
+				code: "UNSUPPORTED_OPTION",
+				message:
+					"LinkedIn does not support suppressing an automatically generated link preview; the post was published without applying this option.",
+			},
+		});
+	});
+
 	it("validates malformed Discord embeds as content errors instead of throwing TypeError", async () => {
 		expect(() =>
 			getDiscordEmbedTextLength([{ title: "valid", footer: {} }]),

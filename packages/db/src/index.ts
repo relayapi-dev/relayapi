@@ -9,6 +9,7 @@ export * from "./executable-retention-contracts";
 export * from "./external-provider-retention-registry";
 export * from "./financial-retention-contracts";
 export * from "./governance-review";
+export * from "./invite-signup-claim";
 export * from "./kv-key-contracts";
 export * from "./operator-resolution-contracts";
 export * from "./privacy-retention-registry";

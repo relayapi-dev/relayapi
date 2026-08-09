@@ -86,10 +86,15 @@ export async function resumeWaitingRunOnEvent(
 			},
 		);
 		if (!updated) continue;
-		await runLoop(db, row.run.id, {
-			...env,
-			socialAccountId: event.socialAccountId ?? undefined,
-		});
+		await runLoop(
+			db,
+			row.run.id,
+			{
+				...env,
+				socialAccountId: event.socialAccountId ?? undefined,
+			},
+			{ refreshContactContext: true },
+		);
 		return true;
 	}
 	return false;

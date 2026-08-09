@@ -20,6 +20,11 @@ import {
 	withCredentialMutationAuthorityInTransaction,
 } from "../lib/credential-mutation-authority";
 import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
+import {
 	resolveOperationalCreateScope,
 	workspaceScopeKey,
 } from "../lib/request-access";
@@ -265,6 +270,10 @@ const listAutomations = createRoute({
 			description: "Automation list",
 			content: { "application/json": { schema: ListResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -301,16 +310,11 @@ app.openapi(listAutomations, async (c) => {
 	// sharing the cursor's millisecond. Bind it back with an explicit ::timestamptz
 	// cast to keep the keyset comparison exact.
 	if (query.cursor) {
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${automations.createdAt}::text` })
-			.from(automations)
-			.where(eq(automations.id, query.cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${automations.createdAt}, ${automations.id}) < (${cursorRow.createdAt}::timestamptz, ${query.cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(query.cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${automations.createdAt}, ${automations.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	// Explicit column projection — never SELECT the heavy graph / template_config
@@ -334,6 +338,7 @@ app.openapi(listAutomations, async (c) => {
 			createdBy: automations.createdBy,
 			createdAt: automations.createdAt,
 			updatedAt: automations.updatedAt,
+			cursorTimestamp: sql<string>`to_char(${automations.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(automations)
 		.where(and(...conditions))
@@ -342,12 +347,16 @@ app.openapi(listAutomations, async (c) => {
 
 	const hasMore = rows.length > query.limit;
 	const data = rows.slice(0, query.limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	return c.json(
 		{
 			data: data.map((row) => serializeAutomationListItem(row)),
-			next_cursor:
-				hasMore && data.length > 0 ? (data[data.length - 1]?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,

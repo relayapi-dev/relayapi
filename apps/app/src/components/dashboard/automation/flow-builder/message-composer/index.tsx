@@ -26,6 +26,7 @@ import type { AutomationNode } from "../graph-types";
 import { type ChannelCapabilities, useAutomationCatalog } from "../use-catalog";
 import { blockLabel } from "./block-editors";
 import { BlockList } from "./block-list";
+import { MediaLibraryProvider } from "./media-library";
 import { Preview } from "./preview";
 import { QuickReplyEditor } from "./quick-reply-editor";
 import {
@@ -46,6 +47,8 @@ interface Props {
 	node: Pick<AutomationNode, "key" | "kind" | "config">;
 	/** Channel of the automation (e.g. "instagram"). */
 	channel: string;
+	/** Operational scope used by media list and upload calls. */
+	workspaceId: string | null;
 	/** Called with the new `config` whenever the user edits. */
 	onChange(config: MessageConfig): void;
 	/**
@@ -74,6 +77,7 @@ const ALL_BLOCK_TYPES: BlockType[] = [
 export function MessageComposer({
 	node,
 	channel,
+	workspaceId,
 	onChange,
 	channelCapabilities,
 }: Props) {
@@ -104,12 +108,22 @@ export function MessageComposer({
 		<div className="flex flex-col gap-4 p-4">
 			<ChannelBanner channel={channel} />
 
-			<BlockList
-				blocks={blocks}
-				channel={channel}
-				channelCapabilities={caps}
-				onChange={setBlocks}
-			/>
+			<MediaLibraryProvider
+				enabled={blocks.some((block) =>
+					["image", "video", "audio", "file", "card", "gallery"].includes(
+						block.type,
+					),
+				)}
+				workspaceId={workspaceId}
+			>
+				<BlockList
+					blocks={blocks}
+					channel={channel}
+					workspaceId={workspaceId}
+					channelCapabilities={caps}
+					onChange={setBlocks}
+				/>
+			</MediaLibraryProvider>
 
 			<AddBlockButton
 				channel={channel}

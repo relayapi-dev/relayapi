@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
@@ -7,19 +7,27 @@ import { CloudflareClient } from "./cloudflare.js";
 import {
 	initialLock,
 	readConfig,
+	validateConfig,
 	validateHyperdriveCaCertificateId,
 	writeConfig,
 	writeLock,
 } from "./config.js";
-import { CLI_VERSION, CONFIG_FILENAME, RESOURCE_NAMES } from "./constants.js";
+import {
+	CLI_VERSION,
+	CONFIG_FILENAME,
+	DEFAULT_SOURCE_REPOSITORY,
+	RESOURCE_NAMES,
+} from "./constants.js";
 import { deploy } from "./deploy.js";
 import { doctor, validateRuntimeDatabaseUrl } from "./doctor.js";
 import { reconcileCloudflareResources } from "./reconcile.js";
 import {
 	configureGithubRepository,
 	generatedSecrets,
+	prepareInitDirectory,
 	writeScaffold,
 } from "./scaffold.js";
+import { resolveReleaseArchiveSha256 } from "./source.js";
 import type { CliOptions, SelfHostConfig } from "./types.js";
 import { upgrade } from "./upgrade.js";
 
@@ -30,7 +38,7 @@ Usage:
   relayapi-self-host doctor [--hyperdrive-ca-certificate-id UUID]
   relayapi-self-host plan [--hyperdrive-ca-certificate-id UUID]
   relayapi-self-host configure [--hyperdrive-ca-certificate-id UUID]
-  relayapi-self-host deploy [--source /path/to/relayapi] [--hyperdrive-ca-certificate-id UUID]
+  relayapi-self-host deploy [--source /path/to/relayapi --allow-unsealed-source] [--hyperdrive-ca-certificate-id UUID]
   relayapi-self-host upgrade
 
 Global options:
@@ -38,6 +46,9 @@ Global options:
   --env-file <path>     Load secrets from a local ignored env file
   --non-interactive     Never prompt
   --dry-run             Show resource changes without applying them
+  --force               During init, back up and replace managed files
+  --allow-unsealed-source
+                        Acknowledge that deploy --source bypasses the sealed archive
   --email               Enable transactional email during init
   --ai                  Enable Workers AI during init
   --downloader          Enable the optional downloader during init
@@ -131,21 +142,12 @@ async function promptValue(
 	}
 }
 
-async function fileExists(path: string): Promise<boolean> {
-	try {
-		await access(path);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
-	if (await fileExists(resolve(options.configPath))) {
-		throw new Error(
-			`${options.configPath} already exists; use configure or deploy instead`,
-		);
-	}
+	const githubRepository = value(args, "github");
+	const preparation = await prepareInitDirectory(options.configPath, {
+		force: options.force,
+		github: githubRepository !== undefined,
+	});
 	const accountId = await promptValue(
 		"Cloudflare account ID",
 		value(args, "account-id") ?? process.env.CLOUDFLARE_ACCOUNT_ID,
@@ -163,7 +165,6 @@ async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
 			options.nonInteractive,
 		)
 	).toLowerCase();
-	const githubRepository = value(args, "github");
 	const adminEmail = await promptValue(
 		"Initial administrator email",
 		value(args, "admin-email") ?? process.env.RELAYAPI_ADMIN_EMAIL,
@@ -187,7 +188,7 @@ async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
 		),
 		"Hyperdrive CA certificate ID",
 	);
-	const config: SelfHostConfig = {
+	const config: SelfHostConfig = validateConfig({
 		schemaVersion: 1,
 		instance: "relayapi",
 		cloudflare: {
@@ -209,14 +210,25 @@ async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
 			downloader: args.flags.has("--downloader"),
 		},
 		...(githubRepository ? { github: { repository: githubRepository } } : {}),
-	};
-	await mkdir(dirname(resolve(options.configPath)), { recursive: true });
-	await writeConfig(config, options.configPath);
-	await writeLock(
-		initialLock(value(args, "relayapi-version") ?? CLI_VERSION),
-		options.configPath,
+	});
+	const version = value(args, "relayapi-version") ?? CLI_VERSION;
+	const sourceArchiveSha256 = await resolveReleaseArchiveSha256(
+		DEFAULT_SOURCE_REPOSITORY,
+		version,
 	);
-	await writeScaffold(options.configPath);
+	await mkdir(dirname(resolve(options.configPath)), { recursive: true });
+	await writeConfig(config, options.configPath, {
+		overwrite: preparation.overwrite,
+	});
+	await writeLock(
+		initialLock(version, sourceArchiveSha256),
+		options.configPath,
+		{ overwrite: preparation.overwrite },
+	);
+	await writeScaffold(options.configPath, {
+		overwrite: preparation.overwrite,
+		mergeGitignore: preparation.mergeGitignore,
+	});
 
 	const generated = generatedSecrets();
 	process.env.CLOUDFLARE_ACCOUNT_ID ??= accountId;
@@ -232,13 +244,19 @@ async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
 	await writeFile(
 		localSecretsPath,
 		`ENCRYPTION_KEY=${process.env.ENCRYPTION_KEY}\nBETTER_AUTH_SECRET=${process.env.BETTER_AUTH_SECRET}\nRELAYAPI_ADMIN_EMAIL=${process.env.RELAYAPI_ADMIN_EMAIL}\nRELAYAPI_ADMIN_PASSWORD=${process.env.RELAYAPI_ADMIN_PASSWORD}\n`,
-		{ mode: 0o600, flag: "wx" },
+		{ mode: 0o600, flag: preparation.overwrite ? "w" : "wx" },
 	);
+	await chmod(localSecretsPath, 0o600);
 
 	console.log(`Created ${options.configPath} and guarded GitHub workflows`);
 	console.log(
 		`Generated local secrets in ${localSecretsPath} (gitignored, mode 0600)`,
 	);
+	if (preparation.backupDirectory) {
+		console.log(
+			`Backed up replaced init files to ${preparation.backupDirectory}`,
+		);
+	}
 	if (githubRepository) {
 		await configureGithubRepository(config, options.configPath);
 		console.log(`Created private deployment repository ${githubRepository}`);
@@ -351,7 +369,11 @@ async function main(): Promise<void> {
 		configPath,
 		nonInteractive: args.flags.has("--non-interactive"),
 		dryRun: args.flags.has("--dry-run"),
+		force: args.flags.has("--force"),
 		...(value(args, "source") ? { source: value(args, "source") } : {}),
+		...(args.flags.has("--allow-unsealed-source")
+			? { allowUnsealedSource: true }
+			: {}),
 		...(requestedHyperdriveCaCertificateId
 			? {
 					hyperdriveCaCertificateId: validateHyperdriveCaCertificateId(

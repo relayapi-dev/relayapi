@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,15 +22,35 @@ const output = JSON.parse(
 		{ cwd: packageDirectory, encoding: "utf8" },
 	),
 );
-const tarball = join(temporaryDirectory, output[0].filename);
+const postgresOutput = JSON.parse(
+	execFileSync(
+		"npm",
+		[
+			"pack",
+			resolve(packageDirectory, "../../node_modules/postgres"),
+			"--json",
+			"--ignore-scripts",
+			"--pack-destination",
+			temporaryDirectory,
+		],
+		{ cwd: packageDirectory, encoding: "utf8", timeout: 30_000 },
+	),
+);
 writeFileSync(
 	join(temporaryDirectory, "package.json"),
-	JSON.stringify({ private: true, type: "module" }),
+	JSON.stringify({
+		private: true,
+		type: "module",
+		dependencies: {
+			"@relayapi/self-host": `file:./${output[0].filename}`,
+			postgres: `file:./${postgresOutput[0].filename}`,
+		},
+	}),
 );
 execFileSync(
 	"npm",
-	["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
-	{ cwd: temporaryDirectory, stdio: "inherit" },
+	["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund"],
+	{ cwd: temporaryDirectory, stdio: "inherit", timeout: 30_000 },
 );
 
 const installedPackage = JSON.parse(
@@ -45,9 +66,39 @@ const executable = join(
 	temporaryDirectory,
 	"node_modules/.bin/relayapi-self-host",
 );
-const help = spawnSync(executable, ["--help"], {
+const releaseArchive = "offline package-smoke release archive";
+const releaseArchiveSha256 = createHash("sha256")
+	.update(releaseArchive)
+	.digest("hex");
+const fetchPreload = join(temporaryDirectory, "offline-fetch.mjs");
+writeFileSync(
+	fetchPreload,
+	`const expectedUrl = ${JSON.stringify(`https://github.com/relayapi-dev/relayapi/archive/refs/tags/self-host-v${installedPackage.version}.tar.gz`)};
+const archive = new TextEncoder().encode(${JSON.stringify(releaseArchive)});
+globalThis.fetch = async (input) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (url !== expectedUrl) throw new Error(\`Package smoke blocked unexpected network request: \${url}\`);
+  return new Response(archive, {
+    status: 200,
+    headers: { "content-length": String(archive.byteLength), "content-type": "application/gzip" },
+  });
+};
+`,
+);
+const cliEnvironment = {
+	...process.env,
+	NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${fetchPreload}`]
+		.filter(Boolean)
+		.join(" "),
+};
+const cliSpawnOptions = {
 	cwd: temporaryDirectory,
 	encoding: "utf8",
+	env: cliEnvironment,
+	timeout: 10_000,
+};
+const help = spawnSync(executable, ["--help"], {
+	...cliSpawnOptions,
 });
 if (
 	help.status !== 0 ||
@@ -56,7 +107,7 @@ if (
 	!help.stdout.includes("doctor [--hyperdrive-ca-certificate-id UUID]") ||
 	!help.stdout.includes("configure [--hyperdrive-ca-certificate-id UUID]") ||
 	!help.stdout.includes(
-		"deploy [--source /path/to/relayapi] [--hyperdrive-ca-certificate-id UUID]",
+		"deploy [--source /path/to/relayapi --allow-unsealed-source] [--hyperdrive-ca-certificate-id UUID]",
 	)
 ) {
 	throw new Error(
@@ -81,7 +132,7 @@ const missingCa = spawnSync(
 		"--admin-email",
 		"admin@example.com",
 	],
-	{ cwd: temporaryDirectory, encoding: "utf8" },
+	cliSpawnOptions,
 );
 if (
 	missingCa.status === 0 ||
@@ -116,7 +167,7 @@ const initialized = spawnSync(
 		"--hyperdrive-ca-certificate-id",
 		certificateId,
 	],
-	{ cwd: temporaryDirectory, encoding: "utf8" },
+	cliSpawnOptions,
 );
 if (initialized.status !== 0) {
 	throw new Error(
@@ -129,11 +180,22 @@ if (initializedConfig.cloudflare?.hyperdriveCaCertificateId !== certificateId) {
 		"Installed self-host CLI did not persist Hyperdrive CA intent",
 	);
 }
+const initializedLock = JSON.parse(
+	readFileSync(
+		join(temporaryDirectory, "operator", "relayapi.lock.json"),
+		"utf8",
+	),
+);
+if (initializedLock.sourceArchiveSha256 !== releaseArchiveSha256) {
+	throw new Error(
+		"Installed self-host CLI did not seal the lock to the mocked release archive",
+	);
+}
 
 const missingRotationValue = spawnSync(
 	executable,
 	["plan", "--config", validConfig, "--hyperdrive-ca-certificate-id"],
-	{ cwd: temporaryDirectory, encoding: "utf8" },
+	cliSpawnOptions,
 );
 if (
 	missingRotationValue.status === 0 ||
@@ -153,7 +215,7 @@ const invalidRotationValue = spawnSync(
 		"--hyperdrive-ca-certificate-id",
 		"not-a-certificate-id",
 	],
-	{ cwd: temporaryDirectory, encoding: "utf8" },
+	cliSpawnOptions,
 );
 if (
 	invalidRotationValue.status === 0 ||

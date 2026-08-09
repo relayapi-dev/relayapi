@@ -48,7 +48,6 @@ export function conversationAvatarPublicUrl(
  * the raw CDN URL (never worse than before).
  */
 async function rehostAvatarInBucket(
-	env: Env,
 	bucket: R2Bucket,
 	objectKey: string,
 	publicUrl: string,
@@ -91,7 +90,6 @@ export async function rehostAvatar(
 	sourceUrl: string | null | undefined,
 ): Promise<string | null> {
 	return rehostAvatarInBucket(
-		env,
 		env.AVATAR_BUCKET,
 		accountAvatarKey(accountId),
 		avatarPublicUrl(env, accountId),
@@ -111,7 +109,6 @@ export async function rehostTransientAvatar(
 	sourceUrl: string | null | undefined,
 ): Promise<string | null> {
 	return rehostAvatarInBucket(
-		env,
 		env.MEDIA_BUCKET,
 		conversationAvatarKey(organizationId, workspaceId, conversationId),
 		conversationAvatarPublicUrl(

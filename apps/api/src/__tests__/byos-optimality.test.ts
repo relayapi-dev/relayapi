@@ -4,6 +4,7 @@ import { getTableConfig } from "drizzle-orm/pg-core";
 import {
 	buildByosBucketUrl,
 	buildByosObjectUrl,
+	byosPutRetries,
 	PINNED_BYOS_CREDENTIAL_STATES,
 	storageLocatorForMedia,
 } from "../services/storage-locator";
@@ -41,8 +42,7 @@ describe("BYOS optimal storage boundary", () => {
 		expect(
 			getTableConfig(storageCredentials).uniqueConstraints.some(
 				(constraint) =>
-					constraint.name ===
-					"storage_credentials_location_org_version_uniq",
+					constraint.name === "storage_credentials_location_org_version_uniq",
 			),
 		).toBe(true);
 
@@ -119,9 +119,7 @@ describe("BYOS optimal storage boundary", () => {
 		expect(mediaRoute).toContain("preferredMediaStorageTarget");
 		expect(mediaRoute).toContain("storageBucketLocator: storageTarget.bucket");
 		expect(mediaRoute).toContain("storageRegion: storageTarget.region");
-		expect(mediaRoute).toContain(
-			"storageLocationId: storageTarget.locationId",
-		);
+		expect(mediaRoute).toContain("storageLocationId: storageTarget.locationId");
 		expect(mediaRoute).toContain(
 			"storageCredentialVersion: storageTarget.credentialVersion",
 		);
@@ -143,6 +141,19 @@ describe("BYOS optimal storage boundary", () => {
 		expect(PINNED_BYOS_CREDENTIAL_STATES).toEqual(["active", "retired"]);
 	});
 
+	it("never retries a one-shot BYOS upload stream", () => {
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array([1, 2, 3]));
+				controller.close();
+			},
+		});
+
+		expect(byosPutRetries(stream)).toBe(0);
+		expect(byosPutRetries(new Uint8Array([1, 2, 3]))).toBe(2);
+		expect(byosPutRetries("replayable")).toBe(2);
+	});
+
 	it("serializes concurrent stages and activates only the exact fenced probe", async () => {
 		const lifecycle = await Bun.file(
 			"src/services/byos-configuration.ts",
@@ -152,7 +163,9 @@ describe("BYOS optimal storage boundary", () => {
 		expect(lifecycle).toContain(
 			"eq(storageCredentials.probeToken, claim.probeToken)",
 		);
-		expect(lifecycle).toContain("if (!active) throw new ByosActivationConflictError()");
+		expect(lifecycle).toContain(
+			"if (!active) throw new ByosActivationConflictError()",
+		);
 		expect(lifecycle).toContain(
 			"if (!activatedLocation) throw new ByosActivationConflictError()",
 		);
@@ -162,7 +175,9 @@ describe("BYOS optimal storage boundary", () => {
 		const lifecycle = await Bun.file(
 			"src/services/byos-configuration.ts",
 		).text();
-		const failureStart = lifecycle.indexOf("async function failStagedCredential");
+		const failureStart = lifecycle.indexOf(
+			"async function failStagedCredential",
+		);
 		const activationStart = lifecycle.indexOf(
 			"async function activateStagedCredential",
 		);
@@ -180,7 +195,9 @@ describe("BYOS optimal storage boundary", () => {
 			Bun.file("src/services/storage-locator.ts").text(),
 		]);
 		expect(lifecycle).toContain(".insert(storageLocations)");
-		expect(lifecycle).toContain("oldActive.locationId !== candidate.locationId");
+		expect(lifecycle).toContain(
+			"oldActive.locationId !== candidate.locationId",
+		);
 		expect(tenantErasure).toContain("nextByosCleanupLocator");
 		expect(tenantErasure).toContain("byos_credential_version");
 		expect(locator).toContain("CLEANUP_BYOS_CREDENTIAL_STATES");

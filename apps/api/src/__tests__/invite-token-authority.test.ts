@@ -103,11 +103,23 @@ describe("invite-token authority", () => {
 		expect(source).toContain("canAssignOrganizationRole");
 		expect(source).toContain('.for("update")');
 		expect(source).toContain("isNull(inviteTokens.usedAt)");
+		expect(source).toContain("inviteSignupClaimForUser(identity.userId)");
+		expect(source).toContain("invitation.usedBy === signupClaim");
+		expect(source).toContain("isNull(inviteTokens.redeemedByUserId)");
 		expect(source).toContain("gt(inviteTokens.expiresAt, redeemedAt)");
 		expect(source).toContain("higherOrganizationRole");
+		// The expiry waiver is scoped to the user who claimed the token during
+		// signup — that claim already burned the token for everyone else, so
+		// enforcing expiry against its owner would leave a real account with no
+		// membership and no reissue path. Every other caller still hits the
+		// unconditional expiry rejection and the expiry-fenced consumption.
+		expect(source).toContain(
+			"if (!ownsSignupClaim && invitation.expiresAt <= redeemedAt)",
+		);
+		expect(source).toContain("isNull(inviteTokens.usedAt),\n\t\t\t\t\tgt(inviteTokens.expiresAt, redeemedAt),");
 		const consume = source.indexOf(
 			".update(inviteTokens)",
-			source.indexOf("// Consume before creating authority rows"),
+			source.indexOf("// Consume (or finalize this user's signup claim)"),
 		);
 		expect(consume).toBeGreaterThan(-1);
 		expect(source.indexOf("if (!existingMember)", consume)).toBeGreaterThan(

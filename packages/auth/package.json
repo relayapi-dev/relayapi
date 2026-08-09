@@ -5,6 +5,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./bearer-invite-contract": "./src/bearer-invite-contract.ts",
 		"./permissions": "./src/permissions.ts"
 	},
 	"dependencies": {

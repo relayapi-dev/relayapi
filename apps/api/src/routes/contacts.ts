@@ -24,6 +24,7 @@ import {
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
 	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
 } from "../lib/pagination-cursor";
 import { hasPostgresErrorCode } from "../lib/postgres-errors";
 import {
@@ -209,6 +210,10 @@ const listContacts = createRoute({
 		200: {
 			description: "Contacts list",
 			content: { "application/json": { schema: ContactListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
 			description: "Segment workspace is not authorized",
@@ -735,16 +740,11 @@ app.openapi(listContacts, async (c) => {
 		// (common after bulk imports) once the page boundary falls inside that
 		// millisecond. Bind it back with an explicit ::timestamptz cast to keep the
 		// keyset comparison exact.
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${contacts.createdAt}::text` })
-			.from(contacts)
-			.where(eq(contacts.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${contacts.createdAt}, ${contacts.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${contacts.createdAt}, ${contacts.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const protectedSelection = {
@@ -760,6 +760,7 @@ app.openapi(listContacts, async (c) => {
 		optedIn: contacts.optedIn,
 		createdAt: contacts.createdAt,
 		updatedAt: contacts.updatedAt,
+		cursorTimestamp: sql<string>`to_char(${contacts.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 	};
 	const matched: Array<
 		Parameters<typeof serializeContact>[0] & { organizationId: string }
@@ -769,16 +770,19 @@ app.openapi(listContacts, async (c) => {
 		: limit + 1;
 	const maxCandidates = search ? 1_000 : limit + 1;
 	let scanned = 0;
-	let scanBoundaryId: string | null = null;
+	// The batch boundary carries its own sort key, so successive scan batches
+	// need no correlated lookup and cannot be derailed by a concurrent delete.
+	let scanBoundary: { timestamp: string; id: string } | null = null;
+	// Search filtering happens in plaintext after decryption, so the sort key of
+	// a matched row has to be carried across from its encrypted row.
+	const cursorTimestampById = new Map<string, string>();
 	let exhausted = false;
 	while (matched.length < limit + 1 && scanned < maxCandidates) {
 		const pageConditions = [...conditions];
-		if (scanBoundaryId) {
-			pageConditions.push(sql`(${contacts.createdAt}, ${contacts.id}) < (
-				(SELECT boundary.created_at FROM contacts AS boundary
-				  WHERE boundary.id = ${scanBoundaryId}),
-				${scanBoundaryId}
-			)`);
+		if (scanBoundary) {
+			pageConditions.push(
+				sql`(${contacts.createdAt}, ${contacts.id}) < (${scanBoundary.timestamp}::timestamptz, ${scanBoundary.id})`,
+			);
 		}
 		const requestedBatchSize = Math.min(
 			candidateBatchSize,
@@ -795,7 +799,16 @@ app.openapi(listContacts, async (c) => {
 			break;
 		}
 		scanned += protectedRows.length;
-		scanBoundaryId = protectedRows.at(-1)?.id ?? scanBoundaryId;
+		for (const row of protectedRows) {
+			cursorTimestampById.set(row.id, row.cursorTimestamp);
+		}
+		const boundaryRow = protectedRows.at(-1);
+		if (boundaryRow) {
+			scanBoundary = {
+				timestamp: boundaryRow.cursorTimestamp,
+				id: boundaryRow.id,
+			};
+		}
 		const plaintextRows = await decryptContactRows(
 			c.env.ENCRYPTION_KEY,
 			protectedRows,
@@ -820,6 +833,20 @@ app.openapi(listContacts, async (c) => {
 		scanned >= maxCandidates;
 	const hasMore = matched.length > limit || scanTruncated;
 	const data = matched.slice(0, limit);
+	// A truncated search scan resumes from where scanning stopped, not from the
+	// last matched row, so the two cases carry different sort keys.
+	const lastMatched = data.at(-1);
+	const lastMatchedTimestamp =
+		lastMatched && cursorTimestampById.get(lastMatched.id);
+	const cursorKey = scanTruncated
+		? scanBoundary
+		: lastMatched && lastMatchedTimestamp
+			? { timestamp: lastMatchedTimestamp, id: lastMatched.id }
+			: null;
+	const nextCursor =
+		hasMore && cursorKey
+			? encodeTimestampIdCursor(cursorKey.timestamp, cursorKey.id)
+			: null;
 
 	// Load channels for all returned contacts
 	const contactIds = data.map((ct) => ct.id);
@@ -868,11 +895,7 @@ app.openapi(listContacts, async (c) => {
 					segmentIdsByContact.get(ct.id) ?? [],
 				),
 			),
-			next_cursor: hasMore
-				? scanTruncated
-					? scanBoundaryId
-					: (data.at(-1)?.id ?? null)
-				: null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,

@@ -26,6 +26,7 @@ import type {
 	MessageBlock,
 	QuickReply,
 } from "../../../schemas/automation-graph";
+import type { Env } from "../../../types";
 import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
@@ -36,6 +37,7 @@ import type {
 	SendMessageRequest,
 	SendMessageResult,
 } from "../../message-sender";
+import { resolveAutomationMessageMedia } from "../automation-media";
 import { applyMergeTags } from "../merge-tags";
 import {
 	type AutomationChannel,
@@ -116,6 +118,21 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 			...qr,
 			label: applyMergeTags(qr.label, mergeCtx),
 		}));
+		let resolvedBlocks: MessageBlock[];
+		try {
+			resolvedBlocks = await resolveAutomationMessageMedia({
+				db: ctx.db,
+				env: ctx.env as unknown as Env,
+				organizationId: ctx.organizationId,
+				workspaceId: ctx.workspaceId ?? null,
+				blocks: renderedBlocks,
+			});
+		} catch (error) {
+			return {
+				result: "fail",
+				error: error instanceof Error ? error : new Error(String(error)),
+			};
+		}
 
 		// 2. Recipient resolution ------------------------------------------------
 		const recipient = await resolveRecipient(
@@ -130,7 +147,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 		}
 
 		if (cfg.delivery === "comment_private_reply") {
-			if (renderedQuickReplies.length > 0 || renderedBlocks.length !== 1) {
+			if (renderedQuickReplies.length > 0 || resolvedBlocks.length !== 1) {
 				return {
 					result: "fail",
 					error: new Error(
@@ -138,7 +155,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 					),
 				};
 			}
-			const block = renderedBlocks[0];
+			const block = resolvedBlocks[0];
 			if (block?.type !== "text" || block.buttons?.length) {
 				return {
 					result: "fail",
@@ -196,7 +213,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 				platformContactId: recipient.platformContactId,
 				conversationId: ctx.conversationId,
 			},
-			blocks: renderedBlocks,
+			blocks: resolvedBlocks,
 			quickReplies: renderedQuickReplies,
 			typingDelayMs: cfg.typing_indicator_seconds
 				? cfg.typing_indicator_seconds * 1000
@@ -241,7 +258,7 @@ export const messageHandler: NodeHandler<MessageConfig> = {
 		const deliverableBranchButton =
 			!!channelCaps &&
 			CHANNEL_SUPPORTS_BUTTONS[channel] &&
-			hasDeliverableBranchButton(renderedBlocks, channelCaps);
+			hasDeliverableBranchButton(resolvedBlocks, channelCaps);
 		const deliverableQuickReply =
 			renderedQuickReplies.length > 0 &&
 			CHANNEL_SUPPORTS_QUICK_REPLIES[channel];

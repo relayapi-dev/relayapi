@@ -25,6 +25,11 @@ import {
 } from "../lib/delete-account";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
 import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { assertAllWorkspaceScope } from "../lib/request-access";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import {
@@ -103,6 +108,10 @@ const listAccounts = createRoute({
 		200: {
 			description: "List of accounts",
 			content: { "application/json": { schema: AccountListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -506,11 +515,13 @@ app.openapi(listAccounts, async (c) => {
 
 	const conditions = [...baseConditions];
 	// Keyset pagination on the actual sort key (connected_at, id). The cursor is
-	// the id of the last row from the previous page; resolve its connected_at in
-	// SQL so equal timestamps are tie-broken deterministically by id.
+	// the id of the last row from the previous page; resolve its connected_at from
+	// the same filtered tenant scope so equal timestamps are tie-broken by id.
 	if (cursor) {
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
 		conditions.push(
-			sql`(${socialAccounts.connectedAt}, ${socialAccounts.id}) < ((select s.connected_at from social_accounts s where s.id = ${cursor}), ${cursor})`,
+			sql`(${socialAccounts.connectedAt}, ${socialAccounts.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
 		);
 	}
 
@@ -528,6 +539,7 @@ app.openapi(listAccounts, async (c) => {
 				connectedAt: socialAccounts.connectedAt,
 				updatedAt: socialAccounts.updatedAt,
 				workspaceName: workspaces.name,
+				cursorTimestamp: sql<string>`to_char(${socialAccounts.connectedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 			})
 			.from(socialAccounts)
 			.leftJoin(workspaces, eq(socialAccounts.workspaceId, workspaces.id))
@@ -543,6 +555,11 @@ app.openapi(listAccounts, async (c) => {
 	const total = countRows[0]?.total ?? 0;
 	const hasMore = accounts.length > limit;
 	const data = accounts.slice(0, limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	return c.json(
 		{
@@ -560,7 +577,7 @@ app.openapi(listAccounts, async (c) => {
 				connected_at: a.connectedAt.toISOString(),
 				updated_at: a.updatedAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 			total,
 		},

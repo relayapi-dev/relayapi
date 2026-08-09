@@ -12,6 +12,11 @@ const observability = {
 		persist: true,
 		invocation_logs: true,
 	},
+	traces: {
+		enabled: true,
+		persist: true,
+		head_sampling_rate: 0.01,
+	},
 };
 
 const consumer = (

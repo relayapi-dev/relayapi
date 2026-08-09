@@ -76,6 +76,8 @@ type LoadedByosAuthority = {
 	client: AwsClient;
 };
 
+const DEFAULT_BYOS_RETRIES = 2;
+
 export const PINNED_BYOS_CREDENTIAL_STATES = ["active", "retired"] as const;
 const CLEANUP_BYOS_CREDENTIAL_STATES = [
 	"staged",
@@ -138,6 +140,7 @@ async function loadByosAuthority(
 		credentialVersion: number;
 	},
 	allowedStates: readonly ("staged" | "active" | "retired" | "failed")[],
+	retries = DEFAULT_BYOS_RETRIES,
 ): Promise<LoadedByosAuthority> {
 	const [loaded] = await db
 		.select({
@@ -149,10 +152,7 @@ async function loadByosAuthority(
 			storageLocations,
 			and(
 				eq(storageLocations.id, storageCredentials.locationId),
-				eq(
-					storageLocations.organizationId,
-					storageCredentials.organizationId,
-				),
+				eq(storageLocations.organizationId, storageCredentials.organizationId),
 			),
 		)
 		.where(
@@ -185,7 +185,7 @@ async function loadByosAuthority(
 			secretAccessKey,
 			service: "s3",
 			region: loaded.location.region,
-			retries: 2,
+			retries,
 		}),
 	};
 }
@@ -194,12 +194,14 @@ async function loadPinnedByosAuthority(
 	db: Database,
 	env: Env,
 	locator: Extract<StorageLocator, { provider: "byos" }>,
+	retries = DEFAULT_BYOS_RETRIES,
 ): Promise<LoadedByosAuthority> {
 	const loaded = await loadByosAuthority(
 		db,
 		env,
 		locator,
 		PINNED_BYOS_CREDENTIAL_STATES,
+		retries,
 	);
 	if (
 		loaded.location.bucket !== locator.bucket ||
@@ -210,6 +212,20 @@ async function loadPinnedByosAuthority(
 		);
 	}
 	return loaded;
+}
+
+/**
+ * aws4fetch retries by signing a fresh Request around the original body. A
+ * ReadableStream is one-shot, so replaying it after a 429/5xx sends a disturbed
+ * body. Disable transport retries for streams and let the durable upload intent
+ * plus the media reconciler resolve an ambiguous outcome instead.
+ */
+export function byosPutRetries(
+	body: ReadableStream | ArrayBuffer | Uint8Array | string,
+): number {
+	return typeof body === "object" && body !== null && "getReader" in body
+		? 0
+		: DEFAULT_BYOS_RETRIES;
 }
 
 function currentR2Bucket(
@@ -250,10 +266,7 @@ export async function preferredMediaStorageTarget(
 			storageLocations,
 			and(
 				eq(storageLocations.id, storageCredentials.locationId),
-				eq(
-					storageLocations.organizationId,
-					storageCredentials.organizationId,
-				),
+				eq(storageLocations.organizationId, storageCredentials.organizationId),
 			),
 		)
 		.where(
@@ -397,7 +410,12 @@ export async function putStoredObject(
 		});
 		return;
 	}
-	const { location, client } = await loadPinnedByosAuthority(db, env, locator);
+	const { location, client } = await loadPinnedByosAuthority(
+		db,
+		env,
+		locator,
+		byosPutRetries(body),
+	);
 	const headers = new Headers({ "content-type": options.contentType });
 	if (options.ifNoneMatch) headers.set("if-none-match", "*");
 	for (const [key, value] of Object.entries(options.metadata ?? {})) {
@@ -656,18 +674,13 @@ export async function nextByosCleanupLocator(
 			storageLocations,
 			and(
 				eq(storageLocations.id, storageCredentials.locationId),
-				eq(
-					storageLocations.organizationId,
-					storageCredentials.organizationId,
-				),
+				eq(storageLocations.organizationId, storageCredentials.organizationId),
 			),
 		)
 		.where(
 			and(
 				eq(storageCredentials.organizationId, organizationId),
-				inArray(storageCredentials.state, [
-					...CLEANUP_BYOS_CREDENTIAL_STATES,
-				]),
+				inArray(storageCredentials.state, [...CLEANUP_BYOS_CREDENTIAL_STATES]),
 				afterCursor,
 			),
 		)

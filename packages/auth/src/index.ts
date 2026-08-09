@@ -10,15 +10,19 @@ import {
 	eq,
 	gt,
 	invitation,
+	inviteTokens,
+	inviteTokenWorkspaces,
 	LEGACY_CREDENTIAL_VERSION,
 	lt,
 	member,
 	organization,
 	organizationCreationReservations,
+	organizationPrincipals,
 	session,
 	sql,
 	user,
 	verification,
+	workspaces,
 } from "@relayapi/db";
 import { type BetterAuthPlugin, betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -37,6 +41,11 @@ import {
 	wrapEndpointInTransaction,
 } from "./atomic-endpoint";
 import { authoritativeOrganizationSessionPlugin } from "./authoritative-organization-session";
+import {
+	bearerInviteSignupClaimPlugin,
+	bearerInviteTokenFromSignUpContext,
+	claimLiveBearerInviteForSignUp,
+} from "./bearer-invite-signup";
 import {
 	fenceInvitationAcceptingSession,
 	type InvitationAcceptContext,
@@ -95,7 +104,7 @@ export interface AuthEnv {
 	BETTER_AUTH_URL?: string;
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;
-	/** Require an unexpired pending organization invitation for new identities. */
+	/** Require a live emailed or bearer organization invitation for new identities. */
 	requireInvitationForSignUp?: boolean;
 	/** Require email/password users to verify their address before signing in. */
 	requireEmailVerification?: boolean;
@@ -312,7 +321,11 @@ export function createAuth(db: Database, env: AuthEnv) {
 						lt(organizationCreationReservations.expiresAt, now),
 					),
 				);
-			const freeOrgCount = await countOwnedFreeOrganizationsForUser(tx, userId);
+			const freeOrgCount = await countOwnedFreeOrganizationsForUser(
+				tx,
+				userId,
+				now,
+			);
 			const activeClaims = await tx
 				.select({ id: organizationCreationReservations.id })
 				.from(organizationCreationReservations)
@@ -459,6 +472,10 @@ export function createAuth(db: Database, env: AuthEnv) {
 				organization,
 				member,
 				invitation,
+				inviteTokens,
+				inviteTokenWorkspaces,
+				organizationPrincipals,
+				workspaces,
 			},
 		}),
 		emailAndPassword: {
@@ -572,7 +589,25 @@ export function createAuth(db: Database, env: AuthEnv) {
 										sql`lower(${invitation.email}) = ${normalizedEmail} AND ${invitation.status} = 'pending' AND ${invitation.expiresAt} > now()`,
 									)
 									.limit(1);
-								if (activeInvitations.length === 0) {
+								const bearerInviteToken =
+									bearerInviteTokenFromSignUpContext(context);
+								let claimedUserId: string | null = null;
+								let hasBearerInvitation = false;
+								if (activeInvitations.length === 0 && bearerInviteToken) {
+									const suppliedUserId = (userData as { id?: unknown }).id;
+									const generatedUserId =
+										typeof suppliedUserId === "string" && suppliedUserId
+											? suppliedUserId
+											: context?.context.generateId({ model: "user" }) ||
+												crypto.randomUUID();
+									hasBearerInvitation = await claimLiveBearerInviteForSignUp(
+										bearerInviteToken,
+										generatedUserId,
+										context,
+									);
+									if (hasBearerInvitation) claimedUserId = generatedUserId;
+								}
+								if (activeInvitations.length === 0 && !hasBearerInvitation) {
 									throw APIError.from("FORBIDDEN", {
 										code: "INVITATION_REQUIRED",
 										message:
@@ -580,7 +615,11 @@ export function createAuth(db: Database, env: AuthEnv) {
 									});
 								}
 								return {
-									data: { ...userData, email: normalizedEmail },
+									data: {
+										...userData,
+										...(claimedUserId ? { id: claimedUserId } : {}),
+										email: normalizedEmail,
+									},
 								};
 							},
 						}
@@ -637,6 +676,7 @@ export function createAuth(db: Database, env: AuthEnv) {
 			},
 		},
 		plugins: [
+			bearerInviteSignupClaimPlugin,
 			apiKey(),
 			authoritativeOrganizationSessionPlugin(),
 			authoritativeAdminSessionPlugin,

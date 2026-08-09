@@ -201,7 +201,12 @@ export async function processMediaDeletion(
 	const thumbnailComplete = thumbnailResult.status === "fulfilled";
 
 	if (originalComplete) {
-		await purgePresignedViewCache(env, row.storageKey);
+		await purgePresignedViewCache(
+			env,
+			row.storageKey,
+			undefined,
+			row.storageBucketLocator,
+		);
 	}
 
 	if (originalComplete && thumbnailComplete) {
@@ -751,7 +756,12 @@ export async function processThumbnailForMedia(
 		.returning({ id: media.id });
 
 	if (result.status === "source_missing" && updated.length > 0) {
-		await purgePresignedViewCache(env, row.storageKey);
+		await purgePresignedViewCache(
+			env,
+			row.storageKey,
+			undefined,
+			row.storageBucketLocator,
+		);
 	}
 	return result;
 }

@@ -4,6 +4,10 @@ import { getApiBySlug } from "../../lib/api-data";
 import { highlightCode } from "../../lib/code-highlight";
 import { platforms } from "../../lib/platform-data";
 import { apiIconPaths, platformGlyph } from "../../lib/product-glyphs";
+import {
+	PUBLIC_ACCESS_HREF,
+	PUBLIC_ACCESS_LABEL,
+} from "../../lib/public-access";
 
 /**
  * API product page — cream / Cursor-style landing for a single API surface.
@@ -22,7 +26,7 @@ const STEPS = [
 	{
 		n: 1,
 		title: "Get your API key",
-		body: "Sign up and generate your credentials in seconds.",
+		body: "Request hosted access or deploy the self-hosted package.",
 	},
 	{
 		n: 2,
@@ -89,10 +93,10 @@ function HeroSection({ api }: { api: ApiData }) {
 			</p>
 			<div className="mt-8 flex flex-wrap justify-center gap-[10px]">
 				<a
-					href="/signup"
+					href={PUBLIC_ACCESS_HREF}
 					className="rounded-full bg-landing-ink px-[22px] py-3 text-[15px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
 				>
-					Start building free
+					{PUBLIC_ACCESS_LABEL}
 				</a>
 				<a
 					href="https://docs.relayapi.dev/"
@@ -104,7 +108,7 @@ function HeroSection({ api }: { api: ApiData }) {
 				</a>
 			</div>
 			<p className="mt-4 text-[13px] text-[#9a968c]">
-				No credit card required · Full API access
+				Hosted signup is currently invite-only · Self-hosting is available
 			</p>
 		</section>
 	);
@@ -317,14 +321,14 @@ function CtaSection() {
 				Ready to start building?
 			</h2>
 			<p className="mx-auto mt-5 max-w-[48ch] text-balance text-[17px] leading-[1.5] text-[#6e6a62]">
-				Get your API key and publish across 21 platforms in minutes.
+				Request hosted access or start with the self-hosted distribution.
 			</p>
 			<div className="mt-8 flex flex-wrap justify-center gap-[12px]">
 				<a
-					href="/signup"
+					href={PUBLIC_ACCESS_HREF}
 					className="rounded-full bg-landing-ink px-[30px] py-[15px] text-[17px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
 				>
-					Start building free
+					{PUBLIC_ACCESS_LABEL}
 				</a>
 				<a
 					href="https://docs.relayapi.dev/"

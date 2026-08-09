@@ -33,7 +33,7 @@ describe("Better Auth ephemeral retention", () => {
 			"utf8",
 		);
 		expect(source).toContain("eq(verification.value, userId)");
-		expect(source).toContain("lower(${verification.identifier})");
+		expect(source).toContain(`lower(\${verification.identifier})`);
 		expect(source).toContain("canonicalDeletingEmail");
 		expect(source.indexOf(".delete(verification)")).toBeLessThan(
 			source.indexOf(".delete(user)"),

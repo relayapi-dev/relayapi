@@ -204,10 +204,10 @@ describe("queue failure tenant lifecycle", () => {
 			"utf8",
 		);
 		expect(writer).toContain(
-			"LEAST(${queueFailures.payloadExpiresAt}, excluded.payload_expires_at)",
+			`LEAST(\${queueFailures.payloadExpiresAt}, excluded.payload_expires_at)`,
 		);
 		expect(writer).toContain(
-			"WHEN ${queueFailures.payloadRedactedAt} IS NOT NULL",
+			`WHEN \${queueFailures.payloadRedactedAt} IS NOT NULL`,
 		);
 	});
 });

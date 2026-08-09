@@ -421,7 +421,7 @@ export interface AdCreateParams {
   link_url?: string;
   image_url?: string;
   video_url?: string;
-  /** Meta currently rejects cities, radius_miles, languages, and platform_specific instead of silently dropping them. */
+  /** Meta targeting. City values are targeting-search location keys, languages are numeric ad-locale IDs encoded as strings, and normalized fields override platform_specific conflicts. */
   targeting?: Record<string, unknown>;
   daily_budget_cents?: number;
   lifetime_budget_cents?: number;
@@ -438,7 +438,7 @@ export interface AdBoostParams {
   external_post_id?: string;
   name?: string;
   objective?: string;
-  /** Meta currently rejects cities, radius_miles, languages, and platform_specific instead of silently dropping them. */
+  /** Meta targeting. City values are targeting-search location keys, languages are numeric ad-locale IDs encoded as strings, and normalized fields override platform_specific conflicts. */
   targeting?: Record<string, unknown>;
   daily_budget_cents: number;
   lifetime_budget_cents?: number;
@@ -456,7 +456,7 @@ export interface AdUpdateParams {
   status?: 'active' | 'paused';
   daily_budget_cents?: number;
   lifetime_budget_cents?: number;
-  /** Meta currently rejects cities, radius_miles, languages, and platform_specific instead of silently dropping them. */
+  /** Meta targeting. City values are targeting-search location keys, languages are numeric ad-locale IDs encoded as strings, and normalized fields override platform_specific conflicts. */
   targeting?: Record<string, unknown>;
 }
 

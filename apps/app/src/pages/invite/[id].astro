@@ -1,4 +1,5 @@
 ---
+import { isBearerInviteToken } from "@relayapi/auth/bearer-invite-contract";
 import { BearerInvitationPage } from "../../components/invitation/bearer-invitation-page";
 import { InvitationPage } from "../../components/invitation/invitation-page";
 import SEO from "../../components/SEO.astro";
@@ -13,7 +14,7 @@ const user = u
 			email: u.email as string,
 		}
 	: null;
-const isBearerInvitation = /^rlay_inv_[0-9a-f]{48}$/.test(id ?? "");
+const isBearerInvitation = isBearerInviteToken(id);
 ---
 
 <BaseLayout>

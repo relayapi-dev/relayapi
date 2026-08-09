@@ -54,7 +54,9 @@ You can also set `is_default: true` when creating or updating a signature — th
 
 ## Skipping Signatures
 
-Server-side signature injection during post creation is coming soon. When available, you will be able to pass `skip_signature: true` on `POST /v1/posts` to prevent the default signature from being applied to that specific post.
+Server-side signature injection is active during post creation. Pass `skip_signature: true` on `POST /v1/posts` to prevent the applicable default signature from being added to that post.
+
+When `skip_signature` is omitted or `false`, RelayAPI looks up the organization's default signature and applies it to the shared text and each non-empty platform-specific text variant before publishing. Media-only variants with no text remain media-only.
 
 ## SDK Usage
 

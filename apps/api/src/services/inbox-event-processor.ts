@@ -35,6 +35,8 @@ import {
 } from "./inbox-persistence";
 import { deliverWebhook, dispatchWebhookEvent } from "./webhook-delivery";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
+import { fetchTwilioMediaSize } from "./twilio-media-metadata";
+import { fetchWhatsAppMediaMetadata } from "./whatsapp-media-metadata";
 
 type InboxEffect = "automation" | "customer_webhook" | "realtime";
 
@@ -472,6 +474,7 @@ export async function processInboxEvent(
 			.select({
 				workspaceId: socialAccounts.workspaceId,
 				accessToken: socialAccounts.accessToken,
+				platformAccountId: socialAccounts.platformAccountId,
 			})
 			.from(socialAccounts)
 			.where(
@@ -627,6 +630,20 @@ export async function processInboxEvent(
 			await runInboxEffectOnce(db, event, "automation", message, () =>
 				dispatchAutomationMatch(event, db, env, {
 					workspace_id: sa?.workspaceId ?? null,
+					whatsapp_media_context:
+						event.platform === "whatsapp"
+							? {
+									encryptedAccessToken: sa.accessToken,
+									phoneNumberId: sa.platformAccountId,
+								}
+							: undefined,
+					sms_media_context:
+						event.platform === "sms"
+							? {
+									encryptedAuthToken: sa.accessToken,
+									accountSid: sa.platformAccountId,
+								}
+							: undefined,
 					is_conversation_start:
 						event.type === "message" && (conversation?.messageCount ?? 0) === 0,
 					is_first_inbound_on_channel: isFirstInboundOnChannel,
@@ -937,6 +954,14 @@ async function dispatchAutomationMatch(
 		 * wa_id), which is not a valid FK for `automation_runs.conversation_id`.
 		 */
 		internal_conversation_id?: string | null;
+		whatsapp_media_context?: {
+			encryptedAccessToken: string | null;
+			phoneNumberId: string;
+		};
+		sms_media_context?: {
+			encryptedAuthToken: string | null;
+			accountSid: string;
+		};
 	},
 ): Promise<void> {
 	try {
@@ -1027,6 +1052,8 @@ async function dispatchAutomationMatch(
 				envAsRecord,
 				contactId,
 				event,
+				meta?.whatsapp_media_context,
+				meta?.sms_media_context,
 			);
 			if (resumed) return;
 		}
@@ -1117,10 +1144,18 @@ async function dispatchAutomationMatch(
  */
 async function resumeWaitingRunForInput(
 	db: ReturnType<typeof createDb>,
-	_env: Env,
+	env: Env,
 	envAsRecord: Record<string, unknown>,
 	contactId: string,
 	event: NormalizedInboxEvent,
+	whatsappMediaContext?: {
+		encryptedAccessToken: string | null;
+		phoneNumberId: string;
+	},
+	smsMediaContext?: {
+		encryptedAuthToken: string | null;
+		accountSid: string;
+	},
 ): Promise<boolean> {
 	const rows = await db
 		.select({
@@ -1163,7 +1198,10 @@ async function resumeWaitingRunForInput(
 
 	if (waitingRuns.length === 0) return false;
 
-	const attachment = event.attachment ?? null;
+	let attachment = event.attachment ?? null;
+	let mediaMetadataPromise:
+		| Promise<NonNullable<typeof attachment>>
+		| undefined;
 	const inboundText = event.text ?? "";
 	const interactivePayload = event.interactive_payload ?? null;
 
@@ -1214,12 +1252,86 @@ async function resumeWaitingRunForInput(
 		//    `resumeWaitingRunOnInput` returns "race" when the run's current
 		//    node is not an `input` node, so this naturally skips runs parked
 		//    on a message-node wait (already handled above by interactive).
+		//    The resolver passed below is lazy: `resumeWaitingRunOnInput` invokes it
+		//    only after confirming the run is parked on a file input with a configured
+		//    size cap. Text inputs, ordinary message waits, and uncapped file inputs
+		//    never depend on a provider metadata lookup. A lookup failure returns the
+		//    original unknown-size attachment so validation fails closed without
+		//    stranding the inbox effect in an unknown outcome.
+		//
+		//    Both providers need one because neither delivers a size inline:
+		//    WhatsApp sends a media id, Twilio sends only a URL and content type.
+		const needsSizeLookup = attachment != null && attachment.size_bytes === undefined;
+		const lookupMediaSize =
+			needsSizeLookup && event.platform === "whatsapp" && attachment?.id
+				? whatsappMediaContext &&
+					(async (current: NonNullable<typeof attachment>) => {
+						const accessToken = await decryptAccountToken(
+							whatsappMediaContext.encryptedAccessToken,
+							env.ENCRYPTION_KEY,
+							event.account_id,
+							"access_token",
+						);
+						if (!accessToken) return current;
+						const metadata = await fetchWhatsAppMediaMetadata(
+							current.id ?? "",
+							whatsappMediaContext.phoneNumberId,
+							accessToken,
+						);
+						return {
+							...current,
+							size_bytes: metadata.sizeBytes,
+							mime_type: metadata.mimeType ?? current.mime_type,
+						};
+					})
+				: needsSizeLookup && event.platform === "sms" && attachment?.url
+					? smsMediaContext &&
+						(async (current: NonNullable<typeof attachment>) => {
+							const authToken = await decryptAccountToken(
+								smsMediaContext.encryptedAuthToken,
+								env.ENCRYPTION_KEY,
+								event.account_id,
+								"access_token",
+							);
+							if (!authToken) return current;
+							return {
+								...current,
+								size_bytes: await fetchTwilioMediaSize(
+									current.url ?? "",
+									smsMediaContext.accountSid,
+									authToken,
+								),
+							};
+						})
+					: undefined;
+
+		const resolveAttachmentSize = lookupMediaSize
+			? async (current: NonNullable<typeof attachment>) => {
+					if (!mediaMetadataPromise) {
+						mediaMetadataPromise = (async () => {
+							try {
+								const resolved = await lookupMediaSize(current);
+								attachment = resolved;
+								event.attachment = resolved;
+								return resolved;
+							} catch {
+								console.warn(
+									`[inbox-processor] ${event.platform} media size unavailable; applying fail-closed input validation`,
+								);
+								return current;
+							}
+						})();
+					}
+					return mediaMetadataPromise;
+				}
+				: undefined;
 		const outcome = await resumeWaitingRunOnInput(
 			db,
 			waiting.id,
 			inboundText,
 			attachment,
 			envAsRecord,
+			resolveAttachmentSize,
 		);
 		// Anything other than "race" means the inbound was consumed by this run
 		// — whether it advanced, retried, or completed. Suppress entrypoint
@@ -1905,8 +2017,9 @@ function extractWhatsAppInteractivePayload(msg: WhatsAppMessage): {
 /**
  * Structured media payload for inbound WhatsApp messages. WhatsApp webhooks
  * deliver a media `id` (fetch via `GET /{id}`) + `mime_type`; size is not
- * surfaced by the webhook, so the `user_input_file` size cap is a no-op for
- * WhatsApp uploads unless a downstream handler fetches the media and checks.
+ * surfaced by the webhook. When an input run is waiting, the processor resolves
+ * authoritative metadata from Meta before validation; the validator still
+ * fails closed if that metadata cannot be obtained.
  */
 function extractWhatsAppAttachment(
 	msg: WhatsAppMessage,

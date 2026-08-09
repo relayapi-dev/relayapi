@@ -1,4 +1,4 @@
-import { contactChannels, generateId } from "@relayapi/db";
+import { type contactChannels, generateId } from "@relayapi/db";
 import {
 	protectContactChannelIdentifier,
 	protectContactValues,

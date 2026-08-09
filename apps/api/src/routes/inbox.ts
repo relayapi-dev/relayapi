@@ -2,6 +2,23 @@ import { createRoute, OpenAPIHono, type z } from "@hono/zod-openapi";
 import { type createDb, socialAccounts } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import { mapConcurrently } from "../lib/concurrency";
+import {
+	isDefinitiveProviderMutationRejection,
+	SingleUnitProviderMutationAggregate,
+	trackSingleUnitProviderMutation,
+} from "../lib/mutation-provider-boundary";
+import { notifyRealtime } from "../lib/notify-post-update";
+import {
+	compareTimestampIdDescending,
+	decodeKeysetCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	isTimestampIdAfterCursor,
+	normalizeCursorTimestamp,
+	type TimestampIdCursor,
+} from "../lib/pagination-cursor";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { ErrorResponse } from "../schemas/common";
 import {
 	CommentActionResponse,
@@ -20,14 +37,6 @@ import {
 	ReviewsQuery,
 } from "../schemas/inbox";
 import type { Env, Variables } from "../types";
-import { notifyRealtime } from "../lib/notify-post-update";
-import { mapConcurrently } from "../lib/concurrency";
-import {
-	isDefinitiveProviderMutationRejection,
-	SingleUnitProviderMutationAggregate,
-	trackSingleUnitProviderMutation,
-} from "../lib/mutation-provider-boundary";
-import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { getAccount, getAccountsForOrg, igGraphHost } from "./inbox-helpers";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -333,6 +342,57 @@ interface CommentWithPost extends CommentData {
 	account_avatar_url: string | null;
 }
 
+function stableCursorKey(parts: string[]): string {
+	return parts.map((part) => `${part.length}:${part}`).join("|");
+}
+
+function postCursorId(post: PostContext): string {
+	return stableCursorKey([post.platform, post.account_id, post.id]);
+}
+
+function commentCursorId(comment: CommentWithPost): string {
+	return stableCursorKey([
+		comment.platform,
+		comment.account_id,
+		comment.post_id,
+		comment.id,
+	]);
+}
+
+/**
+ * Provider payloads (and anything replayed out of KV) are unvalidated, but the
+ * keyset comparators and the cursor encoder both throw on a malformed sort key.
+ * Items are screened at ingestion so one bad `created_at` cannot take down a
+ * whole multi-account feed — and so a poisoned cache entry can never be written
+ * in the first place.
+ */
+export function hasSortableItemKey(item: {
+	id?: unknown;
+	platform?: unknown;
+	created_at?: unknown;
+}): boolean {
+	return (
+		typeof item.id === "string" &&
+		item.id.length > 0 &&
+		typeof item.platform === "string" &&
+		normalizeCursorTimestamp(item.created_at) !== null
+	);
+}
+
+/**
+ * Posts additionally carry `account_id` in their cursor key, and comments
+ * inherit both `account_id` and `post_id` from the post they were fetched for —
+ * so screening it here also covers the comment side.
+ */
+export function hasSortablePostKey(post: {
+	id?: unknown;
+	platform?: unknown;
+	account_id?: unknown;
+	created_at?: unknown;
+}): boolean {
+	return hasSortableItemKey(post) && typeof post.account_id === "string";
+}
+
 async function fetchFacebookPosts(
 	token: string,
 	limit = 10,
@@ -512,12 +572,18 @@ async function getCachedComments(
 			data: CommentData[];
 			next_cursor: string | null;
 		}>(cacheKey, "json");
-		if (cached) return cached;
+		if (cached) {
+			return { ...cached, data: cached.data.filter(hasSortableItemKey) };
+		}
 	} catch {
 		// cache miss
 	}
 
-	const result = await fetcher();
+	const fetched = await fetcher();
+	const result = {
+		...fetched,
+		data: fetched.data.filter(hasSortableItemKey),
+	};
 	try {
 		await kv.put(cacheKey, JSON.stringify(result), {
 			expirationTtl: COMMENTS_CACHE_TTL,
@@ -538,7 +604,7 @@ async function getCachedPosts(
 	const cacheKey = `inbox-posts:${accountId}`;
 	try {
 		const cached = await kv.get<PostContext[]>(cacheKey, "json");
-		if (cached) return cached;
+		if (cached) return cached.filter(hasSortablePostKey);
 	} catch {
 		// cache miss
 	}
@@ -562,6 +628,9 @@ async function getCachedPosts(
 	for (const p of posts) {
 		p.account_id = accountId;
 	}
+	// Screen after stamping and before the write, so an unsortable item is never
+	// persisted into the cache.
+	posts = posts.filter(hasSortablePostKey);
 
 	// Cache empty results too, with a shorter negative-cache TTL, so accounts
 	// with zero posts or broken/expired tokens (every fetcher returns [] on a
@@ -594,6 +663,10 @@ const listComments = createRoute({
 		200: {
 			description: "Comments list",
 			content: { "application/json": { schema: CommentsResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -636,6 +709,10 @@ const listPostsByComments = createRoute({
 			content: {
 				"application/json": { schema: PostsWithCommentsResponse },
 			},
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -891,6 +968,19 @@ app.openapi(listComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: TimestampIdCursor | undefined;
+	if (cursor) {
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		decodedCursor =
+			decoded.kind === "composite"
+				? decoded
+				: // A pre-composite cursor carried only a timestamp. The empty id
+					// sorts before every real id in the descending keyset, so items
+					// sharing the boundary timestamp are excluded — which is exactly
+					// what the timestamp-only filter this replaced did.
+					{ timestamp: decoded.timestamp, id: "" };
+	}
 	// Hard ceiling independent of limit so a large limit can't blow up the live
 	// comment fan-out (each inspected post is one Graph/YouTube subrequest).
 	const maxPostsToInspect = Math.min(Math.max(limit, 10) * 3, 30);
@@ -937,9 +1027,11 @@ app.openapi(listComments, async (c) => {
 		return c.json({ data: [], next_cursor: null, has_more: false }, 200);
 	}
 
-	allPosts.sort(
-		(a, b) =>
-			new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+	allPosts.sort((a, b) =>
+		compareTimestampIdDescending(
+			{ timestamp: a.created_at, id: postCursorId(a) },
+			{ timestamp: b.created_at, id: postCursorId(b) },
+		),
 	);
 	if (allPosts.length > maxPostsToInspect) {
 		allPosts.length = maxPostsToInspect;
@@ -1008,24 +1100,33 @@ app.openapi(listComments, async (c) => {
 	}
 
 	// 3. Sort by created_at descending
-	allComments.sort(
-		(a, b) =>
-			new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+	allComments.sort((a, b) =>
+		compareTimestampIdDescending(
+			{ timestamp: a.created_at, id: commentCursorId(a) },
+			{ timestamp: b.created_at, id: commentCursorId(b) },
+		),
 	);
 
-	// 4. Time-based cursor pagination
+	// 4. Composite keyset pagination across all provider/account/post namespaces.
 	let filtered = allComments;
-	if (cursor) {
-		const cursorTime = new Date(cursor).getTime();
-		filtered = allComments.filter(
-			(c) => new Date(c.created_at).getTime() < cursorTime,
+	if (decodedCursor) {
+		filtered = allComments.filter((comment) =>
+			isTimestampIdAfterCursor(
+				{
+					timestamp: comment.created_at,
+					id: commentCursorId(comment),
+				},
+				decodedCursor,
+			),
 		);
 	}
 
 	const page = filtered.slice(0, limit);
 	const lastItem = page[page.length - 1];
 	const nextCursor =
-		lastItem && filtered.length > limit ? lastItem.created_at : null;
+		lastItem && filtered.length > limit
+			? encodeTimestampIdCursor(lastItem.created_at, commentCursorId(lastItem))
+			: null;
 
 	return c.json(
 		{
@@ -1045,6 +1146,19 @@ app.openapi(listPostsByComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: TimestampIdCursor | undefined;
+	if (cursor) {
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		decodedCursor =
+			decoded.kind === "composite"
+				? decoded
+				: // A pre-composite cursor carried only a timestamp. The empty id
+					// sorts before every real id in the descending keyset, so items
+					// sharing the boundary timestamp are excluded — which is exactly
+					// what the timestamp-only filter this replaced did.
+					{ timestamp: decoded.timestamp, id: "" };
+	}
 
 	const accounts = await getAccountsForOrg(
 		db,
@@ -1091,24 +1205,30 @@ app.openapi(listPostsByComments, async (c) => {
 	}
 
 	// Sort by created_at descending
-	allPosts.sort(
-		(a, b) =>
-			new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+	allPosts.sort((a, b) =>
+		compareTimestampIdDescending(
+			{ timestamp: a.created_at, id: postCursorId(a) },
+			{ timestamp: b.created_at, id: postCursorId(b) },
+		),
 	);
 
-	// Time-based cursor pagination
+	// Composite keyset pagination across provider/account namespaces.
 	let filtered = allPosts;
-	if (cursor) {
-		const cursorTime = new Date(cursor).getTime();
-		filtered = allPosts.filter(
-			(p) => new Date(p.created_at).getTime() < cursorTime,
+	if (decodedCursor) {
+		filtered = allPosts.filter((post) =>
+			isTimestampIdAfterCursor(
+				{ timestamp: post.created_at, id: postCursorId(post) },
+				decodedCursor,
+			),
 		);
 	}
 
 	const page = filtered.slice(0, limit);
 	const lastItem = page[page.length - 1];
 	const nextCursor =
-		lastItem && filtered.length > limit ? lastItem.created_at : null;
+		lastItem && filtered.length > limit
+			? encodeTimestampIdCursor(lastItem.created_at, postCursorId(lastItem))
+			: null;
 
 	return c.json(
 		{

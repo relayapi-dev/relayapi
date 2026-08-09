@@ -37,8 +37,14 @@ const r2ClientCache = new Map<string, AwsClient>();
  */
 const PRESIGN_CACHE_TTL_SECONDS = 50 * 60;
 
-function presignKvKey(storageKey: string, expiresIn: number): string {
-	return `r2-presign:${expiresIn}:${storageKey}`;
+function presignKvKey(
+	storageKey: string,
+	expiresIn: number,
+	bucket = "",
+): string {
+	// The bucket is part of the signed URL, so it has to be part of the key —
+	// otherwise an entry signed for one bucket could be served for another.
+	return `r2-presign:${expiresIn}:${bucket}:${storageKey}`;
 }
 
 /**
@@ -50,9 +56,16 @@ export async function purgePresignedViewCache(
 	env: Env,
 	storageKey: string,
 	expiresIn: number = 3600,
+	/**
+	 * The bucket the row was persisted to. Entries are keyed by the bucket that
+	 * was signed, so passing the row's own `storageBucketLocator` is required for
+	 * the delete to hit — the deployment default is only correct for a row that
+	 * lives in the current default bucket.
+	 */
+	bucket: string = mediaBucketLocation(env).bucket,
 ): Promise<void> {
 	if (!env.KV) return;
-	await env.KV.delete(presignKvKey(storageKey, expiresIn)).catch(() => {
+	await env.KV.delete(presignKvKey(storageKey, expiresIn, bucket)).catch(() => {
 		// Non-fatal: the cached URL expires within the TTL regardless.
 	});
 }
@@ -77,14 +90,40 @@ export function getCachedR2Client(env: Env): AwsClient | null {
 	return client;
 }
 
-function r2ObjectUrl(env: Env, storageKey: string): string {
+/**
+ * Where an R2 object actually lives. Defaults to this deployment's configured
+ * media bucket rather than a hardcoded name — a self-hosted instance provisions
+ * its own bucket, and signing against the managed one would 404 every URL.
+ */
+export interface R2ObjectLocation {
+	bucket: string;
+	region: "default" | "eu";
+}
+
+function mediaBucketLocation(env: Env): R2ObjectLocation {
+	return {
+		bucket: env.R2_MEDIA_BUCKET_NAME || RELAY_R2_BUCKET,
+		region: env.R2_MEDIA_BUCKET_JURISDICTION || "default",
+	};
+}
+
+function r2ObjectUrl(
+	env: Env,
+	location: R2ObjectLocation,
+	storageKey: string,
+): string {
 	// Storage keys may contain "/", spaces, etc. Encode each path segment so the
 	// URL is well-formed; aws4fetch signs the canonical request from this URL.
 	const encodedKey = storageKey
 		.split("/")
 		.map((segment) => encodeURIComponent(segment))
 		.join("/");
-	return `https://${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com/${RELAY_R2_BUCKET}/${encodedKey}`;
+	// EU-jurisdiction buckets are only reachable on the eu S3 endpoint.
+	const host =
+		location.region === "eu"
+			? `${env.CF_ACCOUNT_ID}.eu.r2.cloudflarestorage.com`
+			: `${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+	return `https://${host}/${location.bucket}/${encodedKey}`;
 }
 
 /**
@@ -100,8 +139,9 @@ export async function presignR2Url(
 	method: "GET" | "PUT",
 	expiresIn: number,
 	contentType?: string,
+	location: R2ObjectLocation = mediaBucketLocation(env),
 ): Promise<string> {
-	const url = new URL(r2ObjectUrl(env, storageKey));
+	const url = new URL(r2ObjectUrl(env, location, storageKey));
 	url.searchParams.set("X-Amz-Expires", String(expiresIn));
 
 	const headers: Record<string, string> = {};
@@ -133,8 +173,9 @@ async function presignViewUrlWithCache(
 	client: AwsClient,
 	storageKey: string,
 	expiresIn: number,
+	location: R2ObjectLocation = mediaBucketLocation(env),
 ): Promise<string> {
-	const kvKey = presignKvKey(storageKey, expiresIn);
+	const kvKey = presignKvKey(storageKey, expiresIn, location.bucket);
 
 	// KV is optional: when the binding is absent (e.g. unit tests, misconfig),
 	// fall back to signing directly so view URLs still resolve.
@@ -150,6 +191,8 @@ async function presignViewUrlWithCache(
 		storageKey,
 		"GET",
 		expiresIn,
+		undefined,
+		location,
 	);
 
 	if (kv) {
@@ -275,25 +318,31 @@ async function presignRelayMediaValue<T>(
 		if (!result) {
 			const row = policy.readyMediaByStorageKey.get(storageKey);
 			if (!row) return Promise.resolve(storageKey);
+			const locator = storageLocatorForMedia({
+				organizationId,
+				storageProvider: row.storageProvider,
+				storageBucketLocator: row.storageBucketLocator,
+				storageRegion: row.storageRegion,
+				storageLocationId: row.storageLocationId,
+				storageCredentialVersion: row.storageCredentialVersion,
+				storageKey,
+			});
 			result =
-				row.storageProvider === "byos"
+				locator.provider === "byos"
 					? presignStoredObject(
 							db,
 							env,
-							{
-								provider: "byos",
-								organizationId,
-								locationId: row.storageLocationId!,
-								credentialVersion: row.storageCredentialVersion!,
-								bucket: row.storageBucketLocator,
-								region: row.storageRegion,
-								key: storageKey,
-							},
+							locator,
 							"GET",
 							expiresIn,
 						)
 					: client
-						? presignViewUrlWithCache(env, client, storageKey, expiresIn)
+						? // Sign against the bucket the row was actually written to,
+							// not this deployment's default — they differ on self-host.
+							presignViewUrlWithCache(env, client, storageKey, expiresIn, {
+								bucket: locator.bucket,
+								region: locator.region,
+							})
 						: Promise.resolve(
 								`https://${mediaPublicHost(env)}/${storageKey}`,
 							);

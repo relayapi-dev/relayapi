@@ -22,7 +22,8 @@ export class Posts extends APIResource {
 
   /**
    * Create a post. Use scheduled_at: "now" to publish immediately, "draft" to save
-   * as draft, or an ISO timestamp to schedule.
+   * as draft, or an ISO timestamp to schedule. Missing template or idea references
+   * are rejected instead of being silently ignored.
    *
    * @example
    * ```ts
@@ -1510,17 +1511,23 @@ export interface PostCreateParams {
   cross_post_actions?: Array<PostCreateParams.CrossPostAction>;
 
   /**
-   * Create post from an idea. Pre-fills content from the idea.
+   * Create post from an idea. Pre-fills content from the idea. The request fails if
+   * the idea does not exist in the organization.
    */
   idea_id?: string;
 
   /**
-   * Content template ID. Explicit content takes precedence over the template.
+   * Content template ID. Stored base content and platform overrides are applied;
+   * explicit top-level content skips both, and request target_options override
+   * stored platform content. The request fails if the template does not exist in the
+   * organization.
    */
   template_id?: string;
 
   /**
-   * Variables interpolated into the selected content template.
+   * Variables interpolated into the selected template's base content and platform
+   * overrides. Built-ins include `{{date}}` and `{{account_name}}`; account_name must
+   * be unambiguous across the selected accounts or supplied explicitly here.
    */
   template_variables?: Record<string, string>;
 

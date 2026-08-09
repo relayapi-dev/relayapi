@@ -1,6 +1,10 @@
 import { highlightCode } from "../../lib/code-highlight";
 import { getPlatformBySlug, platforms } from "../../lib/platform-data";
 import { platformGlyph } from "../../lib/product-glyphs";
+import {
+	PUBLIC_ACCESS_HREF,
+	PUBLIC_ACCESS_LABEL,
+} from "../../lib/public-access";
 
 /**
  * Platform product page — cream / Cursor-style landing for a single platform.
@@ -74,10 +78,10 @@ export function PlatformPage({ slug }: { slug: string }) {
 				</p>
 				<div className="mt-8 flex flex-wrap justify-center gap-[10px]">
 					<a
-						href="/signup"
+						href={PUBLIC_ACCESS_HREF}
 						className="rounded-full bg-landing-ink px-[22px] py-3 text-[15px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
 					>
-						Get started free
+						{PUBLIC_ACCESS_LABEL}
 					</a>
 					<a
 						href="https://docs.relayapi.dev/"
@@ -338,10 +342,10 @@ export function PlatformPage({ slug }: { slug: string }) {
 				</p>
 				<div className="mt-8 flex flex-wrap justify-center gap-[12px]">
 					<a
-						href="/signup"
+						href={PUBLIC_ACCESS_HREF}
 						className="rounded-full bg-landing-ink px-[30px] py-[15px] text-[17px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
 					>
-						Get started free
+						{PUBLIC_ACCESS_LABEL}
 					</a>
 					<a
 						href="https://docs.relayapi.dev/"

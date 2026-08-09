@@ -16,6 +16,11 @@ import {
 	validateStoredMediaObject,
 } from "../lib/media-storage-policy";
 import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
+import {
 	getCachedR2Client,
 	presignR2Url,
 	presignRelayMediaUrls,
@@ -147,6 +152,10 @@ const listMedia = createRoute({
 		200: {
 			description: "List of media files",
 			content: { "application/json": { schema: MediaListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -395,28 +404,24 @@ app.openapi(listMedia, async (c) => {
 			conditions.push(workspaceCondition);
 		}
 	}
-	// Composite keyset on (created_at, id) — the full sort key. The cursor is the
-	// id of the last item from the previous page; we read that row's created_at
-	// as text (avoiding the JS-Date microsecond truncation that would skip rows)
-	// and bind it back with an explicit ::timestamptz cast. A plain created_at
-	// keyset would drop rows that share a created_at across the page boundary.
+	// Composite keyset on (created_at, id) — the full sort key, carried in the
+	// cursor itself. Resolving it from a row instead would 400 whenever the
+	// boundary row is deleted or filtered out between pages, and would cost an
+	// extra round-trip. A plain created_at keyset would drop rows that share a
+	// created_at across the page boundary.
 	if (cursor) {
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${media.createdAt}::text` })
-			.from(media)
-			.where(eq(media.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${media.createdAt}, ${media.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${media.createdAt}, ${media.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const records = await db
 		.select({
 			id: media.id,
 			organizationId: media.organizationId,
+			workspaceId: media.workspaceId,
 			status: media.status,
 			storageKey: media.storageKey,
 			url: media.url,
@@ -430,6 +435,7 @@ app.openapi(listMedia, async (c) => {
 			height: media.height,
 			duration: media.duration,
 			createdAt: media.createdAt,
+			cursorTimestamp: sql<string>`to_char(${media.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(media)
 		.where(and(...conditions))
@@ -438,6 +444,9 @@ app.openapi(listMedia, async (c) => {
 
 	const hasMore = records.length > limit;
 	const data = records.slice(0, limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last ? encodeTimestampIdCursor(last.cursorTimestamp, last.id) : null;
 
 	const urls = await getMediaReadUrls(db, c.env, data);
 
@@ -445,6 +454,11 @@ app.openapi(listMedia, async (c) => {
 		{
 			data: data.map((r, i) => ({
 				id: r.id,
+				workspace_id: r.workspaceId,
+				original_available:
+					r.originalDeletedAt === null &&
+					r.deletionRequestedAt === null &&
+					r.url !== null,
 				url: urls[i] ?? null,
 				filename: r.filename,
 				mime_type: r.mimeType,
@@ -454,7 +468,7 @@ app.openapi(listMedia, async (c) => {
 				duration: r.duration ?? null,
 				created_at: r.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,
@@ -620,6 +634,7 @@ app.openapi(uploadMedia, async (c) => {
 
 	return c.json(
 		{
+			id: mediaId,
 			url,
 			type: contentType,
 			size,
@@ -797,6 +812,11 @@ app.openapi(getMedia, async (c) => {
 	return c.json(
 		{
 			id: record.id,
+			workspace_id: record.workspaceId,
+			original_available:
+				record.originalDeletedAt === null &&
+				record.deletionRequestedAt === null &&
+				record.url !== null,
 			url,
 			filename: record.filename,
 			mime_type: record.mimeType,
@@ -1043,6 +1063,11 @@ app.openapi(confirmMedia, async (c) => {
 	return c.json(
 		{
 			id: record.id,
+			workspace_id: record.workspaceId,
+			original_available:
+				record.originalDeletedAt === null &&
+				record.deletionRequestedAt === null &&
+				record.url !== null,
 			url: viewUrl,
 			filename: record.filename,
 			mime_type: record.mimeType,

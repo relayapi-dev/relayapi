@@ -4,6 +4,7 @@ import { paginatedResponse } from "./common";
 // --- Upload response (raw upload) ---
 
 export const MediaUploadResponse = z.object({
+	id: z.string().describe("ID of the ready media record"),
 	url: z.string().url().describe("Public URL of the uploaded file"),
 	type: z.string().describe("MIME type of the uploaded file"),
 	size: z.number().int().describe("File size in bytes"),
@@ -38,6 +39,13 @@ export const MediaPresignResponse = z.object({
 
 export const MediaResponse = z.object({
 	id: z.string().describe("Media ID"),
+	workspace_id: z
+		.string()
+		.nullable()
+		.describe("Workspace scope, or null for organization-shared media"),
+	original_available: z
+		.boolean()
+		.describe("Whether original bytes remain available for provider delivery"),
 	url: z
 		.string()
 		.url()

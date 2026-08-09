@@ -4,6 +4,7 @@ import { registerAccountCommands } from "./commands/accounts.js";
 import { registerAuthCommands } from "./commands/auth.js";
 import { registerMediaCommands } from "./commands/media.js";
 import { registerPostCommands } from "./commands/posts.js";
+import { registerWebhookCommands } from "./commands/webhooks.js";
 import { VERSION } from "./version.js";
 
 const program = new Command()
@@ -19,5 +20,6 @@ registerAuthCommands(program);
 registerAccountCommands(program);
 registerMediaCommands(program);
 registerPostCommands(program);
+registerWebhookCommands(program);
 
-program.parse();
+await program.parseAsync();

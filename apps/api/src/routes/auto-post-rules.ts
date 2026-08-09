@@ -1,8 +1,13 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { autoPostRules, socialAccounts } from "@relayapi/db";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { withCredentialMutationAuthority } from "../lib/credential-mutation-authority";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { inheritOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -142,6 +147,10 @@ const listRulesRoute = createRoute({
 			content: {
 				"application/json": { schema: AutoPostRuleListResponse },
 			},
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -432,20 +441,18 @@ app.openapi(listRulesRoute, async (c) => {
 	// skip rows sharing the cursor's millisecond. Bind it back with an explicit
 	// ::timestamptz cast to keep the keyset comparison exact.
 	if (cursor) {
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${autoPostRules.createdAt}::text` })
-			.from(autoPostRules)
-			.where(eq(autoPostRules.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${autoPostRules.createdAt}, ${autoPostRules.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${autoPostRules.createdAt}, ${autoPostRules.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(autoPostRules),
+			cursorTimestamp: sql<string>`to_char(${autoPostRules.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(autoPostRules)
 		.where(and(...conditions))
 		.orderBy(desc(autoPostRules.createdAt), desc(autoPostRules.id))
@@ -454,7 +461,10 @@ app.openapi(listRulesRoute, async (c) => {
 	const hasMore = rows.length > limit;
 	const data = hasMore ? rows.slice(0, limit) : rows;
 	const lastRow = data[data.length - 1];
-	const nextCursor = hasMore && lastRow ? lastRow.id : null;
+	const nextCursor =
+		hasMore && lastRow
+			? encodeTimestampIdCursor(lastRow.cursorTimestamp, lastRow.id)
+			: null;
 
 	return c.json(
 		{

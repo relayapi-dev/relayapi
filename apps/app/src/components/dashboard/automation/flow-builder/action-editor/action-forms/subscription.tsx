@@ -1,5 +1,7 @@
 // subscribe_list / unsubscribe_list / opt_in_channel / opt_out_channel forms.
 
+import { useMemo } from "react";
+import { usePaginatedApi } from "@/hooks/use-api";
 import type {
 	OptInChannelAction,
 	OptOutChannelAction,
@@ -18,30 +20,118 @@ const CHANNELS: { key: SubscriptionChannel; label: string }[] = [
 
 type ListActionProps = {
 	action: SubscribeListAction | UnsubscribeListAction;
+	automationWorkspaceId: string | null;
 	onChange(next: SubscribeListAction | UnsubscribeListAction): void;
 	error?: string | null;
 };
 
+export interface SubscriptionListPickerRow {
+	id: string;
+	name: string;
+	channel: string;
+	workspace_id: string | null;
+}
+
+export function subscriptionListsForWorkspace(
+	lists: SubscriptionListPickerRow[],
+	workspaceId: string | null,
+): SubscriptionListPickerRow[] {
+	return lists.filter((list) => (list.workspace_id ?? null) === workspaceId);
+}
+
+const CHANNEL_LABELS: Record<string, string> = {
+	instagram: "Instagram",
+	facebook: "Facebook Messenger",
+	whatsapp: "WhatsApp",
+	telegram: "Telegram",
+	tiktok: "TikTok",
+};
+
 export function ListSubscriptionForm({
 	action,
+	automationWorkspaceId,
 	onChange,
 	error,
 }: ListActionProps) {
+	const library = usePaginatedApi<SubscriptionListPickerRow>(
+		"subscription-lists",
+		{
+			limit: 100,
+			query: { workspace_id: automationWorkspaceId ?? undefined },
+		},
+	);
+	const lists = useMemo(
+		() => subscriptionListsForWorkspace(library.data, automationWorkspaceId),
+		[library.data, automationWorkspaceId],
+	);
+	const currentIsMissing =
+		action.list_id.length > 0 &&
+		!lists.some((list) => list.id === action.list_id);
+	const canPick = library.loading || lists.length > 0 || library.hasMore;
+	const description = library.error
+		? "List library unavailable — paste a list ID manually."
+		: lists.length === 0 && library.hasMore
+			? "Load more to find a list in this automation's scope."
+			: lists.length === 0 && !library.loading
+				? "No subscription lists exist in this automation's scope yet."
+				: "Pick a subscription list in this automation's scope.";
+
 	return (
 		<FormShell>
 			<Field
 				label="Subscription list"
 				required
-				description="Internal list ID. Dedicated list picker lands in v1.1."
+				description={description}
 				error={error}
 			>
-				<input
-					type="text"
-					value={action.list_id}
-					onChange={(e) => onChange({ ...action, list_id: e.target.value })}
-					placeholder="lst_..."
-					className={INPUT_CLS}
-				/>
+				{canPick ? (
+					<div className="space-y-1">
+						<select
+							value={action.list_id}
+							onChange={(event) =>
+								onChange({ ...action, list_id: event.target.value })
+							}
+							disabled={library.loading}
+							className={INPUT_CLS}
+						>
+							<option value="">
+								{library.loading
+									? "Loading subscription lists…"
+									: "Select a list…"}
+							</option>
+							{currentIsMissing ? (
+								<option value={action.list_id}>
+									Current selection · {action.list_id}
+								</option>
+							) : null}
+							{lists.map((list) => (
+								<option key={list.id} value={list.id}>
+									{list.name} · {CHANNEL_LABELS[list.channel] ?? list.channel}
+								</option>
+							))}
+						</select>
+						{library.hasMore ? (
+							<button
+								type="button"
+								onClick={() => void library.loadMore()}
+								disabled={library.loadingMore}
+								className="text-[10px] font-medium text-[#5a6373] hover:text-[#1f2937] disabled:opacity-50"
+							>
+								{library.loadingMore ? "Loading more…" : "Load more lists"}
+							</button>
+						) : null}
+					</div>
+				) : (
+					<input
+						type="text"
+						value={action.list_id}
+						onChange={(event) =>
+							onChange({ ...action, list_id: event.target.value })
+						}
+						placeholder="lst_..."
+						className={INPUT_CLS}
+					/>
+				)}
 			</Field>
 		</FormShell>
 	);

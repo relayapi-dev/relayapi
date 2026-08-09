@@ -1,16 +1,22 @@
 ---
+import { isBearerInviteToken } from "@relayapi/auth/bearer-invite-contract";
 import { SignupForm } from "../components/auth/signup-form";
 import SEO from "../components/SEO.astro";
 import BaseLayout from "../layouts/BaseLayout.astro";
+
+const requestedInviteToken = Astro.url.searchParams.get("invite");
+const inviteToken = isBearerInviteToken(requestedInviteToken)
+	? requestedInviteToken
+	: null;
 ---
 
 <BaseLayout>
 	<SEO
 		slot="head"
 		title="Sign Up"
-		description="Create your free RelayAPI account."
+		description="Hosted RelayAPI signup is invite-only. Create an account with a live invitation, request early access, or follow the self-hosting guide."
 	/>
 	<div class="relative">
-		<SignupForm client:load />
+		<SignupForm client:load inviteToken={inviteToken} />
 	</div>
 </BaseLayout>

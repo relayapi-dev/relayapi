@@ -1,4 +1,4 @@
-import { type RequestOptions } from './request-options';
+import { type MultipartFormDataOptions, type RequestOptions } from './request-options';
 import type { FilePropertyBag, Fetch } from './builtin-types';
 import type { Relay } from '../client';
 import { ReadableStreamFrom } from './shims';
@@ -9,6 +9,17 @@ type FsReadStream = AsyncIterable<Uint8Array> & { path: string | { toString(): s
 // https://github.com/oven-sh/bun/issues/5980
 interface BunFile extends Blob {
   readonly name?: string | undefined;
+}
+
+interface BlobLike {
+  readonly size: number;
+  readonly type: string;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+interface ResponseLike {
+  readonly url?: string;
+  blob(): Promise<BlobLike>;
 }
 
 export const checkFileSupport = () => {
@@ -34,7 +45,7 @@ export const checkFileSupport = () => {
  * For convenience, you can also pass a fetch Response, or in Node,
  * the result of fs.createReadStream().
  */
-export type Uploadable = File | Response | FsReadStream | BunFile;
+export type Uploadable = File | Response | FsReadStream | BunFile | BlobLike | ResponseLike;
 
 /**
  * Construct a `File` instance. This is used to ensure a helpful error is thrown
@@ -76,9 +87,10 @@ export const maybeMultipartFormRequestOptions = async (
   opts: RequestOptions,
   fetch: Relay | Fetch,
 ): Promise<RequestOptions> => {
-  if (!hasUploadableValue(opts.body)) return opts;
+  const { multipartFormData, ...requestOptions } = opts;
+  if (!hasUploadableValue(opts.body)) return requestOptions;
 
-  return { ...opts, body: await createForm(opts.body, fetch) };
+  return { ...requestOptions, body: await createForm(opts.body, fetch, multipartFormData) };
 };
 
 type MultipartFormRequestOptions = Omit<RequestOptions, 'body'> & { body: unknown };
@@ -87,7 +99,8 @@ export const multipartFormRequestOptions = async (
   opts: MultipartFormRequestOptions,
   fetch: Relay | Fetch,
 ): Promise<RequestOptions> => {
-  return { ...opts, body: await createForm(opts.body, fetch) };
+  const { multipartFormData, ...requestOptions } = opts;
+  return { ...requestOptions, body: await createForm(opts.body, fetch, multipartFormData) };
 };
 
 const supportsFormDataMap = /* @__PURE__ */ new WeakMap<Fetch, Promise<boolean>>();
@@ -125,6 +138,7 @@ function supportsFormData(fetchObject: Relay | Fetch): Promise<boolean> {
 export const createForm = async <T = Record<string, unknown>>(
   body: T | undefined,
   fetch: Relay | Fetch,
+  options: MultipartFormDataOptions = {},
 ): Promise<FormData> => {
   if (!(await supportsFormData(fetch))) {
     throw new TypeError(
@@ -132,18 +146,31 @@ export const createForm = async <T = Record<string, unknown>>(
     );
   }
   const form = new FormData();
-  await Promise.all(Object.entries(body || {}).map(([key, value]) => addFormValue(form, key, value)));
+  for (const [key, value] of Object.entries(body || {})) {
+    await addFormValue(form, key, value, options);
+  }
   return form;
 };
 
-// We check for Blob not File because Bun.File doesn't inherit from File,
-// but they both inherit from Blob and have a `name` property at runtime.
-const isNamedBlob = (value: unknown) => value instanceof Blob && 'name' in value;
+const isNativeBlob = (value: unknown): value is Blob =>
+  typeof Blob !== 'undefined' && value instanceof Blob;
+
+// Structural checks allow uploads created by another fetch implementation or
+// JavaScript realm. FormData still receives a native Blob/File below.
+const isBlobLike = (value: unknown): value is BlobLike =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as BlobLike).size === 'number' &&
+  typeof (value as BlobLike).type === 'string' &&
+  typeof (value as BlobLike).arrayBuffer === 'function';
+
+const isResponseLike = (value: unknown): value is ResponseLike =>
+  typeof value === 'object' && value !== null && typeof (value as ResponseLike).blob === 'function';
 
 const isUploadable = (value: unknown) =>
   typeof value === 'object' &&
   value !== null &&
-  (value instanceof Response || isAsyncIterable(value) || isNamedBlob(value));
+  (isResponseLike(value) || isAsyncIterable(value) || isBlobLike(value));
 
 const hasUploadableValue = (value: unknown): boolean => {
   if (isUploadable(value)) return true;
@@ -156,7 +183,12 @@ const hasUploadableValue = (value: unknown): boolean => {
   return false;
 };
 
-const addFormValue = async (form: FormData, key: string, value: unknown): Promise<void> => {
+const addFormValue = async (
+  form: FormData,
+  key: string,
+  value: unknown,
+  options: MultipartFormDataOptions,
+): Promise<void> => {
   if (value === undefined) return;
   if (value == null) {
     throw new TypeError(
@@ -164,24 +196,69 @@ const addFormValue = async (form: FormData, key: string, value: unknown): Promis
     );
   }
 
-  // TODO: make nested formats configurable
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     form.append(key, String(value));
-  } else if (value instanceof Response) {
-    form.append(key, makeFile([await value.blob()], getName(value)));
+  } else if (isResponseLike(value)) {
+    const blob = await value.blob();
+    if (!isBlobLike(blob)) {
+      throw new TypeError(`Response-like upload for "${key}" returned an invalid Blob`);
+    }
+    form.append(
+      key,
+      makeFile(
+        [isNativeBlob(blob) ? blob : await blob.arrayBuffer()],
+        getName(value),
+        blob.type ? { type: blob.type } : undefined,
+      ),
+    );
   } else if (isAsyncIterable(value)) {
     form.append(key, makeFile([await new Response(ReadableStreamFrom(value)).blob()], getName(value)));
-  } else if (isNamedBlob(value)) {
-    form.append(key, value, getName(value));
+  } else if (isBlobLike(value)) {
+    const name = getName(value);
+    if (isNativeBlob(value)) {
+      if (name) {
+        form.append(key, value, name);
+      } else {
+        form.append(key, value);
+      }
+    } else {
+      form.append(
+        key,
+        makeFile([await value.arrayBuffer()], name, value.type ? { type: value.type } : undefined),
+      );
+    }
   } else if (Array.isArray(value)) {
-    await Promise.all(value.map((entry) => addFormValue(form, key + '[]', entry)));
+    for (const [index, entry] of value.entries()) {
+      await addFormValue(form, getArrayKey(key, index, options.arrayFormat), entry, options);
+    }
   } else if (typeof value === 'object') {
-    await Promise.all(
-      Object.entries(value).map(([name, prop]) => addFormValue(form, `${key}[${name}]`, prop)),
-    );
+    for (const [name, prop] of Object.entries(value)) {
+      await addFormValue(form, getObjectKey(key, name, options.objectFormat), prop, options);
+    }
   } else {
     throw new TypeError(
       `Invalid value given to form, expected a string, number, boolean, object, Array, File or Blob but got ${value} instead`,
     );
   }
 };
+
+function getArrayKey(
+  key: string,
+  index: number,
+  format: MultipartFormDataOptions['arrayFormat'] = 'brackets',
+): string {
+  if (format === 'brackets') return `${key}[]`;
+  if (format === 'indices') return `${key}[${index}]`;
+  if (format === 'repeat') return key;
+  throw new TypeError(`Unsupported multipart array format: ${String(format)}`);
+}
+
+function getObjectKey(
+  key: string,
+  name: string,
+  format: MultipartFormDataOptions['objectFormat'] = 'brackets',
+): string {
+  if (format === 'brackets') return `${key}[${name}]`;
+  if (format === 'dots') return `${key}.${name}`;
+  throw new TypeError(`Unsupported multipart object format: ${String(format)}`);
+}

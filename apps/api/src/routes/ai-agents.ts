@@ -6,9 +6,14 @@ import {
 	aiKnowledgeBases,
 	organizationPrincipals,
 } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { SingleUnitProviderMutationAggregate } from "../lib/mutation-provider-boundary";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import {
 	resolveOperationalCreateScope,
 	workspaceScopeKey,
@@ -215,6 +220,10 @@ const listAgents = createRoute({
 			description: "List",
 			content: { "application/json": { schema: AiAgentListResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -224,31 +233,34 @@ app.openapi(listAgents, async (c) => {
 	applyWorkspaceScope(c, conditions, aiAgents.workspaceId);
 	if (workspace_id) conditions.push(eq(aiAgents.workspaceId, workspace_id));
 	if (cursor) {
-		const [cursorRow] = await c
-			.get("db")
-			.select({ createdAt: sql<string>`${aiAgents.createdAt}::text` })
-			.from(aiAgents)
-			.where(eq(aiAgents.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${aiAgents.createdAt}, ${aiAgents.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${aiAgents.createdAt}, ${aiAgents.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 	const rows = await c
 		.get("db")
-		.select()
+		.select({
+			...getTableColumns(aiAgents),
+			cursorTimestamp: sql<string>`to_char(${aiAgents.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(aiAgents)
 		.where(and(...conditions))
 		.orderBy(desc(aiAgents.createdAt), desc(aiAgents.id))
 		.limit(limit + 1);
 	const hasMore = rows.length > limit;
-	const data = rows.slice(0, limit).map(serializeAgent);
+	const pageRows = rows.slice(0, limit);
+	const last = pageRows.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
+	const data = pageRows.map(serializeAgent);
 	return c.json(
 		{
 			data,
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,

@@ -1,16 +1,32 @@
-import { and, eq } from "drizzle-orm";
+import {
+	type BillingPolicyInput,
+	getBillingPolicy,
+	hasOrganizationRole,
+} from "@relayapi/config";
+import { eq } from "drizzle-orm";
 import type { Database } from "./client";
 import { member, organizationSubscriptions } from "./schema";
 
+export interface OwnedOrganizationBillingProjection extends BillingPolicyInput {
+	role: string;
+}
+
+export function countFreeOwnedOrganizations(
+	rows: readonly OwnedOrganizationBillingProjection[],
+	now = new Date(),
+): number {
+	return rows.filter(
+		(row) =>
+			hasOrganizationRole(row.role, "owner") &&
+			getBillingPolicy(row, now).entitlement === "free",
+	).length;
+}
+
 /**
- * Counts the FREE organizations a user OWNS (member.role === "owner").
- *
- * An org is "paid" only when its subscription status is "active" — matching the
- * KV feature-gating in apps/api stripe-webhooks. A "trialing" row is just a
- * placeholder written when Stripe checkout is initiated, before any payment, so
- * orgs with no subscription row or a trialing/past_due/cancelled status all
- * count as free. The LEFT JOIN + `!== "active"` filter is NULL-safe, so the
- * common free case (no subscription row) is counted.
+ * Counts organizations the user effectively owns whose canonical runtime
+ * entitlement is Free. Better Auth can persist compound roles, while paid
+ * authority includes complimentary subscriptions, proven trials, and active
+ * past-due grace periods in addition to active Stripe subscriptions.
  *
  * Only owned orgs count, so the "upgrade an org" limit message stays truthful:
  * orgs a user was merely invited to don't consume their free-org quota.
@@ -18,15 +34,26 @@ import { member, organizationSubscriptions } from "./schema";
 export async function countOwnedFreeOrganizationsForUser(
 	db: Pick<Database, "select">,
 	userId: string,
+	now = new Date(),
 ): Promise<number> {
 	const rows = await db
-		.select({ status: organizationSubscriptions.status })
+		.select({
+			role: member.role,
+			status: organizationSubscriptions.status,
+			source: organizationSubscriptions.source,
+			stripeSubscriptionId: organizationSubscriptions.stripeSubscriptionId,
+			trialEndsAt: organizationSubscriptions.trialEndsAt,
+			delinquentAt: organizationSubscriptions.delinquentAt,
+			graceEndsAt: organizationSubscriptions.graceEndsAt,
+			currentPeriodStart: organizationSubscriptions.currentPeriodStart,
+			currentPeriodEnd: organizationSubscriptions.currentPeriodEnd,
+		})
 		.from(member)
 		.leftJoin(
 			organizationSubscriptions,
 			eq(organizationSubscriptions.organizationId, member.organizationId),
 		)
-		.where(and(eq(member.userId, userId), eq(member.role, "owner")));
+		.where(eq(member.userId, userId));
 
-	return rows.filter((row) => row.status !== "active").length;
+	return countFreeOwnedOrganizations(rows, now);
 }

@@ -599,7 +599,7 @@ describe("automation run occurrence contract", () => {
 			"eq(automationRuns.triggerOccurrenceId, args.triggerOccurrenceId)",
 		);
 		expect(source).toContain("if (args.deferRun)");
-		expect(source).toContain("initial-run:${runId}");
+		expect(source).toContain(`initial-run:\${runId}`);
 		expect(source).toContain(
 			"automationDeferredEnrollmentOccurrenceId(run.id)",
 		);

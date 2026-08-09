@@ -16,7 +16,7 @@ export const apis: ApiData[] = [
 		name: "Posting API",
 		heroTitle: "Posting API for Developers",
 		heroDescription:
-			"One REST API to publish content across 21 platforms. Post text, images, videos, and more with a single endpoint.",
+			"One REST API to publish content across 21 social, messaging, SMS, and newsletter channels. Post text, images, videos, and more with a single endpoint.",
 		features: [
 			{
 				title: "Multi-Platform Posting",
@@ -61,9 +61,9 @@ export const apis: ApiData[] = [
 		],
 		benefits: [
 			{
-				title: "One Integration, 17 Platforms",
+				title: "One Integration, 21 Channels",
 				description:
-					"Each social platform has its own auth flow, rate limits, and content rules. RelayAPI abstracts all 17 behind a single REST endpoint so you can focus on your product, not platform quirks.",
+					"Each social, messaging, and newsletter channel has its own auth flow, rate limits, and content rules. RelayAPI exposes all 21 through one publishing contract.",
 			},
 			{
 				title: "Enterprise-Grade Reliability",
@@ -149,7 +149,7 @@ print(post["id"], post["status"])`,
 			{
 				question: "Which social platforms are supported?",
 				answer:
-					"RelayAPI currently supports 21 platforms across social, messaging, and newsletter categories: Instagram, Facebook, LinkedIn, TikTok, YouTube, Bluesky, Mastodon, Threads, Pinterest, Reddit, Discord, Telegram, WhatsApp Business, Google Business Profile, Snapchat, X/Twitter, SMS, Beehiiv, ConvertKit, Mailchimp, and Listmonk. New platforms are added regularly.",
+					"RelayAPI currently supports 21 publishing channels across social, messaging, SMS, and newsletter categories: Instagram, Facebook, LinkedIn, TikTok, YouTube, Bluesky, Mastodon, Threads, Pinterest, Reddit, Discord, Telegram, WhatsApp Business, Google Business Profile, Snapchat, X/Twitter, SMS, Beehiiv, ConvertKit, Mailchimp, and Listmonk.",
 			},
 			{
 				question: "How far in advance can I schedule posts?",
@@ -352,153 +352,133 @@ media = client.media.confirm(storage_key=storage_key)`,
 		name: "Analytics API",
 		heroTitle: "Analytics API for Developers",
 		heroDescription:
-			"Track engagement, reach, and performance across all connected platforms. Unified metrics in one dashboard.",
+			"Query normalized post metrics, daily rollups, best-time analysis, and supported native account insights through documented endpoints.",
 		features: [
 			{
-				title: "Cross-Platform Metrics",
+				title: "Normalized Post Metrics",
 				description:
-					"Aggregate likes, shares, comments, impressions, and reach across all 21 platforms into a single normalized data model. Compare apples to apples regardless of the source.",
+					"GET /v1/analytics returns post-level likes, comments, shares, clicks, impressions, reach, saves, and views when the connected provider supplies them.",
 			},
 			{
-				title: "Engagement Tracking",
+				title: "Daily Aggregates",
 				description:
-					"Monitor engagement rate, click-through rate, and interaction breakdowns for every post. Identify your highest-performing content and understand what resonates with your audience.",
+					"Use /v1/analytics/daily-metrics for daily totals filtered by account, platform, and ISO-8601 date range.",
 			},
 			{
-				title: "Audience Insights",
+				title: "Post Timelines & Decay",
 				description:
-					"Access follower growth, demographics, active hours, and geographic distribution for each connected account. Use data-driven insights to optimize your posting schedule and content strategy.",
+					"Inspect a post's metric timeline or calculate its engagement decay curve and estimated half-life with dedicated endpoints.",
 			},
 			{
-				title: "Performance Comparison",
+				title: "Timing Analysis",
 				description:
-					"Compare performance across platforms, time periods, content types, or campaigns. Spot trends and outliers with built-in statistical summaries and percentage change calculations.",
+					"Best-time and posting-frequency endpoints summarize historical engagement by UTC day/hour and publishing cadence.",
 			},
 			{
-				title: "Historical Data Access",
+				title: "Connected Channel Summaries",
 				description:
-					"Query up to 24 months of historical analytics data. RelayAPI backfills metrics from the moment you connect an account, so you start with a full picture — not a blank slate.",
+					"List connected accounts with summary metrics and an explicit has_analytics capability signal through /v1/analytics/channels.",
 			},
 			{
-				title: "Export & Reporting",
+				title: "Native Platform Overview",
 				description:
-					"Export analytics data as CSV or JSON for use in your own dashboards, BI tools, or client reports. Schedule automated exports to S3, GCS, or webhook endpoints.",
+					"Fetch live overview and top-post data for one supported connected account through the platform analytics endpoints.",
 			},
 			{
-				title: "Real-Time Updates",
+				title: "Audience & Daily Provider Data",
 				description:
-					"Metrics are refreshed every 15 minutes for active posts and hourly for older content. Request an on-demand refresh for any post when you need the latest numbers immediately.",
+					"Audience breakdowns and native daily series are available when the provider and granted account scopes expose those metrics.",
 			},
 			{
-				title: "Custom Date Ranges",
+				title: "Explicit Query Filters",
 				description:
-					"Query analytics for any date range — last 7 days, last quarter, or a custom window. All responses include granularity options: hourly, daily, weekly, or monthly roll-ups.",
+					"Documented account_id, post_id, platform, from_date, and to_date filters keep requests reproducible without undocumented export or refresh jobs.",
 			},
 		],
 		benefits: [
 			{
-				title: "One Dashboard, Every Metric",
+				title: "One Normalized Read Model",
 				description:
-					"Every platform exposes metrics differently — different names, different update frequencies, different auth scopes. RelayAPI normalizes it all into a single, consistent analytics interface.",
+					"Read common post metrics through one response shape while retaining the platform field needed to interpret provider-specific availability.",
 			},
 			{
-				title: "Enterprise-Grade Reliability",
+				title: "Account-Aware Insights",
 				description:
-					"Metrics are collected on a resilient pipeline with 99.9% uptime. Automatic retries on failed fetches, data deduplication, and anomaly detection ensure your analytics are always accurate and available.",
+					"Filter stored analytics by connected account, then use native endpoints for supported account-level overview, posts, audience, and daily data.",
 			},
 			{
-				title: "Developer-First Experience",
+				title: "Contract-First Integration",
 				description:
-					"Clean JSON responses, cursor-based pagination for large datasets, TypeScript types for every metric, and interactive API explorer. Build beautiful dashboards without wrestling with raw platform data.",
+					"The OpenAPI reference and generated SDK expose every analytics route and its supported filters without relying on marketing-only endpoints.",
 			},
 		],
 		codeExamples: [
 			{
 				language: "bash",
 				label: "cURL — Post Analytics",
-				code: `curl https://api.relayapi.dev/v1/analytics/posts/post_a1b2c3d4e5 \\
-  -H "Authorization: Bearer rlay_live_xxxxxxxx"
-
-# Response:
-# {
-#   "post_id": "post_a1b2c3d4e5",
-#   "platforms": {
-#     "twitter": { "impressions": 12450, "likes": 342, "retweets": 87, "replies": 23 },
-#     "linkedin": { "impressions": 8700, "likes": 156, "comments": 42, "shares": 31 },
-#     "bluesky": { "impressions": 3200, "likes": 98, "reposts": 24, "replies": 11 }
-#   },
-#   "totals": { "impressions": 24350, "engagements": 804, "engagement_rate": 0.033 }
-# }`,
+				code: `curl --get https://api.relayapi.dev/v1/analytics \\
+  -H "Authorization: Bearer rlay_live_xxxxxxxx" \\
+  --data-urlencode "post_id=post_a1b2c3d4e5" \\
+  --data-urlencode "from_date=2026-03-01" \\
+  --data-urlencode "to_date=2026-03-20"`,
 			},
 			{
 				language: "typescript",
-				label: "TypeScript — Account Analytics",
-				code: `const response = await fetch(
-  "https://api.relayapi.dev/v1/analytics/accounts?" +
-    new URLSearchParams({
-      account_id: "acc_x9y8z7w6",
-      start_date: "2026-03-01",
-      end_date: "2026-03-20",
-      granularity: "daily",
-    }),
-  {
-    headers: { Authorization: "Bearer rlay_live_xxxxxxxx" },
-  }
-);
+				label: "TypeScript — Channel Summaries",
+				code: `const channels = await client.analytics.listChannels({
+  from_date: "2026-03-01",
+  to_date: "2026-03-20",
+});
 
-const analytics = await response.json();
-
-for (const day of analytics.data) {
-  console.log(\`\${day.date}: \${day.impressions} impressions, \${day.engagements} engagements\`);
+for (const channel of channels.data) {
+  console.log(channel.account_id, channel.has_analytics);
 }`,
 			},
 			{
 				language: "python",
-				label: "Python — Overview",
+				label: "Python — Daily Metrics",
 				code: `import requests
 
 response = requests.get(
-    "https://api.relayapi.dev/v1/analytics/overview",
+    "https://api.relayapi.dev/v1/analytics/daily-metrics",
     headers={"Authorization": "Bearer rlay_live_xxxxxxxx"},
     params={
-        "start_date": "2026-03-01",
-        "end_date": "2026-03-20",
+		"account_id": "acc_x9y8z7w6",
+		"from_date": "2026-03-01",
+		"to_date": "2026-03-20",
     },
 )
+response.raise_for_status()
 
-overview = response.json()
-
-print(f"Total impressions: {overview['totals']['impressions']:,}")
-print(f"Total engagements: {overview['totals']['engagements']:,}")
-print(f"Avg engagement rate: {overview['totals']['engagement_rate']:.1%}")
-print(f"Top platform: {overview['top_platform']['name']}")`,
+for day in response.json()["data"]:
+	print(day["date"], day["impressions"], day["likes"])`,
 			},
 		],
 		faq: [
 			{
 				question: "What metrics are available?",
 				answer:
-					"Core metrics include impressions, reach, engagements (likes, comments, shares, saves, clicks), engagement rate, follower growth, and video-specific metrics (views, watch time, completion rate). Each metric is broken down by platform and available as raw counts or computed rates.",
+					"The normalized post response can include impressions, reach, likes, comments, shares, saves, clicks, and views. Native platform endpoints expose only the overview, post, audience, and daily fields documented for the connected provider.",
 			},
 			{
 				question: "How often are metrics updated?",
 				answer:
-					"Posts published within the last 48 hours are refreshed every 15 minutes. Older posts are refreshed hourly. You can trigger an on-demand refresh for any post via the API, which returns updated metrics within 60 seconds. Account-level metrics are updated every 6 hours.",
+					"Update timing depends on the provider and RelayAPI's background collection. The public analytics API does not expose an on-demand refresh endpoint, so clients should treat returned timestamps and provider availability as authoritative.",
 			},
 			{
 				question: "How far back does historical data go?",
 				answer:
-					"RelayAPI stores up to 24 months of analytics data. When you first connect a social account, we backfill available historical data from each platform — typically 90 days for most platforms, though some provide up to 12 months of history.",
+					"The API accepts documented date-range filters, but it does not promise a universal retention or backfill window. Available history depends on collected records and the native provider's access rules.",
 			},
 			{
 				question: "Are metrics available for all supported platforms?",
 				answer:
-					"Analytics are available for all 17 supported platforms, but the depth of data depends on what each platform's API exposes. Twitter, LinkedIn, and Instagram provide the richest analytics. Platforms like Mastodon and Bluesky provide core engagement counts. The API clearly indicates which metrics are available per platform.",
+					"No. Metric depth varies by provider, account type, and granted scopes. Use /v1/analytics/channels and its has_analytics field before presenting analytics for a connected account.",
 			},
 			{
 				question: "Can I export analytics data?",
 				answer:
-					"Yes. Use the /v1/analytics/export endpoint to download data as CSV or JSON. You can filter by date range, platform, and metric type. For automated reporting, set up scheduled exports that deliver data to your S3 bucket, webhook URL, or email on a daily or weekly cadence.",
+					"RelayAPI returns JSON from the documented analytics endpoints. There is no analytics export or scheduled-report endpoint in the current public API; transform the JSON in your application when you need CSV or BI ingestion.",
 			},
 		],
 	},
@@ -509,64 +489,64 @@ print(f"Top platform: {overview['top_platform']['name']}")`,
 		name: "Webhooks API",
 		heroTitle: "Webhooks API for Developers",
 		heroDescription:
-			"Real-time notifications for post delivery, engagement milestones, and account events. Never poll for status again.",
+			"Subscribe to the documented publishing, account, inbox, automation, streak, and cross-post events with signed delivery attempts.",
 		features: [
 			{
-				title: "Delivery Confirmations",
+				title: "Documented Event Catalog",
 				description:
-					"Receive an instant webhook when a post is successfully published on each platform. Includes the live URL, platform-specific post ID, and final rendered content.",
+					"Subscribe to exact event names such as post.published, post.partial, post.failed, thread.published, and account.disconnected.",
 			},
 			{
-				title: "Engagement Alerts",
+				title: "Server-Generated Secrets",
 				description:
-					"Get notified when posts hit engagement milestones — 100 likes, 1K impressions, first comment, or custom thresholds you define. React to viral content in real time.",
+					"RelayAPI creates the endpoint signing secret and returns it once. Rotate it later with the dedicated secret-rotation endpoint.",
 			},
 			{
-				title: "Failure Notifications",
+				title: "HMAC-SHA256 Signing",
 				description:
-					"Know immediately when a post fails to publish, with detailed error codes, failure reasons, and whether a retry is scheduled. Build alerts or fallback flows without delay.",
+					"Every delivery signs the exact JSON request body in X-RelayAPI-Signature and identifies the event and delivery in separate headers.",
 			},
 			{
-				title: "Account Events",
+				title: "Durable Attempt History",
 				description:
-					"Monitor account-level changes — token expirations, permission changes, rate limit warnings, and disconnections. Stay ahead of issues before they affect your users.",
+					"Inspect the last seven days of delivery and test attempts, including ordinal, status code, response time, outcome, and error.",
 			},
 			{
-				title: "Configurable Retry Logic",
+				title: "Bounded Automatic Retries",
 				description:
-					"Failed webhook deliveries are retried up to 5 times over 24 hours with exponential backoff. View delivery attempts, response codes, and timing in the webhook logs.",
+					"Retryable HTTP and network failures are persisted and retried with backoff; each attempt is exposed in the webhook log.",
 			},
 			{
-				title: "Webhook Signing & Verification",
+				title: "Exact Event Filtering",
 				description:
-					"Every webhook payload is signed with HMAC-SHA256 using your endpoint's secret key. Verify signatures server-side to ensure payloads are authentic and untampered.",
+					"Choose one or more supported event names when creating or updating an endpoint. Wildcard and tag-based filters are not part of the current contract.",
 			},
 			{
-				title: "Event Filtering",
+				title: "Workspace Scoping",
 				description:
-					"Subscribe to exactly the events you care about. Filter by event type, platform, workspace, or post tags. Reduce noise and processing overhead with precise subscriptions.",
+					"Optionally associate an endpoint with an authorized workspace while retaining organization ownership and access checks.",
 			},
 			{
-				title: "Batch Events",
+				title: "Reachability Tests",
 				description:
-					"For high-volume use cases, enable batch mode to receive multiple events in a single webhook delivery. Reduce HTTP overhead and simplify processing for busy integrations.",
+					"POST /v1/webhooks/test sends a test request to a registered endpoint and reports success, HTTP status, and response time.",
 			},
 		],
 		benefits: [
 			{
-				title: "One Webhook, Every Platform",
+				title: "One Subscription Surface",
 				description:
-					"Building a reliable polling system across 21 platforms is fragile and expensive. RelayAPI pushes events to you the moment they happen, replacing thousands of polling requests with a single webhook endpoint.",
+					"A single endpoint can subscribe to multiple supported RelayAPI events without implementing provider-specific callback contracts.",
 			},
 			{
-				title: "Enterprise-Grade Reliability",
+				title: "Auditable Delivery",
 				description:
-					"Webhooks are delivered with 99.9% reliability backed by automatic retries, dead-letter queues, and delivery logging. Every event is stored for 30 days so you can replay missed deliveries at any time.",
+					"Durable delivery IDs and persisted per-attempt outcomes let consumers deduplicate and operators inspect what happened without a promised replay API.",
 			},
 			{
-				title: "Developer-First Experience",
+				title: "Contract-First Management",
 				description:
-					"Test webhooks locally with our CLI tunnel, inspect payloads in the dashboard, replay past events with one click, and use our SDKs for signature verification. Debugging webhooks has never been easier.",
+					"OpenAPI and the generated SDK cover endpoint CRUD, secret rotation, test delivery, and seven-day attempt logs. Signature verification uses standard HMAC primitives.",
 			},
 		],
 		codeExamples: [
@@ -581,18 +561,17 @@ print(f"Top platform: {overview['top_platform']['name']}")`,
     "events": [
       "post.published",
       "post.failed",
-      "post.engagement_milestone",
       "account.disconnected"
-    ],
-    "secret": "whsec_your_signing_secret_here"
+    ]
   }'
 
 # Response:
 # {
 #   "id": "wh_m3n4o5p6q7",
 #   "url": "https://yourapp.com/webhooks/relayapi",
-#   "events": ["post.published", "post.failed", "post.engagement_milestone", "account.disconnected"],
-#   "status": "active",
+#   "events": ["post.published", "post.failed", "account.disconnected"],
+#   "secret": "whsec_...",
+#   "enabled": true,
 #   "created_at": "2026-03-20T10:30:00Z"
 # }`,
 			},
@@ -600,62 +579,56 @@ print(f"Top platform: {overview['top_platform']['name']}")`,
 				language: "json",
 				label: "Webhook Payload",
 				code: `{
-  "id": "evt_r8s9t0u1v2",
-  "type": "post.published",
-  "created_at": "2026-03-20T14:00:05Z",
+  "id": "whd_r8s9t0u1v2",
+  "event": "post.published",
   "data": {
     "post_id": "post_a1b2c3d4e5",
     "platform": "twitter",
-    "platform_post_id": "1902345678901234567",
-    "url": "https://twitter.com/yourhandle/status/1902345678901234567",
-    "content": "Excited to announce our new product launch!",
-    "published_at": "2026-03-20T14:00:03Z"
-  }
+    "url": "https://twitter.com/yourhandle/status/1902345678901234567"
+  },
+  "timestamp": "2026-03-20T14:00:05.000Z"
 }`,
 			},
 			{
 				language: "typescript",
 				label: "TypeScript — Verify Signature",
 				code: `import { createHmac, timingSafeEqual } from "node:crypto";
+import express from "express";
+
+const app = express();
 
 function verifyWebhookSignature(
   payload: string,
-  signature: string,
+  signatureHeader: string,
   secret: string
 ): boolean {
-  const expected = createHmac("sha256", secret)
+  const expected = Buffer.from(createHmac("sha256", secret)
     .update(payload)
-    .digest("hex");
-
-  return timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(\`sha256=\${expected}\`)
+    .digest("hex"), "hex");
+  const supplied = Buffer.from(
+    signatureHeader.replace(/^sha256=/, ""),
+    "hex"
   );
+
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
-// In your webhook handler:
-app.post("/webhooks/relayapi", (req, res) => {
-  const signature = req.headers["x-relayapi-signature"] as string;
+// Verify the raw request body before parsing JSON.
+app.post("/webhooks/relayapi", express.raw({ type: "application/json" }), (req, res) => {
+  const payload = req.body.toString("utf8");
+  const signatureHeader = req.get("x-relayapi-signature") ?? "";
   const isValid = verifyWebhookSignature(
-    JSON.stringify(req.body),
-    signature,
-    process.env.WEBHOOK_SECRET!
+    payload,
+    signatureHeader,
+    process.env.RELAYAPI_WEBHOOK_SECRET!
   );
 
   if (!isValid) {
     return res.status(401).json({ error: "Invalid signature" });
   }
 
-  const event = req.body;
-  switch (event.type) {
-    case "post.published":
-      console.log(\`Post \${event.data.post_id} live at \${event.data.url}\`);
-      break;
-    case "post.failed":
-      console.error(\`Post \${event.data.post_id} failed: \${event.data.error}\`);
-      break;
-  }
-
+  const event = JSON.parse(payload);
+  console.log(event.id, event.event);
   res.status(200).json({ received: true });
 });`,
 			},
@@ -664,32 +637,32 @@ app.post("/webhooks/relayapi", (req, res) => {
 			{
 				question: "What event types are available?",
 				answer:
-					"Core events: post.published, post.failed, post.scheduled, post.deleted, post.engagement_milestone. Account events: account.connected, account.disconnected, account.token_expiring, account.rate_limited. Media events: media.processed, media.failed. You can subscribe to specific events or use wildcards like 'post.*' to receive all post-related events.",
+					"The current catalog is: post.published, post.partial, post.failed, post.scheduled, post.recycled, thread.published, account.connected, account.disconnected, comment.received, message.received, message.sent, auto_post.created, auto_post.error, four streak events, and cross_post_action.executed/failed. Subscriptions require exact names; wildcards are not accepted.",
 			},
 			{
 				question: "What happens if my endpoint is down when a webhook is sent?",
 				answer:
-					"Failed deliveries are retried up to 5 times over 24 hours with exponential backoff (30s, 5m, 30m, 2h, 12h). If all retries fail, the event is moved to a dead-letter queue visible in your dashboard. You can replay any event from the last 30 days with a single API call or button click.",
+					"Retryable HTTP responses and network failures are persisted and retried with bounded backoff. GET /v1/webhooks/logs exposes the last seven days of exact attempts and outcomes. The public API does not currently expose historical-event replay.",
 			},
 			{
 				question: "How do I verify that a webhook is really from RelayAPI?",
 				answer:
-					"Every webhook includes an X-RelayAPI-Signature header containing an HMAC-SHA256 hash of the payload using your endpoint's secret key. Verify the signature server-side before processing. Our TypeScript and Python SDKs include a verifySignature() helper that handles this for you, including timing-safe comparison.",
+					"Compute HMAC-SHA256 over the unmodified request body with the secret returned when the endpoint was created or rotated. Compare it in constant time with the sha256= value in X-RelayAPI-Signature before parsing or processing the event.",
 			},
 			{
 				question: "Are webhook deliveries guaranteed?",
 				answer:
-					"RelayAPI guarantees at-least-once delivery. In rare cases (network partitions, retries), you may receive the same event more than once. Each event has a unique id field — use it to deduplicate on your end. Events are delivered in approximate chronological order but strict ordering is not guaranteed.",
+					"Consumers should implement at-least-once semantics: acknowledge only after durable processing and deduplicate with the delivery id in the payload or X-RelayAPI-Delivery-Id header. Do not depend on global ordering.",
 			},
 			{
 				question: "Can I test webhooks during development?",
 				answer:
-					"Yes. Use the RelayAPI CLI to create a local tunnel: 'relayapi webhooks listen --port 3000'. This forwards live webhook events to your local dev server. You can also use the dashboard to send test events to any registered endpoint, or replay historical events to debug your handler.",
+					"Yes. Register a reachable HTTPS endpoint, then call POST /v1/webhooks/test with its webhook_id or use the dashboard's test action. The RelayAPI CLI does not currently provide a webhook tunnel command.",
 			},
 			{
 				question: "Is there a way to receive multiple events in one request?",
 				answer:
-					"Yes. Enable batch mode on your webhook endpoint to receive up to 100 events per delivery. Events are grouped by type and delivered every 5 seconds or when the batch reaches 100 events, whichever comes first. This is ideal for high-volume integrations that want to reduce HTTP overhead.",
+					"No. The current contract sends one event envelope per delivery. Batch configuration is not exposed by the webhook create or update schemas.",
 			},
 		],
 	},

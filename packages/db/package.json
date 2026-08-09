@@ -37,6 +37,7 @@
 		"catalog:fingerprint:compare": "bun run scripts/compare-catalog-fingerprints.ts"
 	},
 	"dependencies": {
+		"@relayapi/config": "workspace:*",
 		"drizzle-orm": "catalog:",
 		"postgres": "catalog:"
 	},

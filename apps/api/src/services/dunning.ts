@@ -1,4 +1,4 @@
-import { PRICING } from "@relayapi/config";
+import { hasOrganizationRole, PRICING } from "@relayapi/config";
 import {
 	createDb,
 	dunningEvents,
@@ -808,11 +808,19 @@ async function getOrgOwnerEmail(
 	db: ReturnType<typeof createDb>,
 	orgId: string,
 ): Promise<string | null> {
-	const [ownerMember] = await db
-		.select({ email: user.email })
+	const members = await db
+		.select({ email: user.email, role: member.role })
 		.from(member)
 		.innerJoin(user, eq(member.userId, user.id))
-		.where(and(eq(member.organizationId, orgId), eq(member.role, "owner")))
-		.limit(1);
-	return ownerMember?.email ?? null;
+		.where(eq(member.organizationId, orgId));
+	return selectDunningBillingEmail(members);
+}
+
+export function selectDunningBillingEmail(
+	members: readonly { email: string; role: string }[],
+): string | null {
+	return (
+		members.find((membership) => hasOrganizationRole(membership.role, "owner"))
+			?.email ?? null
+	);
 }

@@ -847,7 +847,14 @@ async function deleteMediaBatch(
 				}),
 			),
 		),
-		...rows.map(({ storageKey }) => purgePresignedViewCache(env, storageKey)),
+		...rows.map(({ storageKey, storageBucketLocator }) =>
+			purgePresignedViewCache(
+				env,
+				storageKey,
+				undefined,
+				storageBucketLocator,
+			),
+		),
 	]);
 	await db.delete(media).where(
 		inArray(

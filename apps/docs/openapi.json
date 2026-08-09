@@ -1595,6 +1595,44 @@
             },
             "description": "List of accounts"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -10165,7 +10203,9 @@
                         "type": "array"
                       },
                       "languages": {
+                        "description": "Meta numeric ad-locale IDs encoded as strings",
                         "items": {
+                          "pattern": "^\\d+$",
                           "type": "string"
                         },
                         "type": "array"
@@ -10174,18 +10214,24 @@
                         "items": {
                           "properties": {
                             "cities": {
+                              "description": "Meta location keys returned by the Marketing API targeting search, not display names",
                               "items": {
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "countries": {
                               "items": {
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "radius_miles": {
+                              "description": "Radius applied to each city key in this location entry",
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
                               "type": "number"
                             }
                           },
@@ -10203,6 +10249,7 @@
                         "additionalProperties": {
                           "nullable": true
                         },
+                        "description": "Additional raw Meta targeting-spec fields; normalized RelayAPI fields take precedence on conflicts",
                         "type": "object"
                       }
                     },
@@ -11589,7 +11636,9 @@
                         "type": "array"
                       },
                       "languages": {
+                        "description": "Meta numeric ad-locale IDs encoded as strings",
                         "items": {
+                          "pattern": "^\\d+$",
                           "type": "string"
                         },
                         "type": "array"
@@ -11598,18 +11647,24 @@
                         "items": {
                           "properties": {
                             "cities": {
+                              "description": "Meta location keys returned by the Marketing API targeting search, not display names",
                               "items": {
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "countries": {
                               "items": {
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "radius_miles": {
+                              "description": "Radius applied to each city key in this location entry",
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
                               "type": "number"
                             }
                           },
@@ -11627,6 +11682,7 @@
                         "additionalProperties": {
                           "nullable": true
                         },
+                        "description": "Additional raw Meta targeting-spec fields; normalized RelayAPI fields take precedence on conflicts",
                         "type": "object"
                       }
                     },
@@ -13301,7 +13357,9 @@
                         "type": "array"
                       },
                       "languages": {
+                        "description": "Meta numeric ad-locale IDs encoded as strings",
                         "items": {
+                          "pattern": "^\\d+$",
                           "type": "string"
                         },
                         "type": "array"
@@ -13310,18 +13368,24 @@
                         "items": {
                           "properties": {
                             "cities": {
+                              "description": "Meta location keys returned by the Marketing API targeting search, not display names",
                               "items": {
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "countries": {
                               "items": {
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "radius_miles": {
+                              "description": "Radius applied to each city key in this location entry",
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
                               "type": "number"
                             }
                           },
@@ -13339,6 +13403,7 @@
                         "additionalProperties": {
                           "nullable": true
                         },
+                        "description": "Additional raw Meta targeting-spec fields; normalized RelayAPI fields take precedence on conflicts",
                         "type": "object"
                       }
                     },
@@ -14006,6 +14071,44 @@
               }
             },
             "description": "List"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           }
         },
         "security": [
@@ -15515,6 +15618,44 @@
               }
             },
             "description": "List"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           }
         },
         "security": [
@@ -16275,6 +16416,44 @@
               }
             },
             "description": "List"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           },
           "403": {
             "content": {
@@ -20268,6 +20447,44 @@
               }
             },
             "description": "List of rules"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           },
           "401": {
             "content": {
@@ -24618,6 +24835,44 @@
             },
             "description": "Steps list"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -25084,6 +25339,44 @@
               }
             },
             "description": "Automation list"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           }
         },
         "security": [
@@ -30967,6 +31260,44 @@
             },
             "description": "Runs list"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -32374,6 +32705,44 @@
               }
             },
             "description": "Broadcasts list"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           }
         },
         "security": [
@@ -33627,6 +33996,44 @@
               }
             },
             "description": "Recipients list"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           },
           "403": {
             "content": {
@@ -38618,6 +39025,44 @@
             },
             "description": "Connection log entries"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -38895,6 +39340,44 @@
               }
             },
             "description": "Contacts list"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           },
           "403": {
             "content": {
@@ -42111,38 +42594,6 @@
             }
           },
           {
-            "description": "Filter: start date (ISO 8601)",
-            "in": "query",
-            "name": "from",
-            "required": false,
-            "schema": {
-              "description": "Filter: start date (ISO 8601)",
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter: end date (ISO 8601)",
-            "in": "query",
-            "name": "to",
-            "required": false,
-            "schema": {
-              "description": "Filter: end date (ISO 8601)",
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter by workspace ID",
-            "in": "query",
-            "name": "workspace_id",
-            "required": false,
-            "schema": {
-              "description": "Filter by workspace ID",
-              "type": "string"
-            }
-          },
-          {
             "description": "Filter by tag",
             "in": "query",
             "name": "tag",
@@ -42205,7 +42656,7 @@
                             "type": "string"
                           },
                           "workspace_id": {
-                            "description": "Workspace ID",
+                            "description": "Workspace ID for legacy scoped templates; newly created templates are organization-shared and return null",
                             "nullable": true,
                             "type": "string"
                           }
@@ -42245,6 +42696,44 @@
               }
             },
             "description": "List of content templates"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
           },
           "401": {
             "content": {
@@ -42301,6 +42790,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "content": {
                     "description": "Post text content (supports {{variables}})",
@@ -42324,86 +42814,107 @@
                     "properties": {
                       "beehiiv": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "bluesky": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "convertkit": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "discord": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "facebook": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "googlebusiness": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "instagram": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "linkedin": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "listmonk": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "mailchimp": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "mastodon": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "pinterest": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "reddit": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "sms": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "snapchat": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "telegram": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "threads": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "tiktok": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "twitter": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "whatsapp": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "youtube": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       }
                     },
@@ -42418,10 +42929,6 @@
                     },
                     "maxItems": 20,
                     "type": "array"
-                  },
-                  "workspace_id": {
-                    "description": "Workspace ID to scope this template to",
-                    "type": "string"
                   }
                 },
                 "required": [
@@ -42482,7 +42989,7 @@
                       "type": "string"
                     },
                     "workspace_id": {
-                      "description": "Workspace ID",
+                      "description": "Workspace ID for legacy scoped templates; newly created templates are organization-shared and return null",
                       "nullable": true,
                       "type": "string"
                     }
@@ -42503,6 +43010,44 @@
               }
             },
             "description": "Content template created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
           },
           "401": {
             "content": {
@@ -42541,6 +43086,44 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "An all-workspace credential is required"
           }
         },
         "security": [
@@ -42610,6 +43193,44 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "An all-workspace credential is required"
           },
           "404": {
             "content": {
@@ -42723,7 +43344,7 @@
                       "type": "string"
                     },
                     "workspace_id": {
-                      "description": "Workspace ID",
+                      "description": "Workspace ID for legacy scoped templates; newly created templates are organization-shared and return null",
                       "nullable": true,
                       "type": "string"
                     }
@@ -42782,6 +43403,44 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Template is outside the credential's workspace scope"
           },
           "404": {
             "content": {
@@ -42850,6 +43509,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "content": {
                     "description": "Post text content",
@@ -42875,86 +43535,107 @@
                     "properties": {
                       "beehiiv": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "bluesky": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "convertkit": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "discord": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "facebook": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "googlebusiness": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "instagram": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "linkedin": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "listmonk": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "mailchimp": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "mastodon": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "pinterest": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "reddit": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "sms": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "snapchat": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "telegram": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "threads": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "tiktok": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "twitter": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "whatsapp": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       },
                       "youtube": {
                         "maxLength": 10000,
+                        "minLength": 1,
                         "type": "string"
                       }
                     },
@@ -43024,7 +43705,7 @@
                       "type": "string"
                     },
                     "workspace_id": {
-                      "description": "Workspace ID",
+                      "description": "Workspace ID for legacy scoped templates; newly created templates are organization-shared and return null",
                       "nullable": true,
                       "type": "string"
                     }
@@ -43083,6 +43764,44 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "An all-workspace credential is required"
           },
           "404": {
             "content": {
@@ -43443,6 +44162,44 @@
               }
             },
             "description": "List of fields"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           }
         },
         "security": [
@@ -46356,6 +47113,44 @@
             },
             "description": "List of activity events"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -46555,6 +47350,44 @@
               }
             },
             "description": "List of comments"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
           },
           "404": {
             "content": {
@@ -48724,6 +49557,44 @@
             },
             "description": "Comments list"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -48948,6 +49819,44 @@
               }
             },
             "description": "Posts with comment counts"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
           },
           "401": {
             "content": {
@@ -54395,6 +55304,44 @@
             },
             "description": "List of invite tokens"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -58039,6 +58986,10 @@
                             "description": "MIME type",
                             "type": "string"
                           },
+                          "original_available": {
+                            "description": "Whether original bytes remain available for provider delivery",
+                            "type": "boolean"
+                          },
                           "size": {
                             "description": "File size in bytes",
                             "type": "integer"
@@ -58053,10 +59004,17 @@
                             "description": "Width in pixels",
                             "nullable": true,
                             "type": "integer"
+                          },
+                          "workspace_id": {
+                            "description": "Workspace scope, or null for organization-shared media",
+                            "nullable": true,
+                            "type": "string"
                           }
                         },
                         "required": [
                           "id",
+                          "workspace_id",
+                          "original_available",
                           "url",
                           "filename",
                           "mime_type",
@@ -58087,6 +59045,44 @@
               }
             },
             "description": "List of media files"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           },
           "401": {
             "content": {
@@ -58193,6 +59189,10 @@
                       "description": "MIME type",
                       "type": "string"
                     },
+                    "original_available": {
+                      "description": "Whether original bytes remain available for provider delivery",
+                      "type": "boolean"
+                    },
                     "size": {
                       "description": "File size in bytes",
                       "type": "integer"
@@ -58207,10 +59207,17 @@
                       "description": "Width in pixels",
                       "nullable": true,
                       "type": "integer"
+                    },
+                    "workspace_id": {
+                      "description": "Workspace scope, or null for organization-shared media",
+                      "nullable": true,
+                      "type": "string"
                     }
                   },
                   "required": [
                     "id",
+                    "workspace_id",
+                    "original_available",
                     "url",
                     "filename",
                     "mime_type",
@@ -58593,6 +59600,10 @@
                       "description": "Original filename",
                       "type": "string"
                     },
+                    "id": {
+                      "description": "ID of the ready media record",
+                      "type": "string"
+                    },
                     "size": {
                       "description": "File size in bytes",
                       "type": "integer"
@@ -58608,6 +59619,7 @@
                     }
                   },
                   "required": [
+                    "id",
                     "url",
                     "type",
                     "size",
@@ -58974,6 +59986,10 @@
                       "description": "MIME type",
                       "type": "string"
                     },
+                    "original_available": {
+                      "description": "Whether original bytes remain available for provider delivery",
+                      "type": "boolean"
+                    },
                     "size": {
                       "description": "File size in bytes",
                       "type": "integer"
@@ -58988,10 +60004,17 @@
                       "description": "Width in pixels",
                       "nullable": true,
                       "type": "integer"
+                    },
+                    "workspace_id": {
+                      "description": "Workspace scope, or null for organization-shared media",
+                      "nullable": true,
+                      "type": "string"
                     }
                   },
                   "required": [
                     "id",
+                    "workspace_id",
+                    "original_available",
                     "url",
                     "filename",
                     "mime_type",
@@ -60671,14 +61694,14 @@
                     "type": "array"
                   },
                   "template_id": {
-                    "description": "Content template ID. When provided, the template content is used as the base for the post. Explicit 'content' field takes precedence.",
+                    "description": "Content template ID. When provided, the template content and platform overrides are applied. Explicit top-level content skips both; request target_options override stored platform content.",
                     "type": "string"
                   },
                   "template_variables": {
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "Variables to interpolate in the template (e.g., { \"promo_code\": \"SUMMER25\" }). Built-in variables: {{date}}, {{account_name}}.",
+                    "description": "Variables to interpolate in the template base content and platform overrides (e.g., { \"promo_code\": \"SUMMER25\" }). Built-ins: {{date}}, {{account_name}}.",
                     "type": "object"
                   },
                   "timezone": {
@@ -61189,7 +62212,45 @@
                 }
               }
             },
-            "description": "Quota exceeded"
+            "description": "Workspace access denied or quota exceeded"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Referenced content template or idea not found"
           },
           "409": {
             "content": {
@@ -61419,14 +62480,14 @@
                           "type": "array"
                         },
                         "template_id": {
-                          "description": "Content template ID. When provided, the template content is used as the base for the post. Explicit 'content' field takes precedence.",
+                          "description": "Content template ID. When provided, the template content and platform overrides are applied. Explicit top-level content skips both; request target_options override stored platform content.",
                           "type": "string"
                         },
                         "template_variables": {
                           "additionalProperties": {
                             "type": "string"
                           },
-                          "description": "Variables to interpolate in the template (e.g., { \"promo_code\": \"SUMMER25\" }). Built-in variables: {{date}}, {{account_name}}.",
+                          "description": "Variables to interpolate in the template base content and platform overrides (e.g., { \"promo_code\": \"SUMMER25\" }). Built-ins: {{date}}, {{account_name}}.",
                           "type": "object"
                         },
                         "timezone": {
@@ -62498,6 +63559,44 @@
               }
             },
             "description": "Publishing logs"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
           },
           "401": {
             "content": {
@@ -67451,6 +68550,44 @@
             },
             "description": "List of cross-post actions"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -72332,6 +73469,44 @@
               }
             },
             "description": "List"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           }
         },
         "security": [
@@ -74206,6 +75381,44 @@
             },
             "description": "List of short links"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -75645,6 +76858,44 @@
               }
             },
             "description": "List of signatures"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
           },
           "401": {
             "content": {
@@ -78489,6 +79740,44 @@
             },
             "description": "List of tags"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -78988,6 +80277,44 @@
               }
             },
             "description": "Threads list"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid pagination cursor"
           },
           "401": {
             "content": {
@@ -83071,14 +84398,14 @@
                     "type": "array"
                   },
                   "template_id": {
-                    "description": "Content template ID. When provided, the template content is used as the base for the post. Explicit 'content' field takes precedence.",
+                    "description": "Content template ID. When provided, the template content and platform overrides are applied. Explicit top-level content skips both; request target_options override stored platform content.",
                     "type": "string"
                   },
                   "template_variables": {
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "Variables to interpolate in the template (e.g., { \"promo_code\": \"SUMMER25\" }). Built-in variables: {{date}}, {{account_name}}.",
+                    "description": "Variables to interpolate in the template base content and platform overrides (e.g., { \"promo_code\": \"SUMMER25\" }). Built-ins: {{date}}, {{account_name}}.",
                     "type": "object"
                   },
                   "timezone": {
@@ -93366,6 +94693,44 @@
               }
             },
             "description": "List of workspaces"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "description": "Error code",
+                          "type": "string"
+                        },
+                        "details": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "message": {
+                          "description": "Error message",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid cursor"
           },
           "401": {
             "content": {

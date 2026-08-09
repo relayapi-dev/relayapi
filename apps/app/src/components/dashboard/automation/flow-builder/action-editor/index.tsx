@@ -45,6 +45,8 @@ interface Props {
 	automationId?: string;
 	/** Used to hide actions that a platform cannot execute. */
 	automationChannel: string;
+	/** Operational scope used by resource pickers inside action forms. */
+	automationWorkspaceId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,6 +58,7 @@ export function ActionEditor({
 	onChange,
 	automationId,
 	automationChannel,
+	automationWorkspaceId,
 }: Props) {
 	const cfg = (node.config ?? {}) as { actions?: Action[] };
 	const actions = Array.isArray(cfg.actions) ? cfg.actions : [];
@@ -84,7 +87,11 @@ export function ActionEditor({
 						{actions.length} total
 					</span>
 				</div>
-				<ActionList actions={actions} onChange={setActions} />
+				<ActionList
+					actions={actions}
+					automationWorkspaceId={automationWorkspaceId}
+					onChange={setActions}
+				/>
 				<div className="mt-2">
 					<AddActionButton
 						onAdd={addAction}

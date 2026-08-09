@@ -53,8 +53,8 @@ describe("inbox-content-retention", () => {
 			new URL("../services/inbox-maintenance.ts", import.meta.url),
 		).text();
 		for (const marker of [
-			"LIMIT ${INBOX_MESSAGE_REDACTION_BATCH_SIZE}",
-			"LIMIT ${INBOX_NOTE_DELETION_BATCH_SIZE}",
+			`LIMIT \${INBOX_MESSAGE_REDACTION_BATCH_SIZE}`,
+			`LIMIT \${INBOX_NOTE_DELETION_BATCH_SIZE}`,
 			"message.content_redacted_at IS NULL",
 			"NOT EXISTS (",
 			"enqueueExactObjectCleanup",

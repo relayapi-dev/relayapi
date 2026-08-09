@@ -116,7 +116,6 @@ export interface ContentTemplateCreateParams {
   description?: string;
   platform_overrides?: Record<string, string>;
   tags?: Array<string>;
-  workspace_id?: string;
 }
 
 export interface ContentTemplateUpdateParams {
@@ -130,7 +129,6 @@ export interface ContentTemplateUpdateParams {
 export interface ContentTemplateListParams {
   cursor?: string;
   limit?: number;
-  workspace_id?: string;
   tag?: string;
 }
 

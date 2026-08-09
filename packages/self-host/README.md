@@ -21,9 +21,17 @@ secrets with mode 0600, and writes a small operator repository containing:
 - `relayapi.selfhost.json` — non-secret Cloudflare IDs, domains, feature flags,
   the immutable R2 jurisdiction (`default` or `eu`), and the exact non-secret
   Hyperdrive CA certificate ID
-- `relayapi.lock.json` — the exact stable RelayAPI version to deploy
+- `relayapi.lock.json` — the exact stable RelayAPI version and SHA-256 of its
+  approved GitHub source archive
 - a guarded deploy workflow that migrates before deploying
 - a daily update workflow that proposes new stable versions as pull requests
+
+`init` is collision-safe. It merges and deduplicates the required entries into
+an existing `.gitignore`, and refuses to replace its config, lock, workflows,
+`.env.example`, or local secrets when any already exist. An intentional
+`init --force` first copies every replaced regular file into a mode-0700
+`.relayapi/backups/init-*` directory; symlinks, symlinked managed directories,
+and other non-regular targets are always rejected.
 
 Set the values shown in `.env.example`, then run:
 
@@ -35,11 +43,54 @@ bunx @relayapi/self-host deploy
 For a fully automated private GitHub repository, pass `--github owner/repo` to
 `init` while authenticated with `gh`. Values already present in the environment
 are uploaded with `gh secret set`; their values are never placed on command
-lines or in the operator config.
+lines or in the operator config. Run the `--github` form only in a new empty
+directory: it refuses an existing `.git` path or any pre-existing entry, even
+with `--force`, before it can alter Git state. Omit `--github` when adding the
+collision-safe local scaffold to an existing directory.
 
 The deployment is intentionally forward-only. There is no `destroy` command,
 and database migrations are applied under RelayAPI's migration lock before the
 Workers are updated.
+
+An ordinary deploy never substitutes a RelayAPI-looking current working
+directory for the reviewed lock. It downloads the lock's stable-tag archive
+with a bounded timeout and size, verifies its SHA-256 before extraction, and
+removes the temporary archive tree on success or failure. `--source` remains a
+development override, but it is rejected unless paired with the explicit
+`--allow-unsealed-source` acknowledgement and emits a warning that archive
+verification is being bypassed. Legacy locks without `sourceArchiveSha256`
+must run `upgrade` once to seal their current stable release before `doctor` or
+`deploy` proceeds.
+
+Cloudflare preserves existing secrets omitted from `--secrets-file`, so each
+Worker rollout is staged as an undeployed version instead of assuming that the
+file is replacement state. The CLI uploads the code and complete selected
+secret values together, inspects that candidate's secret names, creates
+undeployed secret-removal versions for every obsolete name, and verifies that
+the final candidate has the exact desired name set and the same hashed script
+and non-secret configuration. Only that exact version is then assigned 100% of
+traffic; routes, schedules, and Queue consumers are reconciled immediately
+afterward with `wrangler triggers deploy`. This removes an old Google or other
+optional provider credential when its local value is removed without ever
+printing secret values or temporarily activating an unverified candidate. See
+Cloudflare's [secret upload semantics](https://developers.cloudflare.com/workers/configuration/secrets/#upload-secrets-alongside-code)
+and [Workers version commands](https://developers.cloudflare.com/workers/wrangler/commands/#versions).
+
+The mode-0600 temporary secrets file and private rollout directory are removed
+even when Wrangler fails. If staging, activation, trigger reconciliation, or a
+binding smoke fails after migrations, the CLI does not blindly roll the
+schema-sensitive release back: the error prints an idempotent forward-repair
+command, commands to inspect each possibly activated Worker's deployment
+history, and a version-ID-specific rollback command that is permitted only when
+that release's compatibility notes authorize it. A failure before 100% traffic
+activation explicitly reports that live traffic was unchanged.
+
+`upgrade` accepts only stable `MAJOR.MINOR.PATCH` tags, compares arbitrarily
+large numeric components without precision loss, follows GitHub release pages,
+and never replaces a newer operator lock with an older available release. A
+selected release is written only together with its archive SHA-256. The
+generated update workflow delegates selection to this same implementation
+instead of maintaining a separate shell comparator.
 
 The migration role is supplied as `RELAYAPI_MIGRATION_DATABASE_URL`; the
 separate no-DDL Worker role remains `RELAYAPI_RUNTIME_DATABASE_URL`.
@@ -117,7 +168,7 @@ not issue an undocumented pool restart. See Cloudflare's
 [PATCH API](https://developers.cloudflare.com/api/resources/hyperdrive/subresources/configs/methods/edit/)
 and [configuration troubleshooting](https://developers.cloudflare.com/hyperdrive/observability/troubleshooting/).
 
-After the API Worker is deployed and receives its secrets, `deploy` calls the
+After the API Worker code and secrets are atomically deployed, `deploy` calls the
 protected cutover smoke with `?probe=database` and verifies
 `current_database()` plus `current_user` through that Worker's actual
 `HYPERDRIVE` binding. It also requires `ok: true`, an open runtime-control
@@ -184,9 +235,15 @@ model rather than silently falling back to a different provider.
 
 The pre-live authority baseline stores API and dashboard credentials behind
 stable organization principals, normalizes selected workspace grants, and
-redeems bearer invitations transactionally. Self-hosted updates require no new
-operator setting: the version-pinned release migration installs this shape
-before either Worker is deployed.
+redeems bearer invitations transactionally. Email signup with a bearer invite
+now locks and revalidates the issuer generation, live role/principal, active
+tenant, and every selected workspace inside Better Auth's user/account
+transaction before claiming the token. A later signup failure rolls the claim
+back, and a concurrent ban, role removal, tenant suspension, or workspace
+deactivation either commits first and rejects signup or waits behind the
+admitted transaction. Self-hosted updates require no new operator setting: the
+version-pinned release migration installs this shape before either Worker is
+deployed.
 
 Dashboard-initiated OAuth and direct provider-account credential writes also
 carry the exact current Better Auth session through the one-time flow and lock
@@ -354,6 +411,14 @@ also read the authoritative session instead of the five-minute signed-cookie
 cache. Upgrade deployments therefore continue to apply database migrations
 before either Worker without adding a binding or secret.
 
+Content templates are organization-shared definitions in both deployment
+modes. New create/update requests reject `workspace_id` instead of silently
+ignoring it, and creating, updating, or deleting a template requires an
+all-workspace credential. Legacy workspace-scoped rows remain readable during
+upgrade compatibility, but applying one to a post rechecks the calling key's
+workspace grant before any template content is rendered.
+This contract adds no binding, secret, or migration.
+
 Durable automation activation/graph, manual enrollment admission, entrypoint,
 binding, active RSS-rule, short-link configuration, and BYOS staging/activation
 mutations also fence the exact issuing key, principal, workspace grants, and dashboard session in the
@@ -370,6 +435,12 @@ Paid-plan default, so changing plans cannot silently extend transient payload
 residency. PostgreSQL and the encrypted rescue bucket remain the durable
 authorities for inspectable failures.
 
+Cloudflare discovery exhausts the documented page-number pagination for KV,
+Queues, and Hyperdrive and the cursor pagination for R2 before deciding whether
+a canonical resource exists. Cloudflare and GitHub JSON responses, release
+archives, and every network wait are size- and time-bounded so a stalled or
+unbounded upstream response cannot hold an operator deployment indefinitely.
+
 Every provisioned R2 bucket also receives a one-day, all-prefix lifecycle for
 incomplete multipart uploads. RelayAPI currently creates media with single PUT
 operations, so this does not shorten any user-facing upload capability; it
@@ -377,6 +448,17 @@ prevents abandoned multipart parts created by future or operator tooling from
 remaining billable for Cloudflare's longer default window. Media originals and
 the encrypted queue-rescue ledger retain their separate 30-day object-expiry
 rules, while avatar, thumbnail, and public-asset objects remain durable.
+
+Automation message blocks persist durable `med_*` library IDs instead of
+expiring signed URLs. Immediately before provider delivery, the API resolves
+each ID through PostgreSQL, requires the current organization/workspace scope
+and a ready, non-deleting original, then uses the configured media storage to
+issue a fresh read URL. The direct-upload response includes that durable ID.
+Self-hosted installs use their existing Hyperdrive, media bucket or BYOS
+location, and storage credentials; this adds no binding, secret, resource, or
+database migration. A one-shot BYOS upload stream is signed with transport
+retries disabled; the durable upload row and reconciler recover ambiguous
+provider outcomes without replaying a consumed request body.
 
 Download and transcript execution uses the provisioned tools Queue, which
 carries only `tool_job` identifiers. PostgreSQL owns the encrypted

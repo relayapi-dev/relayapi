@@ -17,8 +17,17 @@ afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
 
-function response(result: unknown): Response {
-	return Response.json({ success: true, result, errors: [], messages: [] });
+function response(
+	result: unknown,
+	resultInfo?: Record<string, unknown>,
+): Response {
+	return Response.json({
+		success: true,
+		result,
+		...(resultInfo ? { result_info: resultInfo } : {}),
+		errors: [],
+		messages: [],
+	});
 }
 
 const config: SelfHostConfig = {
@@ -106,6 +115,94 @@ function installHyperdrivePlanFetch(remoteCaCertificateId: string): void {
 }
 
 describe("Cloudflare provisioning", () => {
+	test("follows every supported resource-list pagination contract", async () => {
+		const calls: string[] = [];
+		globalThis.fetch = Object.assign(
+			mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = new URL(String(input));
+				calls.push(url.toString());
+				expect(init?.signal).toBeInstanceOf(AbortSignal);
+				const page = Number(url.searchParams.get("page") ?? "1");
+				if (url.pathname.endsWith("/storage/kv/namespaces")) {
+					return response(
+						[
+							{
+								id: `kv-${page}`,
+								title: page === 2 ? RESOURCE_NAMES.kv : "operator-kv",
+							},
+						],
+						{ page, per_page: 1, total_count: 2 },
+					);
+				}
+				if (url.pathname.endsWith("/queues")) {
+					return response(
+						[
+							{
+								queue_id: `queue-${page}`,
+								queue_name: `queue-${page}`,
+							},
+						],
+						{ page, per_page: 1, total_pages: 2, total_count: 2 },
+					);
+				}
+				if (url.pathname.endsWith("/hyperdrive/configs")) {
+					return response(
+						[
+							{
+								id: `hyperdrive-${page}`,
+								name: `hyperdrive-${page}`,
+							},
+						],
+						{ page, per_page: 1, total_count: 2 },
+					);
+				}
+				if (url.pathname.endsWith("/r2/buckets")) {
+					const cursor = url.searchParams.get("cursor");
+					return cursor
+						? response({ buckets: [{ name: "bucket-2" }] })
+						: response(
+								{ buckets: [{ name: "bucket-1" }] },
+								{ cursor: "next-page" },
+							);
+				}
+				throw new Error(`Unhandled test request: ${url}`);
+			}),
+			{ preconnect: originalFetch.preconnect },
+		);
+		const client = new CloudflareClient(
+			"account-id",
+			"cloudflare-token",
+			"https://cloudflare.test/client/v4",
+		);
+		expect(await client.listKvNamespaces()).toHaveLength(2);
+		expect(await client.listQueues()).toHaveLength(2);
+		expect(await client.listHyperdrives()).toHaveLength(2);
+		expect(await client.listBuckets("default")).toEqual([
+			{ name: "bucket-1" },
+			{ name: "bucket-2" },
+		]);
+		expect(calls.filter((url) => url.includes("page=2"))).toHaveLength(3);
+		expect(calls.some((url) => url.includes("cursor=next-page"))).toBe(true);
+	});
+
+	test("bounds Cloudflare response bodies", async () => {
+		globalThis.fetch = Object.assign(
+			mock(
+				async () =>
+					new Response("{}", {
+						headers: { "Content-Length": String(8 * 1024 * 1024 + 1) },
+					}),
+			),
+			{ preconnect: originalFetch.preconnect },
+		);
+		const client = new CloudflareClient(
+			"account-id",
+			"cloudflare-token",
+			"https://cloudflare.test/client/v4",
+		);
+		await expect(client.listQueues()).rejects.toThrow("exceeded 8388608 bytes");
+	});
+
 	test("creates a missing stack without placing credentials in URLs", async () => {
 		expect(QUEUE_MESSAGE_RETENTION_SECONDS).toBe(86_400);
 		const calls: Array<{

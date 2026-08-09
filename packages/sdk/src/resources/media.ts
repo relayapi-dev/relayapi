@@ -80,6 +80,16 @@ export interface MediaRetrieveResponse {
   id: string;
 
   /**
+   * Whether original bytes remain available for provider delivery
+   */
+  original_available: boolean;
+
+  /**
+   * Workspace scope, or null for organization-shared media
+   */
+  workspace_id: string | null;
+
+  /**
    * Upload timestamp
    */
   created_at: string;
@@ -158,6 +168,11 @@ export namespace MediaGetPresignURLResponse {
 
 export interface MediaUploadResponse {
   /**
+   * ID of the ready media record
+   */
+  id: string;
+
+  /**
    * Original filename
    */
   filename: string;
@@ -230,6 +245,11 @@ export interface MediaListParams {
    * Number of items per page
    */
   limit?: number;
+
+  /**
+   * Filter by workspace ID
+   */
+  workspace_id?: string;
 }
 
 export interface MediaListResponse {
@@ -252,6 +272,16 @@ export namespace MediaListResponse {
      * Media ID
      */
     id: string;
+
+    /**
+     * Whether original bytes remain available for provider delivery
+     */
+    original_available: boolean;
+
+    /**
+     * Workspace scope, or null for organization-shared media
+     */
+    workspace_id: string | null;
 
     /**
      * Upload timestamp

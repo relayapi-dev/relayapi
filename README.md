@@ -368,6 +368,10 @@ production change: capture the currently deployed version, use
 then explicitly deploy that version with rollback available. Never use
 `wrangler secret delete` or the script-secret DELETE API as a deploy preflight;
 both immediately create and deploy a Worker version.
+`@relayapi/self-host deploy` automates that guarded version workflow: it stages
+code and desired values, removes names absent from the operator environment,
+verifies the exact candidate without exposing values, and only then assigns it
+100% of traffic.
 Cloudflare credentials and production database migration values remain GitHub
 environment secrets.
 

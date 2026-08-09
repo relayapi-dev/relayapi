@@ -8,6 +8,46 @@ afterEach(() => {
 });
 
 describe("uploadMedia", () => {
+	it("keeps presigned and fallback uploads in the requested workspace", async () => {
+		let presignBody: unknown;
+		const calls: string[] = [];
+		globalThis.fetch = (async (input, init) => {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.toString()
+						: input.url;
+			calls.push(url);
+			if (url === "/api/media/presign") {
+				presignBody = JSON.parse(String(init?.body));
+				throw new Error("presign unavailable");
+			}
+			if (
+				url ===
+				"/api/media/upload?filename=workspace.png&workspace_id=ws_automation"
+			) {
+				return Response.json({
+					id: "med_workspace",
+					url: "https://media.example/workspace.png",
+				});
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const file = new File(["image"], "workspace.png", { type: "image/png" });
+		await uploadMedia(file, { workspaceId: "ws_automation" });
+
+		expect(presignBody).toEqual({
+			filename: "workspace.png",
+			content_type: "image/png",
+			workspace_id: "ws_automation",
+		});
+		expect(calls.at(-1)).toBe(
+			"/api/media/upload?filename=workspace.png&workspace_id=ws_automation",
+		);
+	});
+
 	it("uses the presign flow when both requests succeed", async () => {
 		const calls: string[] = [];
 		let putHeaders: Headers | undefined;
@@ -51,6 +91,7 @@ describe("uploadMedia", () => {
 		const result = await uploadMedia(file);
 
 		expect(result).toEqual({
+			id: "med_1",
 			url: "https://cdn.example.test/file.png",
 			type: "image/png",
 			filename: "hello.png",
@@ -176,10 +217,52 @@ describe("uploadMedia", () => {
 
 			if (url === "/api/media/upload?filename=voice.webm") {
 				return Response.json({
+					id: "med_voice",
 					url: "https://cdn.example.test/voice.webm",
 				});
 			}
 
+			throw new Error(`Unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const file = new File(["audio"], "voice.webm", { type: "audio/webm" });
+		const result = await uploadMedia(file);
+
+		expect(result).toEqual({
+			id: "med_voice",
+			url: "https://cdn.example.test/voice.webm",
+			type: "audio/webm",
+			filename: "voice.webm",
+			size: 5,
+		});
+		expect(calls).toEqual([
+			"/api/media/presign",
+			"/api/media/upload?filename=voice.webm",
+		]);
+	});
+
+	it("keeps a fallback upload usable against an API build with no media id", async () => {
+		// The app and API Workers deploy independently, so an app-first rollout
+		// talks to an API that returns only `url`. The bytes are already stored by
+		// then, so failing here would report an error for a successful upload and
+		// orphan the object.
+		const getUrl = (input: RequestInfo | URL) =>
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.toString()
+					: input.url;
+		globalThis.fetch = (async (input) => {
+			const url = getUrl(input);
+			if (url === "/api/media/presign") throw new Error("network down");
+			if (url === "/api/media/upload?filename=voice.webm") {
+				return Response.json({
+					url: "https://cdn.example.test/voice.webm",
+					type: "audio/webm",
+					size: 5,
+					filename: "voice.webm",
+				});
+			}
 			throw new Error(`Unexpected fetch: ${url}`);
 		}) as typeof fetch;
 
@@ -192,10 +275,27 @@ describe("uploadMedia", () => {
 			filename: "voice.webm",
 			size: 5,
 		});
-		expect(calls).toEqual([
-			"/api/media/presign",
-			"/api/media/upload?filename=voice.webm",
-		]);
+		expect(result.id).toBeUndefined();
+	});
+
+	it("still rejects a fallback upload that returns no URL", async () => {
+		const getUrl = (input: RequestInfo | URL) =>
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.toString()
+					: input.url;
+		globalThis.fetch = (async (input) => {
+			const url = getUrl(input);
+			if (url === "/api/media/presign") throw new Error("network down");
+			if (url === "/api/media/upload?filename=voice.webm") {
+				return Response.json({ id: "med_voice" });
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const file = new File(["audio"], "voice.webm", { type: "audio/webm" });
+		expect(uploadMedia(file)).rejects.toThrow("without a media URL");
 	});
 
 	it("falls back to the direct upload proxy when the presigned PUT fails", async () => {
@@ -228,6 +328,7 @@ describe("uploadMedia", () => {
 
 			if (url === "/api/media/upload?filename=file.pdf") {
 				return Response.json({
+					id: "med_pdf",
 					url: "https://cdn.example.test/file.pdf",
 				});
 			}
@@ -239,6 +340,7 @@ describe("uploadMedia", () => {
 		const result = await uploadMedia(file);
 
 		expect(result).toEqual({
+			id: "med_pdf",
 			url: "https://cdn.example.test/file.pdf",
 			type: "application/pdf",
 			filename: "file.pdf",

@@ -137,6 +137,6 @@ export async function resumeWaitingRunOnInteractive(
 
 	// Mirror enrollContact / resumeWaitingRunOnInput: ensure handlers can reach
 	// the live `db` binding via env even when the caller didn't populate it.
-	await runLoop(db, runId, { db, ...env });
+	await runLoop(db, runId, { db, ...env }, { refreshContactContext: true });
 	return "resumed";
 }

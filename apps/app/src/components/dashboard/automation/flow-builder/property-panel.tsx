@@ -33,7 +33,6 @@ import { platformIcons } from "@/lib/platform-icons";
 import { cn } from "@/lib/utils";
 import { ActionEditor } from "./action-editor";
 import { INPUT_CLS } from "./field-styles";
-import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 import { MessageComposer } from "./message-composer";
 import type { MessageConfig } from "./message-composer/types";
 import {
@@ -49,6 +48,7 @@ import {
 	StartAutomationEditor,
 	WaitEventEditor,
 } from "./node-editors";
+import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 
 // Full-width on mobile (the canvas column is hidden behind it there); fixed
 // width from md+ where it sits beside the canvas.
@@ -380,6 +380,7 @@ function renderEditor({
 			<MessageComposer
 				node={composerNode}
 				channel={automationChannel}
+				workspaceId={automationWorkspaceId}
 				onChange={handleConfigChange}
 			/>
 		);
@@ -391,6 +392,7 @@ function renderEditor({
 				node={{ key: node.key, kind: "action_group", config: node.config }}
 				automationId={automationId}
 				automationChannel={automationChannel}
+				automationWorkspaceId={automationWorkspaceId}
 				onChange={(nextConfig) =>
 					onChange({
 						config: { ...node.config, actions: nextConfig.actions },

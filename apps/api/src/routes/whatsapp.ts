@@ -631,7 +631,7 @@ app.openapi(bulkSend, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -796,7 +796,7 @@ app.openapi(listTemplates, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -902,7 +902,7 @@ app.openapi(createTemplate, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1010,7 +1010,7 @@ app.openapi(getTemplate, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1122,7 +1122,7 @@ app.openapi(deleteTemplate, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1208,7 +1208,7 @@ app.openapi(getBusinessProfile, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1293,7 +1293,7 @@ app.openapi(updateBusinessProfile, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1423,7 +1423,7 @@ app.openapi(listPhoneNumbers, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1522,7 +1522,7 @@ app.openapi(getDisplayName, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1596,7 +1596,7 @@ app.openapi(updateDisplayName, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1681,7 +1681,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1950,7 +1950,7 @@ app.openapi(listFlows, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2019,7 +2019,7 @@ app.openapi(createFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2121,7 +2121,7 @@ app.openapi(getFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2199,7 +2199,7 @@ app.openapi(updateFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2296,7 +2296,7 @@ app.openapi(deleteFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2378,7 +2378,7 @@ app.openapi(publishFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2460,7 +2460,7 @@ app.openapi(deprecateFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2542,7 +2542,7 @@ app.openapi(getFlowJson, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2630,7 +2630,7 @@ app.openapi(uploadFlowJson, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2756,7 +2756,7 @@ app.openapi(sendFlowMessage, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {

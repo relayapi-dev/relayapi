@@ -663,6 +663,10 @@ describe("media event and read-path guards", () => {
 		);
 
 		expect(response.status).toBe(201);
+		expect(await response.json()).toMatchObject({
+			id: expect.stringMatching(/^med_/),
+			url: expect.stringContaining("https://"),
+		});
 		expect(order).toEqual(["db-intent", "r2-put", "db-ready"]);
 	});
 

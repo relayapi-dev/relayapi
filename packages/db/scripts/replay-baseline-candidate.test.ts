@@ -53,7 +53,7 @@ describe("generation-2 candidate replay contract", () => {
 		expect(replaySource).toContain(
 			'run("scripts/verify-migration-history.ts", ["--live", "--require-current"])',
 		);
-		expect(replaySource).toContain("`--verify=${catalogOutput}`");
+		expect(replaySource).toContain(`\`--verify=\${catalogOutput}\``);
 		expect(migrateSource).toContain("RELAYAPI_MIGRATION_DIRECTORY");
 		expect(migrateSource).toContain("RELAYAPI_MIGRATION_GENERATION");
 			expect(liveVerifierSource).not.toContain(

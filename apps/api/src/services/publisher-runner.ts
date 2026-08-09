@@ -30,6 +30,7 @@ import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "./contact-consent";
+import { resolvePostTargetOptions } from "./post-content-resolution";
 import { postCompletionOutboxRow } from "./publish-outbox";
 import {
 	forceRefreshToken,
@@ -915,8 +916,17 @@ export async function publishToTargets(
 			const fullAccount = accountMap.get(account.id);
 			if (!fullAccount) continue;
 
-			let targetOpts =
-				(resolvedTargetOptions?.[target.key] as Record<string, unknown>) ?? {};
+			let targetOpts = resolvePostTargetOptions(
+				resolvedTargetOptions,
+				target.platform,
+				target.key,
+			);
+			// A blank per-target override inherits the shared content. Publishing an
+			// empty string is never the intent — omitting the target is.
+			const targetContent =
+				typeof targetOpts.content === "string" && targetOpts.content.trim()
+					? targetOpts.content
+					: content;
 			if (target.platform === "sms") {
 				const phoneNumbers = Array.isArray(targetOpts.phone_numbers)
 					? targetOpts.phone_numbers.filter(
@@ -1065,7 +1075,7 @@ export async function publishToTargets(
 							);
 							const result = await publisher.publish({
 								operation_id: claimedTarget.publishOperationId,
-								content,
+								content: targetContent,
 								media: resolvedMedia,
 								target_options: targetOpts,
 								account: {

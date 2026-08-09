@@ -39,6 +39,7 @@ import {
 } from "../lib/mutation-provider-boundary";
 import { notifyRealtime } from "../lib/notify-post-update";
 import {
+	decodeKeysetCursor,
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
 	INVALID_CURSOR_BODY,
@@ -89,6 +90,15 @@ import {
 } from "../schemas/posts";
 import { TagResponse } from "../schemas/tags";
 import { chooseCrossPostSourceTarget } from "../services/cross-post-processor";
+import {
+	hasEffectivePostPayload,
+	injectPostSignature,
+	injectSignatureIntoTargetOptions,
+	mergePostTargetOptions,
+	renderPostTemplate,
+	renderPostTemplateOverrides,
+	resolveTemplateAccountName,
+} from "../services/post-content-resolution";
 import {
 	lockProviderReconciliationScope,
 	persistManualProviderReconciliation,
@@ -429,6 +439,10 @@ const listAllPostLogs = createRoute({
 				"application/json": { schema: PublishLogListResponse },
 			},
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -462,11 +476,15 @@ const createPostRoute = createRoute({
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
-			description: "Quota exceeded",
+			description: "Workspace access denied or quota exceeded",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		409: {
 			description: "No slot available",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Referenced content template or idea not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -1623,14 +1641,14 @@ app.openapi(listAllPostLogs, async (c) => {
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 	if (from) conditions.push(gte(postTargets.updatedAt, new Date(from)));
 	if (to) conditions.push(lte(postTargets.updatedAt, new Date(to)));
-	// Apply the incoming cursor as a keyset on updatedAt (the ORDER BY key). Previously
-	// the cursor was ignored, so following next_cursor returned page 1 forever and
-	// auto-paginating clients looped. The cursor is the previous page's last updatedAt.
 	if (cursor) {
-		const cursorDate = new Date(cursor);
-		if (!Number.isNaN(cursorDate.getTime())) {
-			conditions.push(lt(postTargets.updatedAt, cursorDate));
-		}
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			decoded.kind === "composite"
+				? sql`(${postTargets.updatedAt}, ${postTargets.id}) < (${decoded.timestamp}::timestamptz, ${decoded.id})`
+				: lt(postTargets.updatedAt, new Date(decoded.timestamp)),
+		);
 	}
 
 	const rows = await db
@@ -1649,11 +1667,12 @@ app.openapi(listAllPostLogs, async (c) => {
 			deliveryState: postTargets.deliveryState,
 			publishedAt: postTargets.publishedAt,
 			updatedAt: postTargets.updatedAt,
+			cursorTimestamp: sql<string>`to_char(${postTargets.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(postTargets)
 		.innerJoin(posts, eq(postTargets.postId, posts.id))
 		.where(and(...conditions))
-		.orderBy(desc(postTargets.updatedAt))
+		.orderBy(desc(postTargets.updatedAt), desc(postTargets.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -1662,10 +1681,13 @@ app.openapi(listAllPostLogs, async (c) => {
 	return c.json(
 		{
 			data: data.map(formatLogEntry),
-			// Emit the last row's updatedAt as the keyset cursor (matches the ORDER BY key);
-			// the previous id-based cursor could never be applied as a keyset on updatedAt.
 			next_cursor: hasMore
-				? (data.at(-1)?.updatedAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},
@@ -1761,42 +1783,94 @@ app.openapi(createPostRoute, async (c) => {
 
 	// --- Template resolution ---
 	let finalContent = body.content ?? null;
+	const templateTargetOptions: Record<string, Record<string, unknown>> = {};
 
-	if (body.template_id && !finalContent) {
-		try {
-			const [tmpl] = await db
-				.select()
-				.from(contentTemplates)
-				.where(
-					and(
-						eq(contentTemplates.id, body.template_id),
-						eq(contentTemplates.organizationId, orgId),
-					),
-				)
-				.limit(1);
+	if (body.template_id) {
+		const [tmpl] = await db
+			.select()
+			.from(contentTemplates)
+			.where(
+				and(
+					eq(contentTemplates.id, body.template_id),
+					eq(contentTemplates.organizationId, orgId),
+				),
+			)
+			.limit(1);
 
-			if (tmpl) {
-				let rendered = tmpl.content;
-				// Built-in variables
-				rendered = rendered.replace(
-					/\{\{date\}\}/g,
-					new Date().toISOString().split("T")[0] ?? "",
+		if (!tmpl) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "TEMPLATE_NOT_FOUND",
+						message: "Content template not found in this organization.",
+					},
+				},
+				404,
+			);
+		}
+		const templateAccessDenied = assertWorkspaceScope(c, tmpl.workspaceId);
+		if (templateAccessDenied) {
+			markMutationInputNotApplied(c);
+			return templateAccessDenied as never;
+		}
+
+		if (!finalContent) {
+			const accountName = resolveTemplateAccountName(resolved);
+			const renderedAt = new Date();
+			const rendered = renderPostTemplate(
+				tmpl.content,
+				body.template_variables,
+				accountName,
+				renderedAt,
+			);
+			if (!rendered.ok) {
+				markMutationInputNotApplied(c);
+				return c.json(
+					{
+						error: {
+							code: rendered.code,
+							message:
+								"{{account_name}} requires one unambiguous account name or an explicit template_variables.account_name value.",
+							details: { variable: rendered.variable },
+						},
+					},
+					400,
 				);
-				// Custom variables from request
-				if (body.template_variables) {
-					for (const [key, value] of Object.entries(body.template_variables)) {
-						// SECURITY: Escape regex metacharacters to prevent ReDoS via user-controlled keys
-						const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-						rendered = rendered.replace(
-							new RegExp(`\\{\\{${escapedKey}\\}\\}`, "g"),
-							value,
-						);
-					}
-				}
-				finalContent = rendered;
 			}
-		} catch {
-			// Template resolution failure should not block post creation
+			finalContent = rendered.content;
+
+			const renderedOverrides = renderPostTemplateOverrides(
+				tmpl.platformOverrides,
+				body.template_variables,
+				accountName,
+				renderedAt,
+				new Set(resolved.map((target) => target.platform)),
+			);
+			if (!renderedOverrides.ok) {
+				markMutationInputNotApplied(c);
+				return c.json(
+					{
+						error: {
+							code: renderedOverrides.code,
+							message: `The ${renderedOverrides.platform} template override requires one unambiguous account name or an explicit template_variables.account_name value.`,
+							details: {
+								variable: renderedOverrides.variable,
+								platform: renderedOverrides.platform,
+							},
+						},
+					},
+					400,
+				);
+			}
+			for (const target of resolved) {
+				const override = renderedOverrides.overrides[target.platform];
+				// A blank override means "inherit the shared content", not "publish
+				// nothing to this platform" — that is what omitting the target does.
+				if (override?.trim()) {
+					templateTargetOptions[target.platform] = { content: override };
+				}
+			}
 		}
 	}
 
@@ -1808,17 +1882,50 @@ app.openapi(createPostRoute, async (c) => {
 			.from(ideas)
 			.where(and(eq(ideas.id, body.idea_id), eq(ideas.organizationId, orgId)))
 			.limit(1);
-		if (idea) {
-			ideaSource = idea;
-			// Use idea content as fallback — explicit content takes precedence
-			if (!finalContent) {
-				finalContent = idea.content;
-			}
+		if (!idea) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "IDEA_NOT_FOUND",
+						message: "Idea not found in this organization.",
+					},
+				},
+				404,
+			);
+		}
+		ideaSource = idea;
+		// Use idea content as fallback — explicit content takes precedence
+		if (!finalContent) {
+			finalContent = idea.content;
 		}
 	}
 
+	let effectiveTargetOptions = mergePostTargetOptions(
+		templateTargetOptions,
+		body.target_options,
+	);
+	// A draft is explicitly a placeholder to fill in later, so it is exempt from
+	// the payload requirement; everything that can publish is not.
+	if (
+		!isDraft &&
+		!hasEffectivePostPayload(finalContent, body.media, effectiveTargetOptions)
+	) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "CONTENT_REQUIRED",
+					message:
+						"Post creation requires non-empty content, media, or per-target content after resolving template and idea references.",
+				},
+			},
+			400,
+		);
+	}
+
 	// --- Signature injection ---
-	if (finalContent && !body.skip_signature) {
+	if (!body.skip_signature) {
 		try {
 			const [defaultSig] = await db
 				.select()
@@ -1832,10 +1939,13 @@ app.openapi(createPostRoute, async (c) => {
 				.limit(1);
 
 			if (defaultSig) {
-				finalContent =
-					defaultSig.position === "prepend"
-						? `${defaultSig.content}\n\n${finalContent}`
-						: `${finalContent}\n\n${defaultSig.content}`;
+				if (finalContent?.trim()) {
+					finalContent = injectPostSignature(finalContent, defaultSig);
+				}
+				effectiveTargetOptions = injectSignatureIntoTargetOptions(
+					effectiveTargetOptions,
+					defaultSig,
+				);
 			}
 		} catch {
 			// Signature injection failure should not block post creation
@@ -1952,7 +2062,7 @@ app.openapi(createPostRoute, async (c) => {
 	// Insert post — persist media in platformOverrides._media so that
 	// scheduled/queued publishes can retrieve attachments later.
 	const platformOverrides: Record<string, unknown> = {
-		...(body.target_options ?? {}),
+		...effectiveTargetOptions,
 		...(body.media && body.media.length > 0 ? { _media: body.media } : {}),
 	};
 
@@ -2675,6 +2785,34 @@ app.openapi(updatePostRoute, async (c) => {
 	const projectedStatus =
 		(updates.status as typeof posts.$inferSelect.status | undefined) ??
 		post.status;
+
+	// Drafts are exempt from the payload requirement at creation because they are
+	// placeholders. That exemption has to be re-checked here: leaving draft is the
+	// point where an empty post becomes publishable, and nothing downstream in the
+	// publish queue re-validates content.
+	if (projectedStatus !== "draft") {
+		const { _media: projectedMedia, ...projectedTargetOptions } = newOverrides;
+		if (
+			!hasEffectivePostPayload(
+				body.content !== undefined ? body.content : post.content,
+				Array.isArray(projectedMedia) ? projectedMedia : undefined,
+				projectedTargetOptions as Record<string, Record<string, unknown>>,
+			)
+		) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "CONTENT_REQUIRED",
+						message:
+							"A post must have non-empty content, media, or per-target content before it can leave draft.",
+					},
+				},
+				400 as never,
+			);
+		}
+	}
+
 	let replacementTargets: Array<typeof postTargets.$inferInsert> | null = null;
 
 	// Resolve every related ID before mutating the parent. A validation failure now

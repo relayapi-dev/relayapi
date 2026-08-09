@@ -2,7 +2,7 @@
 
 export { Relay as default } from './client';
 
-export { type Uploadable, toFile } from './core/uploads';
+export { type MultipartFormDataOptions, type Uploadable, toFile } from './core/uploads';
 export { APIPromise } from './core/api-promise';
 export { Relay, type ClientOptions } from './client';
 export {

@@ -48,12 +48,12 @@ import { ErrorResponse, IdParam } from "../schemas/common";
 import * as adAnalytics from "../services/ad-analytics";
 import * as adAudienceService from "../services/ad-audience";
 import { getAdPlatformAdapter } from "../services/ad-platforms";
-import type { AdTargeting } from "../services/ad-platforms/types";
 import {
 	AdAuthoritativeNotAppliedError,
 	AdPlatformError,
 } from "../services/ad-platforms/types";
 import * as adService from "../services/ad-service";
+import { toServiceAdTargeting } from "../services/ad-targeting";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -947,7 +947,7 @@ app.openapi(createAdRoute, async (c) => {
 				linkUrl: body.link_url,
 				imageUrl: body.image_url,
 				videoUrl: body.video_url,
-				targeting: body.targeting as AdTargeting | undefined,
+				targeting: toServiceAdTargeting(body.targeting),
 				dailyBudgetCents: body.daily_budget_cents,
 				lifetimeBudgetCents: body.lifetime_budget_cents,
 				durationDays: body.duration_days,
@@ -1014,7 +1014,7 @@ app.openapi(boostPostRoute, async (c) => {
 				externalPostId: body.external_post_id,
 				name: body.name,
 				objective: body.objective,
-				targeting: body.targeting as AdTargeting | undefined,
+				targeting: toServiceAdTargeting(body.targeting),
 				dailyBudgetCents: body.daily_budget_cents,
 				lifetimeBudgetCents: body.lifetime_budget_cents,
 				currency: body.currency,
@@ -1778,7 +1778,7 @@ app.openapi(updateAdRoute, async (c) => {
 				status: body.status,
 				dailyBudgetCents: body.daily_budget_cents,
 				lifetimeBudgetCents: body.lifetime_budget_cents,
-				targeting: body.targeting as AdTargeting | undefined,
+				targeting: toServiceAdTargeting(body.targeting),
 				allowSpendIncrease: await mayIncreaseSpend(c),
 				operationKey,
 			},

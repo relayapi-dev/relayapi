@@ -1,6 +1,6 @@
 ---
-import { platformLogos } from "./data";
 import Container from "./Container.astro";
+import { platformLogos } from "./data";
 
 // Three identical tracks make the marquee seamless: the `animate-marquee`
 // keyframe (globals.css @theme) shifts one full track plus the inter-track gap
@@ -15,7 +15,7 @@ const tracks = [0, 1, 2];
 	class="pt-[clamp(3.5rem,7vw,6rem)] pb-12 text-center"
 >
 	<h2 class="m-0 mb-10 font-medium tracking-[-0.01em] text-[#46443D]">
-		One API. Every platform you publish to.
+		One API. Every supported publishing channel.
 	</h2>
 
 	<div
@@ -34,14 +34,20 @@ const tracks = [0, 1, 2];
 				>
 					{platformLogos.map((p) => (
 						<span class="flex shrink-0 items-center gap-2.5 text-[#1A1815] transition-colors duration-300 hover:text-[#CB5A2C]">
-							<svg
-								viewBox="0 0 24 24"
-								fill="currentColor"
-								aria-hidden="true"
-								class="size-5"
-							>
-								<path d={p.glyph} />
-							</svg>
+							{p.glyph ? (
+								<svg
+									viewBox="0 0 24 24"
+									fill="currentColor"
+									aria-hidden="true"
+									class="size-5"
+								>
+									<path d={p.glyph} />
+								</svg>
+							) : (
+								<span aria-hidden="true" class="w-5 text-center text-[0.625rem] font-semibold">
+									{p.initial}
+								</span>
+							)}
 							<span class="whitespace-nowrap font-semibold tracking-[-0.01em]">
 								{p.name}
 							</span>

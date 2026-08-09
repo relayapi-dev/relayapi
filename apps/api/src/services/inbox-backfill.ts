@@ -38,7 +38,7 @@ export async function processBackfill(
 		)
 		.limit(1);
 
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		console.log(
 			`[backfill] Account ${message.account_id} not found or missing token, skipping`,
 		);

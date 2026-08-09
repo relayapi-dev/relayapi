@@ -67,8 +67,44 @@ Agents should call `relayapi_get_automation_schema` first so enum values (trigge
 
 ## Transports
 
-- **stdio** — default and currently only supported transport.
-- **http (Streamable-HTTP)** — planned. Intended for Claude API Managed Agents. Open an issue if you need it.
+- **stdio** — default, for local MCP clients.
+- **http** — stateless Streamable HTTP, for remote MCP clients.
+
+Start the HTTP server on its secure loopback default:
+
+```bash
+npx @relayapi/mcp-server http
+# http://127.0.0.1:3000/mcp
+```
+
+HTTP configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RELAYAPI_MCP_HOST` | `127.0.0.1` | Bind address |
+| `RELAYAPI_MCP_PORT` | `3000` | Listen port |
+| `RELAYAPI_MCP_PATH` | `/mcp` | MCP endpoint path |
+| `RELAYAPI_MCP_ALLOWED_HOSTS` | loopback hostnames | Comma-separated Host-header allowlist, without ports |
+| `RELAYAPI_MCP_AUTH_TOKEN` | none on loopback | Bearer token used to authenticate MCP clients |
+
+MCP POST requests must use `Content-Type: application/json`. Native clients may
+omit `Origin`; browser requests are accepted only when the Origin hostname is
+also in the Host allowlist. This prevents an unrelated website from driving an
+unauthenticated loopback server.
+
+Non-loopback binding fails closed unless both an explicit Host-header allowlist
+and a separate bearer token of at least 32 characters are configured:
+
+```bash
+export RELAYAPI_MCP_HOST=0.0.0.0
+export RELAYAPI_MCP_ALLOWED_HOSTS=mcp.example.com
+export RELAYAPI_MCP_AUTH_TOKEN='replace-with-a-random-32-character-or-longer-secret'
+npx @relayapi/mcp-server http
+```
+
+Send the token as `Authorization: Bearer <token>`. Terminate TLS at a trusted
+reverse proxy when exposing the endpoint outside the host. `GET /healthz` is an
+unauthenticated liveness check, still protected by the Host allowlist.
 
 ## Errors
 

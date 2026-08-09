@@ -44,7 +44,7 @@ app.openapi(getStreak, async (c) => {
 		.where(eq(orgStreaks.organizationId, orgId))
 		.limit(1);
 
-	if (!streak || !streak.streakStartedAt) {
+	if (!streak?.streakStartedAt) {
 		return c.json(
 			{
 				active: false,

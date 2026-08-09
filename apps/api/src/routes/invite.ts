@@ -9,12 +9,17 @@ import {
 	user,
 	workspaces,
 } from "@relayapi/db";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
 	currentInviteIssuerCredentialVersion,
 	isCurrentInviteIssuerCredential,
 } from "../lib/invite-issuer-authority";
 import { canAssignOrganizationRole } from "../lib/organization-roles";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { ErrorResponse, IdParam, PaginationParams } from "../schemas/common";
 import {
@@ -69,6 +74,10 @@ const listInviteTokens = createRoute({
 		200: {
 			description: "List of invite tokens",
 			content: { "application/json": { schema: InviteTokenListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -144,14 +153,11 @@ app.openapi(listInviteTokens, async (c) => {
 	const conditions = [eq(inviteTokens.organizationId, orgId)];
 
 	if (cursor) {
-		const [cursorRow] = await db
-			.select({ createdAt: inviteTokens.createdAt })
-			.from(inviteTokens)
-			.where(eq(inviteTokens.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(lt(inviteTokens.createdAt, cursorRow.createdAt));
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${inviteTokens.createdAt}, ${inviteTokens.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const tokens = await db
@@ -171,14 +177,20 @@ app.openapi(listInviteTokens, async (c) => {
 			used: inviteTokens.used,
 			expiresAt: inviteTokens.expiresAt,
 			createdAt: inviteTokens.createdAt,
+			cursorTimestamp: sql<string>`to_char(${inviteTokens.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(inviteTokens)
 		.where(and(...conditions))
-		.orderBy(desc(inviteTokens.createdAt))
+		.orderBy(desc(inviteTokens.createdAt), desc(inviteTokens.id))
 		.limit(limit + 1);
 
 	const hasMore = tokens.length > limit;
 	const data = tokens.slice(0, limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	return c.json(
 		{
@@ -191,7 +203,7 @@ app.openapi(listInviteTokens, async (c) => {
 				expires_at: t.expiresAt.toISOString(),
 				created_at: t.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,

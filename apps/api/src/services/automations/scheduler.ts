@@ -330,7 +330,9 @@ async function dispatchJob(
 					return "done"; // completed, no further work
 				}
 			}
-			const result = await runLoop(db, job.run_id, env);
+			const result = await runLoop(db, job.run_id, env, {
+				refreshContactContext: true,
+			});
 			if (result.status === "failed") {
 				return {
 					failed: true,
@@ -403,7 +405,7 @@ async function dispatchJob(
 				// advanced the run already — don't re-enter runLoop on a snapshot we
 				// no longer own.
 				if (!ok) return "done";
-				await runLoop(db, run.id, env);
+				await runLoop(db, run.id, env, { refreshContactContext: true });
 			} else {
 				await transitionRunTerminal(
 					db,
@@ -462,7 +464,7 @@ async function dispatchJob(
 					waitingUntil: null,
 				});
 				if (!ok) return "done";
-				await runLoop(db, run.id, env);
+				await runLoop(db, run.id, env, { refreshContactContext: true });
 			} else {
 				await transitionRunTerminal(
 					db,

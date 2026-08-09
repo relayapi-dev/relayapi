@@ -1,8 +1,19 @@
 # RelayAPI database and durable-state optimality audit — pre-freeze, 2026-07-27
 
-**Status:** target-shape implementation complete; the one-time generation-2 history replacement
-and destructive stage/Cloudflare cutover remain intentionally unexecuted until generation 1 has a
-committed Git anchor
+> **Historical / superseded gate state.** This document preserves the July
+> pre-freeze analysis and implementation evidence. Its proposed generation-2
+> collapse and references to an eight-file generation-1 chain are no longer the
+> current procedure. On 3 August 2026 the authorized pre-live reset landed one
+> sealed generation-1 `0000_baseline`; use
+> `REPOSITORY_SERIOUS_ISSUES_ULTRASCAN_2026-08-02.md` and
+> `DATABASE_MIGRATION_AND_FORWARD_RECOVERY_RUNBOOK.md` for current status and
+> operator steps. Sections explicitly labelled as chronological or original
+> remain intentionally unchanged as historical evidence.
+
+**Historical status at publication:** target-shape implementation complete;
+the then-proposed generation-2 history replacement and destructive
+stage/Cloudflare cutover remained intentionally unexecuted until generation 1
+had a committed Git anchor
 **Baseline premise:** no production database exists, stage will be wiped, and no self-hosted
 operator database has ever run migrations `0000`–`0007`
 **Feature premise:** every capability represented in the schema, live code, public API/SDK,
@@ -2046,12 +2057,12 @@ committed generation-1 Git anchor required before generation-2 collapse.
 
 ---
 
-## 10. Freeze acceptance gates
+## 10. Freeze acceptance gates (historical July snapshot)
 
 The plan is not complete when the DDL merely parses. The baseline may be frozen only when every
 gate below is executable and green.
 
-**Current gate state, 2026-07-29:** the final post-remediation whole-tree sweep is green for
+**Gate state recorded 2026-07-29 (superseded on 2026-08-03):** the final post-remediation whole-tree sweep is green for
 schema/privacy/source contracts, generation-aware migration verification, migration policy and
 baseline-builder controls, monorepo typecheck/lint, isolated API, workerd, dashboard, SDK,
 self-host, OpenAPI, and cutover-control tests; exact results are in §1.5. Claude Opus `xhigh`

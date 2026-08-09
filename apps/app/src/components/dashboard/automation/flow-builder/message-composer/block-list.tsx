@@ -14,11 +14,12 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ChannelCapabilities } from "../use-catalog";
 import { BlockEditor, blockLabel } from "./block-editors";
-import { reorder, type MessageBlock } from "./types";
+import { type MessageBlock, reorder } from "./types";
 
 interface Props {
 	blocks: MessageBlock[];
 	channel: string;
+	workspaceId: string | null;
 	channelCapabilities?: ChannelCapabilities;
 	onChange(next: MessageBlock[]): void;
 }
@@ -26,6 +27,7 @@ interface Props {
 export function BlockList({
 	blocks,
 	channel,
+	workspaceId,
 	channelCapabilities,
 	onChange,
 }: Props) {
@@ -33,9 +35,8 @@ export function BlockList({
 		return (
 			<div className="rounded-xl border border-dashed border-[#d9dde6] bg-[#fbfcfe] p-6 text-center">
 				<p className="text-[12px] text-[#64748b]">
-					No blocks yet. Use{" "}
-					<span className="font-semibold">+ Add block</span> below to add the
-					first one.
+					No blocks yet. Use <span className="font-semibold">+ Add block</span>{" "}
+					below to add the first one.
 				</p>
 			</div>
 		);
@@ -105,6 +106,7 @@ export function BlockList({
 					<BlockEditor
 						block={block}
 						channel={channel}
+						workspaceId={workspaceId}
 						channelCapabilities={channelCapabilities}
 						onChange={(next) => updateAt(idx, next)}
 					/>

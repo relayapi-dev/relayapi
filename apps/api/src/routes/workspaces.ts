@@ -8,6 +8,7 @@ import {
 } from "@relayapi/db";
 import { and, eq, ilike, inArray, ne, or, type SQL, sql } from "drizzle-orm";
 import type { Context } from "hono";
+import { INVALID_CURSOR_BODY } from "../lib/pagination-cursor";
 import {
 	assertAllWorkspaceScope,
 	assertWriteAccess,
@@ -72,6 +73,10 @@ const listWorkspaces = createRoute({
 		200: {
 			description: "List of workspaces",
 			content: { "application/json": { schema: WorkspaceListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -256,25 +261,40 @@ app.openapi(listWorkspaces, async (c) => {
 	const orgId = c.get("orgId");
 	const { search, lifecycle_status, limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
-	const conditions = [eq(workspaces.organizationId, orgId)];
+	// The tenant scope this listing is anchored in. The cursor is resolved
+	// against these alone: lifecycle_status and search are caller-supplied
+	// filters that decide which rows are *returned*, and must not decide which
+	// row defines the page boundary.
+	const scopeConditions = [eq(workspaces.organizationId, orgId)];
 	const workspaceScope = c.get("workspaceScope");
 	if (workspaceScope !== "all") {
-		conditions.push(inArray(workspaces.id, workspaceScope));
+		scopeConditions.push(inArray(workspaces.id, workspaceScope));
 	}
+	const conditions = [...scopeConditions];
 	if (lifecycle_status !== "all") {
 		conditions.push(eq(workspaces.lifecycleStatus, lifecycle_status));
 	}
 	if (search) {
-		conditions.push(
-			or(
-				ilike(workspaces.name, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
-				ilike(workspaces.slug, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
-			)!,
+		const searchCondition = or(
+			ilike(workspaces.name, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
+			ilike(workspaces.slug, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
 		);
+		if (searchCondition) conditions.push(searchCondition);
 	}
+	// Workspaces sort by (name, id) and name is mutable text, which the opaque
+	// timestamp cursor cannot carry — so this route keeps an id cursor and one
+	// scope-only lookup. Renaming the boundary workspace mid-walk can shift a
+	// row by one position, which is inherent to ordering by a mutable key and
+	// strictly better than rejecting the cursor outright.
 	if (cursor) {
+		const [cursorRow] = await db
+			.select({ name: workspaces.name })
+			.from(workspaces)
+			.where(and(...scopeConditions, eq(workspaces.id, cursor)))
+			.limit(1);
+		if (!cursorRow) return c.json(INVALID_CURSOR_BODY, 400);
 		conditions.push(
-			sql`(${workspaces.name}, ${workspaces.id}) > ((select w.name from workspaces w where w.id = ${cursor}), ${cursor})`,
+			sql`(${workspaces.name}, ${workspaces.id}) > (${cursorRow.name}, ${cursor})`,
 		);
 	}
 

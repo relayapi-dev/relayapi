@@ -1,6 +1,11 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { customFieldDefinitions } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { assertAllWorkspaceScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -93,6 +98,10 @@ const listFields = createRoute({
 		200: {
 			description: "List of fields",
 			content: { "application/json": { schema: FieldListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
@@ -253,22 +262,18 @@ app.openapi(listFields, async (c) => {
 	// skip rows sharing the cursor's millisecond. Bind it back with an explicit
 	// ::timestamptz cast to keep the keyset comparison exact.
 	if (cursor) {
-		const [cursorRow] = await db
-			.select({
-				createdAt: sql<string>`${customFieldDefinitions.createdAt}::text`,
-			})
-			.from(customFieldDefinitions)
-			.where(eq(customFieldDefinitions.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${customFieldDefinitions.createdAt}, ${customFieldDefinitions.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${customFieldDefinitions.createdAt}, ${customFieldDefinitions.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const fields = await db
-		.select()
+		.select({
+			...getTableColumns(customFieldDefinitions),
+			cursorTimestamp: sql<string>`to_char(${customFieldDefinitions.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(customFieldDefinitions)
 		.where(and(...conditions))
 		.orderBy(
@@ -278,12 +283,18 @@ app.openapi(listFields, async (c) => {
 		.limit(limit + 1);
 
 	const hasMore = fields.length > limit;
-	const data = fields.slice(0, limit).map(serializeField);
+	const pageRows = fields.slice(0, limit);
+	const last = pageRows.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
+	const data = pageRows.map(serializeField);
 
 	return c.json(
 		{
 			data,
-			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,

@@ -102,6 +102,19 @@ relay media upload ./banner.png
 | `relay media upload <filepath>` | Upload a file |
 | `relay media delete <id>` | Delete a media file |
 
+### Webhooks
+
+| Command | Description |
+|---------|-------------|
+| `relay webhooks list` | List customer webhook endpoints |
+| `relay webhooks create` | Create an endpoint and return its signing secret once |
+| `relay webhooks get <id>` | Find an endpoint by ID in the authorized endpoint list |
+| `relay webhooks update <id>` | Update an endpoint URL, events, or enabled state |
+| `relay webhooks delete <id>` | Delete an endpoint |
+| `relay webhooks test <id>` | Send a test delivery to an endpoint |
+| `relay webhooks logs` | List delivery and test attempts from the last seven days |
+| `relay webhooks rotate-secret <id>` | Replace an endpoint's signing secret and return it once |
+
 ## Usage
 
 ### Creating Posts
@@ -200,6 +213,26 @@ relay media upload ./photo.jpg
   "url": "https://media.relayapi.dev/ws_abc/photo.jpg"
 }
 ```
+
+### Managing Webhooks
+
+Create an endpoint with one or more exact event names. RelayAPI generates the
+signing secret and returns it only in the create response:
+
+```bash
+relay webhooks create \
+  --url https://example.com/relay-events \
+  --events post.published,post.failed
+```
+
+Use `--workspace ws_abc123` to scope a new endpoint or filter `list` and `get`.
+The API has no single-endpoint read route, so `get` pages the authorized list
+until it finds the requested ID. Inspect recent attempts with either
+`relay webhooks logs` or its `relay webhooks deliveries` alias.
+
+The API does not currently expose manual redelivery, and the CLI does not run a
+local webhook listener or tunnel. Use `relay webhooks test <id>` to send a test
+request to a reachable endpoint.
 
 ## Output Formats
 

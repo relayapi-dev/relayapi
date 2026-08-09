@@ -5,6 +5,10 @@ import { siteConfig } from "../../lib/config";
 import { followLink } from "../../lib/link-nav";
 import { platforms } from "../../lib/platform-data";
 import { apiIconPaths, platformGlyph } from "../../lib/product-glyphs";
+import {
+	PUBLIC_ACCESS_HREF,
+	PUBLIC_ACCESS_LABEL,
+} from "../../lib/public-access";
 import { Icons } from "../icons";
 import {
 	Accordion,
@@ -410,15 +414,13 @@ function MobileNav({
 										ease: [0.16, 1, 0.3, 1],
 									}}
 								>
-									<a
-										href="/signup"
-										onClick={(e) => {
-											if (!followLink(e, "/signup")) onClose();
-										}}
-									>
-										<Button className="w-full mt-3 h-12 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-											{siteConfig.cta}
-										</Button>
+					<a
+						href={PUBLIC_ACCESS_HREF}
+						onClick={onClose}
+					>
+						<Button className="w-full mt-3 h-12 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+							{PUBLIC_ACCESS_LABEL}
+						</Button>
 									</a>
 								</motion.div>
 								<motion.div
@@ -556,9 +558,9 @@ export function Navbar() {
 						>
 							Log in
 						</a>
-						<a href="/signup" className="hidden md:inline-flex">
+						<a href={PUBLIC_ACCESS_HREF} className="hidden md:inline-flex">
 							<Button className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full px-5 py-1.5">
-								{siteConfig.cta}
+								{PUBLIC_ACCESS_LABEL}
 							</Button>
 						</a>
 						<HamburgerButton

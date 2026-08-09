@@ -160,7 +160,7 @@ export const CreatePostBody = z.object({
 		.string()
 		.optional()
 		.describe(
-			"Content template ID. When provided, the template content is used as the base for the post. Explicit 'content' field takes precedence.",
+			"Content template ID. When provided, the template content and platform overrides are applied. Explicit top-level content skips both; request target_options override stored platform content.",
 		),
 	idea_id: z
 		.string()
@@ -172,7 +172,7 @@ export const CreatePostBody = z.object({
 		.record(z.string(), z.string())
 		.optional()
 		.describe(
-			'Variables to interpolate in the template (e.g., { "promo_code": "SUMMER25" }). Built-in variables: {{date}}, {{account_name}}.',
+			'Variables to interpolate in the template base content and platform overrides (e.g., { "promo_code": "SUMMER25" }). Built-ins: {{date}}, {{account_name}}.',
 		),
 	skip_signature: z
 		.boolean()

@@ -37,6 +37,9 @@ describe("generated Wrangler configurations", () => {
 	test("keeps the API on the operator's Cloudflare bindings and domains", () => {
 		const generated = apiWranglerConfig(config, "/source") as {
 			name: string;
+			observability: {
+				traces: { enabled: boolean; persist: boolean; head_sampling_rate: number };
+			};
 			vars: Record<string, string>;
 			routes: Array<{ pattern: string }>;
 			r2_buckets: Array<{ jurisdiction: string }>;
@@ -50,6 +53,11 @@ describe("generated Wrangler configurations", () => {
 			ai?: unknown;
 		};
 		expect(generated.name).toBe(RESOURCE_NAMES.workers.api);
+		expect(generated.observability.traces).toEqual({
+			enabled: true,
+			persist: true,
+			head_sampling_rate: 0.01,
+		});
 		expect(generated.routes[0]?.pattern).toBe("api.example.com");
 		expect(generated.routes[1]?.pattern).toBe("go.example.com");
 		expect(generated.vars.DEPLOYMENT_MODE).toBe("self_hosted");
@@ -89,6 +97,9 @@ describe("generated Wrangler configurations", () => {
 	test("uses the built Astro entry for the dashboard", () => {
 		const generated = appWranglerConfig(config, "/source") as {
 			main: string;
+			observability: {
+				traces: { enabled: boolean; persist: boolean; head_sampling_rate: number };
+			};
 			assets: { directory: string };
 			vars: Record<string, string>;
 			r2_buckets: Array<{ jurisdiction: string }>;
@@ -100,6 +111,11 @@ describe("generated Wrangler configurations", () => {
 			queues?: unknown;
 		};
 		expect(generated.main).toBe("/source/apps/app/dist/server/entry.mjs");
+		expect(generated.observability.traces).toEqual({
+			enabled: true,
+			persist: true,
+			head_sampling_rate: 0.01,
+		});
 		expect(generated.assets.directory).toBe("/source/apps/app/dist/client");
 		expect(generated.vars.IDENTITY_DELETION_CONTRACT_VERSION).toBe(
 			"identity-deletion-v1",
@@ -185,10 +201,11 @@ describe("generated Wrangler configurations", () => {
 		const deploy = await Bun.file(
 			new URL("../src/deploy.ts", import.meta.url),
 		).text();
-		const apiDeploy = deploy.indexOf(
-			"await deployWorker(apiConfigPath, apiSecrets",
+		const apiDeploy = deploy.indexOf("configPath: apiConfigPath");
+		const appDeploy = deploy.indexOf(
+			"configPath: appConfigPath",
+			apiDeploy + 1,
 		);
-		const appDeploy = deploy.indexOf("await deployWorker(", apiDeploy + 1);
 		const apiProbe = deploy.indexOf("await probeWorkerDatabase({", apiDeploy);
 		const appProbe = deploy.indexOf(
 			"await probeWorkerDatabase({",

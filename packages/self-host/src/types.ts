@@ -43,6 +43,8 @@ export interface SelfHostLock {
 	channel: "stable";
 	version: string;
 	sourceRepository: string;
+	/** SHA-256 of the exact GitHub stable-tag archive approved by the operator. */
+	sourceArchiveSha256?: string;
 	updatedAt: string;
 }
 
@@ -50,7 +52,10 @@ export interface CliOptions {
 	configPath: string;
 	nonInteractive: boolean;
 	dryRun: boolean;
+	force: boolean;
 	source?: string;
+	/** Explicit acknowledgement that --source bypasses the sealed release archive. */
+	allowUnsealedSource?: boolean;
 	/** Explicit CA intent supplied by the operator for create or pinned rotation. */
 	hyperdriveCaCertificateId?: string;
 }

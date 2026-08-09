@@ -48,6 +48,7 @@ import {
 import type { Graph, GraphEdge } from "../../schemas/automation-graph";
 import { decryptContactRow } from "../contact-protection";
 import { getContactSegmentIds } from "../segment-memberships";
+import { mergeRefreshedContactContext } from "./context-refresh";
 import { getHandler } from "./manifest";
 import {
 	AutomationExternalEffectBusyError,
@@ -889,6 +890,8 @@ export type RunLoopOptions = {
 	 * to exercise the cap without making 200+ DB round-trips.
 	 */
 	maxVisits?: number;
+	/** Refresh contact, tag, segment, and custom-field state before a resumed run. */
+	refreshContactContext?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -903,10 +906,9 @@ export async function runLoop(
 ): Promise<{ status: RunStatus; exit_reason: string | null }> {
 	const maxVisits = options.maxVisits ?? MAX_VISITS_PER_LOOP;
 	let visits = 0;
+	let refreshContactContext = options.refreshContactContext === true;
 
 	while (visits < maxVisits) {
-		visits += 1;
-
 		const run = await db.query.automationRuns.findFirst({
 			where: eq(automationRuns.id, runId),
 		});
@@ -926,6 +928,65 @@ export async function runLoop(
 		if (run.status === "waiting") {
 			return { status: "waiting", exit_reason: run.exitReason };
 		}
+
+		// Refresh contact-derived context before the resumed node runs. The
+		// resume path has already consumed the wait by this point, so a failure
+		// here must never abort the loop — that would strand the run 'active'
+		// with no scheduled job and no node-execution row for a reconciler to
+		// find. Degrading to the context we already have is always preferable.
+		if (refreshContactContext) {
+			refreshContactContext = false;
+			try {
+				const encryptionKey = env.ENCRYPTION_KEY;
+				if (typeof encryptionKey !== "string" || encryptionKey.length === 0) {
+					throw new Error("ENCRYPTION_KEY is required to refresh run context");
+				}
+				const fresh = await buildInitialRunContext(
+					db,
+					run.contactId,
+					run.organizationId,
+					{},
+					encryptionKey,
+				);
+				const refreshedContext = mergeRefreshedContactContext(
+					((run.context as Record<string, unknown>) ?? {}),
+					{
+						contact:
+							fresh.contact && typeof fresh.contact === "object"
+								? (fresh.contact as Record<string, unknown>)
+								: null,
+						tags: Array.isArray(fresh.tags)
+							? fresh.tags.filter(
+									(value): value is string => typeof value === "string",
+								)
+							: [],
+						fields:
+							fresh.fields &&
+							typeof fresh.fields === "object" &&
+							!Array.isArray(fresh.fields)
+								? (fresh.fields as Record<string, string>)
+								: {},
+					},
+				);
+				await writeRefreshedRunContext(
+					db,
+					run.id,
+					run.revision,
+					refreshedContext,
+				);
+				// Use the snapshot for this visit whether or not the write landed:
+				// losing the race only means another writer owns the persisted copy.
+				run.context = refreshedContext;
+			} catch (error) {
+				console.error("automation run context refresh failed", {
+					run_id: run.id,
+					organization_id: run.organizationId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		visits += 1;
 
 		// 1+2. Pause check and graph load both depend only on immutable run
 		// fields (organizationId, contactId, automationId), so issue them in
@@ -1910,7 +1971,12 @@ export async function resumeExternalEventRuns(
 			});
 			if (!ok) continue;
 			activated += 1;
-			await runLoop(db, fresh.id, { db, ...args.env });
+			await runLoop(
+				db,
+				fresh.id,
+				{ db, ...args.env },
+				{ refreshContactContext: true },
+			);
 			resumed += 1;
 		} catch (err) {
 			console.error(
@@ -2107,8 +2173,8 @@ export async function reconcileExpiredAutomationNodeExecutions(
  * `overrides` win over the hydrated fields so callers can pre-seed values
  * like `{ trigger: { post_id: ... } }` without being clobbered.
  *
- * NOTE: we intentionally do NOT re-hydrate on resume. v1.1 can add a refresh
- * step if stale state becomes a problem.
+ * Resume paths call runLoop with refreshContactContext so contact-derived state
+ * is refreshed before the next node while durable trigger/input state remains.
  */
 async function buildInitialRunContext(
 	db: Db,
@@ -2273,6 +2339,36 @@ export type RunUpdate = Partial<{
  * predicate. Unlike timestamp equality, the revision cannot alias when two
  * transitions happen in the same millisecond.
  */
+/**
+ * Persists a refreshed contact snapshot **without consuming a revision**.
+ *
+ * The revision is the replay fence for node-execution claims, whose identity is
+ * (run_id, run_revision, visit_ordinal). Bumping it here would orphan the claim
+ * of an in-flight resume, so a retry would miss the prior claim and re-execute
+ * the node under a fresh effect idempotency key. Context is derived state, so
+ * writing it under the caller's revision without incrementing keeps the fence
+ * stable; a concurrent writer that wins the revision simply overwrites the
+ * snapshot, which costs freshness rather than correctness.
+ */
+async function writeRefreshedRunContext(
+	db: Pick<Db, "update">,
+	runId: string,
+	expectedRevision: number,
+	context: Record<string, unknown>,
+): Promise<boolean> {
+	const rows = await db
+		.update(automationRuns)
+		.set({ context, updatedAt: sql`CURRENT_TIMESTAMP` })
+		.where(
+			and(
+				eq(automationRuns.id, runId),
+				eq(automationRuns.revision, expectedRevision),
+			),
+		)
+		.returning({ id: automationRuns.id });
+	return rows.length > 0;
+}
+
 export async function updateRunOptimistic(
 	db: Pick<Db, "update">,
 	runId: string,

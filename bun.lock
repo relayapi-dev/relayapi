@@ -170,6 +170,7 @@
       "name": "@relayapi/db",
       "version": "0.0.1",
       "dependencies": {
+        "@relayapi/config": "workspace:*",
         "drizzle-orm": "catalog:",
         "postgres": "catalog:",
       },

@@ -36,10 +36,11 @@ import { AutomationControlsUnknownHint } from "./unknown-hint";
 
 interface Props {
 	action: Action;
+	automationWorkspaceId: string | null;
 	onChange(next: Action): void;
 }
 
-export function ActionForm({ action, onChange }: Props) {
+export function ActionForm({ action, automationWorkspaceId, onChange }: Props) {
 	const catalog = useAutomationCatalog();
 	const problems = useMemo(() => validateAction(action), [action]);
 	const errors = problemsToErrorMap(problems);
@@ -96,6 +97,7 @@ export function ActionForm({ action, onChange }: Props) {
 			return (
 				<ListSubscriptionForm
 					action={action}
+					automationWorkspaceId={automationWorkspaceId}
 					onChange={onChange}
 					error={errors.list_id}
 				/>

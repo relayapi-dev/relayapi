@@ -30,9 +30,11 @@ import {
 } from "drizzle-orm";
 import { mediaPublicHost } from "../lib/deployment-mode";
 import {
+	decodeKeysetCursor,
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
 	INVALID_CURSOR_BODY,
+	type KeysetCursor,
 } from "../lib/pagination-cursor";
 import { presignRelayMediaUrls } from "../lib/r2-presign";
 import {
@@ -2187,6 +2189,10 @@ const listComments = createRoute({
 			description: "List of comments",
 			content: { "application/json": { schema: IdeaCommentListResponse } },
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Idea not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -2199,6 +2205,12 @@ app.openapi(listComments, async (c) => {
 	const { id } = c.req.valid("param");
 	const { limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: Exclude<KeysetCursor, { kind: "invalid" }> | undefined;
+	if (cursor) {
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		decodedCursor = decoded;
+	}
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -2220,15 +2232,22 @@ app.openapi(listComments, async (c) => {
 		eq(ideaComments.organizationId, orgId),
 		eq(ideaComments.ideaId, id),
 	];
-	if (cursor) {
-		conditions.push(lt(ideaComments.createdAt, new Date(cursor)));
+	if (decodedCursor) {
+		conditions.push(
+			decodedCursor.kind === "composite"
+				? sql`(${ideaComments.createdAt}, ${ideaComments.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`
+				: lt(ideaComments.createdAt, new Date(decodedCursor.timestamp)),
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(ideaComments),
+			cursorTimestamp: sql<string>`to_char(${ideaComments.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(ideaComments)
 		.where(and(...conditions))
-		.orderBy(desc(ideaComments.createdAt))
+		.orderBy(desc(ideaComments.createdAt), desc(ideaComments.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -2246,7 +2265,12 @@ app.openapi(listComments, async (c) => {
 				serializeComment(row, actors.get(row.authorPrincipalId) ?? null),
 			),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},
@@ -2608,6 +2632,10 @@ const listActivity = createRoute({
 			description: "List of activity events",
 			content: { "application/json": { schema: IdeaActivityListResponse } },
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Idea not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -2620,6 +2648,12 @@ app.openapi(listActivity, async (c) => {
 	const { id } = c.req.valid("param");
 	const { limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: Exclude<KeysetCursor, { kind: "invalid" }> | undefined;
+	if (cursor) {
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		decodedCursor = decoded;
+	}
 
 	const [existing] = await db
 		.select({ id: ideas.id, workspaceId: ideas.workspaceId })
@@ -2641,15 +2675,22 @@ app.openapi(listActivity, async (c) => {
 		eq(ideaActivity.organizationId, orgId),
 		eq(ideaActivity.ideaId, id),
 	];
-	if (cursor) {
-		conditions.push(lt(ideaActivity.createdAt, new Date(cursor)));
+	if (decodedCursor) {
+		conditions.push(
+			decodedCursor.kind === "composite"
+				? sql`(${ideaActivity.createdAt}, ${ideaActivity.id}) < (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`
+				: lt(ideaActivity.createdAt, new Date(decodedCursor.timestamp)),
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(ideaActivity),
+			cursorTimestamp: sql<string>`to_char(${ideaActivity.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(ideaActivity)
 		.where(and(...conditions))
-		.orderBy(desc(ideaActivity.createdAt))
+		.orderBy(desc(ideaActivity.createdAt), desc(ideaActivity.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -2671,7 +2712,12 @@ app.openapi(listActivity, async (c) => {
 				created_at: row.createdAt.toISOString(),
 			})),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},

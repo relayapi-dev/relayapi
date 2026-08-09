@@ -8,6 +8,25 @@
 
 const ORGANIZATION_CREDENTIAL_ADMIN_ROLES = new Set(["owner", "admin"]);
 
+export type OrganizationRole = "owner" | "admin" | "member";
+
+function organizationRoleTokens(role: string | null | undefined): Set<string> {
+	return new Set(
+		(role ?? "")
+			.split(",")
+			.map((candidate) => candidate.trim())
+			.filter(Boolean),
+	);
+}
+
+/** Better Auth can serialize multiple organization roles as a comma list. */
+export function hasOrganizationRole(
+	role: string | null | undefined,
+	requiredRole: OrganizationRole,
+): boolean {
+	return organizationRoleTokens(role).has(requiredRole);
+}
+
 /** Internal dashboard-to-API proof locator; the value is an auth.session ID. */
 export const DASHBOARD_SESSION_AUTHORITY_HEADER =
 	"x-relayapi-dashboard-session-id";
@@ -23,11 +42,9 @@ export type OrganizationCredentialPermission =
 export function canManageOrganizationCredentials(
 	role: string | null | undefined,
 ): boolean {
-	return (role ?? "")
-		.split(",")
-		.some((candidate) =>
-			ORGANIZATION_CREDENTIAL_ADMIN_ROLES.has(candidate.trim()),
-		);
+	return [...organizationRoleTokens(role)].some((candidate) =>
+		ORGANIZATION_CREDENTIAL_ADMIN_ROLES.has(candidate),
+	);
 }
 
 /** Exact dashboard-key authority derived from the live Better Auth role. */
@@ -38,12 +55,9 @@ export function getDashboardCredentialPermissions(
 	if (canManageOrganizationCredentials(role)) {
 		permissions.push("manage_api_keys");
 	}
-	const roles = new Set(
-		(role ?? "").split(",").map((candidate) => candidate.trim()),
-	);
-	if (roles.has("owner")) {
+	if (hasOrganizationRole(role, "owner")) {
 		permissions.push("view_billing", "manage_billing", "manage_spend");
-	} else if (roles.has("admin")) {
+	} else if (hasOrganizationRole(role, "admin")) {
 		permissions.push("manage_spend");
 	}
 	return permissions;
@@ -346,7 +360,7 @@ export function getBillingPolicy(
 	if (
 		input.source === "stripe" &&
 		input.status === "active" &&
-		Boolean(input.stripeSubscriptionId)
+		input.stripeSubscriptionId
 	) {
 		return {
 			entitlement: "pro",
@@ -360,7 +374,7 @@ export function getBillingPolicy(
 	if (
 		input.source === "stripe" &&
 		input.status === "past_due" &&
-		Boolean(input.stripeSubscriptionId)
+		input.stripeSubscriptionId
 	) {
 		const delinquentAt = asValidDate(input.delinquentAt);
 		const graceEndsAt = asValidDate(input.graceEndsAt);

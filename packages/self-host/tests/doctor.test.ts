@@ -870,8 +870,8 @@ test("deploy proves the database contract before Cloudflare apply and again afte
 	expect(preflight).toBeGreaterThan(-1);
 	expect(migrate).toBeGreaterThan(-1);
 	expect(preflight).toBeLessThan(migrate);
-	expect(source.slice(preflight, migrate + 'await run("bun"'.length)).toContain(
-		'await verifyRequiredDatabaseExtensions(migrationDatabaseUrl);\n\tawait run("bun"',
+	expect(source.slice(preflight, migrate + 'await run("bun"'.length)).toMatch(
+		/await verifyRequiredDatabaseExtensions\(migrationDatabaseUrl\);\n\s+await run\("bun"/,
 	);
 	expect(verify).toBeGreaterThan(migrate);
 	expect(postMigrationContract).toBeGreaterThan(verify);

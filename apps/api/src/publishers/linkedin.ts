@@ -744,9 +744,9 @@ export const linkedinPublisher: Publisher = {
 				isReshareDisabledByAuthor: false,
 			};
 
-			// Note: LinkedIn does not have a direct "disable link preview" field.
-			// The only way to suppress auto-generated link previews is to not include
-			// a URL in the commentary text. The disable_link_preview option is a no-op.
+			// LinkedIn has no direct link-preview suppression field. If requested,
+			// publish truthfully and record an explicit unsupported target effect below
+			// instead of silently pretending the option was honored.
 
 			// Handle media content
 			if (mediaCategory === "image") {
@@ -859,6 +859,17 @@ export const linkedinPublisher: Publisher = {
 			}
 
 			const effects: ProviderEffect[] = [];
+			if (opts.disable_link_preview === true) {
+				effects.push({
+					name: "disable_link_preview",
+					status: "unsupported",
+					error: {
+						code: "UNSUPPORTED_OPTION",
+						message:
+							"LinkedIn does not support suppressing an automatically generated link preview; the post was published without applying this option.",
+					},
+				});
+			}
 			// Post first comment if requested
 			const firstComment = opts.first_comment as string | undefined;
 			if (firstComment) {

@@ -5,22 +5,23 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { INPUT_CLS } from "../field-styles";
 import {
-	channelSupportsBlock,
+	type BlockType,
 	capabilitiesFor,
 	channelDisplayName,
-	type BlockType,
+	channelSupportsBlock,
 } from "../channel-capabilities";
+import { INPUT_CLS } from "../field-styles";
 import type { ChannelCapabilities } from "../use-catalog";
 import { ButtonEditor } from "./button-editor";
+import { MediaReferenceField } from "./media-library";
 import { MergeTagPicker, useMergeTagInput } from "./merge-tag-picker";
 import {
-	newBlock,
-	newButton,
 	type BlockButton,
 	type CardBlock,
 	type MessageBlock,
+	newBlock,
+	newButton,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,10 @@ function TextBlockEditor({
 	channelCapabilities?: ChannelCapabilities;
 	onChange(next: MessageBlock): void;
 }) {
-	const buttonsSupported = capabilitiesFor(channel, channelCapabilities).buttons;
+	const buttonsSupported = capabilitiesFor(
+		channel,
+		channelCapabilities,
+	).buttons;
 	const maxButtons =
 		capabilitiesFor(channel, channelCapabilities).buttons_max ?? 3;
 	const buttons = block.buttons ?? [];
@@ -90,9 +94,7 @@ function TextBlockEditor({
 
 			<div className="mt-3">
 				<div className="flex items-center justify-between">
-					<div className="text-[11px] font-medium text-[#475569]">
-						Buttons
-					</div>
+					<div className="text-[11px] font-medium text-[#475569]">Buttons</div>
 					<span className="text-[10px] text-[#94a3b8]">
 						{buttons.length}/{maxButtons}
 					</span>
@@ -137,20 +139,19 @@ function TextBlockEditor({
 }
 
 // ---------------------------------------------------------------------------
-// Media blocks — image/video/audio/file — URL input + optional caption
+// Media blocks — image/video/audio/file — library/upload/URL + optional caption
 // ---------------------------------------------------------------------------
 
 function MediaBlockEditor({
 	block,
 	channel,
+	workspaceId,
 	channelCapabilities,
 	onChange,
 }: {
-	block: Extract<
-		MessageBlock,
-		{ type: "image" | "video" | "audio" | "file" }
-	>;
+	block: Extract<MessageBlock, { type: "image" | "video" | "audio" | "file" }>;
 	channel: string;
+	workspaceId: string | null;
 	channelCapabilities?: ChannelCapabilities;
 	onChange(next: MessageBlock): void;
 }) {
@@ -163,26 +164,14 @@ function MediaBlockEditor({
 
 	return (
 		<div className="space-y-2">
-			<div>
-				<label
-					htmlFor={`block-media-url-${block.id}`}
-					className="mb-1 block text-[11px] font-medium text-[#475569]"
-				>
-					Media URL
-				</label>
-				<input
-					id={`block-media-url-${block.id}`}
-					type="url"
-					value={block.media_ref}
-					onChange={(e) => onChange({ ...block, media_ref: e.target.value })}
-					className={INPUT_CLS}
-					placeholder="https://... or media ref"
-				/>
-				<p className="mt-0.5 text-[10px] text-[#94a3b8]">
-					{/* TODO(v1.1): integrate media-library picker + upload (deferred from automation rebuild). */}
-					For now paste a publicly reachable URL.
-				</p>
-			</div>
+			<MediaReferenceField
+				id={`block-media-${block.id}`}
+				kind={block.type}
+				label="Media"
+				value={block.media_ref}
+				workspaceId={workspaceId}
+				onChange={(mediaRef) => onChange({ ...block, media_ref: mediaRef })}
+			/>
 			{captionSupported ? (
 				<div>
 					<label
@@ -210,7 +199,9 @@ function MediaBlockEditor({
 					/>
 				</div>
 			) : null}
-			{!supported ? <UnsupportedBanner channel={channel} blockType={block.type} /> : null}
+			{!supported ? (
+				<UnsupportedBanner channel={channel} blockType={block.type} />
+			) : null}
 		</div>
 	);
 }
@@ -222,16 +213,21 @@ function MediaBlockEditor({
 function CardBlockEditor({
 	block,
 	channel,
+	workspaceId,
 	channelCapabilities,
 	onChange,
 }: {
 	block: CardBlock;
 	channel: string;
+	workspaceId: string | null;
 	channelCapabilities?: ChannelCapabilities;
 	onChange(next: CardBlock): void;
 }) {
 	const supported = channelSupportsBlock(channel, "card", channelCapabilities);
-	const buttonsSupported = capabilitiesFor(channel, channelCapabilities).buttons;
+	const buttonsSupported = capabilitiesFor(
+		channel,
+		channelCapabilities,
+	).buttons;
 	const maxButtons =
 		capabilitiesFor(channel, channelCapabilities).buttons_max ?? 3;
 	const buttons = block.buttons ?? [];
@@ -249,24 +245,17 @@ function CardBlockEditor({
 
 	return (
 		<div className="space-y-2">
-			<div>
-				<label
-					htmlFor={`card-image-url-${block.id}`}
-					className="mb-1 block text-[11px] font-medium text-[#475569]"
-				>
-					Image URL
-				</label>
-				<input
-					id={`card-image-url-${block.id}`}
-					type="url"
-					value={block.media_ref ?? ""}
-					onChange={(e) =>
-						onChange({ ...block, media_ref: e.target.value || undefined })
-					}
-					className={INPUT_CLS}
-					placeholder="https://... (optional)"
-				/>
-			</div>
+			<MediaReferenceField
+				id={`card-image-${block.id}`}
+				kind="image"
+				label="Image"
+				optional
+				value={block.media_ref ?? ""}
+				workspaceId={workspaceId}
+				onChange={(mediaRef) =>
+					onChange({ ...block, media_ref: mediaRef || undefined })
+				}
+			/>
 
 			<div>
 				<label
@@ -344,7 +333,9 @@ function CardBlockEditor({
 				</Button>
 			</div>
 
-			{!supported ? <UnsupportedBanner channel={channel} blockType="card" /> : null}
+			{!supported ? (
+				<UnsupportedBanner channel={channel} blockType="card" />
+			) : null}
 		</div>
 	);
 }
@@ -356,11 +347,13 @@ function CardBlockEditor({
 function GalleryBlockEditor({
 	block,
 	channel,
+	workspaceId,
 	channelCapabilities,
 	onChange,
 }: {
 	block: Extract<MessageBlock, { type: "gallery" }>;
 	channel: string;
+	workspaceId: string | null;
 	channelCapabilities?: ChannelCapabilities;
 	onChange(next: MessageBlock): void;
 }) {
@@ -424,6 +417,7 @@ function GalleryBlockEditor({
 						<CardBlockEditor
 							block={card}
 							channel={channel}
+							workspaceId={workspaceId}
 							channelCapabilities={channelCapabilities}
 							onChange={(next) => updateCard(idx, next as CardBlock)}
 						/>
@@ -441,7 +435,9 @@ function GalleryBlockEditor({
 				<Plus className="size-3" />
 				Add card
 			</Button>
-			{!supported ? <UnsupportedBanner channel={channel} blockType="gallery" /> : null}
+			{!supported ? (
+				<UnsupportedBanner channel={channel} blockType="gallery" />
+			) : null}
 		</div>
 	);
 }
@@ -493,6 +489,7 @@ function DelayBlockEditor({
 interface BlockEditorProps {
 	block: MessageBlock;
 	channel: string;
+	workspaceId: string | null;
 	channelCapabilities?: ChannelCapabilities;
 	onChange(next: MessageBlock): void;
 }
@@ -500,6 +497,7 @@ interface BlockEditorProps {
 export function BlockEditor({
 	block,
 	channel,
+	workspaceId,
 	channelCapabilities,
 	onChange,
 }: BlockEditorProps) {
@@ -521,6 +519,7 @@ export function BlockEditor({
 				<MediaBlockEditor
 					block={block}
 					channel={channel}
+					workspaceId={workspaceId}
 					channelCapabilities={channelCapabilities}
 					onChange={onChange}
 				/>
@@ -530,6 +529,7 @@ export function BlockEditor({
 				<CardBlockEditor
 					block={block}
 					channel={channel}
+					workspaceId={workspaceId}
 					channelCapabilities={channelCapabilities}
 					onChange={onChange}
 				/>
@@ -539,6 +539,7 @@ export function BlockEditor({
 				<GalleryBlockEditor
 					block={block}
 					channel={channel}
+					workspaceId={workspaceId}
 					channelCapabilities={channelCapabilities}
 					onChange={onChange}
 				/>

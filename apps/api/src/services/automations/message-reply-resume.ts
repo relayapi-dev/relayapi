@@ -93,6 +93,6 @@ export async function resumeWaitingMessageOnReply(
 	});
 	if (!updated) return "race";
 
-	await runLoop(db, runId, { db, ...env });
+	await runLoop(db, runId, { db, ...env }, { refreshContactContext: true });
 	return "resumed";
 }
