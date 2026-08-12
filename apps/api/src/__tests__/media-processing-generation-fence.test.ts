@@ -86,5 +86,8 @@ describe("media processing generation fence", () => {
 		expect(processor).toContain(
 			'setTimeout(() => child.kill("SIGKILL"), PROCESS_TIMEOUT_MS)',
 		);
+		expect(processor).toContain('response.end("transformation failed")');
+		expect(processor).not.toContain("error.message");
+		expect(processor).not.toContain("response.destroy(error)");
 	});
 });

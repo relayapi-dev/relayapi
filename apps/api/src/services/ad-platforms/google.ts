@@ -316,7 +316,9 @@ function credentialsForCustomer(
 	}
 	if (
 		resolved.grantedScopes &&
-		!resolved.grantedScopes.includes("https://www.googleapis.com/auth/adwords")
+		!resolved.grantedScopes.some(
+			(scope) => scope === "https://www.googleapis.com/auth/adwords",
+		)
 	) {
 		throw new AdPlatformError(
 			"ADS_SCOPE_MISSING",

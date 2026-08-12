@@ -6104,13 +6104,13 @@ CREATE INDEX "external_posts_org_platform_idx" ON "external_posts" USING btree (
 CREATE INDEX "external_posts_account_published_idx" ON "external_posts" USING btree ("social_account_id","published_at");--> statement-breakpoint
 CREATE INDEX "external_posts_retention_idx" ON "external_posts" USING btree ("published_at","id");--> statement-breakpoint
 CREATE INDEX "external_posts_preview_retry_idx" ON "external_posts" USING btree ("preview_status","preview_next_retry_at");--> statement-breakpoint
-CREATE UNIQUE INDEX "external_subject_cleanup_jobs_identity_uniq" ON "external_subject_cleanup_jobs" USING btree ("operation","bucket",COALESCE("object_locator", ''),COALESCE("prefix_locator", ''),CASE WHEN "operation" = 'purge_rescue_subject'
-				THEN COALESCE("organization_id", '') ELSE '' END,CASE WHEN "operation" = 'purge_rescue_subject'
-				THEN "subject_kind" ELSE '' END,CASE WHEN "operation" = 'purge_rescue_subject'
-				THEN "subject_id" ELSE '' END,CASE WHEN "operation" = 'delete_short_link'
-				THEN COALESCE("external_provider", '') ELSE '' END,CASE WHEN "operation" = 'delete_short_link'
-				THEN COALESCE("provider_ref"::text, '') ELSE '' END,CASE WHEN "operation" = 'delete_short_link'
-				THEN COALESCE("organization_id", '') ELSE '' END) WHERE "external_subject_cleanup_jobs"."status" <> 'completed';--> statement-breakpoint
+CREATE UNIQUE INDEX "external_subject_cleanup_jobs_identity_uniq" ON "external_subject_cleanup_jobs" USING btree ("operation","bucket",COALESCE("object_locator", ''),COALESCE("prefix_locator", ''),(CASE WHEN "operation" = 'purge_rescue_subject'
+				THEN COALESCE("organization_id", '') ELSE '' END),(CASE WHEN "operation" = 'purge_rescue_subject'
+				THEN "subject_kind" ELSE '' END),(CASE WHEN "operation" = 'purge_rescue_subject'
+				THEN "subject_id" ELSE '' END),(CASE WHEN "operation" = 'delete_short_link'
+				THEN COALESCE("external_provider", '') ELSE '' END),(CASE WHEN "operation" = 'delete_short_link'
+				THEN COALESCE("provider_ref"::text, '') ELSE '' END),(CASE WHEN "operation" = 'delete_short_link'
+				THEN COALESCE("organization_id", '') ELSE '' END)) WHERE "external_subject_cleanup_jobs"."status" <> 'completed';--> statement-breakpoint
 CREATE INDEX "external_subject_cleanup_jobs_due_idx" ON "external_subject_cleanup_jobs" USING btree ("status",COALESCE("organization_id", "subject_kind" || ':' || "subject_id"),"next_attempt_at","id");--> statement-breakpoint
 CREATE INDEX "external_subject_cleanup_jobs_deadline_idx" ON "external_subject_cleanup_jobs" USING btree (COALESCE("organization_id", "subject_kind" || ':' || "subject_id"),"deadline_at","id") WHERE "external_subject_cleanup_jobs"."status" IN ('pending', 'processing');--> statement-breakpoint
 CREATE INDEX "external_subject_cleanup_jobs_lease_idx" ON "external_subject_cleanup_jobs" USING btree ("status","lease_expires_at");--> statement-breakpoint

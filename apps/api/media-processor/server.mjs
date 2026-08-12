@@ -369,15 +369,13 @@ const server = http.createServer((request, response) => {
 		response.writeHead(404).end("not found");
 		return;
 	}
-	transform(request, response).catch((error) => {
+	transform(request, response).catch(() => {
 		if (response.headersSent) {
-			response.destroy(error);
+			response.destroy();
 			return;
 		}
 		response.writeHead(422, { "content-type": "text/plain; charset=utf-8" });
-		response.end(
-			String(error instanceof Error ? error.message : error).slice(0, 4096),
-		);
+		response.end("transformation failed");
 	});
 });
 

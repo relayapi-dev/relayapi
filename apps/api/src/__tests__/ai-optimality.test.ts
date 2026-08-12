@@ -127,6 +127,9 @@ describe("AI provider and lifecycle optimality", () => {
 				"text/html",
 			),
 		).toBe("Hello world");
+		expect(normalizeKnowledgeText("&amp;lt;script&amp;gt;", "text/html")).toBe(
+			"&lt;script&gt;",
+		);
 		const text = Array.from(
 			{ length: 900 },
 			(_, index) => `sentence-${index}.`,

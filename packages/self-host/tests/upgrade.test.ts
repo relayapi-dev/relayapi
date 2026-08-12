@@ -66,6 +66,10 @@ function lock(version: string, digest?: string): SelfHostLock {
 	};
 }
 
+function isGitHubApiRequest(input: RequestInfo | URL): boolean {
+	return new URL(String(input)).origin === "https://api.github.com";
+}
+
 describe("self-host stable updater", () => {
 	test("never replaces a newer operator lock with an older available release", async () => {
 		const archive = new TextEncoder().encode("sealed 2.0.0 archive");
@@ -74,7 +78,7 @@ describe("self-host stable updater", () => {
 		try {
 			const fetcher = Object.assign(
 				mock(async (input: RequestInfo | URL) =>
-					String(input).includes("api.github.com")
+					isGitHubApiRequest(input)
 						? Response.json([release("1.9.9")])
 						: new Response(archive),
 				),
@@ -109,7 +113,7 @@ describe("self-host stable updater", () => {
 		try {
 			const fetcher = Object.assign(
 				mock(async (input: RequestInfo | URL) =>
-					String(input).includes("api.github.com")
+					isGitHubApiRequest(input)
 						? Response.json([release("2.0.0")])
 						: new Response(archive),
 				),
@@ -193,7 +197,7 @@ describe("self-host stable updater", () => {
 		try {
 			const fetcher = Object.assign(
 				mock(async (input: RequestInfo | URL) =>
-					String(input).includes("api.github.com")
+					isGitHubApiRequest(input)
 						? Response.json([release("1.9.9")])
 						: new Response(archive),
 				),

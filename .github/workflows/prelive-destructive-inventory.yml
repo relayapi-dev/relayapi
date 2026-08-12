@@ -319,7 +319,6 @@ jobs:
       - name: Capture preliminary inventories before containment
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2016,SC2129 # jq programs intentionally use literal $variables; summary records append independently.
           preliminary_directory="$RUNNER_TEMP/prelive-preliminary-inventory"
           mkdir "$preliminary_directory"
           database_preliminary="$preliminary_directory/preliminary-database-inventory.json"
@@ -396,16 +395,18 @@ jobs:
               providerBlockingResourceCount: $provider_blocker_count
             }' > "$preliminary_directory/preliminary-inventory-manifest.json"
           manifest_sha="$(sha256sum "$preliminary_directory/preliminary-inventory-manifest.json" | awk '{print $1}')"
-          printf '## Preliminary pre-live provider inventory\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'This evidence was captured before containment and before evaluating blockers.\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- Manifest SHA-256: `%s`\n' "$manifest_sha" >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- Provider inventory SHA-256: `%s`\n' "$provider_sha" >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- Provider blockers: `%s`\n' "$provider_blocker_count" >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- Stripe terminal-reversal policy: `%s`\n' "$terminal_reversal_policy" >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- Stripe terminal-tail SHA-256: `%s`\n' "$terminal_tail_sha" >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$provider_blocker_count" -gt 0 ]]; then
-            printf '\nContainment will remain blocked. Reconcile every listed resource, or explicitly change the protected policy secret to `accept_network_reversal_tail` after review.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            printf '## Preliminary pre-live provider inventory\n\n'
+            printf 'This evidence was captured before containment and before evaluating blockers.\n\n'
+            printf -- "- Manifest SHA-256: \`%s\`\n" "$manifest_sha"
+            printf -- "- Provider inventory SHA-256: \`%s\`\n" "$provider_sha"
+            printf -- "- Provider blockers: \`%s\`\n" "$provider_blocker_count"
+            printf -- "- Stripe terminal-reversal policy: \`%s\`\n" "$terminal_reversal_policy"
+            printf -- "- Stripe terminal-tail SHA-256: \`%s\`\n" "$terminal_tail_sha"
+            if [[ "$provider_blocker_count" -gt 0 ]]; then
+              printf "\nContainment will remain blocked. Reconcile every listed resource, or explicitly change the protected policy secret to \`accept_network_reversal_tail\` after review.\n"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
         env:
           REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
           EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
@@ -535,7 +536,6 @@ jobs:
           EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2016,SC2129 # jq programs intentionally use literal $variables; summary records append independently.
           artifact_directory="$RUNNER_TEMP/prelive-destructive-inventory"
           mkdir "$artifact_directory"
           cloudflare_inventory="$artifact_directory/prelive-cloudflare-inventory.json"
@@ -627,9 +627,11 @@ jobs:
               providerBlockingResourceCount: $provider_blocker_count
             }' > "$artifact_directory/prelive-inventory-manifest.json"
           manifest_sha="$(sha256sum "$artifact_directory/prelive-inventory-manifest.json" | awk '{print $1}')"
-          printf '## Contained pre-live destructive inventory\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'Review the artifact, then supply this exact SHA-256 twice to the separate cutover dispatch:\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf '`%s`\n' "$manifest_sha" >> "$GITHUB_STEP_SUMMARY"
+          {
+            printf '## Contained pre-live destructive inventory\n\n'
+            printf 'Review the artifact, then supply this exact SHA-256 twice to the separate cutover dispatch:\n\n'
+            printf "\`%s\`\n" "$manifest_sha"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the exact contained inventory for human review
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -1,5 +1,5 @@
 {
-  "id": "afb0c019-e855-555e-b44b-2906fd049aa1",
+  "id": "a8041182-2d6b-56f2-aa13-a8cb28ac7679",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -18543,37 +18543,37 @@
               "nulls": "last"
             },
             {
-              "expression": "CASE WHEN \"operation\" = 'purge_rescue_subject'\n\t\t\t\tTHEN COALESCE(\"organization_id\", '') ELSE '' END",
+              "expression": "(CASE WHEN \"operation\" = 'purge_rescue_subject'\n\t\t\t\tTHEN COALESCE(\"organization_id\", '') ELSE '' END)",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
             },
             {
-              "expression": "CASE WHEN \"operation\" = 'purge_rescue_subject'\n\t\t\t\tTHEN \"subject_kind\" ELSE '' END",
+              "expression": "(CASE WHEN \"operation\" = 'purge_rescue_subject'\n\t\t\t\tTHEN \"subject_kind\" ELSE '' END)",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
             },
             {
-              "expression": "CASE WHEN \"operation\" = 'purge_rescue_subject'\n\t\t\t\tTHEN \"subject_id\" ELSE '' END",
+              "expression": "(CASE WHEN \"operation\" = 'purge_rescue_subject'\n\t\t\t\tTHEN \"subject_id\" ELSE '' END)",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
             },
             {
-              "expression": "CASE WHEN \"operation\" = 'delete_short_link'\n\t\t\t\tTHEN COALESCE(\"external_provider\", '') ELSE '' END",
+              "expression": "(CASE WHEN \"operation\" = 'delete_short_link'\n\t\t\t\tTHEN COALESCE(\"external_provider\", '') ELSE '' END)",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
             },
             {
-              "expression": "CASE WHEN \"operation\" = 'delete_short_link'\n\t\t\t\tTHEN COALESCE(\"provider_ref\"::text, '') ELSE '' END",
+              "expression": "(CASE WHEN \"operation\" = 'delete_short_link'\n\t\t\t\tTHEN COALESCE(\"provider_ref\"::text, '') ELSE '' END)",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
             },
             {
-              "expression": "CASE WHEN \"operation\" = 'delete_short_link'\n\t\t\t\tTHEN COALESCE(\"organization_id\", '') ELSE '' END",
+              "expression": "(CASE WHEN \"operation\" = 'delete_short_link'\n\t\t\t\tTHEN COALESCE(\"organization_id\", '') ELSE '' END)",
               "asc": true,
               "isExpression": true,
               "nulls": "last"

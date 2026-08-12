@@ -156,14 +156,19 @@ export async function createOpenAiEmbeddings(
 	});
 }
 
+const KNOWLEDGE_HTML_ENTITIES: Readonly<Record<string, string>> = {
+	"&nbsp;": " ",
+	"&amp;": "&",
+	"&lt;": "<",
+	"&gt;": ">",
+	"&quot;": '"',
+	"&#39;": "'",
+};
+
 function decodeHtmlEntities(value: string): string {
-	return value
-		.replace(/&nbsp;/gi, " ")
-		.replace(/&amp;/gi, "&")
-		.replace(/&lt;/gi, "<")
-		.replace(/&gt;/gi, ">")
-		.replace(/&quot;/gi, '"')
-		.replace(/&#39;/gi, "'");
+	return value.replace(/&(?:nbsp|amp|lt|gt|quot|#39);/gi, (entity) => {
+		return KNOWLEDGE_HTML_ENTITIES[entity.toLowerCase()] ?? entity;
+	});
 }
 
 export function normalizeKnowledgeText(

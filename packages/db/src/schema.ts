@@ -1006,18 +1006,18 @@ export const externalSubjectCleanupJobs = pgTable(
 				table.bucket,
 				sql`COALESCE(${table.objectLocator}, '')`,
 				sql`COALESCE(${table.prefixLocator}, '')`,
-				sql`CASE WHEN ${table.operation} = 'purge_rescue_subject'
-				THEN COALESCE(${table.organizationId}, '') ELSE '' END`,
-				sql`CASE WHEN ${table.operation} = 'purge_rescue_subject'
-				THEN ${table.subjectKind} ELSE '' END`,
-				sql`CASE WHEN ${table.operation} = 'purge_rescue_subject'
-				THEN ${table.subjectId} ELSE '' END`,
-				sql`CASE WHEN ${table.operation} = 'delete_short_link'
-				THEN COALESCE(${table.externalProvider}, '') ELSE '' END`,
-				sql`CASE WHEN ${table.operation} = 'delete_short_link'
-				THEN COALESCE(${table.providerRef}::text, '') ELSE '' END`,
-				sql`CASE WHEN ${table.operation} = 'delete_short_link'
-				THEN COALESCE(${table.organizationId}, '') ELSE '' END`,
+				sql`(CASE WHEN ${table.operation} = 'purge_rescue_subject'
+				THEN COALESCE(${table.organizationId}, '') ELSE '' END)`,
+				sql`(CASE WHEN ${table.operation} = 'purge_rescue_subject'
+				THEN ${table.subjectKind} ELSE '' END)`,
+				sql`(CASE WHEN ${table.operation} = 'purge_rescue_subject'
+				THEN ${table.subjectId} ELSE '' END)`,
+				sql`(CASE WHEN ${table.operation} = 'delete_short_link'
+				THEN COALESCE(${table.externalProvider}, '') ELSE '' END)`,
+				sql`(CASE WHEN ${table.operation} = 'delete_short_link'
+				THEN COALESCE(${table.providerRef}::text, '') ELSE '' END)`,
+				sql`(CASE WHEN ${table.operation} = 'delete_short_link'
+				THEN COALESCE(${table.organizationId}, '') ELSE '' END)`,
 			)
 			.where(sql`${table.status} <> 'completed'`),
 		index("external_subject_cleanup_jobs_due_idx").on(

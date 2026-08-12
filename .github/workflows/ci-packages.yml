@@ -85,6 +85,9 @@ jobs:
         # include optional native tooling that does not support the Node 18 floor.
         run: bun install --frozen-lockfile --ignore-scripts
 
+      - name: Build MCP's workspace SDK dependency
+        run: bun run build:sdk
+
       - name: Build, pack, install, and execute MCP on Node 18
         working-directory: packages/mcp
         run: bun run test:package

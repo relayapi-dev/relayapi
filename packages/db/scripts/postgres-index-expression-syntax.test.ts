@@ -24,32 +24,16 @@ function bareCaseIndexExpressions(source: string): string[] {
 }
 
 describe("PostgreSQL expression-index syntax", () => {
-	it("keeps the sealed baseline defect explicit and rejects it from every append-only migration", () => {
-		const generation = JSON.parse(
-			readFileSync(
-				join(import.meta.dir, "..", "baseline-generation.json"),
-				"utf8",
-			),
-		) as { baseline: { tag: string } };
+	it("rejects bare CASE expressions from every migration", () => {
 		const migrations = readdirSync(drizzleDirectory)
 			.filter((name) => /^\d{4}_.+\.sql$/.test(name))
 			.sort();
-		const baselineFile = `${generation.baseline.tag}.sql`;
 
-		expect(migrations).toContain(baselineFile);
 		for (const migration of migrations) {
 			const offenders = bareCaseIndexExpressions(
 				readFileSync(join(drizzleDirectory, migration), "utf8"),
 			);
-			if (migration === baselineFile) {
-				// This immutable generation-1 artifact requires the sanctioned
-				// generation-2 collapse; silently adding another offender is forbidden.
-				expect(offenders).toEqual([
-					"external_subject_cleanup_jobs_identity_uniq",
-				]);
-			} else {
-				expect(offenders).toEqual([]);
-			}
+			expect(offenders).toEqual([]);
 		}
 	});
 });

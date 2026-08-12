@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,18 +22,34 @@ const output = JSON.parse(
 		{ cwd: packageDirectory, encoding: "utf8" },
 	),
 );
+const postgresPackageDirectory = join(temporaryDirectory, "postgres-package");
+cpSync(
+	resolve(packageDirectory, "../../node_modules/postgres"),
+	postgresPackageDirectory,
+	{
+		recursive: true,
+	},
+);
+const postgresPackageJsonPath = join(postgresPackageDirectory, "package.json");
+const postgresPackageJson = JSON.parse(
+	readFileSync(postgresPackageJsonPath, "utf8"),
+);
+delete postgresPackageJson.scripts?.prepare;
+writeFileSync(
+	postgresPackageJsonPath,
+	`${JSON.stringify(postgresPackageJson, null, 2)}\n`,
+);
 const postgresOutput = JSON.parse(
 	execFileSync(
 		"npm",
 		[
 			"pack",
-			resolve(packageDirectory, "../../node_modules/postgres"),
 			"--json",
 			"--ignore-scripts",
 			"--pack-destination",
 			temporaryDirectory,
 		],
-		{ cwd: packageDirectory, encoding: "utf8", timeout: 30_000 },
+		{ cwd: postgresPackageDirectory, encoding: "utf8", timeout: 30_000 },
 	),
 );
 writeFileSync(

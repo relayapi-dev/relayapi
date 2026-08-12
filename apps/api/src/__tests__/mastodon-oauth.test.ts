@@ -123,7 +123,9 @@ describe("Mastodon dynamic OAuth", () => {
 		});
 		expect(state.auth_url).toBe("https://social.example/oauth/authorize");
 		expect(
-			requested.some((url) => url.startsWith("https://attacker.example")),
+			requested.some(
+				(url) => new URL(url).origin === "https://attacker.example",
+			),
 		).toBe(false);
 	});
 

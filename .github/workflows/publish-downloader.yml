@@ -98,7 +98,6 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
-          # shellcheck disable=SC2016 # The Markdown backticks and placeholders are intentionally literal.
           test -n "$DIGEST"
-          printf 'Promote exactly: `%s@%s`\n' \
+          printf "Promote exactly: \`%s@%s\`\n" \
             "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

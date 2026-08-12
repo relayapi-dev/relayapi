@@ -110,6 +110,9 @@ describe("MCP HTTP request protection", () => {
 		expect(bearerTokenIsAllowed(`bearer ${token}`, token)).toBe(true);
 		expect(bearerTokenIsAllowed("Bearer wrong", token)).toBe(false);
 		expect(bearerTokenIsAllowed(undefined, token)).toBe(false);
+		expect(bearerTokenIsAllowed(`Bearer${"\t".repeat(100_000)}`, token)).toBe(
+			false,
+		);
 	});
 
 	it("accepts only JSON and trusted browser origins", () => {
@@ -128,10 +131,7 @@ describe("MCP HTTP request protection", () => {
 	});
 
 	it("rejects cross-origin and CORS-simple posts in the full handler", async () => {
-		const handler = createHttpRequestHandler(
-			{} as never,
-			loadHttpConfig({}),
-		);
+		const handler = createHttpRequestHandler({} as never, loadHttpConfig({}));
 		const crossOrigin = responseStub();
 		await handler(
 			requestStub({

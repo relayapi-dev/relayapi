@@ -178,7 +178,6 @@ jobs:
           EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2129 # GITHUB_ENV entries are intentionally emitted as independent records.
           run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${INVENTORY_RUN_ID}")"
           printf '%s' "$run_json" | jq -e \
             --arg source_sha "$REVIEWED_COMMIT_SHA" '
@@ -504,13 +503,15 @@ jobs:
           )"
           test "$provider_terminal_tail_sha" = \
             "$(jq -er '.stripeTerminalTailSha256' "$manifest")"
-          printf 'PRELIVE_APPROVED_INVENTORY_SHA256=%s\n' "$APPROVED_INVENTORY_SHA256" >> "$GITHUB_ENV"
-          printf 'PRELIVE_APPROVED_CLOUDFLARE_INVENTORY=%s\n' "$cloudflare_inventory" >> "$GITHUB_ENV"
-          printf 'PRELIVE_APPROVED_CLOUDFLARE_INVENTORY_SHA256=%s\n' "$cloudflare_sha" >> "$GITHUB_ENV"
-          printf 'PRELIVE_APPROVED_DATABASE_INVENTORY=%s\n' "$database_inventory" >> "$GITHUB_ENV"
-          printf 'PRELIVE_APPROVED_DATABASE_INVENTORY_SHA256=%s\n' "$database_sha" >> "$GITHUB_ENV"
-          printf 'PRELIVE_APPROVED_PROVIDER_INVENTORY=%s\n' "$provider_inventory" >> "$GITHUB_ENV"
-          printf 'PRELIVE_APPROVED_PROVIDER_INVENTORY_SHA256=%s\n' "$provider_sha" >> "$GITHUB_ENV"
+          {
+            printf 'PRELIVE_APPROVED_INVENTORY_SHA256=%s\n' "$APPROVED_INVENTORY_SHA256"
+            printf 'PRELIVE_APPROVED_CLOUDFLARE_INVENTORY=%s\n' "$cloudflare_inventory"
+            printf 'PRELIVE_APPROVED_CLOUDFLARE_INVENTORY_SHA256=%s\n' "$cloudflare_sha"
+            printf 'PRELIVE_APPROVED_DATABASE_INVENTORY=%s\n' "$database_inventory"
+            printf 'PRELIVE_APPROVED_DATABASE_INVENTORY_SHA256=%s\n' "$database_sha"
+            printf 'PRELIVE_APPROVED_PROVIDER_INVENTORY=%s\n' "$provider_inventory"
+            printf 'PRELIVE_APPROVED_PROVIDER_INVENTORY_SHA256=%s\n' "$provider_sha"
+          } >> "$GITHUB_ENV"
 
       - name: Re-verify the protected generation-1 stamp workflow record
         env:
@@ -706,7 +707,6 @@ jobs:
           GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2129 # GITHUB_ENV entries are intentionally emitted as independent records.
           base_sha="$(jq -er '.transition.baseCommitSha' packages/db/baseline-generation.json)"
           ledger_manifest="$RUNNER_TEMP/generation-1-migration-manifest.json"
           git show "$base_sha:packages/db/drizzle/migration-manifest.json" > "$ledger_manifest"
@@ -721,9 +721,11 @@ jobs:
           )"
           sentinel="$(openssl rand -hex 32)"
           echo "::add-mask::$sentinel"
-          printf 'PRELIVE_EXPECTED_LEDGER_MANIFEST=%s\n' "$ledger_manifest" >> "$GITHUB_ENV"
-          printf 'PRELIVE_RESET_SENTINEL=%s\n' "$sentinel" >> "$GITHUB_ENV"
-          printf 'PRELIVE_EXPECTED_DATABASE=%s\n' "$EXPECTED_DATABASE_NAME" >> "$GITHUB_ENV"
+          {
+            printf 'PRELIVE_EXPECTED_LEDGER_MANIFEST=%s\n' "$ledger_manifest"
+            printf 'PRELIVE_RESET_SENTINEL=%s\n' "$sentinel"
+            printf 'PRELIVE_EXPECTED_DATABASE=%s\n' "$EXPECTED_DATABASE_NAME"
+          } >> "$GITHUB_ENV"
 
       - name: Verify the exact database, migration role, ledger, and capabilities before maintenance
         run: bun run --cwd packages/db prelive:reset preflight

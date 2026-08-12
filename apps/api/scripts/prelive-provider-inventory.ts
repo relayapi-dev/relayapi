@@ -878,7 +878,11 @@ export function stripeApiKeyIsLive(apiKey: string): boolean {
 }
 
 export function telnyxApiKeyFingerprint(apiKey: string): string {
-	return sha256(`relayapi:telnyx-inventory-credential:v1:${apiKey}`);
+	// This is a deterministic fingerprint of a high-entropy provider credential,
+	// not a password verifier. The domain prefix prevents cross-purpose reuse.
+	return new Bun.CryptoHasher("sha256")
+		.update(`relayapi:telnyx-inventory-credential:v1:${apiKey}`)
+		.digest("hex");
 }
 
 function assertSha256(value: string, name: string): void {

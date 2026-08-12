@@ -139,9 +139,18 @@ export function bearerTokenIsAllowed(
 	expectedToken: string | undefined,
 ): boolean {
 	if (!expectedToken) return true;
-	const match = authorization?.match(/^Bearer\s+(.+)$/i);
-	if (!match?.[1]) return false;
-	const actual = Buffer.from(match[1], "utf8");
+	if (authorization?.slice(0, 6).toLowerCase() !== "bearer") {
+		return false;
+	}
+	let tokenStart = 6;
+	while (
+		authorization[tokenStart] === " " ||
+		authorization[tokenStart] === "\t"
+	) {
+		tokenStart += 1;
+	}
+	if (tokenStart === 6 || tokenStart === authorization.length) return false;
+	const actual = Buffer.from(authorization.slice(tokenStart), "utf8");
 	const expected = Buffer.from(expectedToken, "utf8");
 	return actual.length === expected.length && timingSafeEqual(actual, expected);
 }

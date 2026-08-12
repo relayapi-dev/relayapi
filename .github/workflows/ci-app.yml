@@ -47,6 +47,7 @@ jobs:
         with:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
+      - run: bun run build:sdk
       - name: Run app tests
         working-directory: apps/app
         run: bun test
