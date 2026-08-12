@@ -4,6 +4,7 @@
 	"scripts": {
 		"dev": "bun run generate-docs && next dev",
 		"docs:check": "bun ./scripts/generate-docs.ts --check",
+		"test": "bun test",
 		"build": "opennextjs-cloudflare build",
 		"build:next": "bun run generate-docs && fumadocs-mdx && next build",
 		"build:worker": "bun run build",
