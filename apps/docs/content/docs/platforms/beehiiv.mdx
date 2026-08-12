@@ -31,6 +31,8 @@ curl -X POST https://api.relayapi.dev/v1/connect/beehiiv \
   }'
 ```
 
+RelayAPI verifies the publication during connection and stores its ID as the account's authoritative `platform_account_id`. Publishers and publication discovery use that connected identity, not caller-editable metadata. To move the credential to another publication, reconnect it; a generic account metadata patch cannot retarget the API key.
+
 ## Send a Newsletter
 
 Cross-post to Beehiiv alongside social platforms:
@@ -63,6 +65,11 @@ All fields go inside `target_options.beehiiv` on your post request.
 | `preview_text` | string | No | Preview text shown in email clients. |
 | `content_html` | string | No | Full HTML body. If omitted, plain text content is auto-wrapped in HTML. |
 
+Beehiiv is the only newsletter adapter that accepts Relay media: up to 50 image
+items, including GIFs, can be prepended as inline `<img>` elements when `content_html` is
+omitted. Video, audio, and document media are rejected. When supplying custom
+`content_html`, place the intended image markup in that HTML explicitly.
+
 ## Discovery
 
 List your publication info:
@@ -72,6 +79,8 @@ GET /v1/accounts/{id}/lists
 ```
 
 Returns the publication as a single list entry.
+
+The account must belong to the authenticated organization and be visible through the credential's workspace grants. An existing but out-of-scope account returns `403` rather than exposing its publication.
 
 ## Automations
 

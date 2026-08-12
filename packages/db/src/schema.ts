@@ -34,8 +34,11 @@ import {
 import { LEGACY_CREDENTIAL_VERSION } from "./credential-version";
 import { ddlIntegerLiteral, ddlTextLiteral } from "./ddl-literals";
 import {
+	AD_ADVANCED_RESOURCE_KINDS,
 	AD_AUDIENCE_TYPES,
 	AD_CREATION_OPERATION_KINDS,
+	AD_PROMOTABLE_IDENTITY_STATUSES,
+	AD_PROMOTABLE_IDENTITY_TYPES,
 	AD_SYNC_TYPES,
 	AI_KNOWLEDGE_SOURCE_TYPES,
 	AUTOMATION_BINDING_TYPES,
@@ -55,6 +58,7 @@ import {
 	INBOX_DIRECTIONS,
 	INBOX_NOTE_ACTOR_TYPES,
 	INVITE_TOKEN_ROLES,
+	MEDIA_DERIVATIVE_KINDS,
 	NOTIFICATION_TYPES,
 	ONE_TIME_CAPABILITY_KINDS,
 	ORGANIZATION_PRINCIPAL_KINDS,
@@ -62,6 +66,8 @@ import {
 	PUBLISH_OUTBOX_KINDS,
 	QUEUE_FAILURE_KINDS,
 	REF_URL_DESTINATION_TYPES,
+	SOCIAL_MUTATION_KINDS,
+	SOCIAL_MUTATION_TARGET_TYPES,
 	SOCIAL_PLATFORM_IDS,
 	TOOL_JOB_KINDS,
 	WEBHOOK_ATTEMPT_KINDS,
@@ -438,6 +444,7 @@ export const postStatusEnum = pgEnum("post_status", [
 	"scheduled",
 	"publishing",
 	"published",
+	"provider_draft",
 	"failed",
 	"partial",
 ]);
@@ -2672,10 +2679,25 @@ export const postTargets = pgTable(
 			withTimezone: true,
 		}),
 		platformPostId: text("platform_post_id"),
+		/** Last provider-confirmed body, which can diverge after a partial edit. */
+		confirmedContent: text("confirmed_content"),
+		editRevision: integer("edit_revision").notNull().default(0),
+		lastEditedAt: timestamp("last_edited_at", { withTimezone: true }),
+		platformPostIdHistory: jsonb("platform_post_id_history")
+			.$type<
+				Array<{
+					id: string;
+					replaced_at: string;
+					operation_id: string;
+				}>
+			>()
+			.notNull()
+			.default([]),
 		platformUrl: text("platform_url"),
 		providerDisposition: text("provider_disposition", {
 			enum: [
 				"published",
+				"provider_draft",
 				"sent",
 				"delivered",
 				"scheduled",
@@ -2765,8 +2787,12 @@ export const postTargets = pgTable(
 					AND ${table.claimedAt} IS NOT NULL
 					AND ${table.requestMayHaveBeenSentAt} IS NOT NULL)
 				OR (${table.deliveryState} = 'succeeded'
-					AND ${table.status} = 'published'
-					AND ${table.publishedAt} IS NOT NULL)
+					AND (
+						(${table.status} = 'published' AND ${table.publishedAt} IS NOT NULL)
+						OR (${table.status}::text = 'provider_draft'
+							AND ${table.providerDisposition} = 'provider_draft'
+							AND ${table.publishedAt} IS NULL)
+					))
 				OR (${table.deliveryState} = 'failed' AND ${table.status} = 'failed')`,
 		),
 		check(
@@ -2775,11 +2801,22 @@ export const postTargets = pgTable(
 		),
 		check(
 			"post_targets_reconcile_attempts_nonnegative_check",
-			sql`${table.reconcileAttempts} >= 0`,
+			sql`${table.reconcileAttempts} >= 0 AND ${table.editRevision} >= 0`,
+		),
+		check(
+			"post_targets_edit_projection_check",
+			sql`(${table.lastEditedAt} IS NULL AND ${table.editRevision} = 0)
+				OR (${table.lastEditedAt} IS NOT NULL
+					AND ${table.editRevision} > 0
+					AND ${table.lastEditedAt} <= ${table.updatedAt})`,
+		),
+		check(
+			"post_targets_platform_id_history_check",
+			sql`jsonb_typeof(${table.platformPostIdHistory}) = 'array'`,
 		),
 		check(
 			"post_targets_provider_disposition_check",
-			sql`${table.providerDisposition} IS NULL OR ${table.providerDisposition} IN ('published', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')`,
+			sql`${table.providerDisposition} IS NULL OR ${table.providerDisposition} IN ('published', 'provider_draft', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')`,
 		),
 		uniqueIndex("post_targets_publish_operation_idx").on(
 			table.publishOperationId,
@@ -2821,6 +2858,7 @@ export const publishAttempts = pgTable(
 		providerDisposition: text("provider_disposition", {
 			enum: [
 				"published",
+				"provider_draft",
 				"sent",
 				"delivered",
 				"scheduled",
@@ -2876,7 +2914,7 @@ export const publishAttempts = pgTable(
 		),
 		check(
 			"publish_attempts_provider_disposition_check",
-			sql`${table.providerDisposition} IS NULL OR ${table.providerDisposition} IN ('published', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')`,
+			sql`${table.providerDisposition} IS NULL OR ${table.providerDisposition} IN ('published', 'provider_draft', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')`,
 		),
 		index("publish_attempts_target_claimed_idx").on(
 			table.postTargetId,
@@ -3479,6 +3517,326 @@ export const media = pgTable(
 		index("media_deletion_retry_idx").on(
 			table.status,
 			table.deletionNextRetryAt,
+		),
+	],
+);
+
+/** Durable authority for resumable single-part and multipart media uploads. */
+export const mediaUploadSessions = pgTable(
+	"media_upload_sessions",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("mup_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		mediaId: text("media_id").notNull(),
+		mode: text("mode", { enum: ["single", "multipart"] }).notNull(),
+		expectedSize: integer("expected_size").notNull(),
+		expectedMimeType: text("expected_mime_type").notNull(),
+		partSize: integer("part_size"),
+		partCount: integer("part_count"),
+		multipartUploadIdCiphertext: text("multipart_upload_id_ciphertext"),
+		status: text("status", {
+			enum: [
+				"created",
+				"uploading",
+				"completing",
+				"completed",
+				"aborting",
+				"aborted",
+				"failed",
+				"expired",
+			],
+		})
+			.notNull()
+			.default("created"),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		lastErrorCode: text("last_error_code"),
+		lastError: text("last_error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "media_upload_sessions_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [table.mediaId, table.organizationId, table.scopeKey],
+			foreignColumns: [media.id, media.organizationId, media.scopeKey],
+			name: "media_upload_sessions_media_org_scope_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("media_upload_sessions_media_uniq").on(table.mediaId),
+		index("media_upload_sessions_org_status_idx").on(
+			table.organizationId,
+			table.status,
+		),
+		index("media_upload_sessions_expiry_idx").on(
+			table.status,
+			table.expiresAt,
+			table.leaseExpiresAt,
+			table.id,
+		),
+		check(
+			"media_upload_sessions_mode_check",
+			sql`${table.mode} IN ('single', 'multipart')`,
+		),
+		check(
+			"media_upload_sessions_status_check",
+			sql`${table.status} IN ('created', 'uploading', 'completing', 'completed', 'aborting', 'aborted', 'failed', 'expired')`,
+		),
+		check(
+			"media_upload_sessions_size_check",
+			sql`${table.expectedSize} > 0 AND ${table.expectedSize} <= ${ddlIntegerLiteral(200 * 1024 * 1024)}`,
+		),
+		check(
+			"media_upload_sessions_multipart_shape_check",
+			sql`(${table.mode} = 'single'
+					AND ${table.partSize} IS NULL
+					AND ${table.partCount} IS NULL
+					AND ${table.multipartUploadIdCiphertext} IS NULL)
+				OR (${table.mode} = 'multipart'
+					AND ${table.partSize} >= ${ddlIntegerLiteral(5 * 1024 * 1024)}
+					AND ${table.partCount} > 1
+					AND (
+						(${table.status} IN ('created', 'uploading', 'completing', 'aborting')
+							AND ${table.multipartUploadIdCiphertext} LIKE 'enc:v2:%')
+						OR (${table.status} IN ('completed', 'aborted', 'expired')
+							AND ${table.multipartUploadIdCiphertext} IS NULL)
+						OR ${table.status} = 'failed'
+					))`,
+		),
+		check(
+			"media_upload_sessions_completion_check",
+			sql`(${table.status} = 'completed') = (${table.completedAt} IS NOT NULL)`,
+		),
+		check(
+			"media_upload_sessions_lease_check",
+			sql`${table.leaseToken} >= 0
+				AND (${table.status} IN ('completing', 'aborting')) = (${table.leaseExpiresAt} IS NOT NULL)`,
+		),
+		check(
+			"media_upload_sessions_timestamp_check",
+			sql`${table.expiresAt} > ${table.createdAt}
+				AND ${table.updatedAt} >= ${table.createdAt}
+				AND (${table.completedAt} IS NULL OR ${table.completedAt} >= ${table.createdAt})`,
+		),
+	],
+);
+
+/** Durable orchestration state for media normalization and cover generation. */
+export const mediaProcessingJobs = pgTable(
+	"media_processing_jobs",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("mproc_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		mediaId: text("media_id").notNull(),
+		operation: text("operation", {
+			enum: ["normalize", "provider_variant", "cover"],
+		}).notNull(),
+		profile: text("profile").notNull(),
+		options: jsonb("options").$type<Record<string, unknown>>().notNull(),
+		optionsHash: varchar("options_hash", { length: 64 }).notNull(),
+		sourceEtag: text("source_etag").notNull(),
+		processorVersion: text("processor_version").notNull(),
+		status: text("status", {
+			enum: ["pending", "processing", "completed", "failed", "manual_review"],
+		})
+			.notNull()
+			.default("pending"),
+		workflowId: text("workflow_id"),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		attempts: integer("attempts").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		lastErrorCode: text("last_error_code"),
+		lastError: text("last_error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "media_processing_jobs_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [table.mediaId, table.organizationId, table.scopeKey],
+			foreignColumns: [media.id, media.organizationId, media.scopeKey],
+			name: "media_processing_jobs_media_org_scope_fk",
+		}).onDelete("cascade"),
+		unique("media_processing_jobs_id_org_scope_media_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.mediaId,
+		),
+		uniqueIndex("media_processing_jobs_request_uniq").on(
+			table.mediaId,
+			table.operation,
+			table.profile,
+			table.optionsHash,
+			table.sourceEtag,
+			table.processorVersion,
+		),
+		index("media_processing_jobs_due_idx").on(
+			table.status,
+			table.nextAttemptAt,
+			table.leaseExpiresAt,
+		),
+		check(
+			"media_processing_jobs_state_check",
+			sql`${table.operation} IN ('normalize', 'provider_variant', 'cover')
+				AND ${table.status} IN ('pending', 'processing', 'completed', 'failed', 'manual_review')`,
+		),
+		check(
+			"media_processing_jobs_counter_check",
+			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
+		),
+		check(
+			"media_processing_jobs_lease_check",
+			sql`(${table.status} = 'processing' AND ${table.leaseExpiresAt} IS NOT NULL)
+				OR (${table.status} <> 'processing' AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"media_processing_jobs_completion_check",
+			sql`(${table.status} = 'completed') = (${table.completedAt} IS NOT NULL)`,
+		),
+	],
+);
+
+/** Immutable provider-ready artifacts derived from one retained media source. */
+export const mediaDerivatives = pgTable(
+	"media_derivatives",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("mder_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		mediaId: text("media_id").notNull(),
+		processingJobId: text("processing_job_id").notNull(),
+		kind: text("kind", { enum: [...MEDIA_DERIVATIVE_KINDS] }).notNull(),
+		profile: text("profile").notNull(),
+		optionsHash: varchar("options_hash", { length: 64 }).notNull(),
+		storageKey: text("storage_key").notNull(),
+		mimeType: text("mime_type").notNull(),
+		size: integer("size").notNull(),
+		width: integer("width"),
+		height: integer("height"),
+		duration: integer("duration"),
+		checksumSha256: varchar("checksum_sha256", { length: 64 }).notNull(),
+		status: text("status", {
+			enum: ["processing", "ready", "failed", "deleting"],
+		})
+			.notNull()
+			.default("processing"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		readyAt: timestamp("ready_at", { withTimezone: true }),
+		deleteAfter: timestamp("delete_after", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "media_derivatives_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [table.mediaId, table.organizationId, table.scopeKey],
+			foreignColumns: [media.id, media.organizationId, media.scopeKey],
+			name: "media_derivatives_media_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [
+				table.processingJobId,
+				table.organizationId,
+				table.scopeKey,
+				table.mediaId,
+			],
+			foreignColumns: [
+				mediaProcessingJobs.id,
+				mediaProcessingJobs.organizationId,
+				mediaProcessingJobs.scopeKey,
+				mediaProcessingJobs.mediaId,
+			],
+			name: "media_derivatives_processing_job_org_scope_media_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("media_derivatives_profile_uniq").on(
+			table.mediaId,
+			table.kind,
+			table.profile,
+			table.optionsHash,
+		),
+		uniqueIndex("media_derivatives_storage_key_uniq").on(table.storageKey),
+		index("media_derivatives_cleanup_idx").on(
+			table.status,
+			table.deleteAfter,
+			table.id,
+		),
+		check(
+			"media_derivatives_state_check",
+			sql`${table.kind} IN (${sql.join(
+				MEDIA_DERIVATIVE_KINDS.map((value) => ddlTextLiteral(value)),
+				sql`, `,
+			)})
+				AND ${table.status} IN ('processing', 'ready', 'failed', 'deleting')`,
+		),
+		check(
+			"media_derivatives_numeric_check",
+			sql`${table.size} >= 0
+				AND (${table.width} IS NULL OR ${table.width} > 0)
+				AND (${table.height} IS NULL OR ${table.height} > 0)
+				AND (${table.duration} IS NULL OR ${table.duration} >= 0)`,
+		),
+		check(
+			"media_derivatives_checksum_check",
+			sql`${table.checksumSha256} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"media_derivatives_ready_check",
+			sql`(${table.status} = 'ready') = (${table.readyAt} IS NOT NULL)`,
 		),
 	],
 );
@@ -6455,11 +6813,18 @@ export const inboxMessages = pgTable(
 		platformData: jsonb("platform_data").default({}),
 		isHidden: boolean("is_hidden").default(false),
 		isLiked: boolean("is_liked").default(false),
+		editRevision: integer("edit_revision").notNull().default(0),
+		editedAt: timestamp("edited_at", { withTimezone: true }),
+		providerReadAt: timestamp("provider_read_at", { withTimezone: true }),
+		deletedAt: timestamp("deleted_at", { withTimezone: true }),
 		contentRedactedAt: timestamp("content_redacted_at", {
 			withTimezone: true,
 		}),
 		// Timestamps
 		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
 			.defaultNow()
 			.notNull(),
 	},
@@ -6501,6 +6866,14 @@ export const inboxMessages = pgTable(
 			sql`${table.contentRedactedAt} IS NULL
 				OR ${table.contentRedactedAt} >= ${table.createdAt}`,
 		),
+		check(
+			"inbox_messages_edit_state_check",
+			sql`${table.editRevision} >= 0
+				AND (${table.editedAt} IS NULL OR (${table.editRevision} > 0 AND ${table.editedAt} >= ${table.createdAt}))
+				AND (${table.providerReadAt} IS NULL OR ${table.providerReadAt} >= ${table.createdAt})
+				AND (${table.deletedAt} IS NULL OR ${table.deletedAt} >= ${table.createdAt})
+				AND ${table.updatedAt} >= ${table.createdAt}`,
+		),
 		index("inbox_msg_conv_created_idx").on(
 			table.conversationId,
 			table.createdAt,
@@ -6524,6 +6897,368 @@ export const inboxMessages = pgTable(
 		index("inbox_msg_text_trgm_idx").using(
 			"gin",
 			sql`${table.text} gin_trgm_ops`,
+		),
+	],
+);
+
+/** Durable provider boundary for published edits and social/WhatsApp actions. */
+export const socialMutationOperations = pgTable(
+	"social_mutation_operations",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("smut_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		accountId: text("account_id").notNull(),
+		platform: platformEnum("platform").notNull(),
+		targetType: text("target_type", {
+			enum: [...SOCIAL_MUTATION_TARGET_TYPES],
+		}).notNull(),
+		targetId: text("target_id").notNull(),
+		kind: text("kind", {
+			enum: [...SOCIAL_MUTATION_KINDS],
+		}).notNull(),
+		operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+		requestHash: varchar("request_hash", { length: 64 }).notNull(),
+		requestPayload: jsonb("request_payload")
+			.$type<Record<string, unknown>>()
+			.notNull(),
+		status: text("status", {
+			enum: [
+				"pending",
+				"processing",
+				"request_may_have_been_sent",
+				"unknown",
+				"completed",
+				"failed",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		phase: text("phase", {
+			enum: ["provider", "projection", "completed"],
+		})
+			.notNull()
+			.default("provider"),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		providerConfirmedAt: timestamp("provider_confirmed_at", {
+			withTimezone: true,
+		}),
+		providerOperationId: text("provider_operation_id"),
+		providerResult: jsonb("provider_result").$type<Record<string, unknown>>(),
+		attempts: integer("attempts").notNull().default(0),
+		lastError: text("last_error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "social_mutation_operations_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.accountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				socialAccounts.id,
+				socialAccounts.organizationId,
+				socialAccounts.scopeKey,
+				socialAccounts.platform,
+			],
+			name: "social_mutation_operations_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("social_mutation_operations_org_key_uniq").on(
+			table.organizationId,
+			table.targetType,
+			table.targetId,
+			table.operationKeyHash,
+		),
+		uniqueIndex("social_mutation_operations_target_active_uniq")
+			.on(table.organizationId, table.targetType, table.targetId)
+			.where(
+				sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown')`,
+			),
+		index("social_mutation_operations_due_idx").on(
+			table.status,
+			table.leaseExpiresAt,
+			table.updatedAt,
+		),
+		check(
+			"social_mutation_operations_target_check",
+			sql`${table.targetType} IN (${sql.join(
+				SOCIAL_MUTATION_TARGET_TYPES.map((value) => ddlTextLiteral(value)),
+				sql`, `,
+			)})`,
+		),
+		check(
+			"social_mutation_operations_kind_check",
+			sql`${table.kind} IN (${sql.join(
+				SOCIAL_MUTATION_KINDS.map((value) => ddlTextLiteral(value)),
+				sql`, `,
+			)})`,
+		),
+		check(
+			"social_mutation_operations_status_check",
+			sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'completed', 'failed')`,
+		),
+		check(
+			"social_mutation_operations_phase_check",
+			sql`${table.phase} IN ('provider', 'projection', 'completed')`,
+		),
+		check(
+			"social_mutation_operations_counter_check",
+			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
+		),
+		check(
+			"social_mutation_operations_lease_check",
+			sql`(${table.status} IN ('processing', 'request_may_have_been_sent') AND ${table.leaseExpiresAt} IS NOT NULL)
+				OR (${table.status} NOT IN ('processing', 'request_may_have_been_sent') AND ${table.leaseExpiresAt} IS NULL)`,
+		),
+		check(
+			"social_mutation_operations_boundary_check",
+			sql`${table.status} <> 'request_may_have_been_sent' OR ${table.requestMayHaveBeenSentAt} IS NOT NULL`,
+		),
+		check(
+			"social_mutation_operations_completion_check",
+			sql`(${table.status} = 'completed'
+					AND ${table.phase} = 'completed'
+					AND ${table.providerConfirmedAt} IS NOT NULL
+					AND ${table.completedAt} IS NOT NULL)
+				OR (${table.status} <> 'completed'
+					AND ${table.phase} <> 'completed'
+					AND ${table.completedAt} IS NULL)`,
+		),
+	],
+);
+
+/**
+ * Account-scoped WhatsApp Group projection. Provider group IDs are never
+ * accepted directly by mutation routes without resolving this exact tenant,
+ * workspace, account, and platform tuple first.
+ */
+export const whatsappGroups = pgTable(
+	"whatsapp_groups",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("wg_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		accountId: text("account_id").notNull(),
+		platform: platformEnum("platform").notNull().default("whatsapp"),
+		providerGroupId: text("provider_group_id"),
+		subject: text("subject").notNull(),
+		description: text("description"),
+		joinApprovalMode: text("join_approval_mode", {
+			enum: ["approval_required", "auto_approve"],
+		}),
+		lifecycleStatus: text("lifecycle_status", {
+			enum: [
+				"creating",
+				"active",
+				"suspended",
+				"deleting",
+				"deleted",
+				"failed",
+			],
+		})
+			.notNull()
+			.default("creating"),
+		providerRequestId: text("provider_request_id"),
+		// Group invite links grant join access and are encrypted at rest.
+		inviteLinkCiphertext: text("invite_link_ciphertext"),
+		participantCount: integer("participant_count"),
+		providerCreatedAt: timestamp("provider_created_at", { withTimezone: true }),
+		lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "whatsapp_groups_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.accountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				socialAccounts.id,
+				socialAccounts.organizationId,
+				socialAccounts.scopeKey,
+				socialAccounts.platform,
+			],
+			name: "whatsapp_groups_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("whatsapp_groups_account_provider_uniq")
+			.on(table.accountId, table.providerGroupId)
+			.where(sql`${table.providerGroupId} IS NOT NULL`),
+		index("whatsapp_groups_org_status_idx").on(
+			table.organizationId,
+			table.lifecycleStatus,
+			table.id,
+		),
+		index("whatsapp_groups_provider_request_idx")
+			.on(table.accountId, table.providerRequestId)
+			.where(sql`${table.providerRequestId} IS NOT NULL`),
+		check(
+			"whatsapp_groups_platform_check",
+			sql`${table.platform} = 'whatsapp'`,
+		),
+		check(
+			"whatsapp_groups_status_check",
+			sql`${table.lifecycleStatus} IN ('creating', 'active', 'suspended', 'deleting', 'deleted', 'failed')`,
+		),
+		check(
+			"whatsapp_groups_join_approval_check",
+			sql`${table.joinApprovalMode} IS NULL OR ${table.joinApprovalMode} IN ('approval_required', 'auto_approve')`,
+		),
+		check(
+			"whatsapp_groups_participant_count_check",
+			sql`${table.participantCount} IS NULL OR ${table.participantCount} BETWEEN 0 AND 8`,
+		),
+		check(
+			"whatsapp_groups_provider_identity_check",
+			sql`${table.lifecycleStatus} IN ('creating', 'failed')
+				OR ${table.providerGroupId} IS NOT NULL`,
+		),
+		check(
+			"whatsapp_groups_timestamp_check",
+			sql`${table.updatedAt} >= ${table.createdAt}
+				AND (${table.lastSyncedAt} IS NULL OR ${table.lastSyncedAt} >= ${table.createdAt})`,
+		),
+	],
+);
+
+/** Encrypted aliases needed for WhatsApp's phone-optional BSUID transition. */
+export const whatsappIdentityAliases = pgTable(
+	"whatsapp_identity_aliases",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("wai_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		accountId: text("account_id").notNull(),
+		platform: platformEnum("platform").notNull().default("whatsapp"),
+		conversationId: text("conversation_id"),
+		bsuidHash: varchar("bsuid_hash", { length: 64 }).notNull(),
+		bsuidCiphertext: text("bsuid_ciphertext").notNull(),
+		parentBsuidHash: varchar("parent_bsuid_hash", { length: 64 }),
+		parentBsuidCiphertext: text("parent_bsuid_ciphertext"),
+		waIdHash: varchar("wa_id_hash", { length: 64 }),
+		waIdCiphertext: text("wa_id_ciphertext"),
+		usernameCiphertext: text("username_ciphertext"),
+		lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "whatsapp_identity_aliases_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.accountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				socialAccounts.id,
+				socialAccounts.organizationId,
+				socialAccounts.scopeKey,
+				socialAccounts.platform,
+			],
+			name: "whatsapp_identity_aliases_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.conversationId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				inboxConversations.id,
+				inboxConversations.organizationId,
+				inboxConversations.scopeKey,
+			],
+			name: "whatsapp_identity_aliases_conversation_org_scope_fk",
+		}).onDelete("cascade"),
+		uniqueIndex("whatsapp_identity_aliases_account_bsuid_uniq").on(
+			table.accountId,
+			table.bsuidHash,
+		),
+		index("whatsapp_identity_aliases_wa_id_idx").on(
+			table.accountId,
+			table.waIdHash,
+		),
+		check(
+			"whatsapp_identity_aliases_hash_check",
+			sql`${table.platform} = 'whatsapp'
+				AND ${table.bsuidHash} ~ '^[0-9a-f]{64}$'
+				AND (${table.parentBsuidHash} IS NULL OR ${table.parentBsuidHash} ~ '^[0-9a-f]{64}$')
+				AND (${table.waIdHash} IS NULL OR ${table.waIdHash} ~ '^[0-9a-f]{64}$')`,
+		),
+		check(
+			"whatsapp_identity_aliases_ciphertext_check",
+			sql`${table.bsuidCiphertext} LIKE 'enc:v2:%'
+				AND (${table.parentBsuidCiphertext} IS NULL OR ${table.parentBsuidCiphertext} LIKE 'enc:v2:%')
+				AND (${table.waIdCiphertext} IS NULL OR ${table.waIdCiphertext} LIKE 'enc:v2:%')
+				AND (${table.usernameCiphertext} IS NULL OR ${table.usernameCiphertext} LIKE 'enc:v2:%')`,
+		),
+		check(
+			"whatsapp_identity_aliases_pair_check",
+			sql`(${table.parentBsuidHash} IS NULL) = (${table.parentBsuidCiphertext} IS NULL)
+				AND (${table.waIdHash} IS NULL) = (${table.waIdCiphertext} IS NULL)`,
 		),
 	],
 );
@@ -8472,6 +9207,14 @@ export const adObjectiveEnum = pgEnum("ad_objective", [
 	"video_views",
 ]);
 
+export const adConnectionStatusEnum = pgEnum("ad_connection_status", [
+	"pending",
+	"active",
+	"expired",
+	"revoked",
+	"error",
+]);
+
 export const audienceTypeEnum = pgEnum("audience_type", AD_AUDIENCE_TYPES);
 
 export const ideaMediaTypeEnum = pgEnum("idea_media_type", IDEA_MEDIA_TYPES);
@@ -8493,7 +9236,103 @@ export const ideaActivityActionEnum = pgEnum("idea_activity_action", [
 // Ads tables
 // ---------------------------------------------------------------------------
 
-/** Links social accounts to platform ad accounts (1:N) */
+/**
+ * Dedicated advertising authorization. Paid-media credentials are deliberately
+ * separate from social publishing credentials so scope/revocation boundaries
+ * cannot bleed between the two products.
+ */
+export const adConnections = pgTable(
+	"ad_connections",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("adconn_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		platform: adPlatformEnum("platform").notNull(),
+		providerPrincipalId: text("provider_principal_id").notNull(),
+		displayName: text("display_name"),
+		accessToken: text("access_token"),
+		refreshToken: text("refresh_token"),
+		tokenSecret: text("token_secret"),
+		accessTokenExpiresAt: timestamp("access_token_expires_at", {
+			withTimezone: true,
+		}),
+		refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+			withTimezone: true,
+		}),
+		scopes: text("scopes").array().notNull().default(sql`ARRAY[]::text[]`),
+		status: adConnectionStatusEnum("status").notNull().default("pending"),
+		credentialVersion: integer("credential_version").notNull().default(1),
+		metadata: jsonb("metadata"),
+		refreshLeaseExpiresAt: timestamp("refresh_lease_expires_at", {
+			withTimezone: true,
+		}),
+		lastRefreshAttemptAt: timestamp("last_refresh_attempt_at", {
+			withTimezone: true,
+		}),
+		lastError: text("last_error"),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		unique("ad_connections_id_org_uniq").on(table.id, table.organizationId),
+		unique("ad_connections_id_org_scope_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+		),
+		unique("ad_connections_id_org_scope_platform_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.platform,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_connections_workspace_org_fk",
+		}),
+		uniqueIndex("ad_connections_principal_scope_uniq").on(
+			table.organizationId,
+			table.scopeKey,
+			table.platform,
+			table.providerPrincipalId,
+		),
+		index("ad_connections_org_status_idx").on(
+			table.organizationId,
+			table.status,
+		),
+		index("ad_connections_refresh_due_idx").on(
+			table.status,
+			table.accessTokenExpiresAt,
+			table.refreshLeaseExpiresAt,
+		),
+		check(
+			"ad_connections_credential_version_check",
+			sql`${table.credentialVersion} > 0`,
+		),
+		check(
+			"ad_connections_revocation_state_check",
+			sql`(${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)
+				OR (${table.status} <> 'revoked' AND ${table.revokedAt} IS NULL)`,
+		),
+	],
+);
+
+/** Links a dedicated ad connection to platform ad accounts (1:N). */
 export const adAccounts = pgTable(
 	"ad_accounts",
 	{
@@ -8509,13 +9348,21 @@ export const adAccounts = pgTable(
 		scopeKey: text("scope_key")
 			.notNull()
 			.generatedAlwaysAs(workspaceScopeKeySql()),
-		socialAccountId: text("social_account_id").notNull(),
+		adConnectionId: text("ad_connection_id"),
+		// Transitional boost identity only. New provider authority comes from
+		// ad_connection_id. The legacy composite FK remains for existing rows but,
+		// because this column is nullable, does not authorize dedicated connections.
+		socialAccountId: text("social_account_id"),
 		platform: adPlatformEnum("platform").notNull(),
 		platformAdAccountId: text("platform_ad_account_id").notNull(),
 		name: text("name"),
 		currency: varchar("currency", { length: 3 }),
 		timezone: text("timezone"),
 		status: text("status").default("active"),
+		capabilities: jsonb("capabilities"),
+		capabilitiesCheckedAt: timestamp("capabilities_checked_at", {
+			withTimezone: true,
+		}),
 		metadata: jsonb("metadata"),
 		// Read-only provider synchronization. The due clock is independent from
 		// freshness and from the enqueue/consumer lease so overlapping crons and
@@ -8566,6 +9413,21 @@ export const adAccounts = pgTable(
 			],
 			name: "ad_accounts_social_account_org_scope_fk",
 		}).onDelete("cascade"),
+		foreignKey({
+			columns: [
+				table.adConnectionId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				adConnections.id,
+				adConnections.organizationId,
+				adConnections.scopeKey,
+				adConnections.platform,
+			],
+			name: "ad_accounts_connection_org_scope_platform_fk",
+		}).onDelete("restrict"),
 		uniqueIndex("ad_accounts_org_platform_id_idx").on(
 			table.organizationId,
 			table.platform,
@@ -8574,6 +9436,7 @@ export const adAccounts = pgTable(
 		index("ad_accounts_org_idx").on(table.organizationId),
 		index("ad_accounts_workspace_idx").on(table.workspaceId),
 		index("ad_accounts_social_account_idx").on(table.socialAccountId),
+		index("ad_accounts_connection_idx").on(table.adConnectionId),
 		index("ad_accounts_status_idx").on(table.status),
 		index("ad_accounts_sync_due_idx").on(
 			table.status,
@@ -8581,6 +9444,10 @@ export const adAccounts = pgTable(
 			table.syncLeaseExpiresAt,
 			table.organizationId,
 			table.id,
+		),
+		check(
+			"ad_accounts_authority_check",
+			sql`${table.adConnectionId} IS NOT NULL OR ${table.socialAccountId} IS NOT NULL`,
 		),
 		check(
 			"ad_accounts_sync_counters_check",
@@ -8602,6 +9469,88 @@ export const adAccounts = pgTable(
 			"ad_accounts_currency_check",
 			sql`${table.currency} IS NULL OR ${table.currency} ~ '^[A-Z]{3}$'`,
 		),
+	],
+);
+
+/** Provider identities an ad account is authorized to promote. */
+export const adAccountPromotableIdentities = pgTable(
+	"ad_account_promotable_identities",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("adident_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		adAccountId: text("ad_account_id").notNull(),
+		socialAccountId: text("social_account_id").references(
+			() => socialAccounts.id,
+			{ onDelete: "set null" },
+		),
+		providerIdentityId: text("provider_identity_id").notNull(),
+		identityType: text("identity_type", {
+			enum: AD_PROMOTABLE_IDENTITY_TYPES,
+		}).notNull(),
+		displayName: text("display_name"),
+		status: text("status", {
+			enum: AD_PROMOTABLE_IDENTITY_STATUSES,
+		})
+			.notNull()
+			.default("active"),
+		capabilities: jsonb("capabilities"),
+		metadata: jsonb("metadata"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_account_identities_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [table.adAccountId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				adAccounts.id,
+				adAccounts.organizationId,
+				adAccounts.scopeKey,
+			],
+			name: "ad_account_identities_account_org_scope_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [table.socialAccountId, table.organizationId, table.scopeKey],
+			foreignColumns: [
+				socialAccounts.id,
+				socialAccounts.organizationId,
+				socialAccounts.scopeKey,
+			],
+			name: "ad_account_identities_social_account_org_scope_fk",
+		}),
+		check(
+			"ad_account_identities_identity_type_check",
+			sql`${table.identityType} IN ('social_account', 'facebook_page', 'instagram_account', 'linkedin_organization', 'pinterest_profile', 'tiktok_identity', 'x_user')`,
+		),
+		check(
+			"ad_account_identities_status_check",
+			sql`${table.status} IN ('active', 'revoked', 'unavailable')`,
+		),
+		uniqueIndex("ad_account_identities_provider_uniq").on(
+			table.adAccountId,
+			table.identityType,
+			table.providerIdentityId,
+		),
+		index("ad_account_identities_social_idx").on(table.socialAccountId),
+		index("ad_account_identities_account_idx").on(table.adAccountId),
 	],
 );
 
@@ -9502,6 +10451,707 @@ export const adAudienceUsers = pgTable(
 		uniqueIndex("ad_audience_users_phone_uniq")
 			.on(table.audienceId, table.phoneHash)
 			.where(sql`${table.phoneHash} IS NOT NULL`),
+	],
+);
+
+/** Provider lead-form metadata. Lead payloads are stored separately and encrypted. */
+export const adLeadForms = pgTable(
+	"ad_lead_forms",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("adform_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		adAccountId: text("ad_account_id").notNull(),
+		platform: adPlatformEnum("platform").notNull(),
+		providerFormId: text("provider_form_id").notNull(),
+		name: text("name"),
+		status: text("status", {
+			enum: ["draft", "active", "archived", "unknown"],
+		})
+			.notNull()
+			.default("unknown"),
+		configuration: jsonb("configuration")
+			.$type<Record<string, unknown>>()
+			.notNull()
+			.default({}),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		unique("ad_lead_forms_id_org_scope_account_platform_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.adAccountId,
+			table.platform,
+		),
+		unique("ad_lead_forms_org_account_provider_uniq").on(
+			table.organizationId,
+			table.adAccountId,
+			table.providerFormId,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_lead_forms_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.adAccountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				adAccounts.id,
+				adAccounts.organizationId,
+				adAccounts.scopeKey,
+				adAccounts.platform,
+			],
+			name: "ad_lead_forms_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		check(
+			"ad_lead_forms_status_check",
+			sql`${table.status} IN ('draft', 'active', 'archived', 'unknown')`,
+		),
+		check(
+			"ad_lead_forms_configuration_check",
+			sql`jsonb_typeof(${table.configuration}) = 'object'`,
+		),
+		index("ad_lead_forms_account_created_idx").on(
+			table.adAccountId,
+			table.createdAt,
+			table.id,
+		),
+	],
+);
+
+/** Encrypted, short-retention lead inbox. */
+export const adLeads = pgTable(
+	"ad_leads",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("adlead_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		adAccountId: text("ad_account_id").notNull(),
+		platform: adPlatformEnum("platform").notNull(),
+		leadFormId: text("lead_form_id"),
+		providerLeadId: text("provider_lead_id").notNull(),
+		status: text("status", { enum: ["new", "promoted", "dismissed"] })
+			.notNull()
+			.default("new"),
+		payloadCiphertext: text("payload_ciphertext").notNull(),
+		contactId: text("contact_id"),
+		providerCreatedAt: timestamp("provider_created_at", { withTimezone: true }),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		unique("ad_leads_org_account_provider_uniq").on(
+			table.organizationId,
+			table.adAccountId,
+			table.providerLeadId,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_leads_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.adAccountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				adAccounts.id,
+				adAccounts.organizationId,
+				adAccounts.scopeKey,
+				adAccounts.platform,
+			],
+			name: "ad_leads_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [
+				table.leadFormId,
+				table.organizationId,
+				table.scopeKey,
+				table.adAccountId,
+				table.platform,
+			],
+			foreignColumns: [
+				adLeadForms.id,
+				adLeadForms.organizationId,
+				adLeadForms.scopeKey,
+				adLeadForms.adAccountId,
+				adLeadForms.platform,
+			],
+			name: "ad_leads_form_org_scope_account_platform_fk",
+		}).onDelete("restrict"),
+		foreignKey({
+			columns: [table.contactId, table.organizationId, table.scopeKey],
+			foreignColumns: [contacts.id, contacts.organizationId, contacts.scopeKey],
+			name: "ad_leads_contact_org_scope_fk",
+		}).onDelete("restrict"),
+		check(
+			"ad_leads_status_check",
+			sql`${table.status} IN ('new', 'promoted', 'dismissed')`,
+		),
+		check(
+			"ad_leads_ciphertext_check",
+			sql`${table.payloadCiphertext} LIKE 'enc:v2:%'`,
+		),
+		check(
+			"ad_leads_retention_check",
+			sql`${table.expiresAt} > ${table.createdAt}
+				AND ${table.expiresAt} <= ${table.createdAt} + interval '30 days'`,
+		),
+		check(
+			"ad_leads_promotion_check",
+			sql`(${table.status} = 'promoted') = (${table.contactId} IS NOT NULL)`,
+		),
+		index("ad_leads_account_created_idx").on(
+			table.adAccountId,
+			table.createdAt,
+			table.id,
+		),
+		index("ad_leads_expiry_idx").on(table.expiresAt, table.id),
+	],
+);
+
+/** Tenant-scoped destination and mapping for server-side conversion delivery. */
+export const adConversionRules = pgTable(
+	"ad_conversion_rules",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("adcr_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		adAccountId: text("ad_account_id").notNull(),
+		platform: adPlatformEnum("platform").notNull(),
+		name: text("name").notNull(),
+		eventName: text("event_name").notNull(),
+		providerDestinationId: text("provider_destination_id").notNull(),
+		configuration: jsonb("configuration")
+			.$type<Record<string, unknown>>()
+			.notNull()
+			.default({}),
+		enabled: boolean("enabled").notNull().default(true),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		unique("ad_conversion_rules_id_org_scope_account_platform_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.adAccountId,
+			table.platform,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_conversion_rules_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.adAccountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				adAccounts.id,
+				adAccounts.organizationId,
+				adAccounts.scopeKey,
+				adAccounts.platform,
+			],
+			name: "ad_conversion_rules_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		check(
+			"ad_conversion_rules_configuration_check",
+			sql`jsonb_typeof(${table.configuration}) = 'object'`,
+		),
+		index("ad_conversion_rules_account_enabled_idx").on(
+			table.adAccountId,
+			table.enabled,
+		),
+	],
+);
+
+/** Durable, encrypted conversion-delivery outbox. */
+export const adConversionEvents = pgTable(
+	"ad_conversion_events",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("adconv_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		adAccountId: text("ad_account_id").notNull(),
+		platform: adPlatformEnum("platform").notNull(),
+		conversionRuleId: text("conversion_rule_id").notNull(),
+		eventId: text("event_id").notNull(),
+		operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+		requestHash: varchar("request_hash", { length: 64 }).notNull(),
+		payloadCiphertext: text("payload_ciphertext"),
+		status: text("status", {
+			enum: [
+				"pending",
+				"processing",
+				"request_may_have_been_sent",
+				"unknown",
+				"completed",
+				"failed",
+				"cancelled",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		providerEventId: text("provider_event_id"),
+		attempts: integer("attempts").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", {
+			withTimezone: true,
+		}).defaultNow(),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		lastError: text("last_error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+	},
+	(table) => [
+		unique("ad_conversion_events_org_rule_operation_uniq").on(
+			table.organizationId,
+			table.conversionRuleId,
+			table.operationKeyHash,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_conversion_events_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.conversionRuleId,
+				table.organizationId,
+				table.scopeKey,
+				table.adAccountId,
+				table.platform,
+			],
+			foreignColumns: [
+				adConversionRules.id,
+				adConversionRules.organizationId,
+				adConversionRules.scopeKey,
+				adConversionRules.adAccountId,
+				adConversionRules.platform,
+			],
+			name: "ad_conversion_events_rule_org_scope_account_platform_fk",
+		}).onDelete("cascade"),
+		check(
+			"ad_conversion_events_status_check",
+			sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'completed', 'failed', 'cancelled')`,
+		),
+		check(
+			"ad_conversion_events_hash_check",
+			sql`${table.operationKeyHash} ~ '^[0-9a-f]{64}$'
+				AND ${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"ad_conversion_events_ciphertext_check",
+			sql`${table.payloadCiphertext} IS NULL OR ${table.payloadCiphertext} LIKE 'enc:v2:%'`,
+		),
+		check(
+			"ad_conversion_events_payload_lifecycle_check",
+			sql`${table.status} IN ('completed', 'failed', 'cancelled')
+				OR ${table.payloadCiphertext} IS NOT NULL`,
+		),
+		check(
+			"ad_conversion_events_counters_check",
+			sql`${table.attempts} >= 0 AND ${table.leaseToken} >= 0`,
+		),
+		check(
+			"ad_conversion_events_lease_check",
+			sql`(${table.status} IN ('processing', 'request_may_have_been_sent')) = (${table.leaseExpiresAt} IS NOT NULL)`,
+		),
+		check(
+			"ad_conversion_events_request_boundary_check",
+			sql`${table.status} <> 'request_may_have_been_sent'
+				OR ${table.requestMayHaveBeenSentAt} IS NOT NULL`,
+		),
+		check(
+			"ad_conversion_events_completion_check",
+			sql`(${table.status} IN ('completed', 'failed', 'cancelled')) = (${table.completedAt} IS NOT NULL)`,
+		),
+		uniqueIndex("ad_conversion_events_rule_active_uniq")
+			.on(table.organizationId, table.conversionRuleId, table.eventId)
+			.where(
+				sql`${table.status} IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown')`,
+			),
+		index("ad_conversion_events_due_idx").on(
+			table.status,
+			table.nextAttemptAt,
+			table.leaseExpiresAt,
+			table.id,
+		),
+	],
+);
+
+/** Resolve the later-initialized composite self-reference without widening table inference. */
+function adAdvancedResourceParentColumns(): [
+	AnyPgColumn,
+	AnyPgColumn,
+	AnyPgColumn,
+	AnyPgColumn,
+	AnyPgColumn,
+	AnyPgColumn,
+] {
+	return [
+		adAdvancedResources.id,
+		adAdvancedResources.organizationId,
+		adAdvancedResources.scopeKey,
+		adAdvancedResources.adAccountId,
+		adAdvancedResources.platform,
+		adAdvancedResources.kind,
+	];
+}
+
+/** Linked provider assets, catalogs, product sets, and messaging experiences. */
+export const adAdvancedResources = pgTable(
+	"ad_advanced_resources",
+	{
+		id: text("id").primaryKey(),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		adAccountId: text("ad_account_id").notNull(),
+		platform: adPlatformEnum("platform").notNull(),
+		kind: text("kind", {
+			enum: [...AD_ADVANCED_RESOURCE_KINDS],
+		}).notNull(),
+		providerResourceId: text("provider_resource_id"),
+		parentId: text("parent_id"),
+		// A non-null parent is valid only for product sets, and the generated
+		// discriminator makes their composite FK target a catalog in the same
+		// tenant/account/platform rather than merely any advanced resource ID.
+		parentResourceClass: text("parent_resource_class").generatedAlwaysAs(
+			sql`CASE WHEN parent_id IS NULL THEN NULL ELSE 'catalog' END`,
+		),
+		name: text("name"),
+		status: text("status", {
+			enum: ["linked", "unavailable", "archived"],
+		})
+			.notNull()
+			.default("linked"),
+		configuration: jsonb("configuration")
+			.$type<Record<string, unknown>>()
+			.notNull()
+			.default({}),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		unique("ad_advanced_resources_id_org_scope_account_platform_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.adAccountId,
+			table.platform,
+		),
+		unique("ad_advanced_resources_parent_target_uniq").on(
+			table.id,
+			table.organizationId,
+			table.scopeKey,
+			table.adAccountId,
+			table.platform,
+			table.kind,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_advanced_resources_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.adAccountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				adAccounts.id,
+				adAccounts.organizationId,
+				adAccounts.scopeKey,
+				adAccounts.platform,
+			],
+			name: "ad_advanced_resources_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		foreignKey({
+			columns: [
+				table.parentId,
+				table.organizationId,
+				table.scopeKey,
+				table.adAccountId,
+				table.platform,
+				table.parentResourceClass,
+			],
+			foreignColumns: adAdvancedResourceParentColumns(),
+			name: "ad_advanced_resources_parent_org_scope_account_platform_kind_fk",
+		}).onDelete("restrict"),
+		check(
+			"ad_advanced_resources_kind_check",
+			sql`${table.kind} IN (${sql.join(
+				AD_ADVANCED_RESOURCE_KINDS.map((value) => ddlTextLiteral(value)),
+				sql`, `,
+			)})`,
+		),
+		check(
+			"ad_advanced_resources_status_check",
+			sql`${table.status} IN ('linked', 'unavailable', 'archived')`,
+		),
+		check(
+			"ad_advanced_resources_parent_check",
+			sql`(${table.kind} = 'product_set') = (${table.parentId} IS NOT NULL)`,
+		),
+		check(
+			"ad_advanced_resources_configuration_check",
+			sql`jsonb_typeof(${table.configuration}) = 'object'`,
+		),
+		uniqueIndex("ad_advanced_resources_provider_uniq")
+			.on(table.adAccountId, table.kind, table.providerResourceId)
+			.where(sql`${table.providerResourceId} IS NOT NULL`),
+		index("ad_advanced_resources_account_kind_idx").on(
+			table.adAccountId,
+			table.kind,
+			table.createdAt,
+		),
+	],
+);
+
+/** Durable provider reporting job with bounded normalized results. */
+export const adReportJobs = pgTable(
+	"ad_report_jobs",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => generateId("adrep_")),
+		organizationId: text("organization_id")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		workspaceId: text("workspace_id").references(() => workspaces.id, {
+			onDelete: "restrict",
+		}),
+		scopeKey: text("scope_key")
+			.notNull()
+			.generatedAlwaysAs(workspaceScopeKeySql()),
+		adAccountId: text("ad_account_id").notNull(),
+		platform: adPlatformEnum("platform").notNull(),
+		operationKeyHash: varchar("operation_key_hash", { length: 64 }).notNull(),
+		requestHash: varchar("request_hash", { length: 64 }).notNull(),
+		requestPayload: jsonb("request_payload")
+			.$type<Record<string, unknown>>()
+			.notNull(),
+		status: text("status", {
+			enum: [
+				"pending",
+				"submitting",
+				"provider_pending",
+				"downloading",
+				"completed",
+				"failed",
+				"unknown",
+				"cancelled",
+			],
+		})
+			.notNull()
+			.default("pending"),
+		providerJobId: text("provider_job_id"),
+		resultObjectKey: text("result_object_key"),
+		rowCount: integer("row_count"),
+		resultExpiresAt: timestamp("result_expires_at", { withTimezone: true }),
+		attempts: integer("attempts").notNull().default(0),
+		nextAttemptAt: timestamp("next_attempt_at", {
+			withTimezone: true,
+		}).defaultNow(),
+		leaseToken: integer("lease_token").notNull().default(0),
+		leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+		requestMayHaveBeenSentAt: timestamp("request_may_have_been_sent_at", {
+			withTimezone: true,
+		}),
+		lastError: text("last_error"),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+	},
+	(table) => [
+		unique("ad_report_jobs_id_org_uniq").on(table.id, table.organizationId),
+		unique("ad_report_jobs_org_operation_uniq").on(
+			table.organizationId,
+			table.operationKeyHash,
+		),
+		foreignKey({
+			columns: [table.workspaceId, table.organizationId],
+			foreignColumns: [workspaces.id, workspaces.organizationId],
+			name: "ad_report_jobs_workspace_org_fk",
+		}),
+		foreignKey({
+			columns: [
+				table.adAccountId,
+				table.organizationId,
+				table.scopeKey,
+				table.platform,
+			],
+			foreignColumns: [
+				adAccounts.id,
+				adAccounts.organizationId,
+				adAccounts.scopeKey,
+				adAccounts.platform,
+			],
+			name: "ad_report_jobs_account_org_scope_platform_fk",
+		}).onDelete("cascade"),
+		check(
+			"ad_report_jobs_status_check",
+			sql`${table.status} IN ('pending', 'submitting', 'provider_pending', 'downloading', 'completed', 'failed', 'unknown', 'cancelled')`,
+		),
+		check(
+			"ad_report_jobs_hash_check",
+			sql`${table.operationKeyHash} ~ '^[0-9a-f]{64}$'
+				AND ${table.requestHash} ~ '^[0-9a-f]{64}$'`,
+		),
+		check(
+			"ad_report_jobs_request_check",
+			sql`jsonb_typeof(${table.requestPayload}) = 'object'`,
+		),
+		check(
+			"ad_report_jobs_counters_check",
+			sql`${table.attempts} >= 0
+				AND ${table.leaseToken} >= 0
+				AND (${table.rowCount} IS NULL OR ${table.rowCount} >= 0)`,
+		),
+		check(
+			"ad_report_jobs_request_boundary_check",
+			sql`${table.status} <> 'submitting'
+				OR ${table.requestMayHaveBeenSentAt} IS NOT NULL`,
+		),
+		check(
+			"ad_report_jobs_completion_check",
+			sql`(${table.status} IN ('completed', 'failed', 'cancelled')) = (${table.completedAt} IS NOT NULL)`,
+		),
+		index("ad_report_jobs_due_idx").on(
+			table.status,
+			table.nextAttemptAt,
+			table.leaseExpiresAt,
+			table.id,
+		),
+		index("ad_report_jobs_result_expiry_idx").on(
+			table.resultExpiresAt,
+			table.id,
+		),
+		index("ad_report_jobs_terminal_retention_idx").on(
+			table.status,
+			table.updatedAt,
+			table.id,
+		),
+	],
+);
+
+/** Canonical rows projected from provider-specific report output. */
+export const adReportRows = pgTable(
+	"ad_report_rows",
+	{
+		organizationId: text("organization_id").notNull(),
+		reportJobId: text("report_job_id").notNull(),
+		rowNumber: integer("row_number").notNull(),
+		dimensions: jsonb("dimensions")
+			.$type<Record<string, unknown>>()
+			.notNull()
+			.default({}),
+		metrics: jsonb("metrics")
+			.$type<Record<string, string | number | null>>()
+			.notNull()
+			.default({}),
+	},
+	(table) => [
+		primaryKey({ columns: [table.reportJobId, table.rowNumber] }),
+		foreignKey({
+			columns: [table.reportJobId, table.organizationId],
+			foreignColumns: [adReportJobs.id, adReportJobs.organizationId],
+			name: "ad_report_rows_job_org_fk",
+		}).onDelete("cascade"),
+		check("ad_report_rows_number_check", sql`${table.rowNumber} > 0`),
+		check(
+			"ad_report_rows_payload_check",
+			sql`jsonb_typeof(${table.dimensions}) = 'object'
+				AND jsonb_typeof(${table.metrics}) = 'object'`,
+		),
 	],
 );
 

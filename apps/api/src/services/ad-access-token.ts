@@ -6,10 +6,35 @@ const META_ADS_USER_ACCESS_TOKEN_KEY = "meta_ads_user_access_token";
 const META_ADS_USER_ACCESS_TOKEN_EXPIRES_AT_KEY =
 	"meta_ads_user_access_token_expires_at";
 const FACEBOOK_USER_ID_KEY = "facebook_user_id";
+const TIKTOK_VERIFIED_URL_PREFIXES_KEY = "tiktok_verified_url_prefixes";
+const SNAPCHAT_PUBLIC_PROFILE_VERIFIED_KEY = "snapchat_public_profile_verified";
 const INTERNAL_SOCIAL_ACCOUNT_METADATA_KEYS = new Set([
 	META_ADS_USER_ACCESS_TOKEN_KEY,
 	META_ADS_USER_ACCESS_TOKEN_EXPIRES_AT_KEY,
 	FACEBOOK_USER_ID_KEY,
+	TIKTOK_VERIFIED_URL_PREFIXES_KEY,
+	SNAPCHAT_PUBLIC_PROFILE_VERIFIED_KEY,
+]);
+const CONNECTION_OWNED_SOCIAL_ACCOUNT_METADATA_KEYS = new Set([
+	...INTERNAL_SOCIAL_ACCOUNT_METADATA_KEYS,
+	// These values choose the origin or provider identity that receives a stored
+	// credential. Only a verified connect/reconnect flow may change them.
+	"instance_url",
+	"pds_url",
+	"did",
+	"auth_mode",
+	"waba_id",
+	"publication_id",
+	"location_id",
+	"default_location_id",
+	"from_number",
+	"default_from_number",
+	"mms_capable",
+	"webhook_id",
+	"guild_id",
+	"channel_id",
+	"team_id",
+	"service_id",
 ]);
 
 function getMetadataObject(metadata: unknown): Record<string, unknown> | null {
@@ -94,7 +119,7 @@ export function mergePublicSocialAccountMetadata(
 	if (!publicUpdates) return nextMetadata;
 
 	for (const [key, value] of Object.entries(publicUpdates)) {
-		if (INTERNAL_SOCIAL_ACCOUNT_METADATA_KEYS.has(key)) continue;
+		if (CONNECTION_OWNED_SOCIAL_ACCOUNT_METADATA_KEYS.has(key)) continue;
 		nextMetadata[key] = value;
 	}
 

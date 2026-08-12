@@ -12,6 +12,12 @@ describe("self-host durable ad-mutation compatibility", () => {
 			providerBoundary,
 			usage,
 			meta,
+			google,
+			linkedin,
+			pinterest,
+			tiktok,
+			twitter,
+			credentials,
 			scheduled,
 			phones,
 			api,
@@ -33,6 +39,24 @@ describe("self-host durable ad-mutation compatibility", () => {
 			Bun.file(
 				`${repositoryRoot}apps/api/src/services/ad-platforms/meta.ts`,
 			).text(),
+			Bun.file(
+				`${repositoryRoot}apps/api/src/services/ad-platforms/google.ts`,
+			).text(),
+			Bun.file(
+				`${repositoryRoot}apps/api/src/services/ad-platforms/linkedin.ts`,
+			).text(),
+			Bun.file(
+				`${repositoryRoot}apps/api/src/services/ad-platforms/pinterest.ts`,
+			).text(),
+			Bun.file(
+				`${repositoryRoot}apps/api/src/services/ad-platforms/tiktok.ts`,
+			).text(),
+			Bun.file(
+				`${repositoryRoot}apps/api/src/services/ad-platforms/twitter.ts`,
+			).text(),
+			Bun.file(
+				`${repositoryRoot}apps/api/src/services/ad-provider-credentials.ts`,
+			).text(),
 			Bun.file(`${repositoryRoot}apps/api/src/scheduled/index.ts`).text(),
 			Bun.file(
 				`${repositoryRoot}apps/api/src/services/phone-number-operations.ts`,
@@ -52,23 +76,35 @@ describe("self-host durable ad-mutation compatibility", () => {
 		);
 		expect(providerBoundary).toContain("if (input.requiresLiveEntitlement");
 		expect(providerBoundary).toContain("!isSelfHosted(env)");
-		expect(providerBoundary.match(/\.for\("share"\)/g)).toHaveLength(2);
-		expect(providerBoundary.indexOf(".from(socialAccounts)")).toBeLessThan(
-			providerBoundary.indexOf(
-				".from(adAccounts)",
-				providerBoundary.indexOf(".from(socialAccounts)"),
-			),
-		);
-		expect(providerBoundary).toContain(
-			"resolveAdsAccessToken(socialAccount, env)",
-		);
+		expect(providerBoundary).toContain(".from(adConnections)");
+		expect(providerBoundary).toContain("accountAuthorityCondition");
+		expect(providerBoundary).toContain("resolveAdProviderCredentials({");
+		expect(credentials).toContain("if (input.adConnection)");
+		expect(credentials).toContain('input.platform === "meta"');
+		expect(credentials).toContain('"ADS_CONNECTION_REQUIRED"');
 		expect(normalizedReadme).toContain(
-			"bypasses only the hosted Stripe entitlement check, never actor or provider-account revocation",
+			"bypasses only the hosted Stripe entitlement check, never actor, connection, scope, or provider-account revocation",
 		);
 		expect(meta).toContain("acknowledgement.success !== true");
 		expect(meta).toContain('"META_MUTATION_NOT_ACKNOWLEDGED"');
 		expect(meta).toContain("buildCompleteTargetingSpec(params.targeting)");
 		expect(meta).toContain("Meta requires a geography in every targeting spec");
+		expect(google).toContain("containsEuPoliticalAdvertising");
+		expect(google).toContain("createCreativeAndAd");
+		expect(linkedin).toContain('requiredScopes: ["rw_ads"]');
+		expect(linkedin).toContain('"X-RestLi-Method": "PARTIAL_UPDATE"');
+		expect(normalizedReadme).toContain(
+			"paid-write adapters for Google Ads v25, LinkedIn Marketing API 202607, Pinterest Ads v5, TikTok Marketing API v1.3, and X Ads API v12",
+		);
+		expect(normalizedReadme).toContain(
+			"no extra Cloudflare binding is required",
+		);
+		expect(pinterest).toContain("coalescesCreativeAndAd: true");
+		expect(pinterest).toContain('"/ads", "POST"');
+		expect(tiktok).toContain('"ad/status/update"');
+		expect(tiktok).toContain("code !== 0");
+		expect(twitter).toContain('"DELETE"');
+		expect(twitter).toContain("promoted_tweets");
 		expect(creation).toContain("hasAdCreationProviderEffect(operation)");
 		expect(usage).toContain("adCreationUsesInheritedContext");
 		expect(normalizedReadme).toContain("IDs inherited from an existing");

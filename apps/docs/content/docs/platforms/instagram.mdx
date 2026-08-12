@@ -14,16 +14,16 @@ icon: instagram
 | Images per post | 1 (feed), 10 (carousel) |
 | Videos per post | 1 |
 | Image formats | JPEG, PNG |
-| Image max size | 8 MB (auto-compressed) |
+| Image max size | 8 MiB |
 | Video formats | MP4, MOV |
-| Video max size | 300 MB (feed/reels), 100 MB (stories) |
+| Video max size | 100 MiB |
 | Video max duration | 90 sec (reels), 60 min (feed), 60 sec (story) |
 | Post types | Feed, Carousel, Story, Reel |
 | Scheduling | Yes |
 | Analytics | Yes (impressions, reach, likes, comments, shares, saves, views) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
@@ -36,7 +36,7 @@ Instagram requires a **Business or Creator account** — personal accounts canno
 
 Post a photo to your Instagram feed:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -52,24 +52,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-
-post = client.posts.create(
-    content='Beautiful sunset today #photography',
-    targets=['instagram'],
-    media=[
-        {'url': 'https://cdn.example.com/sunset.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -128,7 +110,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 A single image post on the Instagram feed. Only the first 125 characters are visible before the "more" fold.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -139,18 +121,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Beautiful sunset today #photography',
-    targets=['instagram'],
-    media=[
-        {'url': 'https://cdn.example.com/sunset.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -199,7 +169,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Mix images and videos in a swipeable carousel. The first item determines the aspect ratio for all items.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -213,21 +183,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Trip highlights from last weekend',
-    targets=['instagram'],
-    media=[
-        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/clip.mp4', 'type': 'video'},
-        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -294,7 +249,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Stories are ephemeral (24 hours). Text captions are **not** displayed on stories. Link stickers are **not** available via the API.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -309,22 +264,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['instagram'],
-    media=[
-        {'url': 'https://cdn.example.com/story.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'instagram': {
-            'content_type': 'story',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -385,7 +324,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Vertical video (9:16), max 90 seconds. Reels appear on the Reels tab and optionally on your profile feed.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -403,25 +342,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='New tutorial!',
-    targets=['instagram'],
-    media=[
-        {'url': 'https://cdn.example.com/reel.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'instagram': {
-            'content_type': 'reels',
-            'share_to_feed': True,
-            'first_comment': 'Link in bio!',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -487,11 +407,41 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 </Tab>
 </Tabs>
 
+#### Trial Reel with a custom cover
+
+Trial Reels and cover selectors apply only when `content_type` is `reels`.
+`trial_params.graduation_strategy` is either `MANUAL` or `SS_PERFORMANCE`.
+Choose exactly one cover source: a public `cover_url`, a ready Relay
+`cover_media_id`, a ready generated `cover_variant_id`, or `thumb_offset`.
+
+```typescript
+const post = await client.posts.create({
+  content: 'Testing this Reel with non-followers first',
+  targets: ['instagram'],
+  scheduled_at: 'now',
+  media: [{ url: reelURL, type: 'video' }],
+  target_options: {
+    instagram: {
+      content_type: 'reels',
+      share_to_feed: false,
+      cover_variant_id: 'mder_ready_cover',
+      trial_params: { graduation_strategy: 'SS_PERFORMANCE' },
+    },
+  },
+});
+```
+
+Relay IDs remain stable in a scheduled post. At publish time, RelayAPI verifies
+that the media/variant belongs to the same organization and authorized
+workspace, is ready and unexpired, and then generates the short-lived provider
+URL in memory. See [Media Uploads](/guides/media-uploads#custom-reel-covers) for
+creating a cover variant from a video.
+
 ### Post with Collaborators and User Tags
 
 Tag collaborators (up to 3) and users in images. Collaborators receive an invite to co-author the post.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -510,26 +460,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Collab post with our partners!',
-    targets=['instagram'],
-    media=[
-        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'instagram': {
-            'collaborators': ['brandpartner', 'creator123'],
-            'user_tags': [
-                {'username': 'friend', 'x': 0.5, 'y': 0.5},
-            ],
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -604,7 +534,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Automatically post a first comment after publishing. Useful for hashtag blocks or calls to action.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -620,23 +550,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='New product launch!',
-    targets=['instagram'],
-    media=[
-        {'url': 'https://cdn.example.com/product.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'instagram': {
-            'first_comment': '#newproduct #launch #startup #tech #innovation',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -708,7 +621,7 @@ First comments work on feed posts and carousels only. They are not supported on 
 |----------|------|-------|----------|
 | Max images | 1 | 1 | 10 |
 | Formats | JPEG, PNG | JPEG, PNG | JPEG, PNG |
-| Max file size | 8 MB | 8 MB | 8 MB each |
+| Max file size | 8 MiB | 8 MiB | 8 MiB each |
 | Recommended | 1080 x 1350 px | 1080 x 1920 px | 1080 x 1080 px |
 
 ### Aspect Ratios
@@ -727,7 +640,7 @@ Feed posts accept aspect ratios between 4:5 (0.8) and 1.91:1. Outside that range
 | Property | Feed | Reel | Story |
 |----------|------|------|-------|
 | Formats | MP4, MOV | MP4, MOV | MP4, MOV |
-| Max size | 300 MB | 300 MB | 100 MB |
+| Max size | 100 MiB | 100 MiB | 100 MiB |
 | Max duration | 60 min | 90 sec | 60 sec |
 | Min duration | 3 sec | 3 sec | 3 sec |
 | Aspect ratio | 4:5 to 1.91:1 | 9:16 | 9:16 |
@@ -747,8 +660,11 @@ All fields go inside `target_options.instagram` on your post request.
 | `collaborators` | string[] | Up to 3 usernames to invite as collaborators (feed and reels only) |
 | `user_tags` | object[] | `{username, x, y, media_index?}` — tag users in images. Coordinates are 0-1 range. |
 | `first_comment` | string | Auto-posted first comment (feed and carousels only) |
-| `thumb_offset` | number | Millisecond offset for Reel cover thumbnail |
-| `audio_name` | string | Custom audio name for Reels |
+| `thumb_offset` | number | Millisecond offset for a Reel cover; mutually exclusive with the three other cover selectors |
+| `cover_url` | URL | Public image URL used as the Reel cover |
+| `cover_media_id` | `med_...` | Ready Relay media resolved to a fresh cover URL at publish time |
+| `cover_variant_id` | `mder_...` | Ready Relay-generated cover variant resolved at publish time |
+| `trial_params` | object | Trial Reel graduation strategy: `MANUAL` or `SS_PERFORMANCE` |
 
 ## Common Errors
 
@@ -769,9 +685,18 @@ All fields go inside `target_options.instagram` on your post request.
 - **Google Drive, Dropbox, OneDrive URLs do not work** — they return HTML download pages, not media bytes. Always use direct CDN URLs.
 - **Stories do not display text captions** — text is ignored. Link stickers are not available via the API.
 - **Carousel first item determines aspect ratio** for all subsequent items in the carousel.
-- **Images over 8 MB are auto-compressed** by Instagram, which may degrade quality.
+- **Images over 8 MiB are rejected by RelayAPI preflight** — resize them before publishing.
 - **100 posts per 24-hour rolling limit** includes feed posts, carousels, stories, and reels combined.
 - **User tags only work on images** — not videos or stories. For carousels, use `media_index` to target specific slides.
+
+## Social actions
+
+RelayAPI can hide/unhide Instagram comments, send a provider read receipt for
+a persisted inbound Instagram Messaging message, and list normalized story/post
+mentions already received through signed webhooks. It does not edit a published
+Instagram media object or comment. Reauthorize an older connection if it lacks
+`instagram_manage_comments` or `instagram_manage_messages`. See [Published
+Edits and Social Actions](/guides/published-edits-and-social-actions).
 
 ## Automations
 

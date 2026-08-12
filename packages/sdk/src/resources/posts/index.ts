@@ -4,6 +4,7 @@ export { Logs, type LogRetrieveResponse, type LogListResponse, type LogListParam
 export { PostTags, type PostTagListResponse, type PostTagListParams } from './tags';
 export {
   Posts,
+  POST_TARGET_PLATFORMS,
   type RecyclingConfig,
   type RecyclingInput,
   type PostTargetPlatform,

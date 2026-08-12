@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../../lib/provider-response";
 import { contactChannels, socialAccounts } from "@relayapi/db";
 import { and, eq, isNull } from "drizzle-orm";
 import { GRAPH_BASE } from "../../../config/api-versions";
@@ -99,7 +103,10 @@ export const socialProfileCheckHandler: NodeHandler<SocialProfileCheckConfig> =
 				signal: AbortSignal.timeout(8_000),
 			});
 			if (!response.ok) {
-				const detail = (await response.text().catch(() => "")).slice(0, 300);
+				const detail = (await readProviderText(response).catch(() => "")).slice(
+					0,
+					300,
+				);
 				return {
 					result: "fail",
 					error: new Error(
@@ -107,7 +114,7 @@ export const socialProfileCheckHandler: NodeHandler<SocialProfileCheckConfig> =
 					),
 				};
 			}
-			const profile = (await response.json()) as InstagramProfile;
+			const profile = (await readProviderJson(response)) as InstagramProfile;
 			const follows = profile.is_user_follow_business === true;
 			ctx.context.social_profile = {
 				is_user_follow_business: profile.is_user_follow_business ?? null,

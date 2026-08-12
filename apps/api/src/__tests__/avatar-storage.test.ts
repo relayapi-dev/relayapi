@@ -33,14 +33,36 @@ afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
 
-function mockImageFetch(body = "avatar-bytes"): void {
-	globalThis.fetch = fixture<typeof fetch>(
-		async () =>
-			new Response(body, {
-				status: 200,
-				headers: { "Content-Type": "image/png; charset=binary" },
-			}),
-	);
+function mockImageFetch(body = "avatar-bytes", headers?: HeadersInit): void {
+	globalThis.fetch = fixture<typeof fetch>(async (input: RequestInfo | URL) => {
+		const url = new URL(
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.toString()
+					: input.url,
+		);
+		if (
+			url.hostname === "dns.google" ||
+			url.hostname === "cloudflare-dns.com"
+		) {
+			return Response.json({
+				Status: 0,
+				Answer:
+					url.searchParams.get("type") === "A"
+						? [{ type: 1, data: "93.184.216.34" }]
+						: [],
+			});
+		}
+		const responseHeaders = new Headers(headers);
+		if (!responseHeaders.has("content-type")) {
+			responseHeaders.set("content-type", "image/png; charset=binary");
+		}
+		return new Response(body, {
+			status: 200,
+			headers: responseHeaders,
+		});
+	});
 }
 
 describe("avatar storage lifecycle", () => {
@@ -119,6 +141,26 @@ describe("avatar storage lifecycle", () => {
 			"org_123/workspaces/ws_123/conversations/conv_123/avatar",
 		]);
 		expect(durableWrites).toEqual([]);
+	});
+
+	it("rejects oversized provider avatars before writing either bucket", async () => {
+		mockImageFetch("x", {
+			"Content-Length": String(5 * 1024 * 1024 + 1),
+		});
+		let writes = 0;
+		const env = envFixture({
+			AVATAR_BUCKET: fixture<R2Bucket>({
+				put: async () => {
+					writes += 1;
+					return fixture<R2Object>({});
+				},
+			}),
+		});
+
+		expect(
+			await rehostAvatar(env, "acc_oversized", "https://provider.test/avatar"),
+		).toBeNull();
+		expect(writes).toBe(0);
 	});
 
 	it("checks and deletes the independently addressable durable object", async () => {

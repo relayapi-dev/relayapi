@@ -1,7 +1,7 @@
 import { SOCIAL_PLATFORM_IDS } from "./domain-contracts";
 import {
-	GOVERNANCE_REVIEWED_AT,
 	GOVERNANCE_REVIEW_EXPIRES_AT,
+	GOVERNANCE_REVIEWED_AT,
 	validateGovernanceReview,
 } from "./governance-review";
 
@@ -87,7 +87,7 @@ const SOCIAL_EGRESS_HOSTS = {
 	],
 	pinterest: ["api.pinterest.com", "www.pinterest.com"],
 	reddit: ["oauth.reddit.com", "www.reddit.com"],
-	bluesky: ["bsky.social", "video.bsky.app"],
+	bluesky: ["bsky.social", "public.api.bsky.app", "video.bsky.app"],
 	threads: ["graph.threads.net", "threads.net", "www.threads.net"],
 	telegram: ["api.telegram.org"],
 	snapchat: [
@@ -110,10 +110,65 @@ const SOCIAL_EGRESS_HOSTS = {
 	convertkit: ["api.kit.com"],
 	mailchimp: [],
 	listmonk: [],
+	slack: ["hooks.slack.com", "hooks.slack-gov.com"],
 } as const satisfies Record<
 	(typeof SOCIAL_PLATFORM_IDS)[number],
 	readonly string[]
 >;
+
+const SOCIAL_DYNAMIC_EGRESS_EVIDENCE: Partial<
+	Record<
+		(typeof SOCIAL_PLATFORM_IDS)[number],
+		readonly ExternalProviderEvidence[]
+	>
+> = {
+	mastodon: [
+		{
+			sourcePath: "apps/api/src/config/oauth.ts",
+			marker: "config.requiresPublicEndpointValidation",
+		},
+		{
+			sourcePath: "apps/api/src/services/mastodon-oauth.ts",
+			marker: "fetchPublicUrl(registrationUrl",
+		},
+		{
+			sourcePath: "apps/api/src/routes/posts.ts",
+			marker: 'case "mastodon"',
+		},
+	],
+	telegram: [
+		{
+			sourcePath: "apps/api/src/routes/posts.ts",
+			marker: 'case "telegram"',
+		},
+	],
+	discord: [
+		{
+			sourcePath: "apps/api/src/routes/posts.ts",
+			marker: 'case "discord"',
+		},
+	],
+	listmonk: [
+		{
+			sourcePath: "apps/api/src/routes/accounts.ts",
+			marker: "listmonkApiUrl(account.platformAccountId",
+		},
+		{
+			sourcePath: "apps/api/src/routes/connect.ts",
+			marker: 'listmonkApiUrl(cleanUrl, "/api/settings")',
+		},
+	],
+	whatsapp: [
+		{
+			sourcePath: "apps/api/src/services/whatsapp-admin-provider.ts",
+			marker: "export async function createWhatsAppGroup",
+		},
+		{
+			sourcePath: "apps/api/src/services/whatsapp-identity.ts",
+			marker: "export async function persistWhatsAppIdentityAlias",
+		},
+	],
+};
 
 const SOCIAL_PROVIDER_CONTRACTS =
 	SOCIAL_PLATFORM_IDS.map<ExternalProviderRetentionDefinition>((platform) => ({
@@ -121,6 +176,9 @@ const SOCIAL_PROVIDER_CONTRACTS =
 		provider: platform,
 		capabilities: [
 			"Connected-account publish, read, and supported inbox operations",
+			...(platform === "whatsapp"
+				? ["WhatsApp group administration and identity alias resolution"]
+				: []),
 		],
 		dataClasses: [
 			"account_credential",
@@ -136,6 +194,10 @@ const SOCIAL_PROVIDER_CONTRACTS =
 			"public.external_posts",
 			"public.inbox_conversations",
 			"public.inbox_messages",
+			"public.social_mutation_operations",
+			...(platform === "whatsapp"
+				? ["public.whatsapp_groups", "public.whatsapp_identity_aliases"]
+				: []),
 		],
 		persistenceBoundary:
 			platform === "listmonk" ? "customer_owned" : "provider_object",
@@ -162,6 +224,11 @@ const SOCIAL_PROVIDER_CONTRACTS =
 				sourcePath: "apps/api/src/publishers/index.ts",
 				marker: "publishers",
 			},
+			{
+				sourcePath: "apps/api/src/services/social-mutation-operations.ts",
+				marker: "export async function runSocialMutation",
+			},
+			...(SOCIAL_DYNAMIC_EGRESS_EVIDENCE[platform] ?? []),
 		],
 	}));
 
@@ -262,6 +329,63 @@ const INFRASTRUCTURE_PROVIDER_CONTRACTS = [
 			{
 				sourcePath: "apps/api/src/lib/thumbnails.ts",
 				marker: "env.MEDIA.input",
+			},
+		],
+	},
+	{
+		id: "advanced-ad-reports",
+		provider: "TikTok, X, and LinkedIn advertising APIs",
+		capabilities: [
+			"Asynchronous advertising-report submission, polling, bounded download, and normalization",
+		],
+		dataClasses: [
+			"operational_metadata",
+			"public_content_url",
+			"social_identifier",
+		],
+		localAuthorities: [
+			"public.ad_connections",
+			"public.ad_accounts",
+			"public.ad_report_jobs",
+			"public.ad_report_rows",
+			"R2 AD_REPORT_BUCKET object locators",
+		],
+		persistenceBoundary: "provider_object",
+		residencyControl: "provider_contract",
+		credentialAction:
+			"Revoke the dedicated encrypted advertising connection independently of local report retention.",
+		remoteAction:
+			"Stop polling and remove RelayAPI's private artifact and normalized rows; provider-side report jobs and logs remain governed by each advertising platform.",
+		retentionBoundary:
+			"RelayAPI deletes private result bytes and normalized rows after seven days and terminal local job metadata after 90 days; no shorter provider-side deadline is claimed.",
+		legalHoldTreatment: "provider_policy_only",
+		egressHosts: [
+			"business-api.tiktok.com",
+			"ads-api.x.com",
+			"api.linkedin.com",
+		],
+		owner: DATA_GOVERNANCE_OWNER,
+		reviewedAt: REVIEWED_AT,
+		evidence: [
+			{
+				sourcePath: "apps/api/src/services/ad-advanced-reports.ts",
+				marker: "getAdvancedAdReportAdapter",
+			},
+			{
+				sourcePath: "apps/api/src/services/ad-report-jobs.ts",
+				marker: "fetchPublicUrl(downloadUrl",
+			},
+			{
+				sourcePath: "apps/api/src/services/ad-report-artifact-cleanup.ts",
+				marker: "export function expectedAdReportObjectKey",
+			},
+			{
+				sourcePath: "apps/api/src/services/tenant-deletion.ts",
+				marker: "processTenantExternalResources",
+			},
+			{
+				sourcePath: "apps/api/src/services/workspace-erasure.ts",
+				marker: "deleteExactAdReportArtifacts",
 			},
 		],
 	},
@@ -435,7 +559,9 @@ const INFRASTRUCTURE_PROVIDER_CONTRACTS = [
 	{
 		id: "shortener:bitly",
 		provider: "Bitly",
-		capabilities: ["External short-link creation, analytics, and bounded cleanup"],
+		capabilities: [
+			"External short-link creation, analytics, and bounded cleanup",
+		],
 		dataClasses: ["public_content_url", "operational_metadata"],
 		localAuthorities: [
 			"public.short_links",
@@ -526,10 +652,11 @@ const INFRASTRUCTURE_PROVIDER_CONTRACTS = [
 			"Customer webhooks",
 			"automation HTTP/webhook actions",
 			"RSS ingestion",
-			"public knowledge and preview fetches",
+			"public knowledge, preview, and avatar fetches",
 		],
 		dataClasses: [
 			"knowledge_content",
+			"media_bytes",
 			"message_content",
 			"operational_metadata",
 			"public_content_url",
@@ -540,6 +667,8 @@ const INFRASTRUCTURE_PROVIDER_CONTRACTS = [
 			"public.automation_effects",
 			"public.auto_post_rules",
 			"public.ai_knowledge_documents",
+			"public.social_accounts",
+			"R2 avatar object locators",
 		],
 		persistenceBoundary: "customer_owned",
 		residencyControl: "customer_selected",
@@ -559,13 +688,11 @@ const INFRASTRUCTURE_PROVIDER_CONTRACTS = [
 				marker: "fetchWithTimeout(endpoint.url",
 			},
 			{
-				sourcePath:
-					"apps/api/src/services/automations/nodes/http-request.ts",
+				sourcePath: "apps/api/src/services/automations/nodes/http-request.ts",
 				marker: "fetchPublicUrl(url",
 			},
 			{
-				sourcePath:
-					"apps/api/src/services/automations/actions/webhook.ts",
+				sourcePath: "apps/api/src/services/automations/actions/webhook.ts",
 				marker: "fetchPublicUrl(url",
 			},
 			{
@@ -577,9 +704,16 @@ const INFRASTRUCTURE_PROVIDER_CONTRACTS = [
 				marker: "fetchPublicUrl(document.sourceUrl",
 			},
 			{
-				sourcePath:
-					"apps/api/src/services/external-post-sync/previews.ts",
+				sourcePath: "apps/api/src/services/external-post-sync/previews.ts",
 				marker: "fetchPublicUrl(source.url",
+			},
+			{
+				sourcePath: "apps/api/src/services/publisher-runner.ts",
+				marker: "fetchPublicUrl(url",
+			},
+			{
+				sourcePath: "apps/api/src/services/avatar-store.ts",
+				marker: "fetchPublicUrl(sourceUrl",
 			},
 		],
 	},

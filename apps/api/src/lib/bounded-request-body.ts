@@ -71,3 +71,13 @@ export function seedBoundedRequestBody(
 		arrayBuffer: Promise.resolve(bytes),
 	});
 }
+
+/** Preserve parsed multipart compatibility while keeping arrayBuffer first. */
+export function seedBoundedRequestFormData(
+	request: Pick<HonoRequest, "bodyCache">,
+	formData: FormData,
+): void {
+	Object.assign(request.bodyCache, {
+		formData: Promise.resolve(formData),
+	});
+}

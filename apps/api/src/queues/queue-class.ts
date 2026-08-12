@@ -1,5 +1,6 @@
 export const WORK_QUEUE_CAPABILITIES = [
 	"media-cleanup",
+	"media-processing",
 	"publish",
 	"email",
 	"refresh",

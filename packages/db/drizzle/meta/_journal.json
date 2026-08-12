@@ -8,6 +8,41 @@
       "when": 1783987200000,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786309145888,
+      "tag": "0001_luxuriant_scorpion",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786309612284,
+      "tag": "0002_cooing_mandroid",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786313317883,
+      "tag": "0003_keen_lionheart",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786394067510,
+      "tag": "0004_happy_ken_ellis",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786561468634,
+      "tag": "0005_silky_leader",
+      "breakpoints": true
     }
   ]
 }

@@ -38,9 +38,7 @@ const perform = async (z: ZObject, bundle: Bundle) => {
     method: 'PUT',
     headers: {
       ...presign.upload_headers,
-      ...(contentLength && /^\d+$/.test(contentLength)
-        ? { 'Content-Length': contentLength }
-        : {}),
+      ...(contentLength && /^\d+$/.test(contentLength) ? { 'Content-Length': contentLength } : {}),
     },
     body: fileResponse.body,
     raw: true,
@@ -63,8 +61,7 @@ const uploadMedia = {
 
   display: {
     label: 'Upload Media',
-    description:
-      'Upload a media file to RelayAPI and return the confirmed media record.',
+    description: 'Upload a media file to RelayAPI and return the confirmed media record.',
   },
 
   operation: {
@@ -90,7 +87,7 @@ const uploadMedia = {
         required: true,
         default: 'image/jpeg',
         helpText:
-          'MIME type of the file (e.g. image/jpeg, image/png, video/mp4).',
+          'MIME type of the file (e.g. image/jpeg, video/mp4, audio/mpeg, application/pdf).',
       },
     ],
 

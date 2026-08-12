@@ -7,6 +7,7 @@ import {
 	planQueueRetentionUpdates,
 } from "../../scripts/configure-queue-retention";
 import {
+	assertAdReportLifecycle,
 	assertAlwaysUseHttps,
 	assertApiWorkerDomain,
 	assertBucket,
@@ -250,6 +251,39 @@ describe("production Cloudflare configuration policy", () => {
 		).toThrow();
 		expect(() => assertQueueRescueLifecycle({ rules: [] })).toThrow();
 		expect(() =>
+			assertAdReportLifecycle({
+				rules: [
+					abortIncompleteMultipart,
+					{
+						id: "expire-ad-reports",
+						enabled: true,
+						conditions: { prefix: "" },
+						deleteObjectsTransition: {
+							condition: {
+								type: "Age",
+								maxAge: 691_200,
+							},
+						},
+					},
+				],
+			}),
+		).not.toThrow();
+		expect(() =>
+			assertAdReportLifecycle({
+				rules: [
+					abortIncompleteMultipart,
+					{
+						id: "wrong-retention",
+						enabled: true,
+						conditions: { prefix: "" },
+						deleteObjectsTransition: {
+							condition: { type: "Age", maxAge: 604_800 },
+						},
+					},
+				],
+			}),
+		).toThrow("reviewed retention age");
+		expect(() =>
 			assertDurableBucketLifecycle(resources.avatarBucket, {
 				rules: [abortIncompleteMultipart],
 			}),
@@ -294,7 +328,7 @@ describe("production Cloudflare configuration policy", () => {
 		).toThrow();
 	});
 
-	it("keeps the application on single PUT uploads while lifecycle policy bounds multipart residue", async () => {
+	it("limits multipart creation to the resumable media boundary and bounds abandoned parts", async () => {
 		const repoRoot = new URL("../../../../", import.meta.url).pathname;
 		const multipartCreators: string[] = [];
 		for await (const path of new Bun.Glob("apps/api/src/**/*.ts").scan({
@@ -309,7 +343,21 @@ describe("production Cloudflare configuration policy", () => {
 				multipartCreators.push(path);
 			}
 		}
-		expect(multipartCreators).toEqual([]);
+		expect(multipartCreators.sort()).toEqual([
+			"apps/api/src/routes/media-uploads.ts",
+			"apps/api/src/services/media-upload-session-cleanup.ts",
+		]);
+		const route = await Bun.file(
+			`${repoRoot}apps/api/src/routes/media-uploads.ts`,
+		).text();
+		expect(route).toContain("MAX_MEDIA_UPLOAD_BYTES");
+		expect(route).toContain("MEDIA_MULTIPART_THRESHOLD_BYTES");
+		expect(route).toContain("multipartUploadIdCiphertext");
+		const cleanup = await Bun.file(
+			`${repoRoot}apps/api/src/services/media-upload-session-cleanup.ts`,
+		).text();
+		expect(cleanup).toContain(".resumeMultipartUpload(");
+		expect(cleanup).toContain(").abort()");
 		expect(resources.incompleteMultipartRetentionSeconds).toBe(86_400);
 	});
 
@@ -367,11 +415,26 @@ describe("production Cloudflare configuration policy", () => {
 							methods: ["PUT"],
 							headers: ["Content-Type", "If-None-Match"],
 						},
+						exposeHeaders: ["ETag"],
 						maxAgeSeconds: 3600,
 					},
 				],
 			}),
 		).not.toThrow();
+		expect(() =>
+			assertMediaCors({
+				rules: [
+					{
+						allowed: {
+							origins: ["https://relayapi.dev"],
+							methods: ["PUT"],
+							headers: ["Content-Type", "If-None-Match"],
+						},
+						maxAgeSeconds: 3600,
+					},
+				],
+			}),
+		).toThrow("presigned-upload policy");
 		expect(() =>
 			assertMediaCors({
 				rules: [
@@ -388,12 +451,13 @@ describe("production Cloudflare configuration policy", () => {
 		).toThrow("presigned-upload policy");
 	});
 
-	it("requires all five reviewed R2 buckets in the selected jurisdiction", () => {
+	it("requires all six reviewed R2 buckets in the selected jurisdiction", () => {
 		for (const bucket of [
 			resources.mediaBucket,
 			resources.avatarBucket,
 			resources.thumbnailBucket,
 			resources.queueRescueBucket,
+			resources.adReportBucket,
 			resources.publicAssetsBucket,
 		]) {
 			expect(() =>
@@ -467,6 +531,7 @@ describe("production Cloudflare configuration policy", () => {
 				resources.avatarBucket,
 				resources.thumbnailBucket,
 				resources.queueRescueBucket,
+				resources.adReportBucket,
 			].sort(),
 		);
 		for (const bucketName of resources.privateR2Buckets) {
@@ -1025,6 +1090,25 @@ describe("production Cloudflare configuration policy", () => {
 			'"PUBLIC_LINK_BASE_URL": "https://go.relayapi.dev"',
 		);
 		expect(config).toContain(`"BASELINE_GENERATION": "${BASELINE_GENERATION}"`);
+		expect(resources.workerRuntime.migration_tag).toBe("v2");
+		expect(resources.workerBindings.MEDIA_PROCESSOR).toEqual({
+			type: "durable_object_namespace",
+			class_name: "MediaProcessorContainer",
+		});
+		expect(resources.workerBindings.MEDIA_PROCESSING_WORKFLOW).toEqual({
+			type: "workflow",
+			workflow_name: "relayapi-media-processing",
+			class_name: "MediaProcessingWorkflow",
+		});
+		expect(resources.workerBindings.MEDIA_PROCESSING_QUEUE).toEqual({
+			type: "queue",
+			queue_name: "relayapi-media-processing",
+		});
+		expect(config).toContain('"tag": "v2"');
+		expect(config).toContain('"binding": "MEDIA_PROCESSING_WORKFLOW"');
+		expect(config).toContain('"binding": "MEDIA_PROCESSING_QUEUE"');
+		expect(config).toContain('"class_name": "MediaProcessorContainer"');
+		expect(config).toContain('"image": "./media-processor/Dockerfile"');
 		expect(config).not.toContain('"jurisdiction": "default"');
 		for (const expected of resources.queueConsumers) {
 			expect(config).toContain(`"queue": "${expected.queue}"`);
@@ -1113,9 +1197,12 @@ describe("production Cloudflare configuration policy", () => {
 			"--cwd packages/db migrate",
 			"--cwd packages/db verify:migrations",
 			"--cwd packages/db migration:history:current",
+			"Verify Cloudflare Containers deployment access",
+			"wrangler containers list --json",
 			"WRANGLER_OUTPUT_FILE_PATH",
 			"secrets:cf:deploy -- api --",
 			"relayapi-api-deploy.jsonl",
+			"Verify media processor Container application rollout",
 			"cloudflare:smoke-production",
 			"cloudflare:verify-production",
 			"wrangler rollback",
@@ -1129,6 +1216,15 @@ describe("production Cloudflare configuration policy", () => {
 		expect(deploy).toContain("GITHUB_RUN_ATTEMPT");
 		expect(deploy).toContain('versions view "$active_version" --json');
 		expect(deploy).toContain("deploy_attempt.outputs.exit_code");
+		expect(deploy).toContain('exit "$deploy_exit_code"');
+		expect(deploy).toContain('select(.name == "relayapi-media-processor")');
+		expect(deploy).toContain('contains("@sha256:")');
+		expect(deploy).toContain("steps.previous_container.outputs.image");
+		expect(deploy).toContain("steps.previous_container.outcome");
+		expect(deploy).toContain(
+			"Worker-only rollback would create an unreviewed code/image pairing",
+		);
+		expect(deploy).not.toContain("Wrangler exited nonzero after promoting");
 		expect(deploy).not.toContain("steps.deploy_worker.outcome");
 		expect(deploy).toContain("if: ${{ failure()");
 		expect(deploy).toContain('--message "Automated rollback');

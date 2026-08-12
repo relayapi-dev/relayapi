@@ -10,10 +10,12 @@ import {
 import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { decryptAccountToken } from "../lib/account-token-crypto";
 import { mapConcurrently } from "../lib/concurrency";
+import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { notifyRealtime } from "../lib/notify-post-update";
 import { resolveRelayMediaForPublish } from "../lib/r2-presign";
 import { RelayMediaPolicyError } from "../lib/relay-media-policy";
 import type {
+	ProviderEffect,
 	ProviderOutcome,
 	PublishRequest,
 	PublishResult,
@@ -22,7 +24,9 @@ import { getPublisher } from "../publishers";
 import {
 	hasTerminalProviderEvidence,
 	isNonTerminalProviderOutcome,
+	isTerminalProviderDraft,
 	isTerminalProviderSuccess,
+	mergeProviderEffects,
 } from "../publishers/types";
 import type { Platform } from "../schemas/common";
 import type { Env } from "../types";
@@ -30,6 +34,10 @@ import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "./contact-consent";
+import {
+	resolvePlatformMediaForValidation,
+	validatePlatformPostInput,
+} from "./platform-post-validation";
 import { resolvePostTargetOptions } from "./post-content-resolution";
 import { postCompletionOutboxRow } from "./publish-outbox";
 import {
@@ -62,11 +70,314 @@ export const LOCAL_MEDIA_TARGET_PLATFORMS: ReadonlySet<string> = new Set([
 	"pinterest",
 	"reddit",
 	"snapchat",
+	"tiktok",
 	"twitter",
 	"youtube",
 ]);
 
 type PublishMediaDescriptor = { type?: string };
+
+const PUBLISH_MEDIA_TYPES = new Set([
+	"image",
+	"video",
+	"gif",
+	"document",
+	"audio",
+]);
+const MEDIA_EXTENSION_TYPES: Readonly<
+	Record<string, PublishRequest["media"][number]["type"]>
+> = {
+	jpg: "image",
+	jpeg: "image",
+	png: "image",
+	webp: "image",
+	avif: "image",
+	heic: "image",
+	heif: "image",
+	bmp: "image",
+	tif: "image",
+	tiff: "image",
+	svg: "image",
+	gif: "gif",
+	mp4: "video",
+	m4v: "video",
+	mov: "video",
+	webm: "video",
+	avi: "video",
+	mkv: "video",
+	pdf: "document",
+	txt: "document",
+	csv: "document",
+	rtf: "document",
+	doc: "document",
+	docx: "document",
+	xls: "document",
+	xlsx: "document",
+	ppt: "document",
+	pptx: "document",
+	odt: "document",
+	ods: "document",
+	odp: "document",
+	mp3: "audio",
+	m4a: "audio",
+	aac: "audio",
+	oga: "audio",
+	ogg: "audio",
+	opus: "audio",
+	wav: "audio",
+	amr: "audio",
+};
+
+export class PublisherMediaTypeError extends Error {
+	readonly code: "INVALID_MEDIA_TYPE" | "MEDIA_TYPE_AMBIGUOUS";
+
+	constructor(
+		code: "INVALID_MEDIA_TYPE" | "MEDIA_TYPE_AMBIGUOUS",
+		message: string,
+	) {
+		super(message);
+		this.name = "PublisherMediaTypeError";
+		this.code = code;
+	}
+}
+
+export function inferPublisherMediaTypeFromMime(
+	mimeType: string,
+): PublishRequest["media"][number]["type"] | null {
+	const normalized = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+	if (normalized === "image/gif") return "gif";
+	if (normalized.startsWith("image/")) return "image";
+	if (normalized.startsWith("video/")) return "video";
+	if (normalized.startsWith("audio/")) return "audio";
+	if (
+		normalized.startsWith("text/") ||
+		(normalized.startsWith("application/") &&
+			normalized !== "application/octet-stream")
+	) {
+		return "document";
+	}
+	return null;
+}
+
+export function inferPublisherMediaTypeFromUrl(
+	value: string,
+): PublishRequest["media"][number]["type"] | null {
+	try {
+		const url = new URL(value);
+		const filename = decodeURIComponent(url.pathname).split("/").pop() ?? "";
+		const extension = filename.includes(".")
+			? filename.split(".").pop()?.toLowerCase()
+			: undefined;
+		return extension ? (MEDIA_EXTENSION_TYPES[extension] ?? null) : null;
+	} catch {
+		return null;
+	}
+}
+
+async function probePublisherMediaMimeType(
+	url: string,
+): Promise<string | null> {
+	let response: Response | null = null;
+	try {
+		response = await fetchPublicUrl(url, {
+			method: "HEAD",
+			timeout: 10_000,
+		});
+		if (response.ok) {
+			const contentType = response.headers.get("content-type");
+			if (contentType) return contentType;
+		}
+		await response.body?.cancel().catch(() => {});
+		response = await fetchPublicUrl(url, {
+			method: "GET",
+			headers: { Range: "bytes=0-0" },
+			timeout: 10_000,
+		});
+		return response.ok ? response.headers.get("content-type") : null;
+	} catch {
+		return null;
+	} finally {
+		await response?.body?.cancel().catch(() => {});
+	}
+}
+
+async function normalizePublisherMediaItem(
+	raw: unknown,
+	probeCache: Map<string, Promise<string | null>>,
+): Promise<PublishRequest["media"][number]> {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new PublisherMediaTypeError(
+			"INVALID_MEDIA_TYPE",
+			"Every media item must be an object with a public URL.",
+		);
+	}
+	const item = raw as Record<string, unknown>;
+	if (typeof item.url !== "string" || !item.url.trim()) {
+		throw new PublisherMediaTypeError(
+			"INVALID_MEDIA_TYPE",
+			"Every media item must include a non-empty URL.",
+		);
+	}
+	let validHttpUrl = false;
+	try {
+		const parsed = new URL(item.url);
+		validHttpUrl = parsed.protocol === "http:" || parsed.protocol === "https:";
+	} catch {
+		validHttpUrl = false;
+	}
+	if (!validHttpUrl) {
+		throw new PublisherMediaTypeError(
+			"INVALID_MEDIA_TYPE",
+			`Media URL must use HTTP or HTTPS: ${item.url}`,
+		);
+	}
+	const normalized = (
+		type: PublishRequest["media"][number]["type"],
+	): PublishRequest["media"][number] => ({
+		url: item.url as string,
+		type,
+		...(typeof item.alt_text === "string" ? { alt_text: item.alt_text } : {}),
+		...(typeof item.mime_type === "string"
+			? { mime_type: item.mime_type }
+			: {}),
+		...(typeof item.width === "number" ? { width: item.width } : {}),
+		...(typeof item.height === "number" ? { height: item.height } : {}),
+		...(typeof item.duration_ms === "number"
+			? { duration_ms: item.duration_ms }
+			: {}),
+		...(typeof item.thumbnail === "string"
+			? { thumbnail: item.thumbnail }
+			: {}),
+	});
+
+	if (item.type !== undefined) {
+		if (typeof item.type !== "string" || !PUBLISH_MEDIA_TYPES.has(item.type)) {
+			throw new PublisherMediaTypeError(
+				"INVALID_MEDIA_TYPE",
+				`Unsupported explicit media type for ${item.url}.`,
+			);
+		}
+		return normalized(item.type as PublishRequest["media"][number]["type"]);
+	}
+
+	let inferred =
+		typeof item.mime_type === "string"
+			? inferPublisherMediaTypeFromMime(item.mime_type)
+			: null;
+	if (!inferred) inferred = inferPublisherMediaTypeFromUrl(item.url);
+	if (!inferred) {
+		let probe = probeCache.get(item.url);
+		if (!probe) {
+			probe = probePublisherMediaMimeType(item.url);
+			probeCache.set(item.url, probe);
+		}
+		const remoteMime = await probe;
+		if (remoteMime) inferred = inferPublisherMediaTypeFromMime(remoteMime);
+	}
+	if (!inferred) {
+		throw new PublisherMediaTypeError(
+			"MEDIA_TYPE_AMBIGUOUS",
+			`RelayAPI could not infer a supported media type for ${item.url}; provide media[].type or a supported MIME type.`,
+		);
+	}
+	return normalized(inferred);
+}
+
+async function normalizePublisherMediaList(
+	items: unknown[],
+	probeCache: Map<string, Promise<string | null>>,
+): Promise<PublishRequest["media"]> {
+	return mapConcurrently(items, 4, (item) =>
+		normalizePublisherMediaItem(item, probeCache),
+	);
+}
+
+/** Normalize shared, per-platform, and inline-thread media before any adapter. */
+export async function normalizePublisherMedia(
+	mediaItems: PublishRequest["media"],
+	targetOptions: Record<string, Record<string, unknown>> | null,
+	activeSelectors?: ReadonlySet<string>,
+): Promise<{
+	mediaItems: PublishRequest["media"];
+	targetOptions: Record<string, Record<string, unknown>> | null;
+}> {
+	const probeCache = new Map<string, Promise<string | null>>();
+	const normalizedMedia = await normalizePublisherMediaList(
+		mediaItems,
+		probeCache,
+	);
+	if (!targetOptions) {
+		return { mediaItems: normalizedMedia, targetOptions: null };
+	}
+
+	const normalizedEntries = await mapConcurrently(
+		Object.entries(targetOptions),
+		2,
+		async ([selector, rawOptions]) => {
+			if (activeSelectors && !activeSelectors.has(selector)) {
+				return [selector, rawOptions] as const;
+			}
+			const options = { ...rawOptions };
+			if (options.media !== undefined) {
+				if (!Array.isArray(options.media)) {
+					throw new PublisherMediaTypeError(
+						"INVALID_MEDIA_TYPE",
+						`${selector}.media must be an array.`,
+					);
+				}
+				options.media = await normalizePublisherMediaList(
+					options.media,
+					probeCache,
+				);
+			}
+			if (options.thread !== undefined) {
+				if (!Array.isArray(options.thread)) {
+					throw new PublisherMediaTypeError(
+						"INVALID_MEDIA_TYPE",
+						`${selector}.thread must be an array.`,
+					);
+				}
+				options.thread = await mapConcurrently(
+					options.thread,
+					2,
+					async (rawThreadItem, index) => {
+						if (
+							!rawThreadItem ||
+							typeof rawThreadItem !== "object" ||
+							Array.isArray(rawThreadItem)
+						) {
+							throw new PublisherMediaTypeError(
+								"INVALID_MEDIA_TYPE",
+								`${selector}.thread[${index}] must be an object.`,
+							);
+						}
+						const threadItem = {
+							...(rawThreadItem as Record<string, unknown>),
+						};
+						if (threadItem.media !== undefined) {
+							if (!Array.isArray(threadItem.media)) {
+								throw new PublisherMediaTypeError(
+									"INVALID_MEDIA_TYPE",
+									`${selector}.thread[${index}].media must be an array.`,
+								);
+							}
+							threadItem.media = await normalizePublisherMediaList(
+								threadItem.media,
+								probeCache,
+							);
+						}
+						return threadItem;
+					},
+				);
+			}
+			return [selector, options] as const;
+		},
+	);
+	return {
+		mediaItems: normalizedMedia,
+		targetOptions: Object.fromEntries(normalizedEntries),
+	};
+}
 
 /**
  * Identify only publish modes that actually download or re-stream media in the
@@ -131,6 +442,12 @@ export function publishOperationLocallyStreamsMedia(
 			);
 		case "snapchat":
 			return operationMedia.length > 0;
+		case "tiktok":
+			return operationMedia.some(
+				(media) =>
+					media.type === "video" &&
+					targetOptions.source_mode !== "pull_from_url",
+			);
 		case "twitter":
 			return operationMedia.length > 0;
 		case "youtube":
@@ -167,7 +484,14 @@ export function classifyPublishTaskRejection(
 
 export function classifyPersistedPostTargets(
 	rows: Array<{ status: string; deliveryState: string }>,
-): "active" | "unknown" | "empty" | "published" | "failed" | "partial" {
+):
+	| "active"
+	| "unknown"
+	| "empty"
+	| "published"
+	| "provider_draft"
+	| "failed"
+	| "partial" {
 	if (
 		rows.some(
 			(row) =>
@@ -179,6 +503,9 @@ export function classifyPersistedPostTargets(
 	if (rows.some((row) => row.deliveryState === "unknown")) return "unknown";
 	if (rows.length === 0) return "empty";
 	if (rows.every((row) => row.status === "published")) return "published";
+	if (rows.every((row) => row.status === "provider_draft")) {
+		return "provider_draft";
+	}
 	if (rows.every((row) => row.status === "failed")) return "failed";
 	return "partial";
 }
@@ -240,6 +567,7 @@ export function requiresPublishOutcomeReconciliation(
 	if (
 		result.provider_outcome &&
 		(isTerminalProviderSuccess(result.provider_outcome) ||
+			isTerminalProviderDraft(result.provider_outcome) ||
 			isNonTerminalProviderOutcome(result.provider_outcome) ||
 			result.provider_outcome.disposition === "failed")
 	) {
@@ -268,7 +596,8 @@ export function normalizeProviderOutcome(
 ): ProviderOutcome {
 	if (result.provider_outcome) {
 		if (
-			isTerminalProviderSuccess(result.provider_outcome) &&
+			(isTerminalProviderSuccess(result.provider_outcome) ||
+				isTerminalProviderDraft(result.provider_outcome)) &&
 			!hasTerminalProviderEvidence(result.provider_outcome)
 		) {
 			return {
@@ -301,6 +630,10 @@ export function providerReconcileAt(
 	outcome: ProviderOutcome,
 	now = new Date(),
 ): Date | null {
+	// Webhook-driven providers must not be sent to the polling reconciler, which
+	// would otherwise immediately mark them unavailable. Their signed webhook
+	// consumer owns the eventual terminal transition.
+	if (outcome.reconciliation === "webhook") return null;
 	if (outcome.next_reconcile_at) {
 		const parsed = new Date(outcome.next_reconcile_at);
 		if (Number.isFinite(parsed.getTime()) && parsed.getTime() > now.getTime()) {
@@ -376,6 +709,123 @@ export interface PublishTaskPersistenceInput {
 	result: PublishResult;
 }
 
+export interface PublishTaskEffectPersistenceInput {
+	postId: string;
+	organizationId: string;
+	parentLeaseId: string;
+	postTargetId: string;
+	attemptId: string;
+	publishOperationId: string;
+	effect: ProviderEffect;
+}
+
+/**
+ * Commit one provider-confirmed mutation to the target and exact attempt without
+ * completing either execution. The target row lock serializes concurrent recorder
+ * calls and the parent/target/attempt fences reject a stale Worker invocation.
+ */
+export async function persistPublishTaskEffect(
+	db: ReturnType<typeof createDb>,
+	input: PublishTaskEffectPersistenceInput,
+): Promise<ProviderEffect[] | null> {
+	const recordedAt = new Date();
+	const parentFence = sql`EXISTS (
+		SELECT 1 FROM posts AS publish_parent
+		WHERE publish_parent.id = ${input.postId}
+			AND publish_parent.organization_id = ${input.organizationId}
+			AND publish_parent.status = 'publishing'
+			AND publish_parent.publish_lease_id = ${input.parentLeaseId}
+	)`;
+	const targetFence = and(
+		eq(postTargets.id, input.postTargetId),
+		eq(postTargets.postId, input.postId),
+		eq(postTargets.organizationId, input.organizationId),
+		eq(postTargets.publishOperationId, input.publishOperationId),
+		eq(postTargets.attemptId, input.attemptId),
+		eq(postTargets.status, "publishing"),
+		eq(postTargets.deliveryState, "unknown"),
+		isNotNull(postTargets.requestMayHaveBeenSentAt),
+		parentFence,
+	);
+
+	return db.transaction(async (tx) => {
+		const [lockedTarget] = await tx
+			.select({ providerEffects: postTargets.providerEffects })
+			.from(postTargets)
+			.where(targetFence)
+			.for("update")
+			.limit(1);
+		if (!lockedTarget) return null;
+
+		const effects = mergeProviderEffects(lockedTarget.providerEffects, [
+			input.effect,
+		]);
+		const [savedTarget] = await tx
+			.update(postTargets)
+			.set({ providerEffects: effects, updatedAt: recordedAt })
+			.where(targetFence)
+			.returning({ id: postTargets.id });
+		if (!savedTarget) return null;
+
+		const [savedAttempt] = await tx
+			.update(publishAttempts)
+			.set({ providerEffects: effects })
+			.where(
+				and(
+					eq(publishAttempts.id, input.attemptId),
+					eq(publishAttempts.postTargetId, input.postTargetId),
+					eq(publishAttempts.publishOperationId, input.publishOperationId),
+					eq(publishAttempts.state, "in_flight"),
+					parentFence,
+				),
+			)
+			.returning({ id: publishAttempts.id });
+		if (!savedAttempt) throw new PostPublishLeaseLostError();
+		return effects;
+	});
+}
+
+/** Preserve the durable effect journal even when the publisher's final call fails. */
+export function mergeRecordedEffectsIntoResult(
+	result: PublishResult,
+	recordedEffects: readonly ProviderEffect[],
+): PublishResult {
+	if (recordedEffects.length === 0) return result;
+	const effects = mergeProviderEffects(
+		recordedEffects,
+		result.provider_outcome?.effects,
+	);
+	const outcome = result.provider_outcome ?? normalizeProviderOutcome(result);
+	// Legacy successful results normalize to published here; an explicit failed
+	// outcome with prior successful effects falls through to partial below.
+	if (
+		isTerminalProviderSuccess(outcome) ||
+		isTerminalProviderDraft(outcome) ||
+		isNonTerminalProviderOutcome(outcome) ||
+		outcome.disposition === "partial" ||
+		outcome.disposition === "outcome_unknown"
+	) {
+		return {
+			...result,
+			provider_outcome: { ...outcome, effects },
+		};
+	}
+
+	return {
+		...result,
+		success: false,
+		outcome: undefined,
+		retry: undefined,
+		provider_outcome: {
+			disposition: "partial",
+			platform_post_id: result.platform_post_id,
+			platform_url: result.platform_url,
+			provider_state: `${effects.filter((effect) => effect.status === "succeeded").length}_effects_recorded`,
+			effects,
+		},
+	};
+}
+
 /** Atomically persist the target and its attempt under the same execution fences. */
 export async function persistPublishTaskResult(
 	db: ReturnType<typeof createDb>,
@@ -384,6 +834,7 @@ export async function persistPublishTaskResult(
 	const completedAt = new Date();
 	const providerOutcome = normalizeProviderOutcome(input.result);
 	const terminalSuccess = isTerminalProviderSuccess(providerOutcome);
+	const terminalDraft = isTerminalProviderDraft(providerOutcome);
 	const nonterminal = isNonTerminalProviderOutcome(providerOutcome);
 	const unknown = ["partial", "outcome_unknown"].includes(
 		providerOutcome.disposition,
@@ -397,9 +848,12 @@ export async function persistPublishTaskResult(
 		providerDisposition: providerOutcome.disposition,
 		providerOperationId: providerOutcome.provider_operation_id ?? null,
 		providerState: providerOutcome.provider_state ?? null,
-		providerEffects: providerOutcome.effects ?? null,
+		providerEffects:
+			providerOutcome.effects ?? sql`${postTargets.providerEffects}`,
 		nextReconcileAt,
 	};
+	const attemptProviderEffects =
+		providerOutcome.effects ?? sql`${publishAttempts.providerEffects}`;
 	const parentFence = sql`EXISTS (
 		SELECT 1 FROM posts AS publish_parent
 		WHERE publish_parent.id = ${input.postId}
@@ -412,14 +866,14 @@ export async function persistPublishTaskResult(
 		const [savedTarget] = await tx
 			.update(postTargets)
 			.set(
-				terminalSuccess
+				terminalSuccess || terminalDraft
 					? {
-							status: "published",
+							status: terminalDraft ? "provider_draft" : "published",
 							deliveryState: "succeeded",
 							platformPostId,
 							platformUrl,
 							...providerFields,
-							publishedAt: completedAt,
+							publishedAt: terminalDraft ? null : completedAt,
 							error: null,
 							errorCode: null,
 							errorDetail: null,
@@ -496,7 +950,7 @@ export async function persistPublishTaskResult(
 		const [savedAttempt] = await tx
 			.update(publishAttempts)
 			.set(
-				terminalSuccess
+				terminalSuccess || terminalDraft
 					? {
 							state: "succeeded",
 							providerPostId: platformPostId,
@@ -504,7 +958,7 @@ export async function persistPublishTaskResult(
 								providerOutcome.provider_operation_id ?? null,
 							providerDisposition: providerOutcome.disposition,
 							providerState: providerOutcome.provider_state ?? null,
-							providerEffects: providerOutcome.effects ?? null,
+							providerEffects: attemptProviderEffects,
 							completedAt,
 							error: null,
 							leaseExpiresAt: completedAt,
@@ -517,7 +971,7 @@ export async function persistPublishTaskResult(
 									providerOutcome.provider_operation_id ?? null,
 								providerDisposition: providerOutcome.disposition,
 								providerState: providerOutcome.provider_state ?? null,
-								providerEffects: providerOutcome.effects ?? null,
+								providerEffects: attemptProviderEffects,
 								completedAt,
 								error: null,
 								leaseExpiresAt: completedAt,
@@ -530,7 +984,7 @@ export async function persistPublishTaskResult(
 										providerOutcome.provider_operation_id ?? null,
 									providerDisposition: providerOutcome.disposition,
 									providerState: providerOutcome.provider_state ?? null,
-									providerEffects: providerOutcome.effects ?? null,
+									providerEffects: attemptProviderEffects,
 									completedAt,
 									error:
 										input.result.error?.message ?? "Provider outcome unknown",
@@ -543,7 +997,7 @@ export async function persistPublishTaskResult(
 										providerOutcome.provider_operation_id ?? null,
 									providerDisposition: providerOutcome.disposition,
 									providerState: providerOutcome.provider_state ?? null,
-									providerEffects: providerOutcome.effects ?? null,
+									providerEffects: attemptProviderEffects,
 									completedAt,
 									error: input.result.error?.message ?? "Publish rejected",
 									leaseExpiresAt: completedAt,
@@ -554,10 +1008,7 @@ export async function persistPublishTaskResult(
 					eq(publishAttempts.id, input.attemptId),
 					eq(publishAttempts.postTargetId, input.postTargetId),
 					eq(publishAttempts.publishOperationId, input.publishOperationId),
-					eq(
-						publishAttempts.state,
-						input.requestMayHaveBeenSent ? "unknown" : "in_flight",
-					),
+					eq(publishAttempts.state, "in_flight"),
 					parentFence,
 				),
 			)
@@ -578,6 +1029,7 @@ async function resolveMediaUrls(
 	mediaItems: PublishRequest["media"],
 	targetOptions: Record<string, Record<string, unknown>> | null,
 	orgId: string,
+	postWorkspaceId: string | null,
 ): Promise<{
 	mediaItems: PublishRequest["media"];
 	targetOptions: Record<string, Record<string, unknown>> | null;
@@ -587,6 +1039,8 @@ async function resolveMediaUrls(
 		env,
 		{ mediaItems, targetOptions },
 		orgId,
+		3600,
+		postWorkspaceId,
 	);
 }
 
@@ -610,7 +1064,7 @@ export interface PublishTargetResult {
 	error?: { code: string; message: string; detail?: string };
 }
 
-type TerminalPostStatus = "published" | "failed" | "partial";
+type TerminalPostStatus = "published" | "provider_draft" | "failed" | "partial";
 
 interface PublishBatchResult {
 	targets: Record<string, PublishTargetResult>;
@@ -625,6 +1079,7 @@ export async function publishToTargets(
 	env: Env,
 	postId: string,
 	orgId: string,
+	postWorkspaceId: string | null,
 	content: string | null,
 	mediaItems: PublishRequest["media"],
 	targetOptions: Record<string, Record<string, unknown>> | null,
@@ -648,6 +1103,7 @@ export async function publishToTargets(
 	)`;
 	const responseTargets: Record<string, PublishTargetResult> = {};
 	const successCounts: Record<string, number> = {};
+	const draftCounts: Record<string, number> = {};
 	const activeCounts: Record<string, number> = {};
 	const failureCounts: Record<string, number> = {};
 	const unknownCounts: Record<string, number> = {};
@@ -656,6 +1112,7 @@ export async function publishToTargets(
 	// legacy/corrupt Relay URL is converted into a definitive pre-boundary target
 	// failure below and never reaches a provider.
 	let mediaPolicyFailure: RelayMediaPolicyError | null = null;
+	let mediaTypeFailure: PublisherMediaTypeError | null = null;
 	let resolvedMedia = mediaItems;
 	let resolvedTargetOptions = targetOptions;
 	try {
@@ -665,12 +1122,23 @@ export async function publishToTargets(
 			mediaItems,
 			targetOptions,
 			orgId,
+			postWorkspaceId,
 		);
-		resolvedMedia = resolved.mediaItems;
-		resolvedTargetOptions = resolved.targetOptions;
+		const normalized = await normalizePublisherMedia(
+			resolved.mediaItems,
+			resolved.targetOptions,
+			new Set(targets.flatMap((target) => [target.platform, target.key])),
+		);
+		resolvedMedia = normalized.mediaItems;
+		resolvedTargetOptions = normalized.targetOptions;
 	} catch (error) {
-		if (!(error instanceof RelayMediaPolicyError)) throw error;
-		mediaPolicyFailure = error;
+		if (error instanceof RelayMediaPolicyError) {
+			mediaPolicyFailure = error;
+		} else if (error instanceof PublisherMediaTypeError) {
+			mediaTypeFailure = error;
+		} else {
+			throw error;
+		}
 	}
 
 	// Batch-fetch all account details upfront in one query
@@ -738,6 +1206,7 @@ export async function publishToTargets(
 		postTargetId: string;
 		attemptId: string;
 		publishOperationId: string;
+		recordedEffects: ProviderEffect[];
 		locallyStreamsMedia: boolean;
 		task: () => Promise<PublishResult>;
 	};
@@ -888,6 +1357,30 @@ export async function publishToTargets(
 				continue;
 			}
 
+			if (mediaTypeFailure) {
+				const recorded = await recordPreBoundaryFailure(
+					claimedTarget.id,
+					attemptId,
+					claimedTarget.publishOperationId,
+					mediaTypeFailure.message,
+					mediaTypeFailure.code,
+				);
+				if (!recorded) continue;
+				immediateResultCount++;
+				entry.accounts.push({
+					id: account.id,
+					username: account.username,
+					url: null,
+				});
+				failureCounts[target.key] = (failureCounts[target.key] ?? 0) + 1;
+				entry.status = "failed";
+				entry.error = {
+					code: mediaTypeFailure.code,
+					message: mediaTypeFailure.message,
+				};
+				continue;
+			}
+
 			if (!publisher) {
 				const failureMessage = `Platform ${target.platform} not supported`;
 				const recorded = await recordPreBoundaryFailure(
@@ -927,6 +1420,36 @@ export async function publishToTargets(
 				typeof targetOpts.content === "string" && targetOpts.content.trim()
 					? targetOpts.content
 					: content;
+			const targetMedia = resolvePlatformMediaForValidation(
+				resolvedMedia,
+				targetOpts,
+			);
+			const preflightError = validatePlatformPostInput(
+				target.platform,
+				targetContent ?? "",
+				targetMedia,
+				targetOpts,
+			)[0];
+			if (preflightError) {
+				const recorded = await recordPreBoundaryFailure(
+					claimedTarget.id,
+					attemptId,
+					claimedTarget.publishOperationId,
+					preflightError.message,
+					preflightError.code,
+				);
+				if (!recorded) continue;
+				immediateResultCount++;
+				entry.accounts.push({
+					id: account.id,
+					username: account.username,
+					url: null,
+				});
+				failureCounts[target.key] = (failureCounts[target.key] ?? 0) + 1;
+				entry.status = "failed";
+				entry.error = preflightError;
+				continue;
+			}
 			if (target.platform === "sms") {
 				const phoneNumbers = Array.isArray(targetOpts.phone_numbers)
 					? targetOpts.phone_numbers.filter(
@@ -989,9 +1512,39 @@ export async function publishToTargets(
 
 			// Queue publish task for parallel execution (with inline token refresh retry)
 			const isMultiPostOperation =
-				(target.platform === "twitter" || target.platform === "threads") &&
-				Array.isArray(targetOpts.thread) &&
-				targetOpts.thread.length > 0;
+				Array.isArray(targetOpts.thread) && targetOpts.thread.length > 0;
+			const recordedEffects = mergeProviderEffects(targetState.providerEffects);
+			const effectRecorder = {
+				get effects(): readonly ProviderEffect[] {
+					return recordedEffects;
+				},
+				async record(effect: ProviderEffect): Promise<void> {
+					// The provider mutation is already confirmed when record() is called.
+					// Reflect it locally before awaiting storage so a lost COMMIT response or
+					// lease error still prevents this invocation from classifying/retrying the
+					// operation as though no external effect occurred.
+					recordedEffects.splice(
+						0,
+						recordedEffects.length,
+						...mergeProviderEffects(recordedEffects, [effect]),
+					);
+					const saved = await persistPublishTaskEffect(db, {
+						postId,
+						organizationId: orgId,
+						parentLeaseId,
+						postTargetId: claimedTarget.id,
+						attemptId,
+						publishOperationId: claimedTarget.publishOperationId,
+						effect,
+					});
+					if (!saved) throw new PostPublishLeaseLostError();
+					recordedEffects.splice(
+						0,
+						recordedEffects.length,
+						...mergeProviderEffects(saved, recordedEffects),
+					);
+				},
+			};
 			publishTasks.push({
 				targetKey: target.key,
 				platform: target.platform,
@@ -1000,6 +1553,7 @@ export async function publishToTargets(
 				postTargetId: claimedTarget.id,
 				attemptId,
 				publishOperationId: claimedTarget.publishOperationId,
+				recordedEffects,
 				locallyStreamsMedia: publishOperationLocallyStreamsMedia(
 					target.platform,
 					resolvedMedia,
@@ -1060,13 +1614,25 @@ export async function publishToTargets(
 									)
 									.returning({ id: postTargets.id });
 								if (!boundary) throw new PostPublishLeaseLostError();
-								await tx
+								const [attemptBoundary] = await tx
 									.update(publishAttempts)
 									.set({
-										state: "unknown",
 										requestMayHaveBeenSentAt: requestBoundary,
 									})
-									.where(eq(publishAttempts.id, attemptId));
+									.where(
+										and(
+											eq(publishAttempts.id, attemptId),
+											eq(publishAttempts.postTargetId, claimedTarget.id),
+											eq(
+												publishAttempts.publishOperationId,
+												claimedTarget.publishOperationId,
+											),
+											eq(publishAttempts.state, "in_flight"),
+											parentFence,
+										),
+									)
+									.returning({ id: publishAttempts.id });
+								if (!attemptBoundary) throw new PostPublishLeaseLostError();
 							});
 							requestMayHaveBeenSent = true;
 							const publishStart = Date.now();
@@ -1075,6 +1641,7 @@ export async function publishToTargets(
 							);
 							const result = await publisher.publish({
 								operation_id: claimedTarget.publishOperationId,
+								effect_recorder: effectRecorder,
 								content: targetContent,
 								media: resolvedMedia,
 								target_options: targetOpts,
@@ -1098,6 +1665,7 @@ export async function publishToTargets(
 							// If TOKEN_EXPIRED and we haven't exhausted retries, refresh and retry
 							if (
 								canRetryTokenExpiredPublish(result, isMultiPostOperation) &&
+								recordedEffects.length === 0 &&
 								tokenRefreshRetries < 1
 							) {
 								console.log(
@@ -1122,10 +1690,10 @@ export async function publishToTargets(
 								}
 							}
 
-							const rateLimitDelay = getDefinitiveRateLimitRetryDelay(
-								result,
-								rateLimitRetries,
-							);
+							const rateLimitDelay =
+								recordedEffects.length === 0
+									? getDefinitiveRateLimitRetryDelay(result, rateLimitRetries)
+									: null;
 							if (rateLimitDelay !== null) {
 								rateLimitRetries++;
 								attempt++;
@@ -1161,32 +1729,40 @@ export async function publishToTargets(
 	>;
 	const normalizeSettledResult = (
 		settled: SettledPublishResult,
+		recordedEffects: readonly ProviderEffect[],
 	): { result: PublishResult; requestMayHaveBeenSent: boolean } => {
 		if (settled.status === "fulfilled") {
-			return { result: settled.value, requestMayHaveBeenSent: true };
+			return {
+				result: mergeRecordedEffectsIntoResult(settled.value, recordedEffects),
+				requestMayHaveBeenSent: true,
+			};
 		}
 		const requestMayHaveBeenSent =
 			settled.reason instanceof PublishBoundaryError &&
 			settled.reason.requestMayHaveBeenSent;
+		const result: PublishResult = {
+			success: false,
+			error: {
+				code: classifyPublishTaskRejection(settled.reason),
+				message:
+					settled.reason instanceof Error
+						? settled.reason.message
+						: String(settled.reason ?? "Unknown error"),
+			},
+		};
 		return {
 			requestMayHaveBeenSent,
-			result: {
-				success: false,
-				error: {
-					code: classifyPublishTaskRejection(settled.reason),
-					message:
-						settled.reason instanceof Error
-							? settled.reason.message
-							: String(settled.reason ?? "Unknown error"),
-				},
-			},
+			result: mergeRecordedEffectsIntoResult(result, recordedEffects),
 		};
 	};
 	const persistAndRecordResult = async (
 		task: PublishTask,
 		settled: SettledPublishResult,
 	): Promise<boolean> => {
-		const { result, requestMayHaveBeenSent } = normalizeSettledResult(settled);
+		const { result, requestMayHaveBeenSent } = normalizeSettledResult(
+			settled,
+			task.recordedEffects,
+		);
 		const persisted = await persistPublishTaskResult(db, {
 			postId,
 			organizationId: orgId,
@@ -1209,6 +1785,13 @@ export async function publishToTargets(
 				url: providerOutcome.platform_url ?? result.platform_url ?? null,
 			});
 			successCounts[task.targetKey] = (successCounts[task.targetKey] ?? 0) + 1;
+		} else if (isTerminalProviderDraft(providerOutcome)) {
+			entry.accounts.push({
+				id: task.accountId,
+				username: task.username,
+				url: null,
+			});
+			draftCounts[task.targetKey] = (draftCounts[task.targetKey] ?? 0) + 1;
 		} else if (isNonTerminalProviderOutcome(providerOutcome)) {
 			entry.accounts.push({
 				id: task.accountId,
@@ -1274,6 +1857,7 @@ export async function publishToTargets(
 		const entry = responseTargets[target.key];
 		if (!entry) continue;
 		const hasSuccess = (successCounts[target.key] ?? 0) > 0;
+		const hasDraft = (draftCounts[target.key] ?? 0) > 0;
 		const hasActive = (activeCounts[target.key] ?? 0) > 0;
 		const hasFailure = (failureCounts[target.key] ?? 0) > 0;
 		const hasUnknown = (unknownCounts[target.key] ?? 0) > 0;
@@ -1284,7 +1868,12 @@ export async function publishToTargets(
 			entry.status = "publishing";
 		} else if (hasUnknown) {
 			entry.status = "unknown";
-		} else if (hasSuccess && hasFailure) {
+		} else if (hasDraft && !hasSuccess && !hasFailure) {
+			entry.status = "provider_draft";
+		} else if (
+			(hasSuccess && hasFailure) ||
+			(hasDraft && (hasSuccess || hasFailure))
+		) {
 			entry.status = "partial";
 		} else if (hasFailure) {
 			entry.status = "failed";
@@ -1412,9 +2001,11 @@ export async function publishToTargets(
 	const webhookEvent =
 		finalStatus === "published"
 			? "post.published"
-			: finalStatus === "failed"
-				? "post.failed"
-				: "post.partial";
+			: finalStatus === "provider_draft"
+				? "post.provider_draft"
+				: finalStatus === "failed"
+					? "post.failed"
+					: "post.partial";
 
 	const occurrenceId = `post:${postId}:publish:${parentLeaseId}:${finalStatus}`;
 	const finalizedAt = new Date();
@@ -1595,9 +2186,11 @@ async function finalizePostStatusFromTargets(
 	const webhookEvent =
 		finalStatus === "published"
 			? "post.published"
-			: finalStatus === "failed"
-				? "post.failed"
-				: "post.partial";
+			: finalStatus === "provider_draft"
+				? "post.provider_draft"
+				: finalStatus === "failed"
+					? "post.failed"
+					: "post.partial";
 	const occurrenceId = `post:${postId}:publish:${parentLeaseId}:${finalStatus}`;
 	const finalizedAt = new Date();
 	const persisted = await db.transaction(async (tx) => {
@@ -1847,6 +2440,7 @@ export async function publishPostById(
 		env,
 		postId,
 		orgId,
+		post.workspaceId,
 		post.content,
 		mediaItems,
 		targetOverrides,

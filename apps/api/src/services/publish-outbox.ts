@@ -33,7 +33,11 @@ export interface NotificationOutboxInput {
 	occurrenceId: string;
 }
 
-export type PostCompletionStatus = "published" | "failed" | "partial";
+export type PostCompletionStatus =
+	| "published"
+	| "provider_draft"
+	| "failed"
+	| "partial";
 
 /**
  * One compact post-completion job carries both optional user notification and
@@ -49,6 +53,9 @@ export function postCompletionOutboxRow(input: {
 	platforms: string[];
 	occurredAt: Date;
 }): typeof publishOutbox.$inferInsert | null {
+	// A provider draft is a terminal, non-public success. It neither advances a
+	// publishing streak nor emits a misleading publish/failure notification.
+	if (input.status === "provider_draft") return null;
 	const updatesStreak =
 		input.status === "published" || input.status === "partial";
 	if (!updatesStreak && !input.userId) return null;

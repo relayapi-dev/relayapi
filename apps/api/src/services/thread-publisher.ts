@@ -317,6 +317,8 @@ export async function publishThreadPosition(
 				env,
 				{ mediaItems, overrides },
 				orgId,
+				3600,
+				post.workspaceId,
 			);
 			resolvedMediaItems = resolved.mediaItems;
 			resolvedOverrides = resolved.overrides;

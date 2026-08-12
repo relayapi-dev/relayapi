@@ -44,6 +44,7 @@ export interface QueueRescuePersistenceAlert {
 	organizationId: string | null;
 	queueClass:
 		| "media-cleanup"
+		| "media-processing"
 		| "publish"
 		| "email"
 		| "refresh"

@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 /**
  * Bitly short link provider.
  *
@@ -44,11 +48,11 @@ export const bitlyProvider: ShortLinkProvider = {
 			? await providerMutation.track("bitly.short_link.create", request)
 			: await request();
 		if (!res.ok) {
-			const text = await res.text();
+			const text = await readProviderText(res);
 			throw new Error(`Bitly API error (${res.status}): ${text}`);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			id?: string;
 			link?: string;
 			custom_bitlinks?: string[];
@@ -143,7 +147,9 @@ export const bitlyProvider: ShortLinkProvider = {
 					},
 				);
 				if (res.ok) {
-					const data = (await res.json()) as { total_clicks: number };
+					const data = (await readProviderJson(res)) as {
+						total_clicks: number;
+					};
 					result.set(target.key, data.total_clicks ?? 0);
 				}
 			} catch {

@@ -11,7 +11,7 @@ import {
 } from "../lib/fetch-public-url";
 import {
 	isAllowedMediaMimeType,
-	MAX_MEDIA_UPLOAD_BYTES,
+	MAX_DIRECT_MEDIA_UPLOAD_BYTES,
 	normalizeMediaMimeType,
 	validateStoredMediaObject,
 } from "../lib/media-storage-policy";
@@ -42,6 +42,8 @@ import {
 	MediaResponse,
 	MediaUploadResponse,
 } from "../schemas/media";
+import { enqueueAutomaticMediaNormalization } from "../services/media-processing-jobs";
+import { getMediaProcessingProjection } from "../services/media-processing-projection";
 import {
 	processMediaDeletion,
 	retireRejectedMediaUpload,
@@ -446,7 +448,9 @@ app.openapi(listMedia, async (c) => {
 	const data = records.slice(0, limit);
 	const last = data.at(-1);
 	const nextCursor =
-		hasMore && last ? encodeTimestampIdCursor(last.cursorTimestamp, last.id) : null;
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	const urls = await getMediaReadUrls(db, c.env, data);
 
@@ -460,6 +464,10 @@ app.openapi(listMedia, async (c) => {
 					r.deletionRequestedAt === null &&
 					r.url !== null,
 				url: urls[i] ?? null,
+				reference_url:
+					r.originalDeletedAt === null && r.deletionRequestedAt === null
+						? r.url
+						: null,
 				filename: r.filename,
 				mime_type: r.mimeType,
 				size: r.size,
@@ -505,14 +513,14 @@ app.openapi(uploadMedia, async (c) => {
 	// counting stream below independently enforces the same bound when the
 	// header is absent, zero, malformed, or dishonest.
 	const contentLength = parseContentLength(c.req.raw.headers);
-	if (contentLength !== null && contentLength > MAX_MEDIA_UPLOAD_BYTES) {
+	if (contentLength !== null && contentLength > MAX_DIRECT_MEDIA_UPLOAD_BYTES) {
 		markMediaMutationNotApplied(c);
 		void c.req.raw.body?.cancel().catch(() => {});
 		return c.json(
 			{
 				error: {
 					code: "FILE_TOO_LARGE",
-					message: `Max upload size is ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
+					message: `The streaming upload endpoint accepts at most ${MAX_DIRECT_MEDIA_UPLOAD_BYTES / 1024 / 1024} MiB; use resumable direct-to-R2 uploads for larger media`,
 				},
 			} as never,
 			413 as never,
@@ -529,7 +537,7 @@ app.openapi(uploadMedia, async (c) => {
 	}
 	const boundedBody = createBoundedReadableBody(
 		requestBody,
-		MAX_MEDIA_UPLOAD_BYTES,
+		MAX_DIRECT_MEDIA_UPLOAD_BYTES,
 		contentLength,
 	);
 
@@ -602,7 +610,7 @@ app.openapi(uploadMedia, async (c) => {
 				{
 					error: {
 						code: "FILE_TOO_LARGE",
-						message: `Max upload size is ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
+						message: `The streaming upload endpoint accepts at most ${MAX_DIRECT_MEDIA_UPLOAD_BYTES / 1024 / 1024} MiB; use resumable direct-to-R2 uploads for larger media`,
 					},
 				} as never,
 				413 as never,
@@ -631,6 +639,24 @@ app.openapi(uploadMedia, async (c) => {
 		.update(media)
 		.set({ status: "ready", size })
 		.where(eq(media.id, mediaId));
+	await enqueueAutomaticMediaNormalization(db, c.env, {
+		id: mediaId,
+		organizationId: orgId,
+		workspaceId: scope.workspaceId,
+		storageProvider,
+		storageBucketLocator: storageTarget.bucket,
+		storageRegion: storageTarget.region,
+		storageLocationId:
+			storageTarget.provider === "byos" ? storageTarget.locationId : null,
+		storageCredentialVersion:
+			storageTarget.provider === "byos"
+				? storageTarget.credentialVersion
+				: null,
+		storageKey,
+		mimeType: normalizedContentType,
+	}).catch((error) => {
+		console.error("[media-processing] automatic handoff failed", error);
+	});
 
 	return c.json(
 		{
@@ -808,6 +834,7 @@ app.openapi(getMedia, async (c) => {
 	}
 
 	const url = await getMediaReadUrl(db, c.env, record);
+	const processing = await getMediaProcessingProjection(db, orgId, record.id);
 
 	return c.json(
 		{
@@ -818,12 +845,17 @@ app.openapi(getMedia, async (c) => {
 				record.deletionRequestedAt === null &&
 				record.url !== null,
 			url,
+			reference_url:
+				record.originalDeletedAt === null && record.deletionRequestedAt === null
+					? record.url
+					: null,
 			filename: record.filename,
 			mime_type: record.mimeType,
 			size: record.size,
 			width: record.width ?? null,
 			height: record.height ?? null,
 			duration: record.duration ?? null,
+			...processing,
 			created_at: record.createdAt.toISOString(),
 		},
 		200,
@@ -1058,6 +1090,10 @@ app.openapi(confirmMedia, async (c) => {
 		markMediaMutationNotApplied(c);
 	}
 
+	await enqueueAutomaticMediaNormalization(db, c.env, record).catch((error) => {
+		console.error("[media-processing] automatic handoff failed", error);
+	});
+
 	const viewUrl = await getMediaReadUrl(db, c.env, record);
 
 	return c.json(
@@ -1069,6 +1105,10 @@ app.openapi(confirmMedia, async (c) => {
 				record.deletionRequestedAt === null &&
 				record.url !== null,
 			url: viewUrl,
+			reference_url:
+				record.originalDeletedAt === null && record.deletionRequestedAt === null
+					? record.url
+					: null,
 			filename: record.filename,
 			mime_type: record.mimeType,
 			size: record.size,

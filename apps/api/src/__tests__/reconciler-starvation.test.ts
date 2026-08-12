@@ -100,6 +100,7 @@ const customFieldValues = table("customFieldValues");
 const inboxConversations = table("inboxConversations");
 const posts = table("posts");
 const postTargets = table("postTargets");
+const publishAttempts = table("publishAttempts");
 const publishOutbox = table("publishOutbox");
 const socialAccounts = table("socialAccounts");
 
@@ -131,6 +132,10 @@ class FakeSelect {
 
 	limit(limit: number): this {
 		this.limitCount = limit;
+		return this;
+	}
+
+	for(): this {
 		return this;
 	}
 
@@ -311,6 +316,7 @@ mock.module("@relayapi/db", () => ({
 	isAutomationNodeKind: (value: unknown) => typeof value === "string",
 	posts,
 	postTargets,
+	publishAttempts,
 	publishOutbox,
 	socialAccounts,
 }));
@@ -506,5 +512,361 @@ describe("bounded reconciler starvation", () => {
 		).toBe(true);
 		expect(activeDb.rows("publishOutbox")).toHaveLength(1);
 		expect(dispatchPublishOutbox).toHaveBeenCalledTimes(1);
+	});
+
+	it("arms read-only reconciliation for journaled LinkedIn and YouTube effects before clearing the parent lease", async () => {
+		const expiredAt = new Date(Date.now() - 60_000);
+		const requestBoundary = new Date(expiredAt.getTime() - 60_000);
+		activeDb.seed("posts", [
+			{
+				id: "post_journaled",
+				organizationId: "org_1",
+				status: "publishing",
+				publishLeaseId: "lease_journaled",
+				publishLeaseExpiresAt: expiredAt,
+				publishAttempts: 1,
+				updatedAt: expiredAt,
+			},
+		]);
+		const linkedinEffects = [
+			{
+				name: "media_asset_1",
+				status: "succeeded",
+				provider_id: "urn:li:digitalmediaAsset:asset_1",
+			},
+			{
+				name: "post_published",
+				status: "succeeded",
+				provider_id: "urn:li:share:123",
+			},
+		];
+		const youtubeEffects = [
+			{
+				name: "video_upload",
+				status: "succeeded",
+				provider_id: "video_123",
+			},
+		];
+		const instagramEffects = [
+			{
+				name: "post_published",
+				status: "succeeded",
+				provider_id: "instagram_media_123",
+			},
+		];
+		const twitterThreadEffects = [
+			{
+				name: "thread_item_1",
+				status: "succeeded",
+				provider_id: "tweet_root_123",
+			},
+			{
+				name: "thread_item_2",
+				status: "succeeded",
+				provider_id: "tweet_reply_456",
+			},
+		];
+		activeDb.seed("postTargets", [
+			{
+				id: "target_linkedin",
+				organizationId: "org_1",
+				postId: "post_journaled",
+				status: "publishing",
+				deliveryState: "unknown",
+				platform: "linkedin",
+				attemptId: "attempt_linkedin",
+				publishOperationId: "operation_linkedin",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				platformPostId: null,
+				providerOperationId: null,
+				providerState: null,
+				providerEffects: linkedinEffects,
+				providerDisposition: null,
+				nextReconcileAt: null,
+			},
+			{
+				id: "target_instagram",
+				organizationId: "org_1",
+				postId: "post_journaled",
+				status: "publishing",
+				deliveryState: "unknown",
+				platform: "instagram",
+				attemptId: "attempt_instagram",
+				publishOperationId: "operation_instagram",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				platformPostId: null,
+				providerOperationId: null,
+				providerState: null,
+				providerEffects: instagramEffects,
+				providerDisposition: null,
+				nextReconcileAt: null,
+			},
+			{
+				id: "target_twitter_thread",
+				organizationId: "org_1",
+				postId: "post_journaled",
+				status: "publishing",
+				deliveryState: "unknown",
+				platform: "twitter",
+				attemptId: "attempt_twitter_thread",
+				publishOperationId: "operation_twitter_thread",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				platformPostId: null,
+				providerOperationId: null,
+				providerState: null,
+				providerEffects: twitterThreadEffects,
+				providerDisposition: null,
+				nextReconcileAt: null,
+			},
+			{
+				id: "target_youtube",
+				organizationId: "org_1",
+				postId: "post_journaled",
+				status: "publishing",
+				deliveryState: "unknown",
+				platform: "youtube",
+				attemptId: "attempt_youtube",
+				publishOperationId: "operation_youtube",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				platformPostId: null,
+				providerOperationId: null,
+				providerState: null,
+				providerEffects: youtubeEffects,
+				providerDisposition: null,
+				nextReconcileAt: null,
+			},
+			{
+				id: "target_effectless",
+				organizationId: "org_1",
+				postId: "post_journaled",
+				status: "publishing",
+				deliveryState: "unknown",
+				platform: "twitter",
+				attemptId: "attempt_effectless",
+				publishOperationId: "operation_effectless",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: [],
+				providerDisposition: null,
+				nextReconcileAt: null,
+			},
+		]);
+		activeDb.seed("publishAttempts", [
+			{
+				id: "attempt_linkedin",
+				postTargetId: "target_linkedin",
+				publishOperationId: "operation_linkedin",
+				state: "in_flight",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: linkedinEffects,
+			},
+			{
+				id: "attempt_youtube",
+				postTargetId: "target_youtube",
+				publishOperationId: "operation_youtube",
+				state: "in_flight",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: youtubeEffects,
+			},
+			{
+				id: "attempt_instagram",
+				postTargetId: "target_instagram",
+				publishOperationId: "operation_instagram",
+				state: "in_flight",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: instagramEffects,
+			},
+			{
+				id: "attempt_twitter_thread",
+				postTargetId: "target_twitter_thread",
+				publishOperationId: "operation_twitter_thread",
+				state: "in_flight",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: twitterThreadEffects,
+			},
+			{
+				id: "attempt_effectless",
+				postTargetId: "target_effectless",
+				publishOperationId: "operation_effectless",
+				state: "in_flight",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: [],
+			},
+		]);
+		activeDb.seed("publishOutbox", []);
+
+		const env = {
+			HYPERDRIVE: { connectionString: "postgresql://test.invalid/test" },
+		} as Env;
+		expect(await reconcilePostPublishExecutions(env)).toBe(1);
+
+		const linkedinTarget = activeDb
+			.rows("postTargets")
+			.find((row) => row.id === "target_linkedin");
+		expect(linkedinTarget).toMatchObject({
+			providerDisposition: "partial",
+			platformPostId: "urn:li:share:123",
+			providerOperationId: "urn:li:share:123",
+			providerState: "RECOVERED_FROM_DURABLE_EFFECTS",
+			leaseExpiresAt: null,
+		});
+		expect(linkedinTarget?.nextReconcileAt).toBeInstanceOf(Date);
+
+		const youtubeTarget = activeDb
+			.rows("postTargets")
+			.find((row) => row.id === "target_youtube");
+		expect(youtubeTarget).toMatchObject({
+			providerDisposition: "partial",
+			platformPostId: "video_123",
+			providerOperationId: "video_123",
+			providerState: "RECOVERED_FROM_DURABLE_EFFECTS",
+			leaseExpiresAt: null,
+		});
+		expect(youtubeTarget?.nextReconcileAt).toBeInstanceOf(Date);
+		expect(
+			activeDb.rows("postTargets").find((row) => row.id === "target_instagram"),
+		).toMatchObject({
+			providerDisposition: "partial",
+			platformPostId: "instagram_media_123",
+			providerOperationId: "instagram_media_123",
+		});
+		expect(
+			activeDb
+				.rows("postTargets")
+				.find((row) => row.id === "target_twitter_thread"),
+		).toMatchObject({
+			providerDisposition: "partial",
+			platformPostId: "tweet_root_123",
+			providerOperationId: "tweet_root_123",
+		});
+
+		for (const [attemptId, providerPostId] of [
+			["attempt_linkedin", "urn:li:share:123"],
+			["attempt_youtube", "video_123"],
+			["attempt_instagram", "instagram_media_123"],
+			["attempt_twitter_thread", "tweet_root_123"],
+		] as const) {
+			expect(
+				activeDb.rows("publishAttempts").find((row) => row.id === attemptId),
+			).toMatchObject({
+				state: "unknown",
+				providerDisposition: "partial",
+				providerPostId,
+				providerOperationId: providerPostId,
+				providerState: "RECOVERED_FROM_DURABLE_EFFECTS",
+			});
+		}
+
+		const effectlessTarget = activeDb
+			.rows("postTargets")
+			.find((row) => row.id === "target_effectless");
+		expect(effectlessTarget?.providerDisposition).toBeNull();
+		expect(effectlessTarget?.nextReconcileAt).toBeNull();
+		expect(effectlessTarget).toMatchObject({
+			status: "publishing",
+			deliveryState: "unknown",
+			leaseExpiresAt: null,
+			errorCode: "PUBLISH_OUTCOME_UNKNOWN",
+		});
+		expect(effectlessTarget?.platformPostId ?? null).toBeNull();
+		expect(
+			activeDb
+				.rows("publishAttempts")
+				.find((row) => row.id === "attempt_effectless")?.state,
+		).toBe("unknown");
+		expect(
+			activeDb.rows("posts").find((row) => row.id === "post_journaled")
+				?.publishLeaseId,
+		).toBeNull();
+		expect(activeDb.rows("publishOutbox")).toHaveLength(0);
+		expect(dispatchPublishOutbox).not.toHaveBeenCalled();
+	});
+
+	it("keeps the parent fenced when the target and attempt journals disagree", async () => {
+		const expiredAt = new Date(Date.now() - 60_000);
+		const requestBoundary = new Date(expiredAt.getTime() - 60_000);
+		activeDb.seed("posts", [
+			{
+				id: "post_mismatched_journal",
+				organizationId: "org_1",
+				status: "publishing",
+				publishLeaseId: "lease_mismatched_journal",
+				publishLeaseExpiresAt: expiredAt,
+				publishAttempts: 1,
+				updatedAt: expiredAt,
+			},
+		]);
+		activeDb.seed("postTargets", [
+			{
+				id: "target_mismatched_journal",
+				organizationId: "org_1",
+				postId: "post_mismatched_journal",
+				status: "publishing",
+				deliveryState: "unknown",
+				platform: "linkedin",
+				attemptId: "attempt_mismatched_journal",
+				publishOperationId: "operation_mismatched_journal",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: [
+					{
+						name: "post_published",
+						status: "succeeded",
+						provider_id: "urn:li:share:target",
+					},
+				],
+				providerDisposition: null,
+				nextReconcileAt: null,
+			},
+		]);
+		activeDb.seed("publishAttempts", [
+			{
+				id: "attempt_mismatched_journal",
+				postTargetId: "target_mismatched_journal",
+				publishOperationId: "operation_mismatched_journal",
+				state: "in_flight",
+				leaseExpiresAt: expiredAt,
+				requestMayHaveBeenSentAt: requestBoundary,
+				providerEffects: [
+					{
+						name: "post_published",
+						status: "succeeded",
+						provider_id: "urn:li:share:attempt",
+					},
+				],
+			},
+		]);
+		activeDb.seed("publishOutbox", []);
+
+		const env = {
+			HYPERDRIVE: { connectionString: "postgresql://test.invalid/test" },
+		} as Env;
+		expect(await reconcilePostPublishExecutions(env)).toBe(0);
+		expect(
+			activeDb.rows("posts").find((row) => row.id === "post_mismatched_journal")
+				?.publishLeaseId,
+		).toBe("lease_mismatched_journal");
+		expect(
+			activeDb
+				.rows("postTargets")
+				.find((row) => row.id === "target_mismatched_journal")
+				?.providerDisposition,
+		).toBeNull();
+		expect(
+			activeDb
+				.rows("publishAttempts")
+				.find((row) => row.id === "attempt_mismatched_journal")?.state,
+		).toBe("in_flight");
+		expect(activeDb.rows("publishOutbox")).toHaveLength(0);
+		expect(dispatchPublishOutbox).not.toHaveBeenCalled();
 	});
 });

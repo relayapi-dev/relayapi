@@ -1,6 +1,9 @@
+import { readResponseJson } from "../lib/fetch-public-url";
+import { fetchWithTimeout } from "../lib/fetch-timeout";
 import {
 	classifyPublishError,
 	type MediaAttachment,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
@@ -8,6 +11,7 @@ import {
 } from "./types";
 
 const TELEGRAM_API = "https://api.telegram.org";
+const TELEGRAM_RESPONSE_MAX_BYTES = 256 * 1024;
 
 interface TelegramResponse {
 	ok: boolean;
@@ -48,12 +52,18 @@ async function callTelegramApi(
 	const url = buildBaseUrl(token, method);
 	// Telegram Bot API: Call the specified bot method (e.g. sendMessage, sendPhoto, etc.)
 	// https://core.telegram.org/bots/api#available-methods
-	const res = await fetch(url, {
+	const res = await fetchWithTimeout(url, {
 		method: "POST",
+		redirect: "error",
+		timeout: 30_000,
+		timeoutThroughBody: true,
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
 	});
-	const data = (await res.json()) as TelegramResponse;
+	const data = await readResponseJson<TelegramResponse>(
+		res,
+		TELEGRAM_RESPONSE_MAX_BYTES,
+	);
 	if (!data.ok) {
 		const desc = data.description ?? `Telegram API error: ${method}`;
 		const raw = `HTTP ${res.status}\n${JSON.stringify(data)}`;
@@ -322,15 +332,48 @@ async function sendMediaGroup(
 	// Telegram Bot API: Send a group of photos, videos, documents, or audios as an album
 	// https://core.telegram.org/bots/api#sendmediagroup
 	const data = await callTelegramApi(token, "sendMediaGroup", params);
-	const messages = data.result as TelegramMessage[];
+	const messages = Array.isArray(data.result) ? data.result : [];
+	const effects: ProviderEffect[] = messages
+		.filter((message) => Number.isSafeInteger(message.message_id))
+		.map((message, index) => ({
+			name: `telegram_message_${index}`,
+			status: "succeeded",
+			provider_id: String(message.message_id),
+		}));
 	const firstMsg = messages[0];
+	if (!firstMsg || effects.length !== mediaItems.length) {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				platform_post_id: firstMsg ? String(firstMsg.message_id) : undefined,
+				provider_state: "incomplete_message_array",
+				effects,
+			},
+			error: {
+				code: "PLATFORM_ERROR",
+				message:
+					"Telegram accepted the media group but did not return one message ID per attachment; automatic replay is unsafe.",
+			},
+		};
+	}
+	const platformUrl = buildMessageUrl(
+		chatId,
+		firstMsg.message_id,
+		firstMsg.chat,
+	);
 
 	return {
 		success: true,
-		platform_post_id: firstMsg ? String(firstMsg.message_id) : undefined,
-		platform_url: firstMsg
-			? buildMessageUrl(chatId, firstMsg.message_id, firstMsg.chat)
-			: undefined,
+		platform_post_id: String(firstMsg.message_id),
+		platform_url: platformUrl,
+		provider_outcome: {
+			disposition: "published",
+			platform_post_id: String(firstMsg.message_id),
+			platform_url: platformUrl,
+			provider_state: "sent_media_group",
+			effects,
+		},
 	};
 }
 

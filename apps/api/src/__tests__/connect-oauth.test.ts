@@ -39,7 +39,14 @@ mock.module("../config/oauth", () => {
 				tokenUrl: "https://api.x.com/2/oauth2/token",
 				profileUrl:
 					"https://api.x.com/2/users/me?user.fields=profile_image_url",
-				scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
+				scopes: [
+					"tweet.read",
+					"tweet.write",
+					"tweet.moderate.write",
+					"users.read",
+					"like.write",
+					"offline.access",
+				],
 				requiresPkce: true,
 				tokenExchangeUsesBasicAuth: true,
 			}),
@@ -47,7 +54,11 @@ mock.module("../config/oauth", () => {
 				authUrl: "https://www.facebook.com/v25.0/dialog/oauth",
 				tokenUrl: "https://graph.facebook.com/v25.0/oauth/access_token",
 				profileUrl: "https://graph.facebook.com/v25.0/me?fields=id,name",
-				scopes: ["pages_manage_posts", "pages_show_list"],
+				scopes: [
+					"pages_manage_posts",
+					"pages_manage_engagement",
+					"pages_show_list",
+				],
 			}),
 			instagram: makeConfig({
 				authUrl: "https://www.facebook.com/v25.0/dialog/oauth",
@@ -59,7 +70,11 @@ mock.module("../config/oauth", () => {
 				authUrl: "https://threads.net/oauth/authorize",
 				tokenUrl: "https://graph.threads.net/oauth/access_token",
 				profileUrl: "https://graph.threads.net/v1.0/me?fields=id,username,name",
-				scopes: ["threads_basic", "threads_content_publish"],
+				scopes: [
+					"threads_basic",
+					"threads_content_publish",
+					"threads_location_tagging",
+				],
 			}),
 			googlebusiness: makeConfig({
 				profileUrl:
@@ -67,8 +82,9 @@ mock.module("../config/oauth", () => {
 				scopes: ["https://www.googleapis.com/auth/business.manage"],
 			}),
 			snapchat: makeConfig({
-				profileUrl: "https://adsapi.snapchat.com/v1/me",
-				scopes: ["snapchat-marketing-api"],
+				profileUrl:
+					"https://businessapi.snapchat.com/v1/public_profiles/my_profile",
+				scopes: ["snapchat-profile-api"],
 			}),
 		},
 		INSTAGRAM_DIRECT_CONFIG: makeConfig({
@@ -263,10 +279,14 @@ mock.module("../routes/connections", () => ({
 const mockVerifyInstagramWebhook = mock(async () => ({ success: true }));
 const mockSubscribeInstagramAccount = mock(async () => ({ success: true }));
 const mockSubscribeFacebookPage = mock(async () => ({ success: true }));
+const mockSubscribeWhatsAppBusinessAccount = mock(async () => ({
+	success: true,
+}));
 mock.module("../services/webhook-subscription", () => ({
 	verifyInstagramWebhookSubscription: mockVerifyInstagramWebhook,
 	subscribeInstagramAccount: mockSubscribeInstagramAccount,
 	subscribeFacebookPage: mockSubscribeFacebookPage,
+	subscribeWhatsAppBusinessAccount: mockSubscribeWhatsAppBusinessAccount,
 	verifyWhatsAppWebhookSubscription: mock(async () => ({ success: true })),
 }));
 
@@ -878,7 +898,7 @@ describe("direct OAuth completion authority", () => {
 			'c.get("principalType") === "dashboard_user"',
 		);
 		const serviceScope = handler.indexOf(
-			'if (!body.state) {\n\t\tconst scope = await resolveOperationalCreateScope',
+			"if (!body.state) {\n\t\tconst scope = await resolveOperationalCreateScope",
 		);
 		const providerExchange = handler.indexOf("await exchangeAndSaveAccount");
 		expect(dashboardFence).toBeGreaterThan(-1);

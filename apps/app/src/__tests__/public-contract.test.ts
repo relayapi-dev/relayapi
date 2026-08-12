@@ -9,6 +9,13 @@ import {
 	productProofs,
 } from "../components/landing/data";
 import { getApiBySlug } from "../lib/api-data";
+import { getPlatformBySlug } from "../lib/platform-data";
+import {
+	platformConnectionType,
+	platformDescriptions,
+	platformLabels,
+} from "../lib/platform-maps";
+import { getExpectedScopes } from "../lib/platform-scopes";
 import { PUBLIC_ACCESS_HREF } from "../lib/public-access";
 
 function hasOperation(path: string, method: string): boolean {
@@ -19,19 +26,80 @@ function hasOperation(path: string, method: string): boolean {
 }
 
 describe("public product contract", () => {
-	test("the 21-channel hero represents 21 distinct shipped channel ids", () => {
-		expect(heroChannels).toHaveLength(21);
-		expect(new Set(heroChannels.map((channel) => channel.name)).size).toBe(21);
+	test("the 22-channel hero represents 22 distinct shipped channel ids", () => {
+		expect(heroChannels).toHaveLength(22);
+		expect(new Set(heroChannels.map((channel) => channel.name)).size).toBe(22);
 		expect(heroChannels.map((channel) => channel.name)).toEqual(
 			expect.arrayContaining([
 				"SMS",
+				"Slack",
 				"Beehiiv",
 				"Kit",
 				"Mailchimp",
 				"Listmonk",
 			]),
 		);
-		expect(frontier[0]?.body).toContain("21 publishing channels");
+		expect(frontier[0]?.body).toContain("22 publishing channels");
+		const landingPage = readFileSync(
+			new URL("../pages/index.astro", import.meta.url),
+			"utf8",
+		);
+		expect(landingPage).toContain("twenty-two publishing channels");
+	});
+
+	test("the dashboard exposes all 22 connection contracts", () => {
+		expect(Object.keys(platformConnectionType)).toHaveLength(22);
+		expect(platformDescriptions.twitter).toBe("Sign in with X");
+		for (const platform of [
+			"beehiiv",
+			"convertkit",
+			"mailchimp",
+			"listmonk",
+		] as const) {
+			expect(platformConnectionType[platform]).toBe("credentials");
+			expect(platformLabels[platform]).toBeTruthy();
+		}
+
+		const grid = readFileSync(
+			new URL(
+				"../components/dashboard/connect/platform-grid.tsx",
+				import.meta.url,
+			),
+			"utf8",
+		);
+		const credentialRoute = readFileSync(
+			new URL(
+				"../pages/api/connect/[platform]/credentials.ts",
+				import.meta.url,
+			),
+			"utf8",
+		);
+		const iconMap = readFileSync(
+			new URL("../lib/platform-icons.tsx", import.meta.url),
+			"utf8",
+		);
+		for (const platform of Object.keys(platformConnectionType)) {
+			expect(grid).toContain(`"${platform}"`);
+			expect(iconMap).toContain(`${platform}:`);
+		}
+		for (const method of [
+			"connectBeehiiv",
+			"connectConvertKit",
+			"connectMailchimp",
+			"connectListMonk",
+		]) {
+			expect(credentialRoute).toContain(`client.connect.${method}`);
+		}
+		expect(getExpectedScopes("snapchat").posting).toContainEqual(
+			expect.objectContaining({
+				scope: "snapchat-profile-api",
+				label: "Public Profile API",
+			}),
+		);
+		const snapchatPage = JSON.stringify(getPlatformBySlug("snapchat"));
+		expect(snapchatPage).toContain("Snapchat Public Profile API");
+		expect(snapchatPage).toContain("SNAPCHAT_RECONNECT_REQUIRED");
+		expect(snapchatPage).not.toContain("Snapchat Marketing API");
 	});
 
 	test("marketing examples use analytics and webhook operations in OpenAPI", () => {

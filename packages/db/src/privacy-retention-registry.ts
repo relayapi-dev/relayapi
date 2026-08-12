@@ -226,6 +226,67 @@ const POSTGRES_EPHEMERAL_STORES = postgresStores(
 	},
 );
 
+const POSTGRES_AD_LEAD_EPHEMERA = postgresStores(["public.ad_leads"], {
+	rowPolicy: "ttl_delete",
+	retentionExecution: "scheduled",
+	subjects: ["organization", "workspace", "contact", "account", "parent"],
+	purge: "explicit_delete",
+	legalHold: "never",
+	secretFields: ["payload_ciphertext"],
+	ephemeral: true,
+	retention:
+		"Encrypted provider lead payload and its identifying projection are deleted at expires_at (at most 30 days) by a bounded, ordered daily drain; legal holds never extend this intake window.",
+	owner: DATA_GOVERNANCE_OWNER,
+});
+
+const POSTGRES_MEDIA_UPLOAD_SESSION_EPHEMERA = postgresStores(
+	["public.media_upload_sessions"],
+	{
+		rowPolicy: "ttl_delete",
+		retentionExecution: "scheduled",
+		subjects: ["organization", "workspace", "parent"],
+		purge: "explicit_delete",
+		legalHold: "never",
+		secretFields: ["multipart_upload_id_ciphertext"],
+		ephemeral: true,
+		retention:
+			"Multipart upload authority is shredded immediately after confirmed completion, abort, or expiry. Live completion/abort leases are fenced and excluded from cleanup; stale leases are reclaimable. Terminal session metadata is deleted only after both expiry and the last terminal transition are at least 24 hours old by a bounded, ordered drain.",
+		owner: DATA_GOVERNANCE_OWNER,
+	},
+);
+
+const POSTGRES_AD_REPORT_EPHEMERA = postgresStores(
+	["public.ad_report_jobs", "public.ad_report_rows"],
+	{
+		rowPolicy: "ttl_delete",
+		retentionExecution: "scheduled",
+		subjects: ["organization", "workspace", "account", "parent"],
+		purge: "explicit_delete",
+		legalHold: "never",
+		secretFields: [],
+		ephemeral: true,
+		retention:
+			"Private result bytes and normalized report rows expire after seven days; the minimized terminal job record expires after 90 days. Both drains are bounded and legal holds never extend bulk report data.",
+		owner: DATA_GOVERNANCE_OWNER,
+	},
+);
+
+const POSTGRES_MEDIA_DERIVATIVE_EPHEMERA = postgresStores(
+	["public.media_derivatives"],
+	{
+		rowPolicy: "ttl_delete",
+		retentionExecution: "scheduled",
+		subjects: ["organization", "workspace", "parent"],
+		purge: "explicit_delete",
+		legalHold: "never",
+		secretFields: [],
+		ephemeral: true,
+		retention:
+			"Private derived media bytes are deleted before their projection at delete_after (normally 30 days) by a bounded, ordered drain; the original media remains authoritative.",
+		owner: DATA_GOVERNANCE_OWNER,
+	},
+);
+
 const POSTGRES_NONSECRET_EPHEMERAL_STORES = postgresStores(
 	["auth.organization_creation_reservation"],
 	{
@@ -405,7 +466,12 @@ const POSTGRES_TOMBSTONE_RECEIPTS = postgresStores(
 );
 
 const POSTGRES_MIXED_CREDENTIAL_ENTITIES = postgresStores(
-	["public.social_accounts", "public.webhook_endpoints"],
+	[
+		"public.ad_connections",
+		"public.social_accounts",
+		"public.webhook_endpoints",
+		"public.whatsapp_groups",
+	],
 	{
 		rowPolicy: "field_redaction",
 		retentionExecution: "lifecycle",
@@ -473,9 +539,13 @@ const POSTGRES_TIMED_CREDENTIAL_EVIDENCE = postgresStores(
 
 const POSTGRES_ENTITY_CONTENT = postgresStores(
 	[
+		"public.ad_advanced_resources",
+		"public.ad_account_promotable_identities",
 		"public.ad_accounts",
 		"public.ad_audiences",
 		"public.ad_campaigns",
+		"public.ad_conversion_rules",
+		"public.ad_lead_forms",
 		"public.ads",
 		"public.ai_agents",
 		"public.ai_knowledge_bases",
@@ -509,6 +579,7 @@ const POSTGRES_ENTITY_CONTENT = postgresStores(
 		"public.subscription_lists",
 		"public.tags",
 		"public.whatsapp_phone_numbers",
+		"public.whatsapp_identity_aliases",
 	],
 	{
 		rowPolicy: "entity_lifetime",
@@ -701,11 +772,13 @@ const POSTGRES_OPERATIONAL_EVIDENCE = postgresStores(
 
 const POSTGRES_PARENT_OPERATIONAL_STATE = postgresStores(
 	[
+		"public.media_processing_jobs",
 		"public.ad_audience_users",
 		"public.contact_segment_memberships",
 		"public.contact_subscription_events",
 		"public.contact_subscriptions",
 		"public.post_targets",
+		"public.social_mutation_operations",
 		"public.stripe_organization_leases",
 		"public.whatsapp_phone_billing_attempts",
 		"public.whatsapp_phone_billing_operations",
@@ -727,6 +800,22 @@ const POSTGRES_PARENT_OPERATIONAL_STATE = postgresStores(
 		ephemeral: false,
 		retention:
 			"Authoritative parent or membership lifetime; explicit erasure and parent deletion own removal. Phone add-on authority and immutable revisions are first reduced to one detached seven-year financial receipt digest.",
+		owner: DATA_GOVERNANCE_OWNER,
+	},
+);
+
+const POSTGRES_PROVIDER_OUTBOX_STATE = postgresStores(
+	["public.ad_conversion_events"],
+	{
+		rowPolicy: "parent_lifetime",
+		retentionExecution: "lifecycle",
+		subjects: ["organization", "workspace", "contact", "account", "parent"],
+		purge: "foreign_key",
+		legalHold: "minimize",
+		secretFields: ["payload_ciphertext"],
+		ephemeral: false,
+		retention:
+			"The disabled conversion-delivery outbox follows its authoritative rule parent. No public capability may admit rows until delivery and terminal ciphertext shredding are implemented.",
 		owner: DATA_GOVERNANCE_OWNER,
 	},
 );
@@ -966,6 +1055,10 @@ const POSTGRES_PRIVACY_RETENTION_BASE_STORES: readonly Omit<
 	"fields"
 >[] = [
 	...POSTGRES_EPHEMERAL_STORES,
+	...POSTGRES_AD_LEAD_EPHEMERA,
+	...POSTGRES_MEDIA_UPLOAD_SESSION_EPHEMERA,
+	...POSTGRES_AD_REPORT_EPHEMERA,
+	...POSTGRES_MEDIA_DERIVATIVE_EPHEMERA,
 	...POSTGRES_NONSECRET_EPHEMERAL_STORES,
 	...POSTGRES_CREDENTIAL_STORES,
 	...POSTGRES_USER_SCOPED_NEVER_HELD,
@@ -993,6 +1086,7 @@ const POSTGRES_PRIVACY_RETENTION_BASE_STORES: readonly Omit<
 	...POSTGRES_CONSENT_AUTHORITY,
 	...POSTGRES_OPERATIONAL_EVIDENCE,
 	...POSTGRES_PARENT_OPERATIONAL_STATE,
+	...POSTGRES_PROVIDER_OUTBOX_STATE,
 	...POSTGRES_AUTOMATION_DAILY_COUNTS,
 	...POSTGRES_EMAIL_DELIVERIES,
 	...POSTGRES_PUBLIC_GROWTH_EVIDENCE,
@@ -1027,6 +1121,20 @@ const R2_PRIVACY_RETENTION_STORES = [
 		owner: PLATFORM_OWNER,
 		reviewedAt: REVIEWED_AT,
 		physicalResource: "relayapi-media",
+	}),
+	...defineStores("r2", ["r2:api.AD_REPORT_BUCKET"], {
+		rowPolicy: "ttl_delete",
+		retentionExecution: "lifecycle",
+		subjects: ["organization", "workspace", "account", "parent"],
+		purge: "exact_key_delete",
+		legalHold: "never",
+		secretFields: [],
+		ephemeral: true,
+		retention:
+			"Private provider-report artifacts are deleted by persisted exact job keys for workspace/account/parent erasure and by the tenant ad-reports/{organization}/ prefix for organization erasure. The bounded application drain expires results after seven days, with an eight-day R2 lifecycle fallback if application cleanup is interrupted.",
+		owner: PLATFORM_OWNER,
+		reviewedAt: REVIEWED_AT,
+		physicalResource: "relayapi-ad-reports",
 	}),
 	...defineStores("r2", ["r2:api.AVATAR_BUCKET"], {
 		rowPolicy: "entity_lifetime",
@@ -1183,6 +1291,7 @@ const KV_DERIVED_CACHE_STORES = defineStores(
 
 const QUEUE_FAMILIES = [
 	"media-cleanup",
+	"media-processing",
 	"publish",
 	"email",
 	"refresh",

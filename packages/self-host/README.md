@@ -20,7 +20,8 @@ secrets with mode 0600, and writes a small operator repository containing:
 
 - `relayapi.selfhost.json` — non-secret Cloudflare IDs, domains, feature flags,
   the immutable R2 jurisdiction (`default` or `eu`), and the exact non-secret
-  Hyperdrive CA certificate ID
+  Hyperdrive CA certificate ID; it can also pin non-secret TikTok verified URL
+  prefixes
 - `relayapi.lock.json` — the exact stable RelayAPI version and SHA-256 of its
   approved GitHub source archive
 - a guarded deploy workflow that migrates before deploying
@@ -254,6 +255,143 @@ logout or revocation invalidates an outstanding dashboard challenge. This
 containment behavior is shared by hosted and self-hosted Workers and requires no
 additional binding or secret.
 
+Authenticated JSON request envelopes are capped at 4 MiB before validation,
+idempotency, or usage accounting can materialize them. Bulk CSV and idea-media
+multipart envelopes are capped at 2 MiB and 3 MiB respectively; streamed raw
+media uploads and signed public webhook bodies retain their route-specific
+handling. Legacy analytics, cached best-time signals, and smart-slot collision
+checks now derive workspace authority from `posts.workspace_id`. These runtime
+guards require no new binding, secret, database migration, or operator setting.
+
+Provider JSON and diagnostic-text responses materialized inside the API Worker
+are independently capped at 2 MiB through the shared provider-response reader.
+An oversized or malformed upstream response fails closed instead of consuming
+the isolate's remaining memory; streamed media paths keep their separate
+route-specific limits. Self-hosted operators need no new setting, binding,
+secret, or migration for this guard.
+
+The shared publishing registry now contains 22 platforms, including Slack. The
+release migration adds `slack` to PostgreSQL's closed `platform` enum before
+either Worker deploys. Discord, Slack/GovSlack, and Twilio SMS connect with
+tenant-supplied credentials encrypted under the existing `ENCRYPTION_KEY`; they
+add no global provider secret or Cloudflare binding. Discord performs its
+read-only webhook probe, Twilio verifies the active account and owned
+SMS-capable sender, and Slack validates only its issuer/path because incoming
+webhooks expose no non-mutating probe. Slack activation and channel policy are
+therefore checked on first publish, and this incoming-webhook integration has
+no provider message ID for deletion or reconciliation.
+
+Publisher option validation is also deployment-mode neutral. The checked-in
+SDK and API share the full 22-platform registry and the same typed publisher
+options for posts, durable threads, and validation. Thread media preserves
+per-item `alt_text`. Kit template IDs and Listmonk list/template IDs are positive
+integers. Relay rejects Kit `send_at: null` before provider I/O because provider
+drafts have no Relay terminal lifecycle; use top-level `scheduled_at: "draft"`
+for a local draft. A legacy or unexpected Kit provider-draft response retains
+the broadcast ID and terminalizes for manual action instead of polling forever.
+WhatsApp recipients plus Snapchat/TikTok choices fail before provider I/O when
+incomplete. Audio attachments are admitted only for WhatsApp,
+and WhatsApp audio with nonblank text is rejected because audio messages do not
+support captions. Beehiiv renders image and GIF URLs into its HTML body, while
+Kit, Mailchimp, and Listmonk reject Relay media attachments instead of silently
+discarding them. These preflights add no self-host binding, secret, migration,
+or operator setting.
+
+The recommended Mastodon flow dynamically registers an OAuth client on the
+validated public instance and does not use the optional legacy
+`MASTODON_CLIENT_ID`/`MASTODON_CLIENT_SECRET` pair. Snapchat still requires an
+allowlisted `SNAPCHAT_CLIENT_ID`/`SNAPCHAT_CLIENT_SECRET`. Telegram continues to
+use the operator's existing `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_WEBHOOK_SECRET`; the connection transaction verifies the managed
+bot's actual posting permission before it stores the tenant chat.
+
+Connection-owned provider authority is shared by hosted and self-hosted
+Workers. Generic account metadata updates cannot overwrite Mastodon/Listmonk
+`instance_url`, Bluesky `pds_url`/`did`/`auth_mode`, WhatsApp `waba_id`, Beehiiv
+`publication_id`, Twilio `from_number`/MMS capability, TikTok verified prefixes,
+or Snapchat's internal Public Profile verification marker. Beehiiv publishing
+derives the publication from the connected `platform_account_id`, and SMS
+always uses the connector-verified sender while treating legacy
+`target_options.from_number` only as a matching assertion. Listmonk derives every publisher URL from
+its connected canonical public HTTPS base, rejects private/reserved DNS and
+redirects, applies a 30-second through-body timeout, and caps provider responses
+at 512 KiB. Newsletter list/template discovery also checks the account's
+workspace before provider I/O. These guards add no binding, secret, migration,
+or operator setting.
+
+Beehiiv lifecycle reconciliation is also deployment-mode neutral. Relay treats
+the official `confirmed` state as published only after its canonical publish
+time, keeps a future confirmed post scheduled, and never reports `draft` or
+`archived` as a successful send. The provider post ID and durable effect journal
+are retained for every terminal or ambiguous outcome. Dedicated advertising
+credential rotation and manual rediscovery likewise apply each validated
+provider-account snapshot atomically: returned accounts are upserted and only
+missing rows owned by that exact connection, organization, workspace scope, and
+platform are disabled. A valid empty snapshot disables all rows for that one
+connection without crossing another authority boundary. Manual discovery locks
+and revalidates the credential generation before applying its response, so a
+concurrent rotation or revocation cannot reactivate stale rows. These changes
+require no self-host binding, secret, database migration, or operator setting.
+
+Every Snapchat account created before the Public Profile verification marker
+was introduced must reconnect after upgrading. Legacy/unmarked records return
+`SNAPCHAT_RECONNECT_REQUIRED` for publish and reconciliation; public metadata
+cannot forge the marker or migrate a Marketing API organization/account ID.
+
+LinkedIn publishing always uses the connector-selected member or organization
+URN. Legacy `target_options.linkedin.organization_urn` is only a matching
+assertion; a mismatch is rejected before provider I/O. This behavior requires
+no self-host setting, binding, secret, or migration.
+
+TikTok videos can use RelayAPI's bounded `FILE_UPLOAD` path without another
+operator setting. Photo posts and explicit video `PULL_FROM_URL` require HTTPS
+URL prefixes already verified in the operator's TikTok developer app. Configure
+the same non-secret list as
+`publishing.tiktokVerifiedUrlPrefixes` in `relayapi.selfhost.json`; the CLI
+validates it and emits `TIKTOK_VERIFIED_URL_PREFIXES` as an API Worker variable.
+TikTok OAuth snapshots the canonical list into immutable account metadata, so
+an existing account must reconnect before a changed list takes effect. This
+prevents a post caller from expanding provider media-download authority. Every
+prefix must use an HTTPS domain rather than an IP host, omit credentials,
+non-default ports, queries, and fragments, and end its path in `/`; that slash
+keeps `/media/` from authorizing `/mediaevil`.
+
+Outbound publisher durability also reuses the existing post-target and publish-
+attempt projections. A publisher with several provider-side mutations records
+each confirmed effect in both rows before starting the next step; retries reuse
+those confirmed provider IDs, and a later error or manual reconciliation cannot
+erase the effect journal. If a publish lease expires after provider I/O, the
+recovery transaction requires the exact organization/post/target/attempt/
+operation fences and equal confirmed journals before clearing the parent lease.
+An effect-bearing attempt becomes `partial` with due read-only reconciliation;
+an effectless ambiguous attempt stays nonterminal and `unknown` for manual
+resolution, with no provider-write replay. A journal mismatch remains fenced.
+Signed WhatsApp status callbacks use the existing
+`FACEBOOK_APP_SECRET` and `INBOX_QUEUE`: `sent` remains accepted and
+nonterminal, while `delivered`/`read` or `failed` atomically terminalizes the
+target and attempt and schedules any parent-post/thread continuation. Duplicate
+or reordered callbacks cannot regress a terminal state. This adds no self-host
+binding, secret, migration, or operator setting.
+
+Discord forum/media-thread publishing also uses that existing effect journal.
+The publisher records the provider-confirmed thread channel as
+`discord_thread_context`; published-edit and inbox-edit routes add the exact
+`thread_id` only when the target carries durable thread evidence. A thread-
+scoped edit without a trustworthy channel ID fails before provider I/O with
+`DISCORD_THREAD_CONTEXT_MISSING`. Regular webhook-channel edits remain
+unchanged, and this behavior adds no self-host binding, secret, or operator
+setting.
+
+Published-post unpublish behavior is also deployment-mode neutral. Provider
+delete is implemented for Twitter/X, Facebook, LinkedIn, Reddit, Pinterest,
+Threads, YouTube, Bluesky, Google Business, Telegram, Mastodon, and Discord.
+Telegram media groups journal every returned message ID and unpublish retries
+all of them, treating an already-absent message as an idempotent delete.
+Instagram and every other unsupported target remain published with a per-target
+error when no current provider-delete contract exists; a mixed result remains
+`partial` and retryable instead of falsely reporting remote deletion. This adds
+no self-host binding, secret, migration, or operator setting.
+
 Customer-owned object storage requires no new operator-level setting. The
 baseline replaces the mutable BYOS singleton with immutable storage locations
 and encrypted credential versions; every BYOS media row pins both. Rotating a
@@ -278,7 +416,11 @@ Worker. In self-hosted community mode the status endpoint reports the community
 entitlement and Stripe mutations remain disabled, so operators do not configure
 Stripe secrets or a Stripe price in either Worker.
 
-The shared reset baseline also installs the durable provider-first ad mutation authority and its reconciler. Every provider write re-locks the exact active social/ad-account pair and resolves its current credential at the durable request boundary; multi-write Meta operations repeat that boundary between calls. Self-hosted community mode bypasses only the hosted Stripe entitlement check, never actor or provider-account revocation. Meta boolean mutation responses fail closed unless the provider explicitly returns `success: true`. Self-hosted phone-number operations continue to bypass Stripe; the hosted-only phone add-on price and quantity authority is inert in community mode.
+The shared reset baseline also installs the durable provider-first ad mutation authority and its reconciler. Advertising authorization lives in a dedicated `ad_connections` record; the legacy Meta social-account token remains a migration-only fallback. Every provider write locks the exact active ad connection (or legacy Meta authority) before its ad account and resolves its current credential at the durable request boundary; multi-write Meta operations repeat that boundary between calls. Dedicated connections preserve paid-media history independently; legacy Meta rows retain their previous publishing-account lifecycle until migrated. Self-hosted community mode bypasses only the hosted Stripe entitlement check, never actor, connection, scope, or provider-account revocation. Meta boolean mutation responses fail closed unless the provider explicitly returns `success: true`. Self-hosted phone-number operations continue to bypass Stripe; the hosted-only phone add-on price and quantity authority is inert in community mode.
+
+The same release ships paid-write adapters for Google Ads v25, LinkedIn Marketing API 202607, Pinterest Ads v5, TikTok Marketing API v1.3, and X Ads API v12. Their campaign hierarchy, provider-native creative/ad, absolute-status, removal, and reconciliation calls use the shared PostgreSQL operation fences and bounded provider HTTP reader; no extra Cloudflare binding is required. Operators must still configure provider-approved ad credentials and account authority. Google Search writes require the `adwords` scope, a developer token, provider-specific keyword/RSA settings, and an EU political-ad declaration. LinkedIn writes require approved Advertising API access, `rw_ads`, an eligible ad-account role, an existing content reference, and the required targeting/political-intent fields. TikTok Spark Ads additionally require an authorized identity, Pinterest requires `ads:read` and `ads:write`, and X requires Ads API entitlement, OAuth 1.0a secrets, and a funding instrument. X promoted-Tweet associations cannot be edited or reversibly paused by the official API, and Relay rejects those mutations before opening a provider fence.
+
+Google Ads additionally uses `GOOGLE_ADS_DEVELOPER_TOKEN`; TikTok for Business uses `TIKTOK_ADS_APP_ID`/`TIKTOK_ADS_APP_SECRET`; and X Ads uses `TWITTER_ADS_CONSUMER_KEY`/`TWITTER_ADS_CONSUMER_SECRET` for OAuth 1.0a. These secrets are optional and provider-group complete. Their presence does not enable writes: `/v1/ads/platforms` remains the authoritative capability and approval gate.
 
 Paid ad creation uses the same provider-effect evidence rules in hosted and
 self-hosted deployments: campaign and ad-set IDs inherited from an existing
@@ -442,12 +584,30 @@ archives, and every network wait are size- and time-bounded so a stalled or
 unbounded upstream response cannot hold an operator deployment indefinitely.
 
 Every provisioned R2 bucket also receives a one-day, all-prefix lifecycle for
-incomplete multipart uploads. RelayAPI currently creates media with single PUT
-operations, so this does not shorten any user-facing upload capability; it
-prevents abandoned multipart parts created by future or operator tooling from
-remaining billable for Cloudflare's longer default window. Media originals and
-the encrypted queue-rescue ledger retain their separate 30-day object-expiry
-rules, while avatar, thumbnail, and public-asset objects remain durable.
+incomplete multipart uploads. RelayAPI's resumable direct-to-R2 sessions accept
+canonical objects up to 200 MiB and use multipart uploads above 64 MiB; the API
+also aborts expired sessions, while the lifecycle is a final storage-side
+safety net. Provisioning also pins the media bucket CORS policy to the configured
+dashboard origin and exposes only `ETag`, which the browser needs to complete
+multipart sessions. The legacy Worker-proxy upload remains capped at 50 MiB. Media
+originals and the encrypted queue-rescue ledger retain their separate 30-day
+object-expiry rules. Advanced advertising report source artifacts use a private
+`relayapi-selfhost-ad-reports` bucket with an eight-day storage-side expiry,
+one day beyond the API's seven-day result horizon; normalized report rows and
+the durable job ledger remain in PostgreSQL. Avatar, thumbnail, and
+public-asset objects remain durable.
+
+Automatic compression and custom-cover extraction are opt-in for self-hosted
+operators because they require a Cloudflare plan that supports Containers and
+Workflows. Initialize with `--media-processing` (or set
+`features.mediaProcessing: true`) to add a private ffmpeg Container, a Workflow,
+and a dedicated Queue. Source and result bodies stream between R2 and the
+private Container and are never materialized in the 128 MiB Worker isolate.
+The original remains publishable if processing is unavailable or fails; Relay
+uses a derivative only after its tenant, source ETag, MIME type, size, expiry,
+and stored R2 object are revalidated and the derivative is smaller. With the
+feature disabled, resumable 200 MiB uploads still work and processing endpoints
+fail closed as unavailable without adding paid bindings.
 
 Automation message blocks persist durable `med_*` library IDs instead of
 expiring signed URLs. Immediately before provider delivery, the API resolves

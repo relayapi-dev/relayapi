@@ -1,5 +1,8 @@
 import {
 	accountRevocationJobs,
+	adConnections,
+	adConversionEvents,
+	adLeads,
 	automationEntrypoints,
 	automationSecrets,
 	automationWebhookReceipts,
@@ -10,12 +13,16 @@ import {
 	externalSubjectCleanupJobs,
 	idempotencyReceipts,
 	inboundWebhookEvents,
+	mediaUploadSessions,
 	operatorResolutionNotes,
 	queueFailures,
 	shortLinkCredentials,
 	socialAccounts,
+	socialMutationOperations,
 	storageCredentials,
 	webhookEndpoints,
+	whatsappGroups,
+	whatsappIdentityAliases,
 	whatsappPhoneReleaseOperations,
 } from "@relayapi/db";
 import {
@@ -31,6 +38,10 @@ import {
 	accountTokenNeedsReencryption,
 	reencryptAccountToken,
 } from "../lib/account-token-crypto";
+import {
+	adConnectionTokenNeedsReencryption,
+	reencryptAdConnectionToken,
+} from "../lib/ad-connection-token-crypto";
 import {
 	activeEncryptionKeyId,
 	decryptToken,
@@ -67,6 +78,136 @@ async function rotateScalar(
 	return encryptToken(plaintext, keyConfig, context);
 }
 
+export async function rotateSocialProjectionRequestPayload(
+	keyConfig: string,
+	row: Pick<
+		typeof socialMutationOperations.$inferSelect,
+		"organizationId" | "targetType" | "targetId" | "kind" | "requestPayload"
+	>,
+): Promise<Record<string, unknown> | null> {
+	const stored = row.requestPayload.projection_payload_ciphertext;
+	if (typeof stored !== "string") return null;
+	const rotated = await rotateScalar(
+		stored,
+		keyConfig,
+		{
+			recordId: [
+				row.organizationId,
+				row.targetType,
+				row.targetId,
+				row.kind,
+			].join(":"),
+			field: "social_mutation_projection_payload",
+		},
+		true,
+	);
+	return rotated
+		? { ...row.requestPayload, projection_payload_ciphertext: rotated }
+		: null;
+}
+
+export async function rotateWhatsAppGroupInviteLink(
+	keyConfig: string,
+	row: Pick<typeof whatsappGroups.$inferSelect, "id" | "inviteLinkCiphertext">,
+): Promise<string | null> {
+	return rotateScalar(
+		row.inviteLinkCiphertext,
+		keyConfig,
+		{ recordId: row.id, field: "whatsapp_group_invite_link" },
+		true,
+	);
+}
+
+export async function rotateWhatsAppIdentityAliasValues(
+	keyConfig: string,
+	row: Pick<
+		typeof whatsappIdentityAliases.$inferSelect,
+		| "id"
+		| "bsuidCiphertext"
+		| "parentBsuidCiphertext"
+		| "waIdCiphertext"
+		| "usernameCiphertext"
+	>,
+): Promise<{
+	bsuidCiphertext: string;
+	parentBsuidCiphertext: string | null;
+	waIdCiphertext: string | null;
+	usernameCiphertext: string | null;
+} | null> {
+	const [bsuid, parentBsuid, waId, username] = await Promise.all([
+		rotateScalar(
+			row.bsuidCiphertext,
+			keyConfig,
+			{ recordId: row.id, field: "whatsapp_identity_bsuid" },
+			true,
+		),
+		rotateScalar(
+			row.parentBsuidCiphertext,
+			keyConfig,
+			{ recordId: row.id, field: "whatsapp_identity_parent_bsuid" },
+			true,
+		),
+		rotateScalar(
+			row.waIdCiphertext,
+			keyConfig,
+			{ recordId: row.id, field: "whatsapp_identity_wa_id" },
+			true,
+		),
+		rotateScalar(
+			row.usernameCiphertext,
+			keyConfig,
+			{ recordId: row.id, field: "whatsapp_identity_username" },
+			true,
+		),
+	]);
+	if (!bsuid && !parentBsuid && !waId && !username) return null;
+	return {
+		bsuidCiphertext: bsuid ?? row.bsuidCiphertext,
+		parentBsuidCiphertext: parentBsuid ?? row.parentBsuidCiphertext,
+		waIdCiphertext: waId ?? row.waIdCiphertext,
+		usernameCiphertext: username ?? row.usernameCiphertext,
+	};
+}
+
+export async function rotateAdvancedAdLeadPayload(
+	keyConfig: string,
+	row: Pick<typeof adLeads.$inferSelect, "id" | "payloadCiphertext">,
+): Promise<string | null> {
+	return rotateScalar(
+		row.payloadCiphertext,
+		keyConfig,
+		{ recordId: row.id, field: "ad_lead_payload" },
+		true,
+	);
+}
+
+export async function rotateAdConversionPayload(
+	keyConfig: string,
+	row: Pick<typeof adConversionEvents.$inferSelect, "id" | "payloadCiphertext">,
+): Promise<string | null> {
+	return rotateScalar(
+		row.payloadCiphertext,
+		keyConfig,
+		{ recordId: row.id, field: "ad_conversion_payload" },
+		true,
+	);
+}
+
+export async function rotateMediaUploadAuthority(
+	keyConfig: string,
+	row: Pick<
+		typeof mediaUploadSessions.$inferSelect,
+		"id" | "multipartUploadIdCiphertext"
+	>,
+): Promise<string | null> {
+	return rotateScalar(
+		row.multipartUploadIdCiphertext,
+		keyConfig,
+		{ recordId: row.id, field: "multipart_upload_id" },
+		true,
+	);
+}
+
 /**
  * Resumable online key rotation. Every write compares the complete old
  * ciphertext/document, so reconnect/refresh/config edits win races and are never
@@ -78,6 +219,7 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 	const activeId = activeEncryptionKeyId(keyConfig);
 	const activePrefix = `enc:v2:${activeId}:`;
 	const activeAccountPrefix = `acct:v1:enc:v2:${activeId}:`;
+	const activeAdConnectionPrefix = `adconn:v1:enc:v2:${activeId}:`;
 	let changed = 0;
 
 	const accounts = await db
@@ -157,6 +299,60 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 					),
 				)
 				.returning({ id: socialAccounts.id });
+			changed += result.length;
+		}
+	}
+
+	const adConnectionRows = await db
+		.select({
+			id: adConnections.id,
+			accessToken: adConnections.accessToken,
+			refreshToken: adConnections.refreshToken,
+			tokenSecret: adConnections.tokenSecret,
+		})
+		.from(adConnections)
+		.where(
+			or(
+				and(
+					isNotNull(adConnections.accessToken),
+					doesNotStartWith(adConnections.accessToken, activeAdConnectionPrefix),
+				),
+				and(
+					isNotNull(adConnections.refreshToken),
+					doesNotStartWith(
+						adConnections.refreshToken,
+						activeAdConnectionPrefix,
+					),
+				),
+				and(
+					isNotNull(adConnections.tokenSecret),
+					doesNotStartWith(adConnections.tokenSecret, activeAdConnectionPrefix),
+				),
+			),
+		)
+		.orderBy(adConnections.id)
+		.limit(BATCH_SIZE);
+	for (const row of adConnectionRows) {
+		for (const [field, column, oldValue] of [
+			["access_token", adConnections.accessToken, row.accessToken],
+			["refresh_token", adConnections.refreshToken, row.refreshToken],
+			["token_secret", adConnections.tokenSecret, row.tokenSecret],
+		] as const) {
+			const rotated = adConnectionTokenNeedsReencryption(oldValue, keyConfig)
+				? await reencryptAdConnectionToken(oldValue, keyConfig, row.id, field)
+				: null;
+			if (!rotated || !oldValue) continue;
+			const result = await db
+				.update(adConnections)
+				.set(
+					field === "access_token"
+						? { accessToken: rotated }
+						: field === "refresh_token"
+							? { refreshToken: rotated }
+							: { tokenSecret: rotated },
+				)
+				.where(and(eq(adConnections.id, row.id), eq(column, oldValue)))
+				.returning({ id: adConnections.id });
 			changed += result.length;
 		}
 	}
@@ -791,6 +987,234 @@ export async function rotateEncryptedValues(env: Env): Promise<number> {
 				),
 			)
 			.returning({ id: contactChannels.id });
+		changed += result.length;
+	}
+
+	const adLeadRows = await db
+		.select({
+			id: adLeads.id,
+			payloadCiphertext: adLeads.payloadCiphertext,
+		})
+		.from(adLeads)
+		.where(doesNotStartWith(adLeads.payloadCiphertext, activePrefix))
+		.orderBy(adLeads.expiresAt, adLeads.id)
+		.limit(BATCH_SIZE);
+	for (const row of adLeadRows) {
+		const rotated = await rotateAdvancedAdLeadPayload(keyConfig, row);
+		if (!rotated) continue;
+		const result = await db
+			.update(adLeads)
+			.set({ payloadCiphertext: rotated })
+			.where(
+				and(
+					eq(adLeads.id, row.id),
+					eq(adLeads.payloadCiphertext, row.payloadCiphertext),
+				),
+			)
+			.returning({ id: adLeads.id });
+		changed += result.length;
+	}
+
+	const conversionRows = await db
+		.select({
+			id: adConversionEvents.id,
+			payloadCiphertext: adConversionEvents.payloadCiphertext,
+		})
+		.from(adConversionEvents)
+		.where(
+			and(
+				isNotNull(adConversionEvents.payloadCiphertext),
+				doesNotStartWith(adConversionEvents.payloadCiphertext, activePrefix),
+			),
+		)
+		.orderBy(adConversionEvents.id)
+		.limit(BATCH_SIZE);
+	for (const row of conversionRows) {
+		if (!row.payloadCiphertext) continue;
+		const rotated = await rotateAdConversionPayload(keyConfig, row);
+		if (!rotated) continue;
+		const result = await db
+			.update(adConversionEvents)
+			.set({ payloadCiphertext: rotated })
+			.where(
+				and(
+					eq(adConversionEvents.id, row.id),
+					eq(adConversionEvents.payloadCiphertext, row.payloadCiphertext),
+				),
+			)
+			.returning({ id: adConversionEvents.id });
+		changed += result.length;
+	}
+
+	const mediaUploadRows = await db
+		.select({
+			id: mediaUploadSessions.id,
+			multipartUploadIdCiphertext:
+				mediaUploadSessions.multipartUploadIdCiphertext,
+		})
+		.from(mediaUploadSessions)
+		.where(
+			and(
+				isNotNull(mediaUploadSessions.multipartUploadIdCiphertext),
+				doesNotStartWith(
+					mediaUploadSessions.multipartUploadIdCiphertext,
+					activePrefix,
+				),
+			),
+		)
+		.orderBy(mediaUploadSessions.expiresAt, mediaUploadSessions.id)
+		.limit(BATCH_SIZE);
+	for (const row of mediaUploadRows) {
+		if (!row.multipartUploadIdCiphertext) continue;
+		const rotated = await rotateMediaUploadAuthority(keyConfig, row);
+		if (!rotated) continue;
+		const result = await db
+			.update(mediaUploadSessions)
+			.set({ multipartUploadIdCiphertext: rotated })
+			.where(
+				and(
+					eq(mediaUploadSessions.id, row.id),
+					eq(
+						mediaUploadSessions.multipartUploadIdCiphertext,
+						row.multipartUploadIdCiphertext,
+					),
+				),
+			)
+			.returning({ id: mediaUploadSessions.id });
+		changed += result.length;
+	}
+
+	const projectionCiphertext = sql`${socialMutationOperations.requestPayload}->>'projection_payload_ciphertext'`;
+	const socialProjectionRows = await db
+		.select({
+			id: socialMutationOperations.id,
+			organizationId: socialMutationOperations.organizationId,
+			targetType: socialMutationOperations.targetType,
+			targetId: socialMutationOperations.targetId,
+			kind: socialMutationOperations.kind,
+			requestPayload: socialMutationOperations.requestPayload,
+		})
+		.from(socialMutationOperations)
+		.where(
+			and(
+				sql`${projectionCiphertext} IS NOT NULL`,
+				doesNotStartWith(projectionCiphertext, activePrefix),
+			),
+		)
+		.orderBy(socialMutationOperations.id)
+		.limit(BATCH_SIZE);
+	for (const row of socialProjectionRows) {
+		const nextPayload = await rotateSocialProjectionRequestPayload(
+			keyConfig,
+			row,
+		);
+		if (!nextPayload) continue;
+		const result = await db
+			.update(socialMutationOperations)
+			.set({ requestPayload: nextPayload, updatedAt: new Date() })
+			.where(
+				and(
+					eq(socialMutationOperations.id, row.id),
+					eq(socialMutationOperations.organizationId, row.organizationId),
+					sql`${socialMutationOperations.requestPayload} IS NOT DISTINCT FROM ${row.requestPayload}`,
+				),
+			)
+			.returning({ id: socialMutationOperations.id });
+		changed += result.length;
+	}
+
+	const whatsappGroupRows = await db
+		.select({
+			id: whatsappGroups.id,
+			organizationId: whatsappGroups.organizationId,
+			accountId: whatsappGroups.accountId,
+			inviteLinkCiphertext: whatsappGroups.inviteLinkCiphertext,
+		})
+		.from(whatsappGroups)
+		.where(
+			and(
+				isNotNull(whatsappGroups.inviteLinkCiphertext),
+				doesNotStartWith(whatsappGroups.inviteLinkCiphertext, activePrefix),
+			),
+		)
+		.orderBy(whatsappGroups.id)
+		.limit(BATCH_SIZE);
+	for (const row of whatsappGroupRows) {
+		if (!row.inviteLinkCiphertext) continue;
+		const rotated = await rotateWhatsAppGroupInviteLink(keyConfig, row);
+		if (!rotated) continue;
+		const result = await db
+			.update(whatsappGroups)
+			.set({ inviteLinkCiphertext: rotated, updatedAt: new Date() })
+			.where(
+				and(
+					eq(whatsappGroups.id, row.id),
+					eq(whatsappGroups.organizationId, row.organizationId),
+					eq(whatsappGroups.accountId, row.accountId),
+					eq(whatsappGroups.inviteLinkCiphertext, row.inviteLinkCiphertext),
+				),
+			)
+			.returning({ id: whatsappGroups.id });
+		changed += result.length;
+	}
+
+	const whatsappAliasRows = await db
+		.select({
+			id: whatsappIdentityAliases.id,
+			organizationId: whatsappIdentityAliases.organizationId,
+			accountId: whatsappIdentityAliases.accountId,
+			bsuidCiphertext: whatsappIdentityAliases.bsuidCiphertext,
+			parentBsuidCiphertext: whatsappIdentityAliases.parentBsuidCiphertext,
+			waIdCiphertext: whatsappIdentityAliases.waIdCiphertext,
+			usernameCiphertext: whatsappIdentityAliases.usernameCiphertext,
+		})
+		.from(whatsappIdentityAliases)
+		.where(
+			or(
+				doesNotStartWith(whatsappIdentityAliases.bsuidCiphertext, activePrefix),
+				and(
+					isNotNull(whatsappIdentityAliases.parentBsuidCiphertext),
+					doesNotStartWith(
+						whatsappIdentityAliases.parentBsuidCiphertext,
+						activePrefix,
+					),
+				),
+				and(
+					isNotNull(whatsappIdentityAliases.waIdCiphertext),
+					doesNotStartWith(
+						whatsappIdentityAliases.waIdCiphertext,
+						activePrefix,
+					),
+				),
+				and(
+					isNotNull(whatsappIdentityAliases.usernameCiphertext),
+					doesNotStartWith(
+						whatsappIdentityAliases.usernameCiphertext,
+						activePrefix,
+					),
+				),
+			),
+		)
+		.orderBy(whatsappIdentityAliases.id)
+		.limit(BATCH_SIZE);
+	for (const row of whatsappAliasRows) {
+		const rotated = await rotateWhatsAppIdentityAliasValues(keyConfig, row);
+		if (!rotated) continue;
+		const result = await db
+			.update(whatsappIdentityAliases)
+			.set({ ...rotated, updatedAt: new Date() })
+			.where(
+				and(
+					eq(whatsappIdentityAliases.id, row.id),
+					eq(whatsappIdentityAliases.organizationId, row.organizationId),
+					eq(whatsappIdentityAliases.accountId, row.accountId),
+					sql`${whatsappIdentityAliases.bsuidCiphertext} IS NOT DISTINCT FROM ${row.bsuidCiphertext}`,
+					sql`${whatsappIdentityAliases.parentBsuidCiphertext} IS NOT DISTINCT FROM ${row.parentBsuidCiphertext}`,
+					sql`${whatsappIdentityAliases.waIdCiphertext} IS NOT DISTINCT FROM ${row.waIdCiphertext}`,
+					sql`${whatsappIdentityAliases.usernameCiphertext} IS NOT DISTINCT FROM ${row.usernameCiphertext}`,
+				),
+			)
+			.returning({ id: whatsappIdentityAliases.id });
 		changed += result.length;
 	}
 

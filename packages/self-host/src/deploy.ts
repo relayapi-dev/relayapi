@@ -37,6 +37,8 @@ const API_SECRET_NAMES = [
 	"DOWNLOADER_SERVICE_KEY",
 	"TWITTER_CLIENT_ID",
 	"TWITTER_CLIENT_SECRET",
+	"TWITTER_ADS_CONSUMER_KEY",
+	"TWITTER_ADS_CONSUMER_SECRET",
 	"FACEBOOK_APP_ID",
 	"FACEBOOK_APP_SECRET",
 	"INSTAGRAM_APP_ID",
@@ -47,6 +49,8 @@ const API_SECRET_NAMES = [
 	"LINKEDIN_CLIENT_SECRET",
 	"TIKTOK_CLIENT_KEY",
 	"TIKTOK_CLIENT_SECRET",
+	"TIKTOK_ADS_APP_ID",
+	"TIKTOK_ADS_APP_SECRET",
 	"YOUTUBE_CLIENT_ID",
 	"YOUTUBE_CLIENT_SECRET",
 	"PINTEREST_APP_ID",
@@ -59,6 +63,7 @@ const API_SECRET_NAMES = [
 	"SNAPCHAT_CLIENT_SECRET",
 	"GOOGLE_CLIENT_ID",
 	"GOOGLE_CLIENT_SECRET",
+	"GOOGLE_ADS_DEVELOPER_TOKEN",
 	"WHATSAPP_APP_ID",
 	"WHATSAPP_APP_SECRET",
 	"WHATSAPP_CONFIG_ID",
@@ -121,6 +126,28 @@ function uploadedVersionId(output: string): string {
 	if (matches.length !== 1 || !match) {
 		throw new Error(
 			"Wrangler did not report exactly one staged Worker version ID; live traffic was not changed",
+		);
+	}
+	return match.version_id;
+}
+
+function deployedVersionId(output: string): string {
+	const entries = output
+		.split(/\r?\n/u)
+		.filter((line) => line.trim().length > 0)
+		.map((line) => parseJson(line, "Wrangler deploy"));
+	const matches = entries.filter(
+		(entry) =>
+			isRecord(entry) &&
+			entry.type === "deploy" &&
+			entry.version === 1 &&
+			typeof entry.version_id === "string" &&
+			WORKER_VERSION_ID_PATTERN.test(entry.version_id),
+	) as Array<Record<string, unknown> & { version_id: string }>;
+	const match = matches[0];
+	if (matches.length !== 1 || !match) {
+		throw new Error(
+			"Wrangler did not report exactly one Container-aware Worker deployment ID",
 		);
 	}
 	return match.version_id;
@@ -406,6 +433,8 @@ export async function deployWorker(input: {
 	sourceRoot: string;
 	version: string;
 	label: "API" | "dashboard";
+	/** Build, push, and apply Container configuration after candidate inspection. */
+	deployContainers?: boolean;
 	runner?: typeof run;
 	captureRunner?: typeof runCaptured;
 }): Promise<void> {
@@ -421,10 +450,35 @@ export async function deployWorker(input: {
 			...process.env,
 			WRANGLER_OUTPUT_FILE_PATH: outputPath,
 		};
+		const containerWranglerEnvironment = {
+			...wranglerEnvironment,
+			// Cloudflare Containers currently execute linux/amd64 images. Wrangler's
+			// Dockerfile deploy path otherwise inherits an Apple Silicon host's arm64.
+			DOCKER_DEFAULT_PLATFORM: "linux/amd64",
+		};
 		const rolloutId = randomUUID().replaceAll("-", "").slice(0, 12);
 		const labelTag = input.label === "API" ? "api" : "app";
 		const tagPrefix = `relayapi-${input.version}-${labelTag}-${rolloutId}`;
 		const uploadTag = `${tagPrefix}-upload`;
+		const containerTag = `${tagPrefix}-containers`;
+		if (input.deployContainers) {
+			// versions upload records Container metadata but deliberately does not
+			// build or apply images. Fail fast on Docker/build problems before any
+			// Worker version can receive traffic.
+			await runner(
+				"bunx",
+				[
+					"wrangler",
+					"deploy",
+					"--config",
+					input.configPath,
+					"--dry-run",
+					"--containers-rollout",
+					"immediate",
+				],
+				{ cwd: input.sourceRoot, env: containerWranglerEnvironment },
+			);
+		}
 		const args = [
 			"wrangler",
 			"versions",
@@ -438,8 +492,9 @@ export async function deployWorker(input: {
 			"--message",
 			`RelayAPI self-host ${input.version} ${input.label} candidate`,
 		];
+		let secretsPath: string | undefined;
 		if (Object.keys(input.secrets).length > 0) {
-			const secretsPath = join(rolloutDirectory, "secrets.json");
+			secretsPath = join(rolloutDirectory, "secrets.json");
 			await writeFile(secretsPath, `${JSON.stringify(input.secrets)}\n`, {
 				mode: 0o600,
 				flag: "wx",
@@ -553,6 +608,58 @@ export async function deployWorker(input: {
 				`${input.label} Worker code or non-secret bindings changed during secret reconciliation; live traffic was not changed`,
 			);
 		}
+		if (input.deployContainers) {
+			const containerArgs = [
+				"wrangler",
+				"deploy",
+				"--config",
+				input.configPath,
+				"--keep-vars",
+				"--strict",
+				"--tag",
+				containerTag,
+				"--message",
+				`RelayAPI self-host ${input.version} ${input.label} container rollout`,
+				"--containers-rollout",
+				"gradual",
+			];
+			if (secretsPath) containerArgs.push("--secrets-file", secretsPath);
+			await runner("bunx", containerArgs, {
+				cwd: input.sourceRoot,
+				env: containerWranglerEnvironment,
+			});
+			const containerVersionId = deployedVersionId(
+				await readFile(outputPath, "utf8"),
+			);
+			const containerSnapshot = workerVersionSnapshot(
+				await captureRunner(
+					"bunx",
+					[
+						"wrangler",
+						"versions",
+						"view",
+						containerVersionId,
+						"--config",
+						input.configPath,
+						"--json",
+					],
+					{ cwd: input.sourceRoot, env: wranglerEnvironment },
+				),
+				containerVersionId,
+			);
+			if (
+				containerSnapshot.configurationDigest !==
+				finalSnapshot.configurationDigest
+			) {
+				throw new Error(
+					`${input.label} Worker container rollout changed reviewed code or non-secret bindings`,
+				);
+			}
+		}
+		// A container-aware `wrangler deploy` necessarily creates a transient
+		// Worker deployment while it applies the image. Finish by activating the
+		// already-inspected exact-secret candidate, so the steady-state version is
+		// still the reviewed one used by non-Container rollouts.
 		await runner(
 			"bunx",
 			[
@@ -769,6 +876,7 @@ export async function deploy(options: CliOptions): Promise<void> {
 				sourceRoot: source.root,
 				version: lock.version,
 				label: "API",
+				deployContainers: config.features.mediaProcessing === true,
 			});
 			rolloutStage = "API Worker database probe";
 			await probeWorkerDatabase({

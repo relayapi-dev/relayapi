@@ -15,7 +15,7 @@ icon: bluesky
 | Images per post | 4 |
 | Videos per post | 1 |
 | Image formats | JPEG, PNG |
-| Image max size | 1 MB (strict) |
+| Image max size | 2,000,000 bytes per image (about 1.91 MiB) |
 | Video format | MP4 only |
 | Video max size | 100 MB |
 | Video max duration | 60 seconds |
@@ -24,20 +24,20 @@ icon: bluesky
 | Analytics | Limited (likes, comments, shares) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
 
 <Callout type="warn">
-Bluesky has a **300-character hard limit** — this is the #1 cause of failed posts when cross-posting from other platforms. If you are cross-posting from Twitter (280), LinkedIn (3,000), or Facebook (63,000), always use `target_options.bluesky.content` to provide a version under 300 characters. Images have a strict **1 MB size limit** — most phone photos are 3-5 MB and must be compressed before upload. Bluesky uses **App Passwords** instead of OAuth.
+Bluesky has a **300-character hard limit** — this is the #1 cause of failed posts when cross-posting from other platforms. If you are cross-posting from Twitter (280), LinkedIn (3,000), or Facebook (63,000), always use `target_options.bluesky.content` to provide a version under 300 characters. The canonical image-embed Lexicon limits each image blob to **2,000,000 decimal bytes** (about 1.91 MiB); RelayAPI rejects a larger source instead of compressing it silently. Bluesky uses **App Passwords** instead of OAuth.
 </Callout>
 
 ## Quick Start
 
 Post to Bluesky:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -50,20 +50,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-post = client.posts.create(
-    content='Hello from RelayAPI!',
-    targets=['bluesky'],
-    scheduled_at='now',
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -112,7 +98,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Simple text post. Hard limit of 300 characters.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -120,15 +106,6 @@ const post = await client.posts.create({
   targets: ['bluesky'],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Hello from RelayAPI!',
-    targets=['bluesky'],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -165,9 +142,9 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Image Post (Up to 4)
 
-Each image must be under 1 MB. Images are auto-compressed by the platform but quality may degrade.
+Each image must be at most 2,000,000 bytes. RelayAPI does not silently recompress the source; prepare the image before publishing.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -179,19 +156,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Check out these photos!',
-    targets=['bluesky'],
-    media=[
-        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -246,7 +210,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 MP4 only, max 100 MB, max 60 seconds.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -257,18 +221,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='New product demo!',
-    targets=['bluesky'],
-    media=[
-        {'url': 'https://cdn.example.com/demo.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -317,7 +269,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Create a thread of connected posts. Each item has its own 300-character limit.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -337,27 +289,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['bluesky'],
-    scheduled_at='now',
-    target_options={
-        'bluesky': {
-            'thread': [
-                {
-                    'content': 'A thread about building APIs',
-                    'media': [{'url': 'https://cdn.example.com/api.jpg', 'type': 'image'}],
-                },
-                {'content': 'First, design around resources, not actions.'},
-                {'content': 'Second, always version from day one.'},
-                {'content': 'Finally, document everything!'},
-            ],
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -456,7 +387,7 @@ Custom domain handles are supported (e.g., `brand.com` instead of `brand.bsky.so
 |----------|-------------|
 | Max per post | 4 |
 | Formats | JPEG, PNG, WebP, GIF |
-| Max file size | 1 MB per image (strict) |
+| Max file size | 2,000,000 bytes per image (about 1.91 MiB) |
 | Max dimensions | 2000 x 2000 px |
 | Recommended | 1200 x 675 px (16:9) |
 | Alt text | Up to 1,000 chars per image |
@@ -493,14 +424,14 @@ Bluesky is one of the simplest platforms to post to. No additional platform-spec
 | Posts cannot exceed 300 characters | Content exceeds the 300-character hard limit | Use `target_options.bluesky.content` to provide a shorter version. This is the #1 cause of Bluesky failures. |
 | Thread item N exceeds 300 characters | Individual thread item is too long | Each thread item has its own independent 300-character limit. |
 | App Password invalid | Wrong password type or expired password | Use an App Password (format `xxxx-xxxx-xxxx-xxxx`), not the main account password. |
-| Image too large | Image exceeds the 1 MB limit | Compress the image before upload. Auto-compression may degrade quality. |
+| Image too large | Image exceeds 2,000,000 bytes | Compress the image below the exact byte limit before upload. |
 | Publishing failed | Max retries reached | Usually temporary. Wait a moment and retry manually. |
 
 ## Known Quirks
 
 - **300-character hard limit** — the #1 cause of failed posts when cross-posting. Always provide a Bluesky-specific version.
-- **1 MB image limit** — strictest of any platform. Most phone photos are 3-5 MB and need compression.
-- **Images are auto-compressed** to meet the blob size limit, which may degrade quality.
+- **2,000,000-byte image limit** — this is a decimal-byte Lexicon limit, not 2 MiB. Most phone photos still need compression.
+- **No silent image recompression** — RelayAPI fails closed when the source exceeds the blob limit.
 - **Link previews auto-generated** when no media is attached to the post.
 - **Custom domain handles supported** — e.g., `brand.com` instead of `brand.bsky.social`.
 - **Rich text auto-detected** — mentions, hashtags, and URLs are automatically converted to clickable elements.

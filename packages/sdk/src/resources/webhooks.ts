@@ -258,6 +258,7 @@ export interface WebhookCreateParams {
    */
   events: Array<
     | 'post.published'
+    | 'post.provider_draft'
     | 'post.partial'
     | 'post.failed'
     | 'post.scheduled'
@@ -300,6 +301,7 @@ export interface WebhookUpdateParams {
    */
   events?: Array<
     | 'post.published'
+    | 'post.provider_draft'
     | 'post.partial'
     | 'post.failed'
     | 'post.scheduled'

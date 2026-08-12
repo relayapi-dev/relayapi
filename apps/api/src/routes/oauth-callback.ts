@@ -5,6 +5,7 @@ import { maybeEncrypt } from "../lib/crypto";
 import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
 import { appPublicOrigin } from "../lib/deployment-mode";
 import { validatePersistedOperationalScope } from "../lib/request-access";
+import type { MastodonOAuthState } from "../services/mastodon-oauth";
 import { claimOneTimeCapability } from "../services/one-time-capability";
 import type { Env } from "../types";
 import { exchangeAndSaveAccount } from "./connect";
@@ -22,6 +23,7 @@ interface OAuthState {
 	platform: string;
 	connection_operation_id: string;
 	method?: string | null;
+	mastodon_oauth?: MastodonOAuthState | null;
 	redirect_url: string;
 	code_verifier: string | null;
 	headless?: boolean;
@@ -69,6 +71,7 @@ app.get("/callback", async (c) => {
 		platform,
 		connection_operation_id,
 		method,
+		mastodon_oauth,
 		redirect_url,
 		code_verifier,
 		headless,
@@ -205,6 +208,7 @@ app.get("/callback", async (c) => {
 			redirectUri: oauthRedirectUri,
 			codeVerifier: code_verifier ?? undefined,
 			method: method ?? undefined,
+			mastodonOAuth: mastodon_oauth ?? undefined,
 			connectionOperationId: connection_operation_id,
 			waitUntil: (p) => c.executionCtx.waitUntil(p),
 		});

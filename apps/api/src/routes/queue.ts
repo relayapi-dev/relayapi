@@ -619,6 +619,8 @@ app.openapi(findSlot, async (c) => {
 	const { account_id, after, strategy, count } = c.req.valid("query");
 
 	const result = await findBestSlots(c.env, orgId, {
+		db: c.get("db"),
+		workspaceScope: c.get("workspaceScope"),
 		accountId: account_id,
 		after: after ? new Date(after) : new Date(),
 		strategy,

@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, type z } from "@hono/zod-openapi";
 import { type createDb, socialAccounts } from "@relayapi/db";
 import { eq } from "drizzle-orm";
@@ -75,7 +76,7 @@ async function fetchFacebookComments(
 		// Docs: https://developers.facebook.com/docs/graph-api/reference/object/comments/#reading
 		const res = await fetch(url);
 		if (!res.ok) return { data: [], next_cursor: null };
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				from?: { name: string; picture?: { data?: { url?: string } } };
@@ -155,7 +156,7 @@ async function fetchInstagramComments(
 		}
 		const res = await fetch(url);
 		if (!res.ok) return { data: [], next_cursor: null };
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				from?: { username: string; profile_picture_url?: string };
@@ -249,7 +250,7 @@ async function fetchYouTubeComments(
 			headers: { Authorization: `Bearer ${token}` },
 		});
 		if (!res.ok) return { data: [], next_cursor: null };
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items: Array<{
 				id: string;
 				snippet: {
@@ -403,7 +404,7 @@ async function fetchFacebookPosts(
 		const url = `${GRAPH_BASE.facebook}/me/published_posts?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,message,created_time,full_picture,permalink_url,comments.summary(true)`;
 		const res = await fetch(url);
 		if (!res.ok) return [];
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				message?: string;
@@ -439,7 +440,7 @@ async function fetchInstagramPosts(
 		const url = `https://${host}/${API_VERSIONS.meta_graph}/me/media?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,caption,timestamp,thumbnail_url,media_url,permalink,comments_count`;
 		const res = await fetch(url);
 		if (!res.ok) return [];
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				caption?: string;
@@ -477,7 +478,7 @@ async function fetchYouTubePosts(
 			{ headers: { Authorization: `Bearer ${token}` } },
 		);
 		if (!channelRes.ok) return [];
-		const channelJson = (await channelRes.json()) as {
+		const channelJson = (await readProviderJson(channelRes)) as {
 			items: Array<{
 				contentDetails: { relatedPlaylists: { uploads: string } };
 			}>;
@@ -493,7 +494,7 @@ async function fetchYouTubePosts(
 			{ headers: { Authorization: `Bearer ${token}` } },
 		);
 		if (!videosRes.ok) return [];
-		const videosJson = (await videosRes.json()) as {
+		const videosJson = (await readProviderJson(videosRes)) as {
 			items: Array<{
 				contentDetails: { videoId: string };
 				snippet: {
@@ -1354,7 +1355,7 @@ app.openapi(replyToComment, async (c) => {
 						}),
 				);
 				if (!res.ok) return c.json({ success: false }, 200);
-				const json = (await res.json()) as { id?: string };
+				const json = (await readProviderJson(res)) as { id?: string };
 				c.executionCtx.waitUntil(
 					invalidateInboxCache(c.env.KV, db, orgId, c.env),
 				);
@@ -1383,7 +1384,7 @@ app.openapi(replyToComment, async (c) => {
 						),
 				);
 				if (!igRes.ok) return c.json({ success: false }, 200);
-				const igJson = (await igRes.json()) as { id?: string };
+				const igJson = (await readProviderJson(igRes)) as { id?: string };
 				c.executionCtx.waitUntil(
 					invalidateInboxCache(c.env.KV, db, orgId, c.env),
 				);
@@ -1414,7 +1415,7 @@ app.openapi(replyToComment, async (c) => {
 						),
 				);
 				if (!res.ok) return c.json({ success: false }, 200);
-				const json = (await res.json()) as { id?: string };
+				const json = (await readProviderJson(res)) as { id?: string };
 				c.executionCtx.waitUntil(
 					invalidateInboxCache(c.env.KV, db, orgId, c.env),
 				);
@@ -1797,7 +1798,7 @@ app.openapi(privateReply, async (c) => {
 				}),
 		);
 		if (res.ok) {
-			const json = (await res.json()) as { id?: string };
+			const json = (await readProviderJson(res)) as { id?: string };
 			return c.json({ success: true, comment_id: json.id }, 200);
 		}
 	} catch {
@@ -1922,7 +1923,7 @@ app.openapi(listReviews, async (c) => {
 							);
 							if (!accountsRes.ok)
 								return { accountId: account.id, reviews: [], cursor: null };
-							const accountsJson = (await accountsRes.json()) as {
+							const accountsJson = (await readProviderJson(accountsRes)) as {
 								accounts: Array<{ name: string }>;
 							};
 							const gmbAccount = accountsJson.accounts?.[0];
@@ -1935,7 +1936,7 @@ app.openapi(listReviews, async (c) => {
 							);
 							if (!locRes.ok)
 								return { accountId: account.id, reviews: [], cursor: null };
-							const locJson = (await locRes.json()) as {
+							const locJson = (await readProviderJson(locRes)) as {
 								locations: Array<{ name: string }>;
 							};
 							locationName = locJson.locations?.[0]?.name;
@@ -1974,7 +1975,7 @@ app.openapi(listReviews, async (c) => {
 						if (!res.ok)
 							return { accountId: account.id, reviews: [], cursor: null };
 
-						const json = (await res.json()) as {
+						const json = (await readProviderJson(res)) as {
 							reviews: Array<{
 								name: string;
 								reviewer: { displayName: string };
@@ -2022,7 +2023,7 @@ app.openapi(listReviews, async (c) => {
 						const res = await fetch(url);
 						if (!res.ok)
 							return { accountId: account.id, reviews: [], cursor: null };
-						const json = (await res.json()) as {
+						const json = (await readProviderJson(res)) as {
 							data: Array<{
 								reviewer: { name: string; id: string };
 								rating: number;

@@ -1,198 +1,108 @@
 ---
-title: Python SDK
-description: Official Python client library for RelayAPI. Post to 21 platforms with a few lines of Python.
+title: Python REST and OpenAPI
+description: Call RelayAPI safely from Python over REST or generate a private client from the maintained OpenAPI contract.
 icon: Package
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-Official Python SDK for RelayAPI. Post to 21 platforms, manage accounts, upload media, and track analytics.
+RelayAPI does not currently publish an official Python package. Use the REST API directly with your preferred HTTP library, or generate and review a private Python client from the maintained OpenAPI document.
 
-## Setup
-
-### Install
-
-```bash
-pip install relay
-```
-
-### Authenticate
-
-```python
-from relay import Relay
-
-client = Relay()  # reads RELAY_API_KEY from environment
-```
-
-Or pass the key directly:
-
-```python
-client = Relay(api_key="rlay_live_...")
-```
-
-<Callout type="info">
-Get your API key from [relayapi.dev](https://relayapi.dev) under **Settings > API Keys**.
+<Callout type="warn">
+Do not install the unrelated PyPI project named `relay`. It is not a RelayAPI SDK. The canonical hosted contract is [`https://api.relayapi.dev/openapi.json`](https://api.relayapi.dev/openapi.json).
 </Callout>
 
-## Quick Examples
+## Authentication
 
-### Create and Publish a Post
+Set the API key in your environment:
 
-```python
-post = client.posts.create(
-    content="Hello from the Python SDK!",
-    targets=["acc_twitter_123", "acc_linkedin_456"],
-    scheduled_at="now",
-)
-print(f"Post created: {post.id} — status: {post.status}")
+```bash
+export RELAY_API_KEY="rlay_live_your_api_key"
 ```
 
-### Schedule a Post
+The following helper uses only Python's standard library:
 
 ```python
-post = client.posts.create(
-    content="This will go out tomorrow morning",
-    targets=["twitter", "linkedin"],
-    scheduled_at="2025-01-15T09:00:00Z",
-    timezone="America/New_York",
-)
-```
+import json
+import os
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
-### Save as Draft
+BASE_URL = os.getenv("RELAY_BASE_URL", "https://api.relayapi.dev").rstrip("/")
+API_KEY = os.environ["RELAY_API_KEY"]
 
-```python
-post = client.posts.create(
-    content="Work in progress...",
-    targets=["instagram"],
-    scheduled_at="draft",
-)
-```
 
-### List Connected Accounts
-
-```python
-accounts = client.accounts.list()
-for acc in accounts.data:
-    print(f"{acc.platform}: {acc.display_name} ({acc.id})")
-```
-
-### Upload Media
-
-```python
-from urllib.parse import unquote, urlsplit
-
-# Get a presigned upload URL
-presign = client.media.presign(
-    filename="photo.jpg",
-    content_type="image/jpeg",
-)
-
-# PUT once using both headers required by the presign contract
-import httpx
-with open("photo.jpg", "rb") as f:
-    upload = httpx.put(
-        presign.upload_url,
-        content=f.read(),
-        headers={"Content-Type": "image/jpeg", "If-None-Match": "*"},
+def relay_request(method, path, payload=None):
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        f"{BASE_URL}{path}",
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {API_KEY}",
+            "Accept": "application/json",
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        },
     )
-upload.raise_for_status()
-
-# Confirm the object so the pending upload becomes ready
-storage_key = unquote(urlsplit(presign.url).path.lstrip("/"))
-confirmed = client.media.confirm(storage_key=storage_key)
-assert confirmed.id == presign.id
-
-# Posts take a media object with the canonical URL, not the media ID
-post = client.posts.create(
-    content="Check out this photo!",
-    targets=["instagram"],
-    media=[{"url": presign.url, "type": "image"}],
-    scheduled_at="now",
-)
+    try:
+        with urlopen(request, timeout=60) as response:
+            return json.load(response)
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"RelayAPI returned HTTP {error.code}: {detail}") from error
 ```
 
-### Cross-Post with Per-Platform Content
+## Create and publish a post
 
 ```python
-post = client.posts.create(
-    content="Default content for all platforms",
-    targets=["twitter", "linkedin", "bluesky"],
-    target_options={
-        "twitter": {"content": "Short version for Twitter"},
-        "linkedin": {"content": "Longer professional version for LinkedIn with more context"},
+post = relay_request(
+    "POST",
+    "/v1/posts",
+    {
+        "content": "Hello from Python over REST!",
+        "targets": ["twitter", "linkedin"],
+        "scheduled_at": "now",
     },
-    scheduled_at="now",
 )
+
+print(post["id"], post["status"])
 ```
 
-### Get Post Analytics
+For retried mutations, send one stable `Idempotency-Key` header for the logical operation. Extend the helper with an optional header argument when your application retries requests.
+
+## Start an OAuth connection
 
 ```python
-analytics = client.analytics.retrieve(post_id="post_abc123")
-for platform, metrics in analytics.items():
-    print(f"{platform}: {metrics.impressions} impressions, {metrics.likes} likes")
+flow = relay_request("GET", "/v1/connect/twitter")
+print(flow["auth_url"])
 ```
 
-### Check Account Health
+Redirect the user to `auth_url`. The returned state is one-time and bound to the initiating credential and dashboard session when applicable.
+
+## List connected accounts
 
 ```python
-health = client.accounts.health()
-for acc in health:
-    status = "healthy" if acc.healthy else "needs attention"
-    print(f"{acc.platform} ({acc.username}): {status}")
+page = relay_request("GET", "/v1/accounts?limit=20")
+
+for account in page["data"]:
+    print(account["platform"], account.get("display_name"), account["id"])
+
+while page["has_more"]:
+    cursor = page["next_cursor"]
+    page = relay_request("GET", f"/v1/accounts?limit=20&cursor={cursor}")
 ```
 
-## Error Handling
+Use `urllib.parse.urlencode` when query values can contain characters that require escaping.
 
-```python
-from relay import Relay, APIError, AuthenticationError, RateLimitError
+## Generate a private Python client
 
-client = Relay()
+The complete OpenAPI 3.1 contract is available at:
 
-try:
-    post = client.posts.create(
-        content="Hello!",
-        targets=["twitter"],
-        scheduled_at="now",
-    )
-except AuthenticationError:
-    print("Invalid API key")
-except RateLimitError as e:
-    print(f"Rate limited — retry after {e.retry_after}s")
-except APIError as e:
-    print(f"API error {e.status_code}: {e.message}")
-```
+- [Hosted OpenAPI JSON](https://api.relayapi.dev/openapi.json)
+- [Interactive API reference](/api-reference)
 
-## Async Usage
+You can feed that document to [OpenAPI Generator](https://openapi-generator.tech/) or another generator you control. Pin the contract revision, review the generated authentication, retries, pagination, streaming, and idempotency behavior, and publish the result only under a package name owned by your organization.
 
-The SDK supports async/await with `AsyncRelay`:
-
-```python
-import asyncio
-from relay import AsyncRelay
-
-async def main():
-    client = AsyncRelay()
-
-    post = await client.posts.create(
-        content="Async post!",
-        targets=["twitter"],
-        scheduled_at="now",
-    )
-    print(f"Posted: {post.id}")
-
-asyncio.run(main())
-```
-
-## Configuration
-
-| Environment Variable | Description |
-|---|---|
-| `RELAY_API_KEY` | Your API key (required if not passed to constructor) |
-| `RELAY_BASE_URL` | Custom API base URL (default: `https://api.relayapi.dev`) |
-
-## Links
-
-- [GitHub](https://github.com/relayapi-dev/relay-python)
-- [PyPI](https://pypi.org/project/relay/)
-- [API Reference](/api-reference)
+<Callout type="info">
+`@relayapi/sdk` is the canonical current client maintained with this repository. A generated Python client can lag unless you regenerate it from the current contract.
+</Callout>

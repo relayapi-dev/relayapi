@@ -1,3 +1,4 @@
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import type { createDb } from "@relayapi/db";
 import type { Context } from "hono";
@@ -90,13 +91,15 @@ async function gmbFetch(
 				);
 
 	if (res.ok) {
-		const text = await res.text();
+		const text = await readProviderText(res);
 		return { ok: true, data: text ? JSON.parse(text) : {} };
 	}
 
 	let message = `Google API error (${res.status})`;
 	try {
-		const errBody = (await res.json()) as { error?: { message?: string } };
+		const errBody = (await readProviderJson(res)) as {
+			error?: { message?: string };
+		};
 		if (errBody.error?.message) message = errBody.error.message;
 	} catch {}
 

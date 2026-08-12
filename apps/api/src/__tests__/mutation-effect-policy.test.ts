@@ -383,17 +383,17 @@ describe("mutation-effect coverage policy", () => {
 			["connectBeehiiv", 1, 1],
 			["connectConvertKit", 1, 1],
 			["connectMailchimp", 2, 1],
-			["connectListMonk", 4, 1],
+			["connectListMonk", 3, 1],
 			["connectBluesky", 1, 1],
 			["initTelegram", 0, 1],
 			["whatsappEmbeddedSignup", 2, 1],
-			["whatsappCredentials", 0, 1],
+			["whatsappCredentials", 1, 1],
 			["selectFacebookPage", 2, 1],
 			["selectLinkedInOrg", 1, 1],
 			["selectPinterestBoard", 1, 1],
 			["selectGBPLocation", 2, 1],
-			["selectSnapchatProfile", 1, 1],
-			["completeOAuth", 13, 2],
+			["selectSnapchatProfile", 2, 1],
+			["completeOAuth", 14, 2],
 		] as const;
 		expect(connectMutations).toHaveLength(14);
 		for (const [name, directMarkers, sharedMarkers] of connectMutations) {
@@ -431,7 +431,7 @@ describe("mutation-effect coverage policy", () => {
 		).toHaveLength(4);
 
 		for (const [name, boundary] of [
-			["connectBluesky", "const session = (await res.json())"],
+			["connectBluesky", "const session = await readResponseJson<"],
 			["whatsappEmbeddedSignup", "const accessToken = tokenData.access_token"],
 		] as const) {
 			const source = handler(connectSource, name);

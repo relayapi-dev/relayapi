@@ -61,6 +61,45 @@ function clientWithApply(
 }
 
 describe("Hyperdrive CA reconciliation persistence", () => {
+	test("persists resolved additive queue IDs after upgrading a v1 config", async () => {
+		const legacyConfig = structuredClone(config);
+		if (!legacyConfig.resources) throw new Error("missing resource fixture");
+		delete legacyConfig.resources.queues["media-processing"];
+		delete legacyConfig.resources.queues["media-processing-dlq"];
+		let persisted: SelfHostConfig | undefined;
+		const persist = mock(async (appliedConfig: SelfHostConfig) => {
+			persisted = appliedConfig;
+		});
+		const queueAdoptionPlan: CloudflareResourcePlan = {
+			...rotationPlan,
+			hyperdrive: {
+				...rotationPlan.hyperdrive,
+				caCertificateId: previousCaCertificateId,
+				caCertificateAction: "retain",
+			},
+		};
+		const client = {
+			plan: mock(async () => queueAdoptionPlan),
+			apply: mock(async () => resources),
+		} as unknown as Pick<CloudflareClient, "plan" | "apply">;
+
+		const result = await reconcileCloudflareResources({
+			config: legacyConfig,
+			runtimeDatabaseUrl:
+				"postgresql://runtime:secret@db.example.com/relay?sslmode=verify-full",
+			client,
+			dryRun: false,
+			persist,
+		});
+
+		expect(result.config.resources?.queues["media-processing"]).toBe(
+			"queue-media-processing",
+		);
+		expect(persisted?.resources?.queues["media-processing-dlq"]).toBe(
+			"queue-media-processing-dlq",
+		);
+	});
+
 	test("keeps an explicit rotation plan read-only during dry-run", async () => {
 		const { client } = clientWithApply(async () => resources);
 		const persist = mock(async (_config: SelfHostConfig) => {});

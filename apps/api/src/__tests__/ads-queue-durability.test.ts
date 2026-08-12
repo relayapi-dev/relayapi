@@ -130,7 +130,7 @@ describe("ads Queue identifier-only durability", () => {
 		]);
 	});
 
-	it("does not use inactive tenants or social accounts for paid provider work", () => {
+	it("does not use inactive tenants or provider authorities for paid provider work", () => {
 		const service = readFileSync(
 			new URL("../services/ad-service.ts", import.meta.url),
 			"utf8",
@@ -142,7 +142,7 @@ describe("ads Queue identifier-only durability", () => {
 		expect(service).toContain('eq(socialAccounts.lifecycleStatus, "active")');
 		expect(service).toContain('eq(organization.lifecycleStatus, "active")');
 		expect(reconciler).toContain(
-			'"Paid operation cannot resume because its organization or social account is inactive"',
+			'"Paid operation cannot resume because its organization or provider authority is inactive"',
 		);
 		expect(reconciler).toContain('status: "manual_review"');
 	});

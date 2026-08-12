@@ -5,6 +5,7 @@ import { consumeDeadLetterQueue } from "./dead-letter";
 import { consumeEmailQueue } from "./email";
 import { consumeInboxQueue } from "./inbox";
 import { consumeMediaCleanupQueue } from "./media-cleanup";
+import { consumeMediaProcessingQueue } from "./media-processing";
 import { consumePublishQueue } from "./publish";
 import { normalizeQueueClass } from "./queue-class";
 import { consumeQueueRescue } from "./queue-rescue";
@@ -46,6 +47,11 @@ export async function handleQueueBatch(
 		case "media-cleanup":
 			return consumeMediaCleanupQueue(
 				batch as Parameters<typeof consumeMediaCleanupQueue>[0],
+				env,
+			);
+		case "media-processing":
+			return consumeMediaProcessingQueue(
+				batch as Parameters<typeof consumeMediaProcessingQueue>[0],
 				env,
 			);
 		case "refresh":

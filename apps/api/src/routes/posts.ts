@@ -24,10 +24,12 @@ import {
 } from "@relayapi/db";
 import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
-import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import { GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountToken } from "../lib/account-token-crypto";
 import { parseCsv } from "../lib/csv-parser";
 import { mediaPublicHost } from "../lib/deployment-mode";
+import { parseDiscordWebhookUrl } from "../lib/discord-webhook";
+import { fetchPublicUrl, readResponseJson } from "../lib/fetch-public-url";
 import {
 	getLinkedInRestHeaders,
 	LINKEDIN_REST_BASE,
@@ -45,6 +47,7 @@ import {
 	INVALID_CURSOR_BODY,
 	type TimestampIdCursor,
 } from "../lib/pagination-cursor";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import { presignRelayMediaUrls, RELAY_MEDIA_HOST } from "../lib/r2-presign";
 import {
 	loadRelayMediaPolicy,
@@ -66,6 +69,8 @@ import {
 	markMutationInputNotApplied,
 	multipartMutationInputPreflight,
 } from "../middleware/mutation-validation";
+import { deleteBlueskyPost } from "../publishers/bluesky";
+import { resolveMastodonInstanceUrl } from "../publishers/mastodon";
 import { addToPlaylist } from "../publishers/youtube";
 import {
 	ErrorResponse,
@@ -135,7 +140,7 @@ const PRESIGN_GET_EXPIRES = 3600;
 
 type MediaItem = {
 	url: string;
-	type?: "image" | "video" | "gif" | "document";
+	type?: "image" | "video" | "gif" | "document" | "audio";
 	thumbnail?: string;
 };
 type PostResponseBody = z.infer<typeof PostResponse>;
@@ -159,7 +164,8 @@ function responseMediaType(value: string | null): MediaItem["type"] {
 	return value === "image" ||
 		value === "video" ||
 		value === "gif" ||
-		value === "document"
+		value === "document" ||
+		value === "audio"
 		? value
 		: undefined;
 }
@@ -1105,6 +1111,7 @@ app.openapi(listPosts, async (c) => {
 					return overrides?._media ?? null;
 				}),
 				mediaPublicHost(c.env),
+				c.get("workspaceScope"),
 			)
 		: undefined;
 
@@ -1704,6 +1711,7 @@ app.openapi(createPostRoute, async (c) => {
 		orgId,
 		mediaPolicyInput(body),
 		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
 	);
 	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
 	if (mediaViolation) {
@@ -1749,6 +1757,9 @@ app.openapi(createPostRoute, async (c) => {
 	} else if (isAuto) {
 		const { findBestSlot } = await import("../services/slot-finder");
 		const slot = await findBestSlot(c.env, orgId, {
+			db,
+			workspaceScope: c.get("workspaceScope"),
+			workspaceId,
 			accountId: resolved[0]?.accounts[0]?.id,
 			after: new Date(),
 			strategy: "smart",
@@ -2702,6 +2713,7 @@ app.openapi(updatePostRoute, async (c) => {
 		orgId,
 		mediaPolicyInput(body),
 		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
 	);
 	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
 	if (mediaViolation) {
@@ -2754,6 +2766,9 @@ app.openapi(updatePostRoute, async (c) => {
 			// → 500 when serialized.
 			const { findBestSlot } = await import("../services/slot-finder");
 			const slot = await findBestSlot(c.env, orgId, {
+				db,
+				workspaceScope: c.get("workspaceScope"),
+				workspaceId: post.workspaceId,
 				after: new Date(),
 				strategy: "smart",
 			});
@@ -3726,7 +3741,7 @@ async function bulkItemErrorFromResponse(response: Response): Promise<{
 	message: string;
 }> {
 	try {
-		const payload = (await response.json()) as {
+		const payload = (await readProviderJson(response)) as {
 			error?: { code?: unknown; message?: unknown };
 		};
 		if (
@@ -3759,6 +3774,7 @@ app.openapi(bulkCreatePosts, async (c) => {
 		orgId,
 		postItems.map(mediaPolicyInput),
 		mediaPublicHost(c.env),
+		wsScope,
 	);
 
 	// Pre-fetch org accounts once for all items (resolveTargets fetches them each time)
@@ -3831,6 +3847,9 @@ app.openapi(bulkCreatePosts, async (c) => {
 			} else if (isAuto) {
 				const { findBestSlot } = await import("../services/slot-finder");
 				const slot = await findBestSlot(c.env, orgId, {
+					db,
+					workspaceScope: c.get("workspaceScope"),
+					workspaceId,
 					accountId: resolved[0]?.accounts[0]?.id,
 					after: new Date(),
 					strategy: "smart",
@@ -4041,6 +4060,8 @@ app.openapi(unpublishPost, async (c) => {
 						accessToken: socialAccounts.accessToken,
 						refreshToken: socialAccounts.refreshToken,
 						tokenExpiresAt: socialAccounts.tokenExpiresAt,
+						platformAccountId: socialAccounts.platformAccountId,
+						metadata: socialAccounts.metadata,
 					})
 					.from(socialAccounts)
 					.where(
@@ -4084,18 +4105,39 @@ app.openapi(unpublishPost, async (c) => {
 			.filter((t) => t.platformPostId)
 			.map(async (target) => {
 				const account = accountMap.get(target.socialAccountId);
-				if (!account?.accessToken)
-					return { targetId: target.id, success: false };
-				const accessToken = account.accessToken;
-				if (!target.platformPostId)
-					return { targetId: target.id, success: false };
+				if (!account) {
+					return {
+						targetId: target.id,
+						success: false,
+						error: "Connected account is unavailable",
+					};
+				}
+				const accessToken =
+					account.accessToken ??
+					(target.platform === "telegram" ? c.env.TELEGRAM_BOT_TOKEN : null);
+				if (!accessToken) {
+					return {
+						targetId: target.id,
+						success: false,
+						error: "Connected account credentials are unavailable",
+					};
+				}
+				if (!target.platformPostId) {
+					return {
+						targetId: target.id,
+						success: false,
+						error: "Provider post ID is unavailable",
+					};
+				}
 				const platformPostId = target.platformPostId;
 
 				let deleteSuccess = false;
+				let attempted = false;
 				try {
 					const signal = AbortSignal.timeout(FETCH_TIMEOUT);
 					switch (target.platform) {
 						case "twitter":
+							attempted = true;
 							deleteSuccess = (
 								await unpublishMutation.track("twitter.post.delete", () =>
 									fetch(
@@ -4103,7 +4145,7 @@ app.openapi(unpublishPost, async (c) => {
 										{
 											method: "DELETE",
 											headers: {
-												Authorization: `Bearer ${account.accessToken}`,
+												Authorization: `Bearer ${accessToken}`,
 											},
 											signal,
 										},
@@ -4114,40 +4156,19 @@ app.openapi(unpublishPost, async (c) => {
 						// Facebook Graph API: DELETE a Page post
 						// Docs: https://developers.facebook.com/docs/graph-api/reference/post/#deleting
 						case "facebook":
+							attempted = true;
 							deleteSuccess = (
 								await unpublishMutation.track("facebook.post.delete", () =>
 									fetch(`${GRAPH_BASE.facebook}/${target.platformPostId}`, {
 										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
+										headers: { Authorization: `Bearer ${accessToken}` },
 										signal,
 									}),
 								)
 							).ok;
 							break;
-						// Instagram Graph API: DELETE an IG Media object
-						// Docs: https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/#deleting
-						// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
-						case "instagram": {
-							const igHost = account.accessToken.startsWith("IGAA")
-								? "graph.instagram.com"
-								: "graph.facebook.com";
-							deleteSuccess = (
-								await unpublishMutation.track("instagram.post.delete", () =>
-									fetch(
-										`https://${igHost}/${API_VERSIONS.meta_graph}/${target.platformPostId}`,
-										{
-											method: "DELETE",
-											headers: {
-												Authorization: `Bearer ${account.accessToken}`,
-											},
-											signal,
-										},
-									),
-								)
-							).ok;
-							break;
-						}
 						case "linkedin":
+							attempted = true;
 							deleteSuccess = (
 								await unpublishMutation.track("linkedin.post.delete", () =>
 									fetch(
@@ -4162,22 +4183,24 @@ app.openapi(unpublishPost, async (c) => {
 							).ok;
 							break;
 						case "reddit":
+							attempted = true;
 							deleteSuccess = (
 								await unpublishMutation.track("reddit.post.delete", () =>
 									fetch("https://oauth.reddit.com/api/del", {
 										method: "POST",
 										headers: {
-											Authorization: `Bearer ${account.accessToken}`,
+											Authorization: `Bearer ${accessToken}`,
 											"Content-Type": "application/x-www-form-urlencoded",
 											"User-Agent": "RelayAPI/1.0",
 										},
-										body: `id=${target.platformPostId}`,
+										body: new URLSearchParams({ id: platformPostId }),
 										signal,
 									}),
 								)
 							).ok;
 							break;
 						case "pinterest":
+							attempted = true;
 							deleteSuccess = (
 								await unpublishMutation.track("pinterest.post.delete", () =>
 									fetch(
@@ -4185,7 +4208,7 @@ app.openapi(unpublishPost, async (c) => {
 										{
 											method: "DELETE",
 											headers: {
-												Authorization: `Bearer ${account.accessToken}`,
+												Authorization: `Bearer ${accessToken}`,
 											},
 											signal,
 										},
@@ -4193,11 +4216,259 @@ app.openapi(unpublishPost, async (c) => {
 								)
 							).ok;
 							break;
+						// Threads API official Meta collection, "Delete Threads Media
+						// Objects" -> DELETE /{thread_id}.
+						// https://www.postman.com/meta/threads/documentation/dht3nzz/threads-api
+						case "threads":
+							attempted = true;
+							deleteSuccess = (
+								await unpublishMutation.track("threads.post.delete", () =>
+									fetch(
+										`${GRAPH_BASE.threads}/${encodeURIComponent(platformPostId)}`,
+										{
+											method: "DELETE",
+											headers: { Authorization: `Bearer ${accessToken}` },
+											signal,
+										},
+									),
+								)
+							).ok;
+							break;
+						// YouTube Data API v3, videos.delete:
+						// DELETE /youtube/v3/videos?id={videoId}; success is 204.
+						// https://developers.google.com/youtube/v3/docs/videos/delete
+						case "youtube": {
+							attempted = true;
+							const url = new URL(
+								"https://www.googleapis.com/youtube/v3/videos",
+							);
+							url.searchParams.set("id", platformPostId);
+							deleteSuccess = (
+								await unpublishMutation.track("youtube.video.delete", () =>
+									fetch(url, {
+										method: "DELETE",
+										headers: { Authorization: `Bearer ${accessToken}` },
+										signal,
+									}),
+								)
+							).ok;
+							break;
+						}
+						// AT Protocol canonical deleteRecord Lexicon:
+						// POST com.atproto.repo.deleteRecord with repo/collection/rkey.
+						// https://github.com/bluesky-social/atproto/blob/main/lexicons/com/atproto/repo/deleteRecord.json
+						case "bluesky":
+							attempted = true;
+							deleteSuccess = (
+								await unpublishMutation.track("bluesky.post.delete", () =>
+									deleteBlueskyPost(
+										{
+											id: account.id,
+											platform: "bluesky",
+											access_token: accessToken,
+											refresh_token: null,
+											platform_account_id: account.platformAccountId,
+											username: null,
+											metadata: account.metadata as Record<
+												string,
+												unknown
+											> | null,
+										},
+										platformPostId,
+										signal,
+									),
+								)
+							).ok;
+							break;
+						// Google Business Profile Local Posts delete:
+						// DELETE /v4/{name=accounts/*/locations/*/localPosts/*}.
+						// https://developers.google.com/my-business/reference/rest/v4/accounts.locations.localPosts/delete
+						case "googlebusiness": {
+							attempted = true;
+							const resourceName = platformPostId.replace(/^\/+/, "");
+							if (
+								!/^accounts\/[^/]+\/locations\/[^/]+\/localPosts\/[^/]+$/u.test(
+									resourceName,
+								)
+							) {
+								break;
+							}
+							const connectedLocation = account.platformAccountId.replace(
+								/\/+$/u,
+								"",
+							);
+							const defaultLocation =
+								typeof (account.metadata as Record<string, unknown> | null)
+									?.default_location_id === "string"
+									? String(
+											(account.metadata as Record<string, unknown>)
+												.default_location_id,
+										).replace(/^\/+|\/+$/gu, "")
+									: null;
+							const connectedAccount = /^accounts\/[^/]+/u.exec(
+								connectedLocation,
+							)?.[0];
+							const allowedParents = new Set([connectedLocation]);
+							if (connectedAccount && defaultLocation) {
+								allowedParents.add(
+									`${connectedAccount}/${
+										defaultLocation.startsWith("locations/")
+											? defaultLocation
+											: `locations/${defaultLocation}`
+									}`,
+								);
+							}
+							const resourceParent = resourceName.replace(
+								/\/localPosts\/[^/]+$/u,
+								"",
+							);
+							if (!allowedParents.has(resourceParent)) break;
+							deleteSuccess = (
+								await unpublishMutation.track(
+									"googlebusiness.post.delete",
+									() =>
+										fetch(
+											`https://mybusiness.googleapis.com/v4/${resourceName}`,
+											{
+												method: "DELETE",
+												headers: { Authorization: `Bearer ${accessToken}` },
+												signal,
+											},
+										),
+								)
+							).ok;
+							break;
+						}
+						// Telegram Bot API deleteMessage (subject to the provider's
+						// documented 48-hour and chat-permission limits).
+						// https://core.telegram.org/bots/api#deletemessage
+						case "telegram": {
+							attempted = true;
+							const messageIds = new Set<number>();
+							for (const rawId of [
+								platformPostId,
+								...(target.providerEffects ?? [])
+									.filter(
+										(effect) =>
+											effect.status === "succeeded" &&
+											effect.name.startsWith("telegram_message_") &&
+											effect.provider_id,
+									)
+									.map((effect) => effect.provider_id as string),
+							]) {
+								const messageId = Number(rawId);
+								if (Number.isSafeInteger(messageId) && messageId > 0) {
+									messageIds.add(messageId);
+								}
+							}
+							if (messageIds.size === 0) {
+								break;
+							}
+							const outcomes = await Promise.all(
+								[...messageIds].map(async (messageId, index) => {
+									const response = await unpublishMutation.track(
+										`telegram.message.delete.${index}`,
+										() =>
+											fetchPublicUrl(
+												`https://api.telegram.org/bot${accessToken}/deleteMessage`,
+												{
+													method: "POST",
+													redirect: "error",
+													timeout: FETCH_TIMEOUT,
+													timeoutThroughBody: true,
+													headers: { "Content-Type": "application/json" },
+													body: JSON.stringify({
+														chat_id: account.platformAccountId,
+														message_id: messageId,
+													}),
+													signal,
+												},
+											),
+									);
+									type TelegramDeleteResponse = {
+										ok?: boolean;
+										result?: boolean;
+										description?: string;
+									};
+									const payload =
+										await readResponseJson<TelegramDeleteResponse>(
+											response,
+											64 * 1024,
+										).catch((): TelegramDeleteResponse => ({}));
+									return (
+										(response.ok &&
+											payload.ok === true &&
+											payload.result === true) ||
+										(response.status === 400 &&
+											payload.description
+												?.toLowerCase()
+												.includes("message to delete not found"))
+									);
+								}),
+							);
+							deleteSuccess = outcomes.every(Boolean);
+							break;
+						}
+						// Mastodon statuses API, "Delete a status":
+						// DELETE /api/v1/statuses/:id with write:statuses.
+						// https://docs.joinmastodon.org/methods/statuses/#delete
+						case "mastodon": {
+							attempted = true;
+							const instanceUrl = resolveMastodonInstanceUrl(
+								account.metadata as Record<string, unknown> | null,
+							);
+							const url = new URL(
+								`/api/v1/statuses/${encodeURIComponent(platformPostId)}`,
+								instanceUrl,
+							);
+							url.searchParams.set("delete_media", "true");
+							deleteSuccess = (
+								await unpublishMutation.track("mastodon.status.delete", () =>
+									fetchPublicUrl(url, {
+										method: "DELETE",
+										redirect: "error",
+										timeout: FETCH_TIMEOUT,
+										headers: { Authorization: `Bearer ${accessToken}` },
+										signal,
+									}),
+								)
+							).ok;
+							break;
+						}
+						// Discord Webhook API, "Delete Webhook Message":
+						// DELETE /webhooks/{webhook.id}/{webhook.token}/messages/{message.id}.
+						// https://docs.discord.com/developers/resources/webhook#delete-webhook-message
+						case "discord": {
+							attempted = true;
+							const webhook = parseDiscordWebhookUrl(accessToken);
+							deleteSuccess = (
+								await unpublishMutation.track("discord.message.delete", () =>
+									fetchPublicUrl(
+										`${webhook.url}/messages/${encodeURIComponent(platformPostId)}`,
+										{
+											method: "DELETE",
+											redirect: "error",
+											timeout: FETCH_TIMEOUT,
+											signal,
+										},
+									),
+								)
+							).ok;
+							break;
+						}
 					}
 				} catch {
 					/* timeout or network error */
 				}
-				return { targetId: target.id, success: deleteSuccess };
+				return {
+					targetId: target.id,
+					success: deleteSuccess,
+					error: deleteSuccess
+						? null
+						: attempted
+							? "Platform deletion failed"
+							: "Unpublish is not supported by this platform",
+				};
 			}),
 	);
 
@@ -4215,7 +4486,7 @@ app.openapi(unpublishPost, async (c) => {
 		const val =
 			result.status === "fulfilled"
 				? result.value
-				: { targetId: "", success: false };
+				: { targetId: "", success: false, error: "Platform deletion failed" };
 		if (!val.targetId) continue;
 		processedTargetIds.add(val.targetId);
 		if (val.success) {
@@ -4230,7 +4501,7 @@ app.openapi(unpublishPost, async (c) => {
 			updatePromises.push(
 				db
 					.update(postTargets)
-					.set({ error: "Platform deletion failed" })
+					.set({ error: val.error })
 					.where(eq(postTargets.id, val.targetId)),
 			);
 		}
@@ -4252,7 +4523,9 @@ app.openapi(unpublishPost, async (c) => {
 	}
 
 	await Promise.all(updatePromises);
-	if (hasLocalUnpublishEffect) unpublishMutation.markCommitted();
+	if (hasLocalUnpublishEffect || anySuccessfullyRemoved) {
+		unpublishMutation.markCommitted();
+	}
 	unpublishMutation.finalize();
 
 	// Re-fetch all targets and derive the post status from the ACTUAL outcome rather
@@ -4557,7 +4830,7 @@ app.openapi(updateMetadata, async (c) => {
 		);
 	}
 
-	const listData = (await listRes.json()) as {
+	const listData = (await readProviderJson(listRes)) as {
 		items?: Array<{
 			snippet: {
 				title: string;
@@ -4657,7 +4930,9 @@ app.openapi(updateMetadata, async (c) => {
 		);
 
 		if (!updateRes.ok) {
-			const errText = await updateRes.text().catch(() => "Unknown error");
+			const errText = await readProviderText(updateRes).catch(
+				() => "Unknown error",
+			);
 			return c.json(
 				{
 					error: {
@@ -4918,6 +5193,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 			});
 		}),
 		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
 	);
 
 	// Pre-fetch org accounts once, filtered by workspace scope
@@ -5120,6 +5396,9 @@ app.openapi(bulkCsvUpload, async (c) => {
 			} else if (isAutoCSV) {
 				const { findBestSlot } = await import("../services/slot-finder");
 				const slot = await findBestSlot(c.env, orgId, {
+					db,
+					workspaceScope: c.get("workspaceScope"),
+					workspaceId: resolvedWorkspaceId,
 					accountId: resolved[0]?.accounts[0]?.id,
 					after: new Date(),
 					strategy: "smart",

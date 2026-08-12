@@ -1,4 +1,4 @@
-import { fetchWithTimeout } from "../lib/fetch-timeout";
+import { fetchPublicUrl, readResponseBytes } from "../lib/fetch-public-url";
 import type { Env } from "../types";
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024; // 5MB
@@ -55,8 +55,10 @@ async function rehostAvatarInBucket(
 ): Promise<string | null> {
 	if (!sourceUrl) return null;
 	try {
-		const res = await fetchWithTimeout(sourceUrl, {
+		const res = await fetchPublicUrl(sourceUrl, {
 			timeout: FETCH_TIMEOUT_MS,
+			timeoutThroughBody: true,
+			maxBytes: MAX_AVATAR_BYTES,
 		});
 		if (!res.ok) return null;
 
@@ -64,7 +66,7 @@ async function rehostAvatarInBucket(
 			res.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
 		if (!contentType.startsWith("image/")) return null;
 
-		const bytes = await res.arrayBuffer();
+		const bytes = await readResponseBytes(res, MAX_AVATAR_BYTES);
 		if (bytes.byteLength === 0 || bytes.byteLength > MAX_AVATAR_BYTES)
 			return null;
 

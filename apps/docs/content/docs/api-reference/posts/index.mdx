@@ -2,6 +2,8 @@
 title: Posts
 ---
 
+`PATCH /v1/posts/{id}` edits drafts or scheduled posts. Published X, Facebook, Discord, and Reddit text is edited through the durable `/edits` operation family with an `Idempotency-Key`; X edits replace the provider Post ID. Discord forum/media-thread edits require the exact thread ID retained from the confirmed publish result and fail closed when that context is unavailable. Media/title edits are not implied. See [Published Edits and Social Actions](/guides/published-edits-and-social-actions).
+
 ## Endpoints
 
 | Method | Endpoint | Description |
@@ -10,16 +12,19 @@ title: Posts
 | `POST` | [Bulk create posts](/api-reference/posts/bulkCreatePosts) | Bulk create posts |
 | `POST` | [Bulk create posts from CSV](/api-reference/posts/bulkCsvUpload) | Bulk create posts from CSV |
 | `POST` | [Create a post](/api-reference/posts/createPost) | Create a post |
+| `POST` | [Edit one or more published post targets](/api-reference/posts/createPublishedPostEdit) | Edit one or more published post targets |
 | `DELETE` | [Delete a post](/api-reference/posts/deletePost) | Delete a post |
 | `DELETE` | [Remove recycling configuration](/api-reference/posts/deleteRecyclingConfig) | Remove recycling configuration |
 | `DELETE` | [Detach a tag from a post](/api-reference/posts/detachPostTag) | Detach a tag from a post |
 | `GET` | [Get a post](/api-reference/posts/getPost) | Get a post |
 | `GET` | [Get publishing logs for a post](/api-reference/posts/getPostLogs) | Get publishing logs for a post |
 | `GET` | [Get notes for a post](/api-reference/posts/getPostNotes) | Get notes for a post |
+| `GET` | [Get a published-edit operation](/api-reference/posts/getPublishedPostEdit) | Get a published-edit operation |
 | `GET` | [Get recycling configuration](/api-reference/posts/getRecyclingConfig) | Get recycling configuration |
 | `GET` | [List all publishing logs](/api-reference/posts/listAllPostLogs) | List all publishing logs |
 | `GET` | [List tags attached to a post](/api-reference/posts/listPostTags) | List tags attached to a post |
 | `GET` | [List posts](/api-reference/posts/listPosts) | List posts |
+| `GET` | [List published-edit operations](/api-reference/posts/listPublishedPostEdits) | List published-edit operations |
 | `GET` | [List recycled copies of a post](/api-reference/posts/listRecycledCopies) | List recycled copies of a post |
 | `PUT` | [Set recycling configuration](/api-reference/posts/putRecyclingConfig) | Set recycling configuration |
 | `POST` | [Resolve an unknown provider publish outcome](/api-reference/posts/reconcilePostTarget) | Resolve an unknown provider publish outcome |

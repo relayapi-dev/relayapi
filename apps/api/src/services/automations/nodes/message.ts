@@ -1,3 +1,4 @@
+import { readProviderText } from "../../../lib/provider-response";
 // apps/api/src/services/automations/nodes/message.ts
 //
 // Composite `message` node handler. Renders a list of MessageBlocks,
@@ -462,7 +463,7 @@ async function dispatchCommentPrivateReply(
 		},
 		body: JSON.stringify(request.body),
 	});
-	const raw = await response.text();
+	const raw = await readProviderText(response);
 	if (!response.ok) {
 		if (response.status >= 500) {
 			throw new Error(

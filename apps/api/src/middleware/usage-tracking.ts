@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { matchedRoutes } from "hono/route";
 import { parseCsv } from "../lib/csv-parser";
+import { readResponseJson } from "../lib/fetch-public-url";
 import {
 	instrumentMutationDatabase,
 	MutationEffectTracker,
@@ -27,6 +28,8 @@ import {
 	type UsageReservationDecision,
 } from "../services/usage-meter";
 import type { Env, Variables } from "../types";
+
+const BULK_USAGE_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
 
 /** KV is a display/notification hint only; PostgreSQL usage buckets are authoritative. */
 export async function incrementUsage(
@@ -411,7 +414,9 @@ async function settleMutationDisposition(
 		const contentType = c.res.headers.get("content-type") ?? undefined;
 		if (!isJsonContentType(contentType))
 			throw new Error("non-JSON bulk response");
-		const payload = asJsonObject(await c.res.clone().json());
+		const payload = asJsonObject(
+			await readResponseJson(c.res.clone(), BULK_USAGE_RESPONSE_MAX_BYTES),
+		);
 		const committedUnits = payload
 			? committedUnitsFromBulkResponse(c.req.path, payload, reservedUnits)
 			: null;
@@ -450,20 +455,11 @@ function isJsonContentType(contentType: string | undefined): boolean {
 	return mimeType === "application/json" || mimeType.endsWith("+json");
 }
 
-async function readJsonBodyFromClone(
-	c: UsageTrackingContext,
-): Promise<Record<string, unknown> | null> {
-	if (!isJsonContentType(c.req.header("content-type"))) return null;
-	try {
-		return (await c.req.raw.clone().json()) as Record<string, unknown>;
-	} catch {
-		return null;
-	}
-}
-
 async function countBulkCsvUnits(c: UsageTrackingContext): Promise<number> {
 	try {
-		const formData = await c.req.raw.clone().formData();
+		// The authenticated body-cache middleware has already enforced the 2 MiB
+		// envelope and seeded Hono's exact-byte replay cache for this route.
+		const formData = await c.req.formData();
 		const file = formData.get("file");
 		if (!(file instanceof File)) return 1;
 		return Math.max(1, parseCsv(await file.text()).length);
@@ -476,9 +472,7 @@ async function getUsageUnits(c: UsageTrackingContext): Promise<number> {
 	if (c.req.method !== "POST") return 1;
 	const field = JSON_BULK_USAGE_FIELDS[c.req.path];
 	if (field) {
-		const body =
-			(c.get("parsedBody") as Record<string, unknown> | null | undefined) ??
-			(await readJsonBodyFromClone(c));
+		const body = c.get("parsedBody");
 		const items = body?.[field];
 		return Array.isArray(items) ? Math.max(1, items.length) : 1;
 	}

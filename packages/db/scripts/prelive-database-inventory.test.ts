@@ -53,6 +53,9 @@ function providerRow(
 		row[contract.localIdKey ?? "id"] = "local_1";
 		row[contract.stateKey] = contract.terminalStates[0];
 	}
+	for (const providerKey of target.providerKeys) {
+		row[providerKey] = `${providerKey}_1`;
+	}
 	row[target.stateKey] = state;
 	return row;
 }
@@ -221,6 +224,11 @@ describe("explicit provider-operation inventory contracts", () => {
 			"account_revocation_operation",
 			"ad_creation_operation",
 			"ad_mutation_operation",
+			"ad_report_operation",
+			"ad_conversion_operation",
+			"social_mutation_operation",
+			"media_upload_operation",
+			"media_processing_operation",
 			"usage_reservation",
 			"thread_publish_execution",
 			"queue_failure_resolution",

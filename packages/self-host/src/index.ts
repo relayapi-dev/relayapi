@@ -52,6 +52,7 @@ Global options:
   --email               Enable transactional email during init
   --ai                  Enable Workers AI during init
   --downloader          Enable the optional downloader during init
+  --media-processing    Enable paid Containers/Workflows media compression
   --r2-jurisdiction     R2 jurisdiction: default or eu (default: default)
   --hyperdrive-ca-certificate-id
                         Create with, or explicitly rotate the exact pinned
@@ -208,6 +209,7 @@ async function init(args: ParsedArgs, options: CliOptions): Promise<void> {
 			email: args.flags.has("--email"),
 			ai: args.flags.has("--ai"),
 			downloader: args.flags.has("--downloader"),
+			mediaProcessing: args.flags.has("--media-processing"),
 		},
 		...(githubRepository ? { github: { repository: githubRepository } } : {}),
 	});

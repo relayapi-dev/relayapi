@@ -628,7 +628,7 @@ describe("pre-live Cloudflare cutover controls", () => {
 		await client.ensureR2Buckets();
 
 		const creates = calls.filter((call) => call.method === "POST");
-		expect(creates).toHaveLength(4);
+		expect(creates).toHaveLength(5);
 		expect(creates.every((call) => call.jurisdiction === "default")).toBe(true);
 		expect(creates.map((call) => call.body)).toContainEqual({
 			name: "relayapi-public-assets",
@@ -636,7 +636,7 @@ describe("pre-live Cloudflare cutover controls", () => {
 		const lifecycleUpdates = calls.filter(
 			(call) => call.method === "PUT" && call.url.endsWith("/lifecycle"),
 		);
-		expect(lifecycleUpdates).toHaveLength(5);
+		expect(lifecycleUpdates).toHaveLength(6);
 		for (const update of lifecycleUpdates) {
 			expect(update.jurisdiction).toBe("default");
 			expect(update.body).toMatchObject({
@@ -652,12 +652,40 @@ describe("pre-live Cloudflare cutover controls", () => {
 				]),
 			});
 		}
+		const [mediaCorsUpdate] = calls.filter(
+			(call) =>
+				call.method === "PUT" && call.url.endsWith("/relayapi-media/cors"),
+		);
+		expect(mediaCorsUpdate?.jurisdiction).toBe("default");
+		expect(mediaCorsUpdate?.body).toEqual({
+			rules: [
+				{
+					allowed: {
+						origins: ["https://relayapi.dev"],
+						methods: ["PUT"],
+						headers: ["Content-Type", "If-None-Match"],
+					},
+					exposeHeaders: ["ETag"],
+					maxAgeSeconds: 3600,
+				},
+			],
+		});
 		expect(reviewedLifecycleRules("relayapi-media")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					id: "relayapi-media-expiry",
 					deleteObjectsTransition: {
 						condition: { type: "Age", maxAge: 2_592_000 },
+					},
+				}),
+			]),
+		);
+		expect(reviewedLifecycleRules("relayapi-ad-reports")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "relayapi-ad-report-expiry",
+					deleteObjectsTransition: {
+						condition: { type: "Age", maxAge: 691_200 },
 					},
 				}),
 			]),

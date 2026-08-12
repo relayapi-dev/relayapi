@@ -109,6 +109,15 @@ export const ASYNC_LIFECYCLE_REGISTRY: readonly AsyncLifecycleRegistration[] = [
 	),
 	...registrations(
 		"external_mutation",
+		"src/services/ad-report-jobs.ts",
+		"ads",
+		["ad_report_jobs"],
+	),
+	...registrations("external_mutation", "src/routes/ads-advanced.ts", "ads", [
+		"ad_conversion_events",
+	]),
+	...registrations(
+		"external_mutation",
 		"src/services/automations/binding-sync.ts",
 		"automations",
 		["automation_bindings"],
@@ -157,6 +166,18 @@ export const ASYNC_LIFECYCLE_REGISTRY: readonly AsyncLifecycleRegistration[] = [
 	),
 	...registrations(
 		"external_mutation",
+		"src/routes/media-uploads.ts",
+		"media",
+		["media_upload_sessions"],
+	),
+	...registrations(
+		"pure_orchestration",
+		"src/workflows/media-processing.ts",
+		"media",
+		["media_processing_jobs"],
+	),
+	...registrations(
+		"external_mutation",
 		"src/services/byos-configuration.ts",
 		"storage",
 		["storage_credentials"],
@@ -166,6 +187,12 @@ export const ASYNC_LIFECYCLE_REGISTRY: readonly AsyncLifecycleRegistration[] = [
 		"src/services/publisher-runner.ts",
 		"publishing",
 		["post_targets", "publish_attempts"],
+	),
+	...registrations(
+		"external_mutation",
+		"src/services/social-mutation-operations.ts",
+		"social-actions",
+		["social_mutation_operations"],
 	),
 	...registrations(
 		"external_mutation",
@@ -347,6 +374,8 @@ export const ASYNC_LIFECYCLE_REGISTRY: readonly AsyncLifecycleRegistration[] = [
 export const ASYNC_SIGNATURE_EXCEPTIONS = {
 	account:
 		"Better Auth credential refresh fields; no background claim lifecycle",
+	ad_connections:
+		"operator-driven ad credential rotation; automatic provider token exchange is intentionally disabled",
 	social_accounts:
 		"encrypted provider credential fields; token_refresh_operations owns refresh",
 	erasure_holds: "release transition fields, not a retry/claim lifecycle",

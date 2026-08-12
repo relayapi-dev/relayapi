@@ -1,4 +1,5 @@
 import { GRAPH_BASE } from "../config/api-versions";
+import { readPublisherJson } from "./provider-response";
 import {
 	classifyPublishError,
 	PublishError,
@@ -32,7 +33,7 @@ async function waFetch(
 		body: JSON.stringify(body),
 	});
 
-	const data = (await res.json()) as WhatsAppMessageResponse;
+	const data = (await readPublisherJson(res)) as WhatsAppMessageResponse;
 
 	if (!res.ok || data.error) {
 		const msg = data.error?.message ?? `WhatsApp API error: ${res.status}`;
@@ -77,9 +78,82 @@ function whatsappAccepted(data: WhatsAppMessageResponse): PublishResult {
 		platform_post_id: messageId,
 		provider_outcome: {
 			disposition: "accepted",
+			reconciliation: "webhook",
 			provider_operation_id: messageId,
 			platform_post_id: messageId,
 			provider_state: "accepted",
+		},
+	};
+}
+
+/**
+ * Normalize a signed WhatsApp status webhook for the outbound post target.
+ * The webhook route remains responsible for tenant/account lookup, signature
+ * validation, deduplication, and the monotonic database transition.
+ */
+export function whatsappStatusResult(
+	messageId: string,
+	status: string,
+	error?: { code?: string | number; message?: string },
+): PublishResult {
+	const providerState = status.toLowerCase();
+	if (providerState === "failed") {
+		return {
+			success: false,
+			platform_post_id: messageId,
+			provider_outcome: {
+				disposition: "failed",
+				provider_operation_id: messageId,
+				platform_post_id: messageId,
+				provider_state: providerState,
+			},
+			error: {
+				code: error?.code ? `WHATSAPP_${error.code}` : "WHATSAPP_FAILED",
+				message: error?.message ?? "WhatsApp failed to send the message.",
+			},
+		};
+	}
+	if (providerState === "delivered" || providerState === "read") {
+		return {
+			success: true,
+			platform_post_id: messageId,
+			provider_outcome: {
+				disposition: "delivered",
+				provider_operation_id: messageId,
+				platform_post_id: messageId,
+				provider_state: providerState,
+			},
+		};
+	}
+	if (providerState === "sent") {
+		return {
+			success: true,
+			platform_post_id: messageId,
+			provider_outcome: {
+				// Meta's `sent` status confirms hand-off to WhatsApp, not delivery to
+				// the recipient. Keep the post nonterminal until delivered/read or
+				// failed so Relay does not overstate delivery.
+				disposition: "accepted",
+				reconciliation: "webhook",
+				provider_operation_id: messageId,
+				platform_post_id: messageId,
+				provider_state: providerState,
+			},
+		};
+	}
+	return {
+		success: false,
+		platform_post_id: messageId,
+		provider_outcome: {
+			disposition: "outcome_unknown",
+			reconciliation: "webhook",
+			provider_operation_id: messageId,
+			platform_post_id: messageId,
+			provider_state: providerState || "missing_status",
+		},
+		error: {
+			code: "PUBLISH_OUTCOME_UNKNOWN",
+			message: `WhatsApp returned an undocumented message status: ${status || "missing"}.`,
 		},
 	};
 }
@@ -251,6 +325,16 @@ export const whatsappPublisher: Publisher = {
 				).includes(m.type as never)
 					? (m.type as "image" | "video" | "document" | "audio")
 					: "image";
+				if (mediaType === "audio" && content.trim().length > 0) {
+					return {
+						success: false,
+						error: {
+							code: "AUDIO_CAPTION_UNSUPPORTED",
+							message:
+								"WhatsApp audio messages do not support captions; remove text content or use a non-audio attachment.",
+						},
+					};
+				}
 
 				// Use link-based media (simpler, no upload needed for public URLs)
 				const mediaPayload: Record<string, unknown> = {

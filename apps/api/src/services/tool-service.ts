@@ -1,3 +1,4 @@
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import type { Env } from "../types";
 
 interface ToolServiceResult {
@@ -60,7 +61,7 @@ export async function callDownloaderService(
 		clearTimeout(timer);
 
 		if (!res.ok) {
-			const text = await res.text().catch(() => "Unknown error");
+			const text = await readProviderText(res).catch(() => "Unknown error");
 			return {
 				ok: false,
 				error: `Service returned ${res.status}: ${text}`,
@@ -68,7 +69,7 @@ export async function callDownloaderService(
 			};
 		}
 
-		const data = (await res.json()) as Record<string, unknown>;
+		const data = (await readProviderJson(res)) as Record<string, unknown>;
 
 		if (data.success === false) {
 			return {

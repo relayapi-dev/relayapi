@@ -1,3 +1,4 @@
+import { readProviderText } from "../lib/provider-response";
 import { XMLParser } from "fast-xml-parser";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
@@ -28,7 +29,7 @@ export async function parseFeed(url: string): Promise<FeedItem[]> {
 	});
 	if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
 
-	const parsed = xmlParser.parse(await response.text());
+	const parsed = xmlParser.parse(await readProviderText(response));
 	const rssItems = parsed?.rss?.channel?.item;
 	if (rssItems) {
 		return rssItems.map(parseRssItem).sort(byDateDesc);

@@ -1,36 +1,12 @@
 import { z } from "@hono/zod-openapi";
 import { PlatformEnum, paginatedResponse } from "./common";
 import { CrossPostActionInput } from "./cross-post-actions";
+import { PostMediaItem, PublisherTargetOptions } from "./publisher-options";
 import { TagResponse } from "./tags";
-
-function isHttpOrHttpsUrl(url: string): boolean {
-	try {
-		const parsed = new URL(url);
-		return parsed.protocol === "http:" || parsed.protocol === "https:";
-	} catch {
-		return false;
-	}
-}
 
 // --- Media item in post body ---
 
-const MediaItem = z.object({
-	url: z
-		.string()
-		.url()
-		.refine(isHttpOrHttpsUrl, "URL must use http or https")
-		.describe("Public URL of the media file"),
-	type: z
-		.enum(["image", "video", "gif", "document"])
-		.optional()
-		.describe("Media type. Inferred from URL extension if omitted."),
-	thumbnail: z
-		.string()
-		.optional()
-		.describe(
-			"Read-only. Stable, hyper-optimized preview URL that persists after the full-res original expires. Ignored on write.",
-		),
-});
+const MediaItem = PostMediaItem;
 
 // --- Scheduled at: "now" | "draft" | ISO timestamp ---
 
@@ -128,12 +104,9 @@ export const CreatePostBody = z.object({
 		.describe("Account IDs, platform names, or workspace IDs to publish to"),
 	scheduled_at: ScheduledAt,
 	media: z.array(MediaItem).optional().describe("Media attachments"),
-	target_options: z
-		.record(z.string(), z.record(z.string(), z.any()))
-		.optional()
-		.describe(
-			"Per-target customizations keyed by target value (account ID or platform name). Supports platform-specific features such as Twitter polls (poll.options, poll.duration_minutes), threads, reply_to, and reply_settings.",
-		),
+	target_options: PublisherTargetOptions.optional().describe(
+		"Per-target customizations keyed by target value (account ID or platform name). Supports platform-specific features such as Twitter polls (poll.options, poll.duration_minutes), threads, reply_to, and reply_settings.",
+	),
 	timezone: z.string().default("UTC").describe("IANA timezone for scheduling"),
 	workspace_id: z
 		.string()
@@ -194,9 +167,7 @@ export const UpdatePostBody = z.object({
 	targets: z.array(Target).min(1).optional().describe("Updated targets"),
 	scheduled_at: ScheduledAt.optional(),
 	media: z.array(MediaItem).optional().describe("Updated media"),
-	target_options: z
-		.record(z.string(), z.record(z.string(), z.any()))
-		.optional(),
+	target_options: PublisherTargetOptions.optional(),
 	timezone: z.string().optional(),
 	recycling: RecyclingInput.optional().describe(
 		"Recycling configuration (Pro plan only)",
@@ -234,6 +205,7 @@ const TargetResult = z.object({
 		"scheduled",
 		"publishing",
 		"published",
+		"provider_draft",
 		"failed",
 		"partial",
 	]),
@@ -276,6 +248,7 @@ export const PostResponse = z.object({
 		"scheduled",
 		"publishing",
 		"published",
+		"provider_draft",
 		"failed",
 		"partial",
 	]),
@@ -284,9 +257,7 @@ export const PostResponse = z.object({
 	published_at: z.string().nullable().describe("When the post was published"),
 	targets: z.record(z.string(), TargetResult).describe("Per-target results"),
 	media: z.array(MediaItem).nullable(),
-	target_options: z
-		.record(z.string(), z.record(z.string(), z.any()))
-		.nullable()
+	target_options: PublisherTargetOptions.nullable()
 		.optional()
 		.describe("Per-target customizations"),
 	timezone: z.string().nullable().optional().describe("IANA timezone"),

@@ -1,12 +1,13 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../../lib/provider-response";
 // ---------------------------------------------------------------------------
 // TikTok Video List Fetcher
 // Docs: https://developers.tiktok.com/doc/content-posting-api-get-started
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
+import type { ExternalPostFetcher, ExternalPostData } from "../types";
 import { RateLimitError } from "../types";
 import { parseRateLimitHeaders } from "../rate-limits";
 
@@ -67,10 +68,10 @@ async function ttFetch<T = unknown>(
 		);
 	}
 	if (!res.ok) {
-		const text = await res.text();
+		const text = await readProviderText(res);
 		throw new Error(`TikTok API ${res.status}: ${text}`);
 	}
-	return { data: (await res.json()) as T, headers: res.headers };
+	return { data: (await readProviderJson(res)) as T, headers: res.headers };
 }
 
 function parseVideo(raw: TikTokRawVideo): ExternalPostData {
@@ -119,7 +120,8 @@ export const tiktokPostFetcher: ExternalPostFetcher = {
 			? posts.filter((p) => p.publishedAt >= since)
 			: posts;
 
-		const nextCursor = videoData.cursor != null ? String(videoData.cursor) : null;
+		const nextCursor =
+			videoData.cursor != null ? String(videoData.cursor) : null;
 		const hasMore = videoData.has_more === true;
 		const rateLimit = parseRateLimitHeaders(headers) ?? undefined;
 

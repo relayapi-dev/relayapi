@@ -8,8 +8,9 @@ import {
 import { and, eq } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountTokens } from "../lib/account-token-crypto";
-import { fetchPublicUrl } from "../lib/fetch-public-url";
+import { fetchPublicUrl, readResponseBytes } from "../lib/fetch-public-url";
 import { trackSingleUnitProviderMutation } from "../lib/mutation-provider-boundary";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import { canAccessWorkspaceScope } from "../lib/workspace-scope";
 import { BroadcastResponse as GenericBroadcastResponse } from "../schemas/broadcasts";
 import { ErrorResponse } from "../schemas/common";
@@ -45,6 +46,7 @@ import type { Env, Variables } from "../types";
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 const WA_API_BASE = GRAPH_BASE.facebook;
+const WHATSAPP_PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helper: look up a WhatsApp social account by its relay account_id + org
@@ -830,7 +832,7 @@ app.openapi(listTemplates, async (c) => {
 			headers: { Authorization: `Bearer ${account.accessToken}` },
 		});
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -841,7 +843,7 @@ app.openapi(listTemplates, async (c) => {
 				401,
 			);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				name: string;
 				language: string;
@@ -952,7 +954,7 @@ app.openapi(createTemplate, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -965,7 +967,7 @@ app.openapi(createTemplate, async (c) => {
 		}
 
 		// The Cloud API returns { id, status, category } on success
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			id: string;
 			status: string;
 			category: string;
@@ -1050,7 +1052,7 @@ app.openapi(getTemplate, async (c) => {
 				404,
 			);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				name: string;
 				language: string;
@@ -1168,7 +1170,7 @@ app.openapi(deleteTemplate, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1232,7 +1234,7 @@ app.openapi(getBusinessProfile, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1244,7 +1246,7 @@ app.openapi(getBusinessProfile, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				about?: string;
 				address?: string;
@@ -1336,7 +1338,7 @@ app.openapi(updateBusinessProfile, async (c) => {
 		);
 
 		if (!updateRes.ok) {
-			const err = await updateRes.text();
+			const err = await readProviderText(updateRes);
 			return c.json(
 				{
 					error: {
@@ -1372,7 +1374,7 @@ app.openapi(updateBusinessProfile, async (c) => {
 			);
 		}
 
-		const json = (await getRes.json()) as {
+		const json = (await readProviderJson(getRes)) as {
 			data: Array<{
 				about?: string;
 				address?: string;
@@ -1458,7 +1460,7 @@ app.openapi(listPhoneNumbers, async (c) => {
 		});
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1470,7 +1472,7 @@ app.openapi(listPhoneNumbers, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				display_phone_number: string;
@@ -1547,7 +1549,7 @@ app.openapi(getDisplayName, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1559,7 +1561,7 @@ app.openapi(getDisplayName, async (c) => {
 			);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			verified_name?: string;
 			name_status?: string;
 		};
@@ -1633,7 +1635,7 @@ app.openapi(updateDisplayName, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1732,7 +1734,11 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		}
 
 		// Step 1: Fetch the image from the provided URL
-		const imageRes = await fetchPublicUrl(body.photo_url, { timeout: 30_000 });
+		const imageRes = await fetchPublicUrl(body.photo_url, {
+			timeout: 30_000,
+			timeoutThroughBody: true,
+			maxBytes: WHATSAPP_PROFILE_PHOTO_MAX_BYTES,
+		});
 		if (!imageRes.ok) {
 			return c.json(
 				{
@@ -1745,7 +1751,10 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			);
 		}
 
-		const imageBytes = await imageRes.arrayBuffer();
+		const imageBytes = await readResponseBytes(
+			imageRes,
+			WHATSAPP_PROFILE_PHOTO_MAX_BYTES,
+		);
 		const contentType = imageRes.headers.get("content-type") ?? "image/jpeg";
 		const fileSize = imageBytes.byteLength;
 
@@ -1766,7 +1775,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		);
 
 		if (!sessionRes.ok) {
-			const err = await sessionRes.text();
+			const err = await readProviderText(sessionRes);
 			return c.json(
 				{
 					error: {
@@ -1778,7 +1787,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			);
 		}
 
-		const sessionData = (await sessionRes.json()) as { id?: string };
+		const sessionData = (await readProviderJson(sessionRes)) as { id?: string };
 		const uploadSessionId = sessionData.id;
 		if (!uploadSessionId) {
 			return c.json(
@@ -1808,7 +1817,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		});
 
 		if (!uploadRes.ok) {
-			const err = await uploadRes.text();
+			const err = await readProviderText(uploadRes);
 			return c.json(
 				{
 					error: {
@@ -1820,7 +1829,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			);
 		}
 
-		const uploadData = (await uploadRes.json()) as { h?: string };
+		const uploadData = (await readProviderJson(uploadRes)) as { h?: string };
 		const fileHandle = uploadData.h;
 		if (!fileHandle) {
 			return c.json(
@@ -1854,7 +1863,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		);
 
 		if (!profileRes.ok) {
-			const err = await profileRes.text();
+			const err = await readProviderText(profileRes);
 			return c.json(
 				{
 					error: {
@@ -1871,7 +1880,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile?fields=profile_picture_url`,
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
-		const updatedJson = (await updatedRes.json()) as {
+		const updatedJson = (await readProviderJson(updatedRes)) as {
 			data?: Array<{ profile_picture_url?: string }>;
 		};
 		const newUrl = updatedJson.data?.[0]?.profile_picture_url ?? null;
@@ -1915,7 +1924,7 @@ async function assertFlowOwnership(
 				owned: false,
 				error: `Flow not found or inaccessible (HTTP ${res.status})`,
 			};
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			whatsapp_business_account?: { id?: string };
 		};
 		const flowWabaId = data.whatsapp_business_account?.id;
@@ -1978,7 +1987,7 @@ app.openapi(listFlows, async (c) => {
 			headers: { Authorization: `Bearer ${account.accessToken}` },
 		});
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1989,7 +1998,7 @@ app.openapi(listFlows, async (c) => {
 				502,
 			);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data?: Array<Record<string, unknown>>;
 		};
 		return c.json({ data: json.data ?? [] }, 200);
@@ -2067,7 +2076,7 @@ app.openapi(createFlow, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2079,7 +2088,7 @@ app.openapi(createFlow, async (c) => {
 			);
 		}
 
-		const data = (await res.json()) as { id?: string };
+		const data = (await readProviderJson(res)) as { id?: string };
 		if (!data.id) {
 			return c.json(
 				{ error: { code: "WA_API_ERROR", message: "No flow ID returned" } },
@@ -2092,7 +2101,10 @@ app.openapi(createFlow, async (c) => {
 			`${WA_API_BASE}/${data.id}?fields=id,name,status,categories,validation_errors`,
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
-		const detail = (await detailRes.json()) as Record<string, unknown>;
+		const detail = (await readProviderJson(detailRes)) as Record<
+			string,
+			unknown
+		>;
 		return c.json(detail, 201);
 	} catch (e) {
 		return c.json(
@@ -2159,7 +2171,7 @@ app.openapi(getFlow, async (c) => {
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2170,7 +2182,7 @@ app.openapi(getFlow, async (c) => {
 				502,
 			);
 		}
-		const data = (await res.json()) as Record<string, unknown>;
+		const data = (await readProviderJson(res)) as Record<string, unknown>;
 		return c.json(data, 200);
 	} catch (e) {
 		return c.json(
@@ -2250,7 +2262,7 @@ app.openapi(updateFlow, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2267,7 +2279,10 @@ app.openapi(updateFlow, async (c) => {
 			`${WA_API_BASE}/${flow_id}?fields=id,name,status,categories,validation_errors`,
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
-		const detail = (await detailRes.json()) as Record<string, unknown>;
+		const detail = (await readProviderJson(detailRes)) as Record<
+			string,
+			unknown
+		>;
 		return c.json(detail, 200);
 	} catch (e) {
 		return c.json(
@@ -2338,7 +2353,7 @@ app.openapi(deleteFlow, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2420,7 +2435,7 @@ app.openapi(publishFlow, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2502,7 +2517,7 @@ app.openapi(deprecateFlow, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2579,7 +2594,7 @@ app.openapi(getFlowJson, async (c) => {
 		});
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2591,7 +2606,7 @@ app.openapi(getFlowJson, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data?: Array<{ name?: string; download_url?: string }>;
 		};
 		const asset = json.data?.find((a) => a.name === "flow.json");
@@ -2683,7 +2698,7 @@ app.openapi(uploadFlowJson, async (c) => {
 				}),
 		);
 
-		const responseBody = await res.text();
+		const responseBody = await readProviderText(res);
 		let parsed:
 			| {
 					success?: boolean;
@@ -2850,7 +2865,7 @@ app.openapi(sendFlowMessage, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2862,7 +2877,9 @@ app.openapi(sendFlowMessage, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as { messages?: Array<{ id?: string }> };
+		const json = (await readProviderJson(res)) as {
+			messages?: Array<{ id?: string }>;
+		};
 		const messageId = json.messages?.[0]?.id ?? "";
 
 		return c.json({ message_id: messageId }, 200);

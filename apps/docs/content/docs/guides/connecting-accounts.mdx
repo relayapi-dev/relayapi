@@ -1,71 +1,196 @@
 ---
 title: Connecting Accounts
-description: Connect social accounts at organization or workspace scope.
+description: Connect OAuth, per-instance, credential-based, and managed-bot accounts safely.
 icon: Link
 ---
 
-## Overview
+## Connection models
 
-Before you can post to a social media platform, you need to connect at least one account. RelayAPI supports OAuth-based connections for most platforms, credential-based connections for services such as Bluesky and newsletter providers, and a challenge flow for Telegram.
+RelayAPI supports four connection models. Use the platform-specific flow rather than placing provider credentials in a post request.
+
+| Model | Platforms and endpoints | What RelayAPI stores |
+|-------|-------------------------|----------------------|
+| OAuth | Most social platforms through `GET /v1/connect/{platform}` | Encrypted provider tokens and the selected provider identity |
+| Per-instance OAuth | Mastodon through `GET /v1/connect/mastodon?instance_url=...` | Encrypted token plus the immutable instance origin |
+| Credential connections | Discord, Slack, SMS, Bluesky, newsletters, and direct WhatsApp flows | An encrypted webhook, token, or app credential; validation strength is provider-specific |
+| Managed bot challenge | Telegram through `POST /v1/connect/telegram` | The selected chat ID; hosted users never provide a bot token |
 
 ## Workspace behavior
 
 `workspace_id` is optional on every connection initiation flow unless your organization has **Require Workspace ID** enabled.
 
-- With **Require Workspace ID** disabled, omit `workspace_id` to create an organization-scoped connection. A key with at least one workspace grant can still create and use organization-scoped connections.
+- With **Require Workspace ID** disabled, omit `workspace_id` to create an organization-scoped connection. A key with at least one workspace grant can create and use organization-scoped connections.
 - With **Require Workspace ID** enabled, every new connection must include `workspace_id`; omission returns `WORKSPACE_ID_REQUIRED`.
-- When supplied, `workspace_id` must identify an active workspace in the same organization and be allowed by the API key.
-- Reconnecting an existing provider identity never moves it silently. If `workspace_id` is omitted in optional mode, the existing connection keeps its current workspace. Supplying a different workspace returns `ACCOUNT_WORKSPACE_CONFLICT`; move or disconnect the existing account explicitly first.
+- A supplied workspace must be active, belong to the organization, and be allowed by the API key.
+- Reconnecting an existing provider identity never moves it silently. Omitting `workspace_id` preserves its current scope; supplying a different workspace returns `ACCOUNT_WORKSPACE_CONFLICT`.
 
-The authorization captured when a flow starts and the initiating API key's current authorization must both allow the final scope. Disabling or expiring the key, removing write permission, changing its workspace grants, archiving the workspace, enabling **Require Workspace ID** during an organization-scoped flow, or removing a dashboard user's membership causes completion to fail without rotating stored credentials.
+RelayAPI revalidates the initiating key, its workspace grants, and the exact dashboard session (when applicable) before credentials are committed. A revoked session, disabled key, archived workspace, or changed workspace policy causes completion to fail without replacing the existing credential.
 
-## Connecting via Dashboard
+## Connection-owned provider authority
 
-1. Navigate to **Connections** in your dashboard
-2. Select a workspace, or leave the account unassigned when workspace IDs are optional
-3. Click **Connect Account**
-4. Select the platform you want to connect
-5. Authorize RelayAPI in the platform's OAuth flow
-6. Your account will appear in the connected accounts list
+A connected account's destination and provider identity are not ordinary editable annotations. Generic `PATCH /v1/accounts/{id}` metadata updates cannot replace connection-owned values such as a Mastodon/Listmonk instance origin, Bluesky PDS/DID/auth mode, WhatsApp Business Account ID, Beehiiv publication ID, Twilio sender/MMS capability, TikTok verified pull prefixes, or Snapchat's internal Public Profile verification marker.
 
-## Connecting via API
+The publisher uses the identity stored by the verified connection flow—for example, Beehiiv uses the connected `platform_account_id` publication and Listmonk uses the connected `platform_account_id` base URL. Reconnect the account, or use an explicit provider-selection endpoint where one is documented, to change that authority. Treat returned metadata as descriptive; never depend on a generic metadata patch to retarget stored credentials.
 
-Start an OAuth connection with `GET /v1/connect/{platform}`. Include `workspace_id` only when you want a workspace-bound account or the organization requires it:
+## Standard OAuth
+
+Start OAuth and redirect the user to the returned `auth_url`:
 
 ```bash
-curl "https://api.relayapi.dev/v1/connect/twitter?workspace_id=ws_example" \
+curl --get https://api.relayapi.dev/v1/connect/twitter \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  --data-urlencode "workspace_id=ws_example"
+```
+
+The one-time state binds the organization, initiating credential/session, selected workspace, and callback configuration. Do not construct, modify, or reuse it.
+
+Set `headless=true` to receive a temporary polling token. Only the credential and dashboard session that started the flow can poll its result.
+
+### Scope upgrades and existing connections
+
+An OAuth refresh preserves the grants attached to the existing authorization;
+it cannot silently add a newly requested scope. Reauthorize an existing
+connection before using a feature in this table:
+
+| Platform | Required grant | Feature that needs it |
+| --- | --- | --- |
+| X | `tweet.write`, `like.write`, `tweet.moderate.write` | Published Post edits, like/unlike, and reply hide/unhide |
+| Facebook | `pages_manage_posts`, `pages_manage_engagement`, `pages_messaging` | Page post/comment edits, like/unlike, comment hide/unhide, and Messenger read receipts |
+| Instagram | `instagram_manage_comments`, `instagram_manage_messages` | Comment hide/unhide and Instagram Messaging read receipts |
+| TikTok | `video.upload` | `target_options.tiktok.publish_mode: 'inbox'` |
+| Threads | `threads_location_tagging` | `target_options.threads.location_id` |
+| YouTube | `youtube.force-ssl` | Comment editing/moderation and video rating actions |
+| Reddit | `edit`, `vote` | Editing published self-text and post vote actions |
+| WhatsApp embedded token | `whatsapp_business_management`, `whatsapp_business_messaging` | WhatsApp administration, messaging, groups, usernames, block lists, and templates |
+
+This applies to connections created before those grants entered RelayAPI's
+authorization request. Starting a fresh OAuth flow and approving the updated
+permission screen is the only supported upgrade path; editing account metadata
+or waiting for token refresh does not expand authority.
+
+### Secondary selection
+
+Facebook, LinkedIn, Pinterest, Google Business, and Snapchat require a page, organization, board, location, or Public Profile selection after OAuth. The pending response contains a `connect_token`; supply it to both the matching list and select endpoints.
+
+```bash
+curl --get https://api.relayapi.dev/v1/connect/snapchat/profiles \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  --data-urlencode "connect_token=$CONNECT_TOKEN"
+```
+
+The selection token is short-lived, operation-scoped, and bound to the initiating authority. It cannot inspect or complete another connection attempt.
+
+### TikTok verified media authority
+
+TikTok OAuth snapshots the RelayAPI operator's configured
+`TIKTOK_VERIFIED_URL_PREFIXES` into the connected account. Those non-secret
+HTTPS domain prefixes must already be verified in the same TikTok developer
+app, and each path must end in `/` to preserve a slash-delimited authority
+boundary. They authorize TikTok `PULL_FROM_URL` for video and are mandatory for
+every photo URL; they are never accepted from a post caller.
+
+The snapshot is immutable connection metadata. If an operator adds, removes, or
+changes a prefix, reconnect the TikTok account before relying on the new list.
+Videos outside the snapshot can still use RelayAPI's bounded `FILE_UPLOAD`
+path. See [TikTok](/platforms/tiktok) for the required creator choices,
+consent attestations, and source-mode behavior.
+
+## Mastodon per-instance OAuth
+
+Mastodon requires the account's home instance as a bare public HTTPS origin:
+
+```bash
+curl --get https://api.relayapi.dev/v1/connect/mastodon \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  --data-urlencode "instance_url=https://mastodon.social"
+```
+
+RelayAPI checks the resolved destination, discovers same-origin OAuth metadata when available, registers an app on that instance, and returns its authorization URL. Paths, credentials, query strings, fragments, private/reserved addresses, and cross-origin OAuth endpoints are rejected.
+
+The accepted instance becomes connection-owned metadata. A later post cannot override it with `target_options`, preventing a bearer token from being redirected to a caller-selected host. Reconnect a legacy account that reports `MASTODON_RECONNECT_REQUIRED`.
+
+## Discord webhook
+
+Connect an incoming webhook with `POST /v1/connect/discord`:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/discord \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_id": "ws_example",
+    "webhook_url": "https://discord.com/api/webhooks/123456789/secret-token"
+  }'
+```
+
+Only the exact `https://discord.com/api[/vN]/webhooks/{id}/{token}` incoming-webhook form is accepted. RelayAPI calls Discord to verify that the credential exists, is an incoming webhook, and is bound to a channel before encrypting it. The URL is a bearer secret: never log it or place it in post content.
+
+## SMS through Twilio
+
+Connect a Twilio account and an owned default sender with `POST /v1/connect/sms`:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/sms \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_id": "ws_example",
+    "account_sid": "your-twilio-account-sid",
+    "auth_token": "your-twilio-auth-token",
+    "from_number": "+15017122661"
+  }'
+```
+
+RelayAPI verifies that the Twilio account is active and that `from_number` is an SMS-capable number owned by it. The sender and its reported MMS capability become connection-owned metadata. Posts always use that verified sender; legacy `target_options.sms.from_number` is only a matching assertion and a mismatch returns `SMS_SENDER_MISMATCH` before provider I/O. RelayAPI's current SMS connector is Twilio-only.
+
+## Slack incoming webhook
+
+Connect a Slack or GovSlack incoming webhook with `POST /v1/connect/slack`:
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/slack \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_id": "ws_example",
+    "webhook_url": "https://hooks.slack.com/services/T00000000/B00000000/secret"
+  }'
+```
+
+RelayAPI validates the exact Slack-issued URL shape and stores it encrypted. Slack exposes no non-mutating incoming-webhook probe, so connection does **not** prove that the hook remains active or that channel policy permits a message. The first publish is the authoritative provider check. The webhook stays bound to the channel chosen when it was created; a post cannot override that channel.
+
+## Telegram managed bot
+
+Initiate a 15-minute Telegram challenge:
+
+```bash
+curl -X POST "https://api.relayapi.dev/v1/connect/telegram?workspace_id=ws_example" \
   -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
-The response contains `auth_url`. Redirect the user to that URL; RelayAPI binds the organization, initiating key, initial workspace grant, selected workspace, and callback configuration into a one-time OAuth state. Do not construct or reuse state values yourself.
+Follow the returned instructions: add the named RelayAPI bot to the target channel/group, open a private chat with it, and send the challenge plus the target's public `@username`. The human sender must administer the chat. RelayAPI also verifies the managed bot itself: channels require administrator/creator status and `can_post_messages`; groups and supergroups require permission to send messages.
 
-To start an organization-scoped flow while **Require Workspace ID** is disabled, omit the query parameter:
-
-```bash
-curl "https://api.relayapi.dev/v1/connect/twitter" \
-  -H "Authorization: Bearer $RELAY_API_KEY"
-```
-
-Credential-based connection request bodies and `POST /v1/connect/telegram` use the same optional `workspace_id` contract.
-
-### Headless and secondary-selection flows
-
-Set `headless=true` to receive a temporary polling token. Only the API key that started the flow can poll its result. The returned `workspace_id` is authoritative and may be `null` in optional mode.
-
-Facebook, LinkedIn, Pinterest, Google Business, and Snapchat require a secondary page, organization, board, location, or profile selection. A pending response includes `connect_token`. Pass that token to both the matching list endpoint as the `connect_token` query parameter and the select endpoint in the JSON body. Each token belongs to one connection operation and initiating API key; it cannot read or consume another concurrent operation.
+Poll with the same API key:
 
 ```bash
-curl "https://api.relayapi.dev/v1/connect/facebook/pages?connect_token=OPERATION_TOKEN" \
-  -H "Authorization: Bearer $RELAY_API_KEY"
+curl --get https://api.relayapi.dev/v1/connect/telegram \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  --data-urlencode "code=$TELEGRAM_CHALLENGE"
 ```
 
-Pending OAuth data and Telegram challenge codes are short-lived and one-time. If authorization changes before completion, start a new connection flow after correcting the key or workspace policy.
+Challenges are one-time, organization-bound, and authority-bound. A private channel without a public `@username` cannot complete this challenge flow.
 
-## Managing Connected Accounts
+## Credential lifecycle
 
-- **List accounts**: `GET /v1/accounts`
-- **Disconnect**: `DELETE /v1/accounts/{id}`
+- OAuth state, selection tokens, headless polling tokens, and Telegram challenges are short-lived and single-operation capabilities. Start again after expiry or an authorization change.
+- RelayAPI refreshes provider tokens only when the provider issues a supported refresh credential. Provider revocation or lost scopes can require a new OAuth connection.
+- Reauthorize Facebook, TikTok, Threads, X, and Reddit connections created
+  before the scope upgrades listed above when using their new operations.
+- Discord/Slack webhook rotation or deletion and Twilio Auth Token rotation are not refreshable. Reconnect the credential.
+- Restoring the managed Telegram bot's posting permission can resume publishing; changing the managed bot or target chat requires a new connection.
+- Changing TikTok verified URL prefixes requires reconnecting the TikTok account so the new authority is snapshotted.
+- Every Snapchat account connected before Public Profile verification markers were introduced must reconnect. Publishing and reconciliation fail closed with `SNAPCHAT_RECONNECT_REQUIRED` until a current connection verifies and selects the Public Profile.
+- Changing a Beehiiv publication or Listmonk origin requires reconnecting; generic account metadata cannot redirect either stored credential.
+- Disconnect an account with `DELETE /v1/accounts/{id}`. Treat provider-side revocation as a separate step unless the platform confirms that RelayAPI performed it.
 
-## Token Refresh
-
-RelayAPI automatically refreshes OAuth tokens before they expire. If a token becomes invalid, the account status will change to `disconnected` and you'll receive a webhook notification.
+See the [Snapchat](/platforms/snapchat), [TikTok](/platforms/tiktok), [Mastodon](/platforms/mastodon), [Discord](/platforms/discord), [Slack](/platforms/slack), [SMS](/platforms/sms), and [Telegram](/platforms/telegram) pages for publishing behavior and provider-specific limits.

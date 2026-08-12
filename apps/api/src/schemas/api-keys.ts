@@ -31,6 +31,13 @@ export const ApiKeyResponse = z.object({
 	can_manage_spend: z
 		.boolean()
 		.describe("Whether this key can create or increase provider spend"),
+	can_view_ad_leads: z.boolean().describe("Whether this key can decrypt and view ad leads"),
+	can_manage_ad_leads: z
+		.boolean()
+		.describe("Whether this key can promote and manage ad leads"),
+	can_manage_ad_conversions: z
+		.boolean()
+		.describe("Whether this key can configure and submit ad conversions"),
 });
 
 export const ApiKeyCreatedResponse = z.object({
@@ -60,6 +67,13 @@ export const ApiKeyCreatedResponse = z.object({
 	can_manage_spend: z
 		.boolean()
 		.describe("Whether this key can create or increase provider spend"),
+	can_view_ad_leads: z.boolean().describe("Whether this key can decrypt and view ad leads"),
+	can_manage_ad_leads: z
+		.boolean()
+		.describe("Whether this key can promote and manage ad leads"),
+	can_manage_ad_conversions: z
+		.boolean()
+		.describe("Whether this key can configure and submit ad conversions"),
 });
 
 export const CreateApiKeyBody = z
@@ -94,6 +108,9 @@ export const CreateApiKeyBody = z
 		can_view_billing: z.boolean().default(false),
 		can_manage_billing: z.boolean().default(false),
 		can_manage_spend: z.boolean().default(false),
+		can_view_ad_leads: z.boolean().default(false),
+		can_manage_ad_leads: z.boolean().default(false),
+		can_manage_ad_conversions: z.boolean().default(false),
 	})
 	.superRefine((value, context) => {
 		const elevated =
@@ -117,6 +134,23 @@ export const CreateApiKeyBody = z
 				code: "custom",
 				path: ["can_view_billing"],
 				message: "manage_billing requires view_billing",
+			});
+		}
+		if (value.can_manage_ad_leads && !value.can_view_ad_leads) {
+			context.addIssue({
+				code: "custom",
+				path: ["can_view_ad_leads"],
+				message: "manage_ad_leads requires view_ad_leads",
+			});
+		}
+		if (
+			(value.can_manage_ad_leads || value.can_manage_ad_conversions) &&
+			value.permission !== "read_write"
+		) {
+			context.addIssue({
+				code: "custom",
+				path: ["permission"],
+				message: "Ad-lead and conversion management require read_write permission",
 			});
 		}
 	});

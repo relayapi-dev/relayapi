@@ -4,6 +4,7 @@ import updatePost from './creates/updatePost';
 import deletePost from './creates/deletePost';
 import uploadMedia from './creates/uploadMedia';
 import accountOptions from './triggers/accountOptions';
+import postOptions from './triggers/postOptions';
 import postPublished from './triggers/postPublished';
 import postFailed from './triggers/postFailed';
 import postRecycled from './triggers/postRecycled';
@@ -17,6 +18,9 @@ import { addAuthHeader, handleErrors } from './lib/requestHelper';
 const App = {
   version: require('../package.json').version,
   platformVersion: require('zapier-platform-core').version,
+  flags: {
+    cleanInputData: false,
+  },
 
   authentication,
 
@@ -25,6 +29,7 @@ const App = {
 
   triggers: {
     [accountOptions.key]: accountOptions,
+    [postOptions.key]: postOptions,
     [postPublished.key]: postPublished,
     [postFailed.key]: postFailed,
     [postRecycled.key]: postRecycled,

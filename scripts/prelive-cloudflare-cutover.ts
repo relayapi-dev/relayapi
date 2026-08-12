@@ -266,6 +266,19 @@ export function reviewedLifecycleRules(bucket: string): R2LifecycleRule[] {
 			},
 		});
 	}
+	if (bucket === resources.adReportBucket) {
+		rules.push({
+			id: "relayapi-ad-report-expiry",
+			enabled: true,
+			conditions: { prefix: "" },
+			deleteObjectsTransition: {
+				condition: {
+					type: "Age",
+					maxAge: resources.adReportRetentionSeconds,
+				},
+			},
+		});
+	}
 	return rules;
 }
 
@@ -1212,6 +1225,12 @@ class CloudflareCutoverClient {
 					buckets.map((bucket) => [bucket.name ?? "", candidate] as const),
 				),
 		);
+		const collidedName = bucketNames().find((name) => collisions.has(name));
+		if (collidedName) {
+			throw new Error(
+				`R2 bucket ${collidedName} already exists in ${collisions.get(collidedName)}; bucket jurisdiction is immutable`,
+			);
+		}
 
 		for (const name of bucketNames()) {
 			const existing = selectedByName.get(name);
@@ -1222,12 +1241,6 @@ class CloudflareCutoverClient {
 					);
 				}
 				continue;
-			}
-			const collision = collisions.get(name);
-			if (collision) {
-				throw new Error(
-					`R2 bucket ${name} already exists in ${collision}; bucket jurisdiction is immutable`,
-				);
 			}
 			const created = await this.request<R2Bucket>(
 				"POST",
@@ -1256,6 +1269,28 @@ class CloudflareCutoverClient {
 				},
 			);
 		}
+		await this.request(
+			"PUT",
+			this.account(
+				`/r2/buckets/${encodeURIComponent(resources.mediaBucket)}/cors`,
+			),
+			{
+				body: {
+					rules: [
+						{
+							allowed: {
+								origins: resources.mediaCors.origins,
+								methods: resources.mediaCors.methods,
+								headers: resources.mediaCors.headers,
+							},
+							exposeHeaders: resources.mediaCors.exposeHeaders,
+							maxAgeSeconds: resources.mediaCors.maxAgeSeconds,
+						},
+					],
+				},
+				r2Jurisdiction: jurisdiction,
+			},
+		);
 	}
 
 	async emptyR2(): Promise<void> {

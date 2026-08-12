@@ -1,10 +1,14 @@
 import { API_VERSIONS } from "../config/api-versions";
+import { InstagramTargetOptions } from "../schemas/publisher-options";
+import { readPublisherJson } from "./provider-response";
 import {
 	classifyPublishError,
+	getSucceededProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	recordProviderEffect,
 } from "./types";
 
 const DEBUG = false;
@@ -25,6 +29,27 @@ interface InstagramAuth {
 	user_id: string;
 }
 
+interface InstagramUserTag {
+	username: string;
+	x: number;
+	y: number;
+	/** Relay-only selector; it is not sent to Meta. */
+	media_index?: number;
+}
+
+function userTagsForMedia(
+	tags: readonly InstagramUserTag[] | undefined,
+	mediaIndex: number,
+): Array<Omit<InstagramUserTag, "media_index">> {
+	return (tags ?? [])
+		.filter(
+			(tag) =>
+				tag.media_index === mediaIndex ||
+				(tag.media_index === undefined && mediaIndex === 0),
+		)
+		.map(({ media_index: _mediaIndex, ...providerTag }) => providerTag);
+}
+
 async function graphPost(
 	endpoint: string,
 	auth: InstagramAuth,
@@ -42,7 +67,7 @@ async function graphPost(
 	});
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = (await readPublisherJson(res).catch(() => ({}))) as {
 			error?: {
 				message?: string;
 				type?: string;
@@ -82,7 +107,7 @@ async function graphPost(
 		});
 	}
 
-	const result = (await res.json()) as Record<string, unknown>;
+	const result = (await readPublisherJson(res)) as Record<string, unknown>;
 	if (DEBUG)
 		console.log(
 			`[instagram-publisher] POST ${endpoint} success: id=${result.id ?? "unknown"}`,
@@ -104,7 +129,7 @@ async function graphGet(
 	});
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = (await readPublisherJson(res).catch(() => ({}))) as {
 			error?: { message?: string };
 		};
 		const detail = err.error?.message ?? res.statusText;
@@ -115,7 +140,7 @@ async function graphGet(
 		});
 	}
 
-	return res.json() as Promise<Record<string, unknown>>;
+	return readPublisherJson(res) as Promise<Record<string, unknown>>;
 }
 
 /**
@@ -218,22 +243,48 @@ async function postFirstComment(
 	auth: InstagramAuth,
 	postId: string,
 	message: string,
-): Promise<void> {
+): Promise<string> {
 	// Instagram Graph API: Post a comment on a published media object
 	// Docs: https://developers.facebook.com/docs/graph-api/reference/object/comments/
-	await graphPost(`/${postId}/comments`, auth, { message });
+	const result = await graphPost(`/${postId}/comments`, auth, { message });
+	return result.id as string;
+}
+
+async function publishFirstCommentOnce(
+	request: PublishRequest,
+	auth: InstagramAuth,
+	postId: string,
+	message: string,
+): Promise<void> {
+	if (getSucceededProviderEffect(request, "first_comment")) return;
+	let commentId: string;
+	try {
+		commentId = await postFirstComment(auth, postId, message);
+	} catch {
+		// The primary post is already visible, so a provider-side comment rejection
+		// remains non-fatal. Recorder failures below are deliberately not swallowed.
+		return;
+	}
+	await recordProviderEffect(request, {
+		name: "first_comment",
+		status: "succeeded",
+		provider_id: commentId,
+	});
 }
 
 /**
  * Publish a single-image or single-video feed post.
  */
 async function publishSingleMedia(
+	request: PublishRequest,
 	auth: InstagramAuth,
 	mediaUrl: string,
 	mediaType: "IMAGE" | "VIDEO" | "REELS",
 	caption?: string,
 	extraParams?: Record<string, unknown>,
 ): Promise<string> {
+	const published = getSucceededProviderEffect(request, "post_published");
+	if (published?.provider_id) return published.provider_id;
 	const params: Record<string, unknown> = {
 		caption: caption ?? "",
 		...extraParams,
@@ -254,23 +305,43 @@ async function publishSingleMedia(
 		params.alt_text = (extraParams.alt_text as string).slice(0, 1000);
 	}
 
-	const containerId = await createMediaContainer(auth, params);
+	let containerId = getSucceededProviderEffect(
+		request,
+		"media_container",
+	)?.provider_id;
+	if (!containerId) {
+		containerId = await createMediaContainer(auth, params);
+		await recordProviderEffect(request, {
+			name: "media_container",
+			status: "succeeded",
+			provider_id: containerId,
+		});
+	}
 
 	// Poll until container is ready (images usually finish fast, videos take longer)
 	await pollContainerStatus(auth, containerId);
 
-	return publishContainer(auth, containerId);
+	const postId = await publishContainer(auth, containerId);
+	await recordProviderEffect(request, {
+		name: "post_published",
+		status: "succeeded",
+		provider_id: postId,
+	});
+	return postId;
 }
 
 /**
  * Publish a carousel post with up to 10 mixed images/videos.
  */
 async function publishCarousel(
+	request: PublishRequest,
 	auth: InstagramAuth,
-	items: Array<{ url: string; type?: string }>,
+	items: Array<{ url: string; type?: string; alt_text?: string }>,
 	caption?: string,
 	extraParams?: Record<string, unknown>,
 ): Promise<string> {
+	const published = getSucceededProviderEffect(request, "post_published");
+	if (published?.provider_id) return published.provider_id;
 	if (items.length < 2 || items.length > 10) {
 		// Official Meta docs: https://developers.facebook.com/docs/instagram-platform/content-publishing
 		// Section "Create a carousel container" > "Limitations" says carousels
@@ -284,7 +355,10 @@ async function publishCarousel(
 	// Step 1: Create child containers
 	const childIds: string[] = [];
 
-	for (const item of items) {
+	const carouselUserTags = Array.isArray(extraParams?.user_tags)
+		? (extraParams.user_tags as InstagramUserTag[])
+		: undefined;
+	for (const [mediaIndex, item] of items.entries()) {
 		const isVideo = item.type === "video";
 		const childParams: Record<string, unknown> = {
 			is_carousel_item: true,
@@ -301,12 +375,25 @@ async function publishCarousel(
 		}
 
 		// Alt text for carousel children
-		const itemAltText = (item as { alt_text?: string }).alt_text;
+		const itemAltText = item.alt_text;
 		if (itemAltText) {
 			childParams.alt_text = itemAltText.slice(0, 1000);
 		}
+		const childUserTags = userTagsForMedia(carouselUserTags, mediaIndex);
+		if (childUserTags.length > 0) {
+			childParams.user_tags = childUserTags;
+		}
 
-		const childId = await createMediaContainer(auth, childParams);
+		const effectName = `carousel_child_${mediaIndex + 1}`;
+		let childId = getSucceededProviderEffect(request, effectName)?.provider_id;
+		if (!childId) {
+			childId = await createMediaContainer(auth, childParams);
+			await recordProviderEffect(request, {
+				name: effectName,
+				status: "succeeded",
+				provider_id: childId,
+			});
+		}
 		childIds.push(childId);
 	}
 
@@ -315,7 +402,11 @@ async function publishCarousel(
 
 	// Step 2: Create parent carousel container
 	// user_tags are only valid on child containers, not the carousel parent
-	const { user_tags: _userTags, ...parentExtras } = extraParams ?? {};
+	const {
+		user_tags: _userTags,
+		alt_text: _altText,
+		...parentExtras
+	} = extraParams ?? {};
 	const parentParams: Record<string, unknown> = {
 		media_type: "CAROUSEL",
 		children: childIds.join(","),
@@ -323,23 +414,43 @@ async function publishCarousel(
 		...parentExtras,
 	};
 
-	const parentId = await createMediaContainer(auth, parentParams);
+	let parentId = getSucceededProviderEffect(
+		request,
+		"carousel_container",
+	)?.provider_id;
+	if (!parentId) {
+		parentId = await createMediaContainer(auth, parentParams);
+		await recordProviderEffect(request, {
+			name: "carousel_container",
+			status: "succeeded",
+			provider_id: parentId,
+		});
+	}
 
 	// Step 3: Poll until carousel container is ready
 	await pollContainerStatus(auth, parentId);
 
 	// Step 4: Publish the carousel
-	return publishContainer(auth, parentId);
+	const postId = await publishContainer(auth, parentId);
+	await recordProviderEffect(request, {
+		name: "post_published",
+		status: "succeeded",
+		provider_id: postId,
+	});
+	return postId;
 }
 
 /**
  * Publish a story (image or video).
  */
 async function publishStory(
+	request: PublishRequest,
 	auth: InstagramAuth,
 	mediaUrl: string,
 	isVideo: boolean,
 ): Promise<string> {
+	const published = getSucceededProviderEffect(request, "post_published");
+	if (published?.provider_id) return published.provider_id;
 	// Stories use the STORIES media_type
 	const params: Record<string, unknown> = {
 		media_type: "STORIES",
@@ -351,12 +462,29 @@ async function publishStory(
 		params.image_url = mediaUrl;
 	}
 
-	const containerId = await createMediaContainer(auth, params);
+	let containerId = getSucceededProviderEffect(
+		request,
+		"media_container",
+	)?.provider_id;
+	if (!containerId) {
+		containerId = await createMediaContainer(auth, params);
+		await recordProviderEffect(request, {
+			name: "media_container",
+			status: "succeeded",
+			provider_id: containerId,
+		});
+	}
 
 	// Poll all stories (both image and video) for consistency and robustness
 	await pollContainerStatus(auth, containerId);
 
-	return publishContainer(auth, containerId);
+	const postId = await publishContainer(auth, containerId);
+	await recordProviderEffect(request, {
+		name: "post_published",
+		status: "succeeded",
+		provider_id: postId,
+	});
+	return postId;
 }
 
 export const instagramPublisher: Publisher = {
@@ -364,15 +492,25 @@ export const instagramPublisher: Publisher = {
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
-			const opts = request.target_options;
+			const parsedOptions = InstagramTargetOptions.safeParse(
+				request.target_options,
+			);
+			if (!parsedOptions.success) {
+				const issue = parsedOptions.error.issues[0];
+				const path = issue?.path.length ? ` ${issue.path.join(".")}` : "";
+				return {
+					success: false,
+					error: {
+						code: "INVALID_INSTAGRAM_TARGET_OPTIONS",
+						message: `Invalid Instagram target option${path}: ${issue?.message ?? "validation failed"}.`,
+					},
+				};
+			}
+			const opts = parsedOptions.data;
 			const auth: InstagramAuth = {
 				access_token: request.account.access_token,
 				user_id: request.account.platform_account_id,
 			};
-
-			console.log(
-				`[instagram-publisher] Publishing for account ${request.account.platform_account_id}, username=${request.account.username}, has_token=${!!auth.access_token}`,
-			);
 
 			const content = (opts.content as string) ?? request.content ?? "";
 			const media =
@@ -381,15 +519,68 @@ export const instagramPublisher: Publisher = {
 			const firstComment = opts.first_comment as string | undefined;
 			const shareToFeed = opts.share_to_feed as boolean | undefined;
 			const collaborators = opts.collaborators as string[] | undefined;
-			const userTags = opts.user_tags as
-				| Array<{
-						username: string;
-						x: number;
-						y: number;
-						media_index?: number;
-				  }>
-				| undefined;
+			const userTags = opts.user_tags as InstagramUserTag[] | undefined;
 			const thumbOffset = opts.thumb_offset as number | undefined;
+			const coverUrl = opts.cover_url as string | undefined;
+			const coverMediaId = opts.cover_media_id as string | undefined;
+			const coverVariantId = opts.cover_variant_id as string | undefined;
+			const trialParams = opts.trial_params as
+				| { graduation_strategy?: unknown }
+				| undefined;
+			const coverSources = [
+				coverUrl,
+				coverMediaId,
+				coverVariantId,
+				thumbOffset,
+			].filter((value) => value !== undefined);
+
+			// Official Meta reference: https://developers.facebook.com/docs/instagram-api/reference/ig-user/media
+			// Fields `cover_url` and `trial_params` are valid only for REELS;
+			// trial_params.graduation_strategy is MANUAL or SS_PERFORMANCE.
+			if ((coverSources.length > 0 || trialParams) && contentType !== "reels") {
+				return {
+					success: false,
+					error: {
+						code: "REELS_OPTION_REQUIRES_REEL",
+						message:
+							"Instagram cover options and trial_params require content_type reels.",
+					},
+				};
+			}
+			if (coverSources.length > 1) {
+				return {
+					success: false,
+					error: {
+						code: "AMBIGUOUS_REEL_COVER",
+						message:
+							"Choose exactly one Instagram Reel cover source: cover_url, cover_media_id, cover_variant_id, or thumb_offset.",
+					},
+				};
+			}
+			if (coverMediaId || coverVariantId) {
+				return {
+					success: false,
+					error: {
+						code: "COVER_SELECTOR_UNRESOLVED",
+						message:
+							"Relay cover selectors must be resolved to a fresh cover_url immediately before Instagram publishing.",
+					},
+				};
+			}
+			if (
+				trialParams &&
+				trialParams.graduation_strategy !== "MANUAL" &&
+				trialParams.graduation_strategy !== "SS_PERFORMANCE"
+			) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_TRIAL_PARAMS",
+						message:
+							"Instagram Trial Reels require graduation_strategy MANUAL or SS_PERFORMANCE.",
+					},
+				};
+			}
 
 			// Instagram requires media for all post types
 			if (media.length === 0) {
@@ -454,7 +645,7 @@ export const instagramPublisher: Publisher = {
 				const firstMedia = media[0];
 				if (!firstMedia) throw new Error("No media found");
 				const isVideo = firstMedia.type === "video";
-				postId = await publishStory(auth, firstMedia.url, isVideo);
+				postId = await publishStory(request, auth, firstMedia.url, isVideo);
 				const storyPermalink = await fetchPermalink(auth, postId);
 
 				return {
@@ -479,14 +670,25 @@ export const instagramPublisher: Publisher = {
 				}
 
 				const reelParams: Record<string, unknown> = { ...extraParams };
+				const reelUserTags = userTagsForMedia(userTags, 0);
+				if (reelUserTags.length > 0) {
+					reelParams.user_tags = reelUserTags;
+				}
 				if (shareToFeed !== undefined) {
 					reelParams.share_to_feed = shareToFeed;
 				}
 				if (thumbOffset !== undefined) {
 					reelParams.thumb_offset = thumbOffset;
 				}
+				if (coverUrl) {
+					reelParams.cover_url = coverUrl;
+				}
+				if (trialParams) {
+					reelParams.trial_params = trialParams;
+				}
 
 				postId = await publishSingleMedia(
+					request,
 					auth,
 					media[0]?.url,
 					"REELS",
@@ -495,13 +697,8 @@ export const instagramPublisher: Publisher = {
 				);
 
 				// First comment on reels
-				if (firstComment) {
-					try {
-						await postFirstComment(auth, postId, firstComment);
-					} catch {
-						// Non-fatal
-					}
-				}
+				if (firstComment)
+					await publishFirstCommentOnce(request, auth, postId, firstComment);
 
 				const reelPermalink = await fetchPermalink(auth, postId);
 				return {
@@ -515,19 +712,15 @@ export const instagramPublisher: Publisher = {
 			// Carousel (multiple media items)
 			if (media.length > 1) {
 				postId = await publishCarousel(
+					request,
 					auth,
 					media,
 					content || undefined,
 					extraParams,
 				);
 
-				if (firstComment) {
-					try {
-						await postFirstComment(auth, postId, firstComment);
-					} catch {
-						// Non-fatal
-					}
-				}
+				if (firstComment)
+					await publishFirstCommentOnce(request, auth, postId, firstComment);
 
 				const carouselPermalink = await fetchPermalink(auth, postId);
 				return {
@@ -544,22 +737,23 @@ export const instagramPublisher: Publisher = {
 
 			// Instagram deprecated standalone video feed posts — all videos become Reels
 			// The formal endpoint reference only lists CAROUSEL, REELS, STORIES as valid media_type values
+			const singleParams: Record<string, unknown> = { ...extraParams };
+			const singleUserTags = userTagsForMedia(userTags, 0);
+			if (singleUserTags.length > 0) {
+				singleParams.user_tags = singleUserTags;
+			}
 			postId = await publishSingleMedia(
+				request,
 				auth,
 				firstMedia.url,
 				isVideo ? "REELS" : "IMAGE",
 				content || undefined,
-				extraParams,
+				singleParams,
 			);
 
 			// First comment
-			if (firstComment) {
-				try {
-					await postFirstComment(auth, postId, firstComment);
-				} catch {
-					// Non-fatal
-				}
-			}
+			if (firstComment)
+				await publishFirstCommentOnce(request, auth, postId, firstComment);
 
 			const mediaPermalink = await fetchPermalink(auth, postId);
 			const fallbackUrl = isVideo

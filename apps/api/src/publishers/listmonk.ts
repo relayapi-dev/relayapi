@@ -1,11 +1,18 @@
-import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
+import { fetchPublicUrl } from "../lib/fetch-public-url";
+import {
+	listmonkApiUrl,
+	parseListmonkInstanceUrl,
+} from "../lib/listmonk-instance";
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
+	getSucceededProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
 	type ReconcileRequest,
+	recordProviderEffect,
 } from "./types";
 
 /**
@@ -16,6 +23,38 @@ import {
  * ListMonk API:
  * Docs: https://listmonk.app/docs/apis/campaigns/
  */
+
+const LISTMONK_RESPONSE_MAX_BYTES = 512 * 1024;
+
+function listmonkFetch(
+	instanceUrl: string,
+	path: string,
+	authorization: string,
+	init: RequestInit = {},
+): Promise<Response> {
+	return fetchPublicUrl(listmonkApiUrl(instanceUrl, path), {
+		...init,
+		redirect: "error",
+		timeout: 30_000,
+		timeoutThroughBody: true,
+		maxBytes: LISTMONK_RESPONSE_MAX_BYTES,
+		headers: {
+			Authorization: authorization,
+			...(init.headers ?? {}),
+		},
+	});
+}
+
+function connectedListmonkInstance(account: PublishRequest["account"]): string {
+	try {
+		return parseListmonkInstanceUrl(account.platform_account_id);
+	} catch {
+		throw new PublishError(
+			"This Listmonk connection has no valid immutable instance URL. Reconnect the account before publishing.",
+			{ code: "ACCOUNT_RECONNECT_REQUIRED" },
+		);
+	}
+}
 
 function wrapInHtml(text: string): string {
 	return text
@@ -116,44 +155,81 @@ export const listmonkPublisher: Publisher = {
 		try {
 			const campaignId =
 				request.platform_post_id ?? request.provider_operation_id;
-			const instanceUrl =
-				(request.account.metadata?.instance_url as string | undefined) ?? "";
+			const instanceUrl = connectedListmonkInstance(request.account);
 			if (!campaignId || !instanceUrl || !request.account.access_token) {
 				throw new Error(
 					"CONTENT_ERROR: Listmonk reconciliation requires a campaign ID, instance URL, and credentials.",
 				);
 			}
-			if (await isBlockedUrlWithDns(instanceUrl)) {
-				throw new Error(
-					"CONTENT_ERROR: ListMonk instance URL points to a blocked address.",
-				);
-			}
-			const response = await fetch(
-				`${instanceUrl}/api/campaigns/${encodeURIComponent(campaignId)}`,
-				{
-					headers: { Authorization: `Basic ${request.account.access_token}` },
-					redirect: "error",
-				},
+			const response = await listmonkFetch(
+				instanceUrl,
+				`/api/campaigns/${encodeURIComponent(campaignId)}`,
+				`Basic ${request.account.access_token}`,
 			);
 			if (!response.ok) {
-				const body = await response.text();
+				const body = await readPublisherText(response);
 				throw new PublishError(
 					`Listmonk campaign status failed (${response.status})`,
 					{ statusCode: response.status, detail: body },
 				);
 			}
-			const data = (await response.json()) as { data?: ListmonkCampaignState };
-			return listmonkCampaignResult(instanceUrl, data.data ?? {});
+			const data = (await readPublisherJson(response)) as {
+				data?: ListmonkCampaignState;
+			};
+			const result = listmonkCampaignResult(instanceUrl, data.data ?? {});
+			if (
+				request.provider_state?.startsWith("partial:") &&
+				result.provider_outcome?.disposition === "accepted"
+			) {
+				return {
+					success: false,
+					platform_post_id: result.platform_post_id,
+					platform_url: result.platform_url,
+					provider_outcome: {
+						disposition: "failed",
+						provider_operation_id: campaignId,
+						platform_post_id: result.platform_post_id,
+						platform_url: result.platform_url,
+						provider_state: request.provider_state,
+						effects: request.effects,
+					},
+					error: {
+						code: "LISTMONK_PARTIAL_OPERATION",
+						message:
+							"Listmonk created the campaign but the requested start/schedule step did not complete.",
+					},
+				};
+			}
+			return result;
 		} catch (err) {
 			return classifyPublishError(err);
 		}
 	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
+		let createdCampaignId = getSucceededProviderEffect(
+			request,
+			"campaign_created",
+		)?.provider_id;
+		let createdCampaignUrl: string | undefined;
 		try {
 			const authToken = request.account.access_token; // base64(user:pass)
-			const metadata = request.account.metadata ?? undefined;
-			const instanceUrl = (metadata?.instance_url as string) ?? "";
+			const instanceUrl = connectedListmonkInstance(request.account);
+			const opts = request.target_options;
+			const media = Array.isArray(opts.media) ? opts.media : request.media;
+			if (media.length > 0) {
+				return {
+					success: false,
+					error: {
+						code: "UNSUPPORTED_MEDIA_TYPE",
+						message:
+							"Listmonk campaigns accept text or HTML content; Relay media attachments are not supported.",
+					},
+				};
+			}
+			if (createdCampaignId) {
+				createdCampaignUrl = `${instanceUrl}/campaigns/${createdCampaignId}`;
+			}
 
 			if (!authToken || !instanceUrl) {
 				throw new Error(
@@ -161,35 +237,47 @@ export const listmonkPublisher: Publisher = {
 				);
 			}
 
-			if (await isBlockedUrlWithDns(instanceUrl)) {
-				throw new Error(
-					"CONTENT_ERROR: ListMonk instance URL points to a blocked address.",
-				);
-			}
-
 			const authHeader = `Basic ${authToken}`;
-			const opts = request.target_options;
-
 			const subject =
 				(opts.subject as string) ??
 				(request.content?.split("\n")[0]?.slice(0, 100) || "Newsletter Update");
 			const contentHtml =
 				(opts.content_html as string) ?? wrapInHtml(request.content ?? "");
-			const listId = opts.list_id as number | undefined;
-			const templateId = opts.template_id as number | undefined;
+			const listId = opts.list_id;
+			const templateId = opts.template_id;
+			for (const [name, value] of [
+				["list_id", listId],
+				["template_id", templateId],
+			] as const) {
+				if (
+					value !== undefined &&
+					(typeof value !== "number" ||
+						!Number.isSafeInteger(value) ||
+						value < 1)
+				) {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_LISTMONK_ID",
+							message: `Listmonk ${name} must be a positive integer.`,
+						},
+					};
+				}
+			}
 			const sendAt = opts.send_at as string | undefined;
 
 			// Find a list if not specified
-			let targetListIds: number[] = listId ? [listId] : [];
+			let targetListIds: number[] = typeof listId === "number" ? [listId] : [];
 			if (targetListIds.length === 0) {
 				// ListMonk API: Get Lists
 				// Docs: https://listmonk.app/docs/apis/lists/
-				const listsRes = await fetch(`${instanceUrl}/api/lists?per_page=1`, {
-					headers: { Authorization: authHeader },
-					redirect: "error",
-				});
+				const listsRes = await listmonkFetch(
+					instanceUrl,
+					"/api/lists?per_page=1",
+					authHeader,
+				);
 				if (listsRes.ok) {
-					const lists = (await listsRes.json()) as {
+					const lists = (await readPublisherJson(listsRes)) as {
 						data?: { results?: Array<{ id: number }> };
 					};
 					const firstList = lists.data?.results?.[0]?.id;
@@ -216,7 +304,7 @@ export const listmonkPublisher: Publisher = {
 				...(sendAt ? { send_at: sendAt } : {}),
 			};
 
-			if (templateId) {
+			if (typeof templateId === "number") {
 				body.template_id = templateId;
 			}
 
@@ -244,41 +332,59 @@ export const listmonkPublisher: Publisher = {
 				}));
 			}
 
-			const createRes = await fetch(`${instanceUrl}/api/campaigns`, {
-				method: "POST",
-				headers: {
-					Authorization: authHeader,
-					"Content-Type": "application/json",
-				},
-				redirect: "error",
-				body: JSON.stringify(body),
-			});
+			if (!createdCampaignId) {
+				const createRes = await listmonkFetch(
+					instanceUrl,
+					"/api/campaigns",
+					authHeader,
+					{
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify(body),
+					},
+				);
 
-			if (!createRes.ok) {
-				const err = (await createRes.json().catch(() => ({}))) as {
-					message?: string;
-				};
-				const detail = err?.message ?? createRes.statusText;
-				const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
+				if (!createRes.ok) {
+					const err = (await readPublisherJson(createRes).catch(
+						() => ({}),
+					)) as {
+						message?: string;
+					};
+					const detail = err?.message ?? createRes.statusText;
+					const raw = `HTTP ${createRes.status}\n${JSON.stringify(err)}`;
 
-				if (createRes.status === 401) {
+					if (createRes.status === 401) {
+						throw new PublishError(
+							`TOKEN_EXPIRED: ListMonk credentials invalid: ${detail}`,
+							{ statusCode: createRes.status, detail: raw },
+						);
+					}
 					throw new PublishError(
-						`TOKEN_EXPIRED: ListMonk credentials invalid: ${detail}`,
+						`ListMonk create campaign failed (${createRes.status}): ${detail}`,
 						{ statusCode: createRes.status, detail: raw },
 					);
 				}
-				throw new PublishError(
-					`ListMonk create campaign failed (${createRes.status}): ${detail}`,
-					{ statusCode: createRes.status, detail: raw },
-				);
-			}
 
-			const created = (await createRes.json()) as {
-				data?: { id?: number; uuid?: string };
-			};
-			const campaignId = created.data?.id;
-			if (!campaignId) {
-				throw new Error("ListMonk: No campaign ID returned");
+				const created = (await readPublisherJson(createRes)) as {
+					data?: { id?: number; uuid?: string };
+				};
+				const campaignId = created.data?.id;
+				if (!campaignId) {
+					throw new Error("ListMonk: No campaign ID returned");
+				}
+				createdCampaignId = String(campaignId);
+				createdCampaignUrl = `${instanceUrl}/campaigns/${campaignId}`;
+				await recordProviderEffect(request, {
+					name: "campaign_created",
+					status: "succeeded",
+					provider_id: createdCampaignId,
+				});
+			}
+			const campaignId = Number(createdCampaignId);
+			if (!Number.isSafeInteger(campaignId) || campaignId < 1) {
+				throw new Error("ListMonk: Recorded campaign ID is invalid");
 			}
 
 			// Step 2: Start or schedule the campaign.
@@ -286,21 +392,23 @@ export const listmonkPublisher: Publisher = {
 			// Section "PUT /api/campaigns/{campaign_id}/status" -> the request body
 			// contains only `status`; `send_at` belongs to campaign creation above.
 			const targetStatus = sendAt ? "scheduled" : "running";
-			const statusRes = await fetch(
-				`${instanceUrl}/api/campaigns/${campaignId}/status`,
-				{
-					method: "PUT",
-					headers: {
-						Authorization: authHeader,
-						"Content-Type": "application/json",
-					},
-					redirect: "error",
-					body: JSON.stringify({ status: targetStatus }),
-				},
-			);
+			const statusRes = getSucceededProviderEffect(request, "start_or_schedule")
+				? null
+				: await listmonkFetch(
+						instanceUrl,
+						`/api/campaigns/${campaignId}/status`,
+						authHeader,
+						{
+							method: "PUT",
+							headers: {
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify({ status: targetStatus }),
+						},
+					);
 
-			if (!statusRes.ok) {
-				const err = (await statusRes.json().catch(() => ({}))) as {
+			if (statusRes && !statusRes.ok) {
+				const err = (await readPublisherJson(statusRes).catch(() => ({}))) as {
 					message?: string;
 				};
 				const raw = `HTTP ${statusRes.status}\n${JSON.stringify(err)}`;
@@ -308,6 +416,13 @@ export const listmonkPublisher: Publisher = {
 					`ListMonk start campaign failed: ${err?.message ?? statusRes.statusText}`,
 					{ statusCode: statusRes.status, detail: raw },
 				);
+			}
+			if (statusRes) {
+				await recordProviderEffect(request, {
+					name: "start_or_schedule",
+					status: "succeeded",
+					provider_id: String(campaignId),
+				});
 			}
 
 			return {
@@ -324,7 +439,37 @@ export const listmonkPublisher: Publisher = {
 				},
 			};
 		} catch (err) {
-			return classifyPublishError(err, { definitiveHttpRejection: true });
+			const result = classifyPublishError(err, {
+				definitiveHttpRejection: createdCampaignId === undefined,
+			});
+			if (createdCampaignId) {
+				return {
+					...result,
+					success: false,
+					platform_post_id: createdCampaignId,
+					platform_url: createdCampaignUrl,
+					provider_outcome: {
+						disposition: "partial",
+						provider_operation_id: createdCampaignId,
+						platform_post_id: createdCampaignId,
+						platform_url: createdCampaignUrl,
+						provider_state: "partial:campaign_created",
+						effects: [
+							{
+								name: "campaign_created",
+								status: "succeeded",
+								provider_id: createdCampaignId,
+							},
+							{
+								name: "start_or_schedule",
+								status: "outcome_unknown",
+								...(result.error ? { error: result.error } : {}),
+							},
+						],
+					},
+				};
+			}
+			return result;
 		}
 	},
 };

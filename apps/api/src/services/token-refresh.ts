@@ -1,3 +1,4 @@
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import { createDb, socialAccounts } from "@relayapi/db";
 import { and, eq, gt, isNotNull, lt, notInArray } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
@@ -277,14 +278,14 @@ async function refreshStandard(params: {
 	});
 
 	if (!res.ok) {
-		const errorBody = await res.text().catch(() => "");
+		const errorBody = await readProviderText(res).catch(() => "");
 		console.error(
 			`Token refresh failed for ${params.tokenUrl}: ${res.status} ${errorBody.slice(0, 200)}`,
 		);
 		return null;
 	}
 
-	const data = (await res.json()) as Partial<TokenResult> &
+	const data = (await readProviderJson(res)) as Partial<TokenResult> &
 		Record<string, unknown>;
 	// Some providers (e.g. TikTok) return error bodies with HTTP 200 and no
 	// access_token. Reject these so we never overwrite a working token with null.
@@ -317,7 +318,7 @@ async function refreshInstagram(
 	);
 	if (!res.ok) return null;
 
-	const data = (await res.json()) as {
+	const data = (await readProviderJson(res)) as {
 		access_token?: string;
 		token_type?: string;
 		expires_in?: number;
@@ -350,7 +351,7 @@ async function refreshThreads(
 	);
 	if (!res.ok) return null;
 
-	const data = (await res.json()) as {
+	const data = (await readProviderJson(res)) as {
 		access_token?: string;
 		token_type?: string;
 		expires_in?: number;
@@ -387,7 +388,7 @@ export async function fetchAvatarUrl(
 					},
 				);
 				if (!res.ok) return null;
-				const data = (await res.json()) as {
+				const data = (await readProviderJson(res)) as {
 					data?: { profile_image_url?: string };
 				};
 				return data.data?.profile_image_url ?? null;
@@ -401,7 +402,7 @@ export async function fetchAvatarUrl(
 					},
 				);
 				if (!res.ok) return null;
-				const data = (await res.json()) as { picture?: string };
+				const data = (await readProviderJson(res)) as { picture?: string };
 				return data.picture ?? null;
 			}
 			case "instagram": {
@@ -410,7 +411,9 @@ export async function fetchAvatarUrl(
 					{ timeout: 10_000 },
 				);
 				if (!res.ok) return null;
-				const data = (await res.json()) as { profile_picture_url?: string };
+				const data = (await readProviderJson(res)) as {
+					profile_picture_url?: string;
+				};
 				return data.profile_picture_url ?? null;
 			}
 			case "threads": {
@@ -419,7 +422,7 @@ export async function fetchAvatarUrl(
 					{ timeout: 10_000 },
 				);
 				if (!res.ok) return null;
-				const data = (await res.json()) as {
+				const data = (await readProviderJson(res)) as {
 					threads_profile_picture_url?: string;
 				};
 				return data.threads_profile_picture_url ?? null;
@@ -433,7 +436,7 @@ export async function fetchAvatarUrl(
 					},
 				);
 				if (!res.ok) return null;
-				const data = (await res.json()) as {
+				const data = (await readProviderJson(res)) as {
 					items?: Array<{
 						snippet?: { thumbnails?: { default?: { url?: string } } };
 					}>;
@@ -447,7 +450,9 @@ export async function fetchAvatarUrl(
 					{ timeout: 10_000 },
 				);
 				if (!res.ok) return null;
-				const data = (await res.json()) as { data?: { url?: string } };
+				const data = (await readProviderJson(res)) as {
+					data?: { url?: string };
+				};
 				return data.data?.url ?? null;
 			}
 			case "tiktok": {
@@ -459,7 +464,7 @@ export async function fetchAvatarUrl(
 					},
 				);
 				if (!res.ok) return null;
-				const data = (await res.json()) as {
+				const data = (await readProviderJson(res)) as {
 					data?: { user?: { avatar_url?: string } };
 				};
 				return data.data?.user?.avatar_url ?? null;
@@ -501,7 +506,7 @@ async function refreshTikTok(
 
 	if (!res.ok) return null;
 
-	const data = (await res.json()) as {
+	const data = (await readProviderJson(res)) as {
 		access_token?: string;
 		refresh_token?: string;
 		expires_in?: number;

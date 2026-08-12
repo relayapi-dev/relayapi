@@ -1,6 +1,7 @@
 import {
 	adAccounts,
 	adCampaigns,
+	adConnections,
 	adMutationOperations,
 	ads,
 	createDb,
@@ -20,11 +21,11 @@ import {
 	stableOperationJson,
 } from "../lib/durable-operation";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import { getAdPlatformAdapter } from "./ad-platforms";
 import type {
 	AdPlatform,
 	AdPlatformAdapter,
+	AdProviderCredentials,
 	AdProviderMutationState,
 	AdTargeting,
 	CampaignProviderMutationState,
@@ -37,6 +38,7 @@ import {
 	type AdProviderBoundaryContext,
 	lockAdProviderBoundary,
 } from "./ad-provider-boundary";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 import {
 	adoptDurableUsageReservationInTransaction,
 	settleLinkedDurableUsage,
@@ -410,30 +412,46 @@ async function resolveProviderContext(
 ): Promise<{
 	adapter: AdPlatformAdapter;
 	accessToken: string;
+	credentials: AdProviderCredentials;
 	platform: AdPlatform;
 }> {
 	const [row] = await db
-		.select({ adAccount: adAccounts, socialAccount: socialAccounts })
+		.select({
+			adAccount: adAccounts,
+			adConnection: adConnections,
+			socialAccount: socialAccounts,
+		})
 		.from(adAccounts)
-		.innerJoin(
+		.leftJoin(
+			adConnections,
+			and(
+				eq(adAccounts.adConnectionId, adConnections.id),
+				eq(adConnections.organizationId, organizationId),
+			),
+		)
+		.leftJoin(
 			socialAccounts,
 			and(
 				eq(adAccounts.socialAccountId, socialAccounts.id),
 				eq(socialAccounts.organizationId, organizationId),
 			),
 		)
-		.innerJoin(organization, eq(organization.id, socialAccounts.organizationId))
+		.innerJoin(organization, eq(organization.id, organizationId))
 		.where(
 			and(
 				eq(adAccounts.id, adAccountId),
 				eq(adAccounts.organizationId, organizationId),
 				eq(adAccounts.status, "active"),
-				eq(socialAccounts.lifecycleStatus, "active"),
 				eq(organization.lifecycleStatus, "active"),
 			),
 		)
 		.limit(1);
-	if (!row) {
+	const authorityIsActive = row?.adConnection
+		? row.adConnection.status === "active" &&
+			row.adConnection.workspaceId === row.adAccount.workspaceId
+		: row?.socialAccount?.lifecycleStatus === "active" &&
+			row.socialAccount.workspaceId === row.adAccount.workspaceId;
+	if (!row || !authorityIsActive) {
 		throw new AdPlatformError(
 			"MANUAL_REVIEW_REQUIRED",
 			"The provider credential for this mutation is no longer available",
@@ -446,9 +464,17 @@ async function resolveProviderContext(
 			"No provider adapter is available for this mutation",
 		);
 	}
+	const credentials = await resolveAdProviderCredentials({
+		platform: row.adAccount.platform,
+		providerAdAccountId: row.adAccount.platformAdAccountId,
+		adConnection: row.adConnection,
+		legacySocialAccount: row.socialAccount,
+		env,
+	});
 	return {
 		adapter,
-		accessToken: await resolveAdsAccessToken(row.socialAccount, env),
+		accessToken: credentials.accessToken,
+		credentials,
 		platform: row.adAccount.platform,
 	};
 }
@@ -641,13 +667,18 @@ async function callProvider(
 				providerWrites += 1;
 				return refreshed.accessToken;
 			},
+			context.credentials,
 		);
 	};
 
 	switch (payload.kind) {
 		case "cancel_ad": {
 			const context = await contextForWrite();
-			await context.adapter.cancelAd(context.accessToken, payload.platformAdId);
+			await context.adapter.cancelAd(
+				context.accessToken,
+				payload.platformAdId,
+				context.credentials,
+			);
 			return;
 		}
 		case "cancel_campaign": {
@@ -655,6 +686,7 @@ async function callProvider(
 			await context.adapter.pauseCampaign(
 				context.accessToken,
 				payload.platformCampaignId,
+				context.credentials,
 			);
 			return;
 		}
@@ -683,6 +715,8 @@ async function callProvider(
 						name: payload.changes.name,
 						status: payload.changes.status,
 					},
+					undefined,
+					context.credentials,
 				);
 			}
 			if (
@@ -704,6 +738,7 @@ async function callProvider(
 						providerWrites += 1;
 						return refreshed.accessToken;
 					},
+					context.credentials,
 				);
 			}
 			return;
@@ -714,6 +749,7 @@ async function callProvider(
 				await context.adapter.pauseCampaign(
 					context.accessToken,
 					payload.platformCampaignId,
+					context.credentials,
 				);
 			}
 			if (payload.changes.name !== undefined) {
@@ -723,6 +759,7 @@ async function callProvider(
 					payload.platformCampaignId,
 					payload.platformAdSetId,
 					{ name: payload.changes.name },
+					context.credentials,
 				);
 			}
 			if (
@@ -738,6 +775,7 @@ async function callProvider(
 						dailyBudgetCents: payload.changes.dailyBudgetCents,
 						lifetimeBudgetCents: payload.changes.lifetimeBudgetCents,
 					},
+					context.credentials,
 				);
 			}
 			if (payload.changes.status === "active") {
@@ -751,11 +789,16 @@ async function callProvider(
 					await context.adapter.resumeCampaign(
 						context.accessToken,
 						payload.platformCampaignId,
+						context.credentials,
 					);
 				}
 				for (const platformAdId of payload.childPlatformAdIds) {
 					const context = await contextForWrite();
-					await context.adapter.resumeAd(context.accessToken, platformAdId);
+					await context.adapter.resumeAd(
+						context.accessToken,
+						platformAdId,
+						context.credentials,
+					);
 				}
 			}
 		}
@@ -1030,6 +1073,21 @@ export async function executeAdMutation(options: {
 	authorityAdmission: DurableCredentialAuthorityAdmission;
 	requiresLiveAuthority: boolean;
 }): Promise<void> {
+	const adapter = getAdPlatformAdapter(options.platform);
+	if (!adapter) {
+		throw new AdAuthoritativeNotAppliedError(
+			"UNSUPPORTED_PLATFORM",
+			"No provider adapter is available for this mutation",
+		);
+	}
+	try {
+		adapter.validateMutation?.(options.payload);
+	} catch (error) {
+		if (error instanceof AdPlatformError) {
+			throw new AdAuthoritativeNotAppliedError(error);
+		}
+		throw error;
+	}
 	const begun = await beginMutation(options);
 	if ("completed" in begun) return;
 	// A provider-confirmed operation can be left pending solely because its
@@ -1206,12 +1264,14 @@ export function campaignMutationStateMatches(
 async function providerMatches(
 	adapter: AdPlatformAdapter,
 	accessToken: string,
+	credentials: AdProviderCredentials,
 	payload: AdMutationPayload,
 ): Promise<boolean> {
 	if (payload.kind === "update_ad" || payload.kind === "cancel_ad") {
 		const state = await adapter.inspectAdMutation(
 			accessToken,
 			payload.platformAdId,
+			credentials,
 		);
 		const ancestor =
 			payload.kind === "update_ad" &&
@@ -1221,6 +1281,7 @@ async function providerMatches(
 						accessToken,
 						payload.platformCampaignId,
 						payload.platformAdSetId,
+						credentials,
 					)
 				: undefined;
 		return adMutationStateMatches(payload, state, ancestor);
@@ -1229,12 +1290,13 @@ async function providerMatches(
 		accessToken,
 		payload.platformCampaignId,
 		payload.kind === "update_campaign" ? payload.platformAdSetId : undefined,
+		credentials,
 	);
 	const children =
 		payload.kind === "update_campaign" && payload.changes.status === "active"
 			? await Promise.all(
 					payload.childPlatformAdIds.map((id) =>
-						adapter.inspectAdMutation(accessToken, id),
+						adapter.inspectAdMutation(accessToken, id, credentials),
 					),
 				)
 			: [];
@@ -1408,7 +1470,12 @@ export async function reconcileAdMutationOperations(env: Env): Promise<void> {
 		let confirmed: Operation | undefined;
 		try {
 			if (
-				!(await providerMatches(context.adapter, context.accessToken, payload))
+				!(await providerMatches(
+					context.adapter,
+					context.accessToken,
+					context.credentials,
+					payload,
+				))
 			) {
 				await markUnknown(
 					db,

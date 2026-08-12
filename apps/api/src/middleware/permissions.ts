@@ -142,7 +142,8 @@ export const requireManageSpendMiddleware =
 /**
  * Enforces workspace scoping on API keys.
  * Keys with scope "all" pass through. Scoped keys are checked against
- * the workspace_id in query params (GET) or request body (POST/PUT/PATCH).
+ * the workspace_id in query params (GET) or request body
+ * (POST/PUT/PATCH/DELETE).
  */
 export const workspaceScopeMiddleware = createMiddleware<{
 	Bindings: Env;
@@ -172,7 +173,7 @@ export const workspaceScopeMiddleware = createMiddleware<{
 				403,
 			);
 		}
-	} else if (["POST", "PUT", "PATCH"].includes(method)) {
+	} else if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
 		// Check query param first (works for all content types)
 		const url = new URL(c.req.url);
 		const queryWs = url.searchParams.get("workspace_id");

@@ -1,9 +1,41 @@
 {
   "schemaVersion": 2,
   "migrations": {
-    "0000_baseline": {
-      "phase": "baseline",
-      "summary": "Pre-launch virgin PostgreSQL 18 baseline; old development ledgers are unsupported"
-    }
-  }
+		"0000_baseline": {
+			"phase": "baseline",
+			"summary": "Pre-launch virgin PostgreSQL 18 baseline; old development ledgers are unsupported"
+		},
+		"0001_luxuriant_scorpion": {
+			"phase": "expand",
+			"summary": "Add dedicated paid-media connections, truthful provider capability snapshots, and promotable identity bindings while retaining legacy Meta authority"
+		},
+		"0002_cooing_mandroid": {
+			"phase": "expand",
+			"summary": "Add Slack publishing support and enforce valid paid-media promotable identity types and statuses"
+		},
+		"0003_keen_lionheart": {
+			"phase": "expand",
+			"summary": "Enforce organization and workspace tenant integrity for social accounts bound as paid-media promotable identities"
+		},
+		"0004_happy_ken_ellis": {
+			"phase": "contract",
+			"summary": "Add advanced ad reporting and lead projections, lease-fenced resumable media processing, published-edit and social-mutation durability, and WhatsApp administration identities; widen existing publishing checks for provider drafts and edit projections",
+			"affectedObjects": [
+				"post_targets.post_targets_delivery_projection_check",
+				"post_targets.post_targets_reconcile_attempts_nonnegative_check",
+				"post_targets.post_targets_provider_disposition_check",
+				"publish_attempts.publish_attempts_provider_disposition_check"
+			],
+			"compatibleReleasePrerequisite": "The immediately preceding API release writes only the legacy provider-disposition and edit-state subset and remains compatible with both the old and widened checks; apply this migration before enabling provider_draft or published-edit writes."
+		},
+		"0005_silky_leader": {
+			"phase": "contract",
+			"summary": "Fence media derivatives to their exact tenant-scoped processing job and product sets to same-tenant catalog parents",
+			"affectedObjects": [
+				"media_derivatives.media_derivatives_processing_job_fk",
+				"ad_advanced_resources.ad_advanced_resources_parent_id_ad_advanced_resources_id_fk"
+			],
+			"compatibleReleasePrerequisite": "The immediately preceding API release derives every media derivative from the same organization, scope, and media job tuple and creates product sets only beneath catalog resources owned by the same ad account."
+		}
+	}
 }

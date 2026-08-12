@@ -17,6 +17,11 @@ import {
 	createStreamingMultipartBody,
 	createStreamingMultipartFilesBody,
 } from "../lib/multipart-stream";
+import {
+	PROVIDER_RESPONSE_MAX_BYTES,
+	readProviderJson,
+	readProviderText,
+} from "../lib/provider-response";
 
 const originalFetch = globalThis.fetch;
 const RELAY_MEDIA_URL =
@@ -53,6 +58,20 @@ function chunkedResponse(
 }
 
 describe("bounded response bodies", () => {
+	it("caps shared provider JSON and diagnostic text before materializing", async () => {
+		const oversized = String(PROVIDER_RESPONSE_MAX_BYTES + 1);
+		await expect(
+			readProviderJson(
+				new Response("{}", { headers: { "Content-Length": oversized } }),
+			),
+		).rejects.toBeInstanceOf(ResponseTooLargeError);
+		await expect(
+			readProviderText(
+				new Response("error", { headers: { "Content-Length": oversized } }),
+			),
+		).rejects.toBeInstanceOf(ResponseTooLargeError);
+	});
+
 	it("rejects an oversized declared body before reading it", () => {
 		let cancelled = false;
 		const response = chunkedResponse([2, 2], "9", () => {

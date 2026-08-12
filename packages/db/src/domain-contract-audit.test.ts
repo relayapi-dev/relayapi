@@ -25,8 +25,8 @@ test("every durable type/kind/role/direction column has exactly one valid domain
 	const audit = auditDurableDomains(schemaConfigs());
 
 	expect(audit.failures).toEqual([]);
-	expect(audit.candidates).toHaveLength(48);
-	expect(audit.contractCount).toBe(48);
+	expect(audit.candidates).toHaveLength(55);
+	expect(audit.contractCount).toBe(55);
 	expect(
 		audit.candidates.every(
 			({ classification }) =>

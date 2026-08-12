@@ -32,6 +32,9 @@ mock.module("../queues/inbox", () => ({
 mock.module("../queues/media-cleanup", () => ({
 	consumeMediaCleanupQueue: recordConsumer("media-cleanup"),
 }));
+mock.module("../queues/media-processing", () => ({
+	consumeMediaProcessingQueue: recordConsumer("media-processing"),
+}));
 mock.module("../queues/publish", () => ({
 	consumePublishQueue: recordConsumer("publish"),
 }));

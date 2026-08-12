@@ -2,6 +2,7 @@ import "./lib/safe-console";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import app from "./app";
 import { RealtimeDO } from "./durable-objects/post-updates";
+import { MediaProcessorContainer } from "./durable-objects/media-processor";
 import {
 	assertRuntimeOpenForInternalRpc,
 	createControlledWorker,
@@ -13,6 +14,7 @@ import {
 	stageInternalEmailIntent,
 } from "./services/email-intents";
 import type { Env } from "./types";
+import { MediaProcessingWorkflow } from "./workflows/media-processing";
 
 export default createControlledWorker({
 	fetch: (request, env, ctx) => app.fetch(request, env, ctx),
@@ -31,4 +33,4 @@ export class EmailIntentEntrypoint extends WorkerEntrypoint<Env> {
 	}
 }
 
-export { RealtimeDO };
+export { MediaProcessingWorkflow, MediaProcessorContainer, RealtimeDO };

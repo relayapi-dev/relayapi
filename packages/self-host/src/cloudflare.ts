@@ -1,5 +1,6 @@
 import { validateHyperdriveCaCertificateId } from "./config.js";
 import {
+	ADDITIVE_QUEUE_NAME_SET,
 	cloudflareQueueName,
 	INCOMPLETE_MULTIPART_RETENTION_SECONDS,
 	QUEUE_MESSAGE_RETENTION_SECONDS,
@@ -8,7 +9,11 @@ import {
 	RESOURCE_NAMES,
 } from "./constants.js";
 import { fetchBounded, parseJsonBytes } from "./http.js";
-import type { CloudflareResourcePlan, SelfHostConfig } from "./types.js";
+import type {
+	CloudflareResourcePlan,
+	ResolvedCloudflareResources,
+	SelfHostConfig,
+} from "./types.js";
 
 interface ApiResultInfo {
 	count?: number;
@@ -702,16 +707,19 @@ export class CloudflareClient {
 		config: SelfHostConfig,
 		runtimeDatabaseUrl: string,
 		options: HyperdriveReconciliationOptions = {},
-	): Promise<NonNullable<SelfHostConfig["resources"]>> {
+	): Promise<ResolvedCloudflareResources> {
 		const jurisdiction = config.cloudflare.r2Jurisdiction;
 		const plan = await this.plan(config, runtimeDatabaseUrl, options);
 		if (config.resources) {
 			if (
 				plan.kv.id !== config.resources.kvNamespaceId ||
 				plan.hyperdrive.id !== config.resources.hyperdriveId ||
-				plan.queues.some(
-					(queue) => config.resources?.queues[queue.logicalName] !== queue.id,
-				)
+				plan.queues.some((queue) => {
+					const configuredId = config.resources?.queues[queue.logicalName];
+					return configuredId === undefined
+						? !ADDITIVE_QUEUE_NAME_SET.has(queue.logicalName)
+						: configuredId !== queue.id;
+				})
 			) {
 				throw new Error(
 					"Provisioned Cloudflare resource IDs drifted from relayapi.selfhost.json",
@@ -912,10 +920,17 @@ export class CloudflareClient {
 					? { id: "relayapi-media-expiry", expireDays: 30 }
 					: bucket === RESOURCE_NAMES.buckets.queueRescue
 						? { id: "relayapi-queue-rescue-expiry", expireDays: 30 }
-						: undefined,
+						: bucket === RESOURCE_NAMES.buckets.adReports
+							? { id: "relayapi-ad-report-expiry", expireDays: 8 }
+							: undefined,
 				jurisdiction,
 			);
 		}
+		await this.ensureMediaBucketCors(
+			RESOURCE_NAMES.buckets.media,
+			config.cloudflare.appHostname,
+			jurisdiction,
+		);
 		await this.r2Request(
 			"PUT",
 			this.account(
@@ -951,6 +966,31 @@ export class CloudflareClient {
 			config.cloudflare.thumbnailHostname,
 			config.cloudflare.zoneId,
 			jurisdiction,
+		);
+	}
+
+	private async ensureMediaBucketCors(
+		bucket: string,
+		appHostname: string,
+		jurisdiction: "default" | "eu",
+	): Promise<void> {
+		await this.r2Request(
+			"PUT",
+			this.account(`/r2/buckets/${encodeURIComponent(bucket)}/cors`),
+			jurisdiction,
+			{
+				rules: [
+					{
+						allowed: {
+							origins: [`https://${appHostname}`],
+							methods: ["PUT"],
+							headers: ["Content-Type", "If-None-Match"],
+						},
+						exposeHeaders: ["ETag"],
+						maxAgeSeconds: 3600,
+					},
+				],
+			},
 		);
 	}
 

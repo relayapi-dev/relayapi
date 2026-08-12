@@ -6,6 +6,7 @@ import {
 	adAccounts,
 	adAudiences,
 	adAudienceUsers,
+	adConnections,
 	createDb,
 	eq,
 	socialAccounts,
@@ -13,9 +14,10 @@ import {
 import { and, sql } from "drizzle-orm";
 import { normalizeContactPhone } from "../lib/contact-phone";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import { getAdPlatformAdapter } from "./ad-platforms";
 import { AdPlatformError } from "./ad-platforms/types";
+import { requireAdCapability } from "./ad-platforms/unsupported";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,10 +41,12 @@ async function getAdAccountWithToken(
 	const [result] = await db
 		.select({
 			adAccount: adAccounts,
+			adConnection: adConnections,
 			socialAccount: socialAccounts,
 		})
 		.from(adAccounts)
-		.innerJoin(
+		.leftJoin(adConnections, eq(adAccounts.adConnectionId, adConnections.id))
+		.leftJoin(
 			socialAccounts,
 			and(
 				eq(adAccounts.socialAccountId, socialAccounts.id),
@@ -50,15 +54,25 @@ async function getAdAccountWithToken(
 			),
 		)
 		.where(
-			and(eq(adAccounts.id, adAccountId), eq(adAccounts.organizationId, orgId)),
+			and(
+				eq(adAccounts.id, adAccountId),
+				eq(adAccounts.organizationId, orgId),
+				eq(adAccounts.status, "active"),
+			),
 		)
 		.limit(1);
 
 	if (!result) return null;
 
-	const accessToken = await resolveAdsAccessToken(result.socialAccount, env);
+	const credentials = await resolveAdProviderCredentials({
+		platform: result.adAccount.platform,
+		providerAdAccountId: result.adAccount.platformAdAccountId,
+		adConnection: result.adConnection,
+		legacySocialAccount: result.socialAccount,
+		env,
+	});
 
-	return { ...result, accessToken };
+	return { ...result, accessToken: credentials.accessToken, credentials };
 }
 
 // ---------------------------------------------------------------------------
@@ -90,12 +104,14 @@ export async function discoverAudiences(
 			`No adapter for ad platform "${ctx.adAccount.platform}"`,
 		);
 	}
+	requireAdCapability(adapter, "audience_discovery");
 
 	// Pass the platform-side ad account id (e.g. Meta "act_…"), but store rows
 	// under the internal adAccountId so the list query matches.
 	const platformAudiences = await adapter.listAudiences(
 		ctx.accessToken,
 		ctx.adAccount.platformAdAccountId,
+		ctx.credentials,
 	);
 
 	if (platformAudiences.length === 0) return;
@@ -159,6 +175,7 @@ export async function createAudience(
 
 	const adapter = getAdPlatformAdapter(ctx.adAccount.platform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
+	requireAdCapability(adapter, "audience_create");
 
 	// Resolve source audience's platform ID for lookalike
 	let platformSourceAudienceId: string | undefined;
@@ -204,6 +221,7 @@ export async function createAudience(
 			ratio: params.ratio,
 			customerFileSource: params.customerFileSource,
 		},
+		ctx.credentials,
 	);
 
 	const [audience] = await db
@@ -338,11 +356,13 @@ export async function addUsersToAudience(
 
 	const adapter = getAdPlatformAdapter(ctx.adAccount.platform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
+	requireAdCapability(adapter, "audience_upload");
 
 	const platformResult = await adapter.addUsersToAudience(
 		ctx.accessToken,
 		audience.platformAudienceId,
 		hashedUsers.filter((u) => u.emailHash || u.phoneHash),
+		ctx.credentials,
 	);
 
 	return {
@@ -397,11 +417,13 @@ export async function deleteAudience(
 				"Provider audience deletion is unavailable for this platform",
 			);
 		}
+		requireAdCapability(adapter, "audience_create");
 		// Provider deletion is authoritative. Never report local success while
 		// the provider may still retain and use the audience.
 		await adapter.deleteAudience(
 			ctx.accessToken,
 			audience.platformAudienceId,
+			ctx.credentials,
 		);
 	}
 

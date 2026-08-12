@@ -2,13 +2,21 @@
 title: Media
 ---
 
+Use direct-to-storage upload sessions for new uploads: the canonical limit is 200 MiB and files above 64 MiB use resumable 16 MiB multipart parts. The Worker-proxy upload remains capped at 50 MiB. In a ready media response, persist `reference_url` for post attachments; `url` is a potentially expiring read URL. Automatic normalization is asynchronous and fail-open, while explicit processing requests use strict typed options. See [Media Uploads](/guides/media-uploads).
+
 ## Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `DELETE` | [Abort Media Upload Session](/api-reference/media/abortMediaUploadSession) | Abort Media Upload Session |
+| `POST` | [Complete Media Upload Session](/api-reference/media/completeMediaUploadSession) | Complete Media Upload Session |
 | `POST` | [Confirm a presigned upload completed](/api-reference/media/confirmMedia) | Confirm a presigned upload completed |
+| `POST` | [Create Media Upload Part Urls](/api-reference/media/createMediaUploadPartUrls) | Create Media Upload Part Urls |
+| `POST` | [Create a resumable media upload session](/api-reference/media/createMediaUploadSession) | Create a resumable media upload session |
 | `DELETE` | [Delete media](/api-reference/media/deleteMedia) | Delete media |
 | `GET` | [Get media details](/api-reference/media/getMedia) | Get media details |
+| `GET` | [Get Media Upload Session](/api-reference/media/getMediaUploadSession) | Get Media Upload Session |
 | `GET` | [List media files](/api-reference/media/listMedia) | List media files |
 | `POST` | [Get a pre-signed upload URL](/api-reference/media/presignMedia) | Get a pre-signed upload URL |
+| `POST` | [Process Media](/api-reference/media/processMedia) | Process Media |
 | `POST` | [Upload a file](/api-reference/media/uploadMedia) | Upload a file |

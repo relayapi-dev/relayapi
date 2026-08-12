@@ -1,33 +1,43 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-import { APIResource } from '../../core/resource';
-import * as FacebookPagesAPI from './facebook-pages';
+import { APIResource } from "../../core/resource";
+import * as FacebookPagesAPI from "./facebook-pages";
 import {
   FacebookPageRetrieveResponse,
   FacebookPageSetDefaultParams,
   FacebookPageSetDefaultResponse,
   FacebookPages,
-} from './facebook-pages';
-import * as GmbAttributesAPI from './gmb-attributes';
-import { GmbAttributeRetrieveResponse, GmbAttributeUpdateParams, GmbAttributeUpdateResponse, GmbAttributes } from './gmb-attributes';
-import * as GmbFoodMenusAPI from './gmb-food-menus';
-import { GmbFoodMenuRetrieveResponse, GmbFoodMenuUpdateParams, GmbFoodMenuUpdateResponse, GmbFoodMenus } from './gmb-food-menus';
-import * as GmbLocationDetailsAPI from './gmb-location-details';
+} from "./facebook-pages";
+import * as GmbAttributesAPI from "./gmb-attributes";
+import {
+  GmbAttributeRetrieveResponse,
+  GmbAttributeUpdateParams,
+  GmbAttributeUpdateResponse,
+  GmbAttributes,
+} from "./gmb-attributes";
+import * as GmbFoodMenusAPI from "./gmb-food-menus";
+import {
+  GmbFoodMenuRetrieveResponse,
+  GmbFoodMenuUpdateParams,
+  GmbFoodMenuUpdateResponse,
+  GmbFoodMenus,
+} from "./gmb-food-menus";
+import * as GmbLocationDetailsAPI from "./gmb-location-details";
 import {
   GmbLocationDetailRetrieveParams,
   GmbLocationDetailRetrieveResponse,
   GmbLocationDetailUpdateParams,
   GmbLocationDetailUpdateResponse,
   GmbLocationDetails,
-} from './gmb-location-details';
-import * as GmbLocationsAPI from './gmb-locations';
+} from "./gmb-location-details";
+import * as GmbLocationsAPI from "./gmb-locations";
 import {
   GmbLocationRetrieveResponse,
   GmbLocationSetDefaultParams,
   GmbLocationSetDefaultResponse,
   GmbLocations,
-} from './gmb-locations';
-import * as GmbMediaAPI from './gmb-media';
+} from "./gmb-locations";
+import * as GmbMediaAPI from "./gmb-media";
 import {
   GmbMedia,
   GmbMediaCategory,
@@ -36,8 +46,8 @@ import {
   GmbMediaListResponse,
   GmbMediaUploadParams,
   GmbMediaUploadResponse,
-} from './gmb-media';
-import * as GmbPlaceActionsAPI from './gmb-place-actions';
+} from "./gmb-media";
+import * as GmbPlaceActionsAPI from "./gmb-place-actions";
 import {
   GmbPlaceActionCreateParams,
   GmbPlaceActionCreateResponse,
@@ -46,73 +56,91 @@ import {
   GmbPlaceActionListResponse,
   GmbPlaceActionType,
   GmbPlaceActions,
-} from './gmb-place-actions';
-import * as HealthAPI from './health';
-import { Health, HealthListResponse, HealthRetrieveResponse } from './health';
-import * as LinkedinOrganizationsAPI from './linkedin-organizations';
+} from "./gmb-place-actions";
+import * as HealthAPI from "./health";
+import { Health, HealthListResponse, HealthRetrieveResponse } from "./health";
+import * as LinkedinOrganizationsAPI from "./linkedin-organizations";
 import {
   LinkedinOrganizationRetrieveResponse,
   LinkedinOrganizationSwitchTypeParams,
   LinkedinOrganizationSwitchTypeResponse,
   LinkedinOrganizations,
-} from './linkedin-organizations';
-import * as PinterestBoardsAPI from './pinterest-boards';
+} from "./linkedin-organizations";
+import * as PinterestBoardsAPI from "./pinterest-boards";
 import {
   PinterestBoardRetrieveResponse,
   PinterestBoardSetDefaultParams,
   PinterestBoardSetDefaultResponse,
   PinterestBoards,
-} from './pinterest-boards';
-import * as RedditFlairsAPI from './reddit-flairs';
-import { RedditFlairRetrieveParams, RedditFlairRetrieveResponse, RedditFlairs } from './reddit-flairs';
-import * as RedditSubredditsAPI from './reddit-subreddits';
+} from "./pinterest-boards";
+import * as RedditFlairsAPI from "./reddit-flairs";
+import {
+  RedditFlairRetrieveParams,
+  RedditFlairRetrieveResponse,
+  RedditFlairs,
+} from "./reddit-flairs";
+import * as RedditSubredditsAPI from "./reddit-subreddits";
 import {
   RedditSubredditRetrieveResponse,
   RedditSubredditSetDefaultParams,
   RedditSubredditSetDefaultResponse,
   RedditSubreddits,
-} from './reddit-subreddits';
-import * as TikTokCreatorInfoAPI from './tiktok-creator-info';
-import { TikTokCreatorInfo, TikTokCreatorInfoRetrieveResponse } from './tiktok-creator-info';
-import * as YouTubePlaylistsAPI from './youtube-playlists';
+} from "./reddit-subreddits";
+import * as TikTokCreatorInfoAPI from "./tiktok-creator-info";
+import {
+  TikTokCreatorInfo,
+  TikTokCreatorInfoRetrieveResponse,
+} from "./tiktok-creator-info";
+import * as YouTubePlaylistsAPI from "./youtube-playlists";
 import {
   YouTubePlaylistRetrieveResponse,
   YouTubePlaylistSetDefaultParams,
   YouTubePlaylistSetDefaultResponse,
   YouTubePlaylists,
-} from './youtube-playlists';
-import { APIPromise } from '../../core/api-promise';
-import { buildHeaders } from '../../internal/headers';
-import { RequestOptions } from '../../internal/request-options';
-import { path } from '../../internal/utils/path';
+} from "./youtube-playlists";
+import { APIPromise } from "../../core/api-promise";
+import { buildHeaders } from "../../internal/headers";
+import { RequestOptions } from "../../internal/request-options";
+import { path } from "../../internal/utils/path";
 
 export class Accounts extends APIResource {
   health: HealthAPI.Health = new HealthAPI.Health(this._client);
-  redditFlairs: RedditFlairsAPI.RedditFlairs = new RedditFlairsAPI.RedditFlairs(this._client);
-  facebookPages: FacebookPagesAPI.FacebookPages = new FacebookPagesAPI.FacebookPages(this._client);
+  redditFlairs: RedditFlairsAPI.RedditFlairs = new RedditFlairsAPI.RedditFlairs(
+    this._client,
+  );
+  facebookPages: FacebookPagesAPI.FacebookPages =
+    new FacebookPagesAPI.FacebookPages(this._client);
   linkedinOrganizations: LinkedinOrganizationsAPI.LinkedinOrganizations =
     new LinkedinOrganizationsAPI.LinkedinOrganizations(this._client);
-  pinterestBoards: PinterestBoardsAPI.PinterestBoards = new PinterestBoardsAPI.PinterestBoards(this._client);
-  redditSubreddits: RedditSubredditsAPI.RedditSubreddits = new RedditSubredditsAPI.RedditSubreddits(
+  pinterestBoards: PinterestBoardsAPI.PinterestBoards =
+    new PinterestBoardsAPI.PinterestBoards(this._client);
+  redditSubreddits: RedditSubredditsAPI.RedditSubreddits =
+    new RedditSubredditsAPI.RedditSubreddits(this._client);
+  gmbLocations: GmbLocationsAPI.GmbLocations = new GmbLocationsAPI.GmbLocations(
     this._client,
   );
-  gmbLocations: GmbLocationsAPI.GmbLocations = new GmbLocationsAPI.GmbLocations(this._client);
-  gmbFoodMenus: GmbFoodMenusAPI.GmbFoodMenus = new GmbFoodMenusAPI.GmbFoodMenus(this._client);
-  gmbLocationDetails: GmbLocationDetailsAPI.GmbLocationDetails = new GmbLocationDetailsAPI.GmbLocationDetails(this._client);
+  gmbFoodMenus: GmbFoodMenusAPI.GmbFoodMenus = new GmbFoodMenusAPI.GmbFoodMenus(
+    this._client,
+  );
+  gmbLocationDetails: GmbLocationDetailsAPI.GmbLocationDetails =
+    new GmbLocationDetailsAPI.GmbLocationDetails(this._client);
   gmbMedia: GmbMediaAPI.GmbMedia = new GmbMediaAPI.GmbMedia(this._client);
-  gmbAttributes: GmbAttributesAPI.GmbAttributes = new GmbAttributesAPI.GmbAttributes(this._client);
-  gmbPlaceActions: GmbPlaceActionsAPI.GmbPlaceActions = new GmbPlaceActionsAPI.GmbPlaceActions(this._client);
-  tiktokCreatorInfo: TikTokCreatorInfoAPI.TikTokCreatorInfo = new TikTokCreatorInfoAPI.TikTokCreatorInfo(
-    this._client,
-  );
-  youtubePlaylists: YouTubePlaylistsAPI.YouTubePlaylists = new YouTubePlaylistsAPI.YouTubePlaylists(
-    this._client,
-  );
+  gmbAttributes: GmbAttributesAPI.GmbAttributes =
+    new GmbAttributesAPI.GmbAttributes(this._client);
+  gmbPlaceActions: GmbPlaceActionsAPI.GmbPlaceActions =
+    new GmbPlaceActionsAPI.GmbPlaceActions(this._client);
+  tiktokCreatorInfo: TikTokCreatorInfoAPI.TikTokCreatorInfo =
+    new TikTokCreatorInfoAPI.TikTokCreatorInfo(this._client);
+  youtubePlaylists: YouTubePlaylistsAPI.YouTubePlaylists =
+    new YouTubePlaylistsAPI.YouTubePlaylists(this._client);
 
   /**
    * Get a connected account
    */
-  retrieve(id: string, options?: RequestOptions): APIPromise<AccountRetrieveResponse> {
+  retrieve(
+    id: string,
+    options?: RequestOptions,
+  ): APIPromise<AccountRetrieveResponse> {
     return this._client.get(path`/v1/accounts/${id}`, options);
   }
 
@@ -134,21 +162,27 @@ export class Accounts extends APIResource {
     query: AccountListParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<AccountListResponse> {
-    return this._client.get('/v1/accounts', { query, ...options });
+    return this._client.get("/v1/accounts", { query, ...options });
   }
 
   /**
    * Get newsletter lists/audiences for a newsletter account (beehiiv, convertkit,
    * mailchimp, listmonk).
    */
-  listNewsletterLists(id: string, options?: RequestOptions): APIPromise<NewsletterListsResponse> {
+  listNewsletterLists(
+    id: string,
+    options?: RequestOptions,
+  ): APIPromise<NewsletterListsResponse> {
     return this._client.get(path`/v1/accounts/${id}/lists`, options);
   }
 
   /**
    * Get newsletter templates for a newsletter account (mailchimp, listmonk).
    */
-  listNewsletterTemplates(id: string, options?: RequestOptions): APIPromise<NewsletterTemplatesResponse> {
+  listNewsletterTemplates(
+    id: string,
+    options?: RequestOptions,
+  ): APIPromise<NewsletterTemplatesResponse> {
     return this._client.get(path`/v1/accounts/${id}/templates`, options);
   }
 
@@ -166,7 +200,7 @@ export class Accounts extends APIResource {
     query: AccountSyncAllParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<AccountSyncAllResponse> {
-    return this._client.post('/v1/accounts/sync', { query, ...options });
+    return this._client.post("/v1/accounts/sync", { query, ...options });
   }
 
   /**
@@ -175,7 +209,7 @@ export class Accounts extends APIResource {
   delete(id: string, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/accounts/${id}`, {
       ...options,
-      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+      headers: buildHeaders([{ Accept: "*/*" }, options?.headers]),
     });
   }
 }
@@ -205,33 +239,38 @@ export interface AccountRetrieveResponse {
    * Per-account scheduling preferences for smart slot finding.
    */
   scheduling_preferences?: {
-    posting_windows?: Array<{ day_of_week: number; start_hour: number; end_hour: number }>;
+    posting_windows?: Array<{
+      day_of_week: number;
+      start_hour: number;
+      end_hour: number;
+    }>;
     max_posts_per_day?: number;
     min_gap_minutes?: number;
   } | null;
 
   platform:
-    | 'twitter'
-    | 'instagram'
-    | 'facebook'
-    | 'linkedin'
-    | 'tiktok'
-    | 'youtube'
-    | 'pinterest'
-    | 'reddit'
-    | 'bluesky'
-    | 'threads'
-    | 'telegram'
-    | 'snapchat'
-    | 'googlebusiness'
-    | 'whatsapp'
-    | 'mastodon'
-    | 'discord'
-    | 'sms'
-    | 'beehiiv'
-    | 'convertkit'
-    | 'mailchimp'
-    | 'listmonk';
+    | "twitter"
+    | "instagram"
+    | "facebook"
+    | "linkedin"
+    | "tiktok"
+    | "youtube"
+    | "pinterest"
+    | "reddit"
+    | "bluesky"
+    | "threads"
+    | "telegram"
+    | "snapchat"
+    | "googlebusiness"
+    | "whatsapp"
+    | "mastodon"
+    | "discord"
+    | "sms"
+    | "beehiiv"
+    | "convertkit"
+    | "mailchimp"
+    | "listmonk"
+    | "slack";
 
   platform_account_id: string;
 
@@ -257,23 +296,28 @@ export interface AccountUpdateResponse {
   workspace: AccountWorkspace | null;
 
   platform:
-    | 'twitter'
-    | 'instagram'
-    | 'facebook'
-    | 'linkedin'
-    | 'tiktok'
-    | 'youtube'
-    | 'pinterest'
-    | 'reddit'
-    | 'bluesky'
-    | 'threads'
-    | 'telegram'
-    | 'snapchat'
-    | 'googlebusiness'
-    | 'whatsapp'
-    | 'mastodon'
-    | 'discord'
-    | 'sms';
+    | "twitter"
+    | "instagram"
+    | "facebook"
+    | "linkedin"
+    | "tiktok"
+    | "youtube"
+    | "pinterest"
+    | "reddit"
+    | "bluesky"
+    | "threads"
+    | "telegram"
+    | "snapchat"
+    | "googlebusiness"
+    | "whatsapp"
+    | "mastodon"
+    | "discord"
+    | "sms"
+    | "beehiiv"
+    | "convertkit"
+    | "mailchimp"
+    | "listmonk"
+    | "slack";
 
   platform_account_id: string;
 
@@ -319,23 +363,28 @@ export namespace AccountListResponse {
     workspace: AccountWorkspace | null;
 
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "bluesky"
+      | "threads"
+      | "telegram"
+      | "snapchat"
+      | "googlebusiness"
+      | "whatsapp"
+      | "mastodon"
+      | "discord"
+      | "sms"
+      | "beehiiv"
+      | "convertkit"
+      | "mailchimp"
+      | "listmonk"
+      | "slack";
 
     platform_account_id: string;
 

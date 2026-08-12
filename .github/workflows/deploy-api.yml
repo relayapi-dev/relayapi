@@ -6,7 +6,7 @@ name: Deploy API
 # this repository and is not represented by a misleading workflow checkbox.
 #
 # Required repository secrets:
-# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_API_TOKEN (Workers edit plus Cloudflare Containers edit/access)
 # - CLOUDFLARE_ACCOUNT_ID  (relay account: 3496f40fcd55a91da50ded8abea2cf7a)
 # - DOTENVX_ARMOR_TOKEN (required after apps/api/.production.secrets.vault is configured)
 #
@@ -461,6 +461,25 @@ jobs:
         env:
           CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
 
+      - name: Verify Cloudflare Containers deployment access
+        id: previous_container
+        run: |
+          set -euo pipefail
+          applications="$(bunx wrangler containers list --json)"
+          printf '%s' "$applications" | jq -e 'type == "array"' >/dev/null
+          previous_image="$(printf '%s' "$applications" | jq -er '
+            [.[] | select(.name == "relayapi-media-processor")]
+            | if length == 0 then ""
+              elif length == 1 then .[0].image
+              else error("expected at most one relayapi-media-processor application")
+              end
+          ')"
+          printf 'image=%s\n' "$previous_image" >> "$GITHUB_OUTPUT"
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Attempt API deploy
         id: deploy_attempt
         run: |
@@ -476,6 +495,10 @@ jobs:
           deploy_exit_code=$?
           set -e
           printf 'exit_code=%s\n' "$deploy_exit_code" >> "$GITHUB_OUTPUT"
+          if [ "$deploy_exit_code" -ne 0 ]; then
+            echo "::error::Wrangler failed while deploying the Worker and its Container application"
+            exit "$deploy_exit_code"
+          fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -514,10 +537,27 @@ jobs:
             echo "::error::Wrangler output disagrees with the active API release"
             exit 1
           fi
-          if [ "${{ steps.deploy_attempt.outputs.exit_code }}" != "0" ]; then
-            echo "::warning::Wrangler exited nonzero after promoting the exact tagged API release; continuing with post-deploy verification"
-          fi
           printf 'version_id=%s\n' "$active_version" >> "$GITHUB_OUTPUT"
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify media processor Container application rollout
+        run: |
+          set -euo pipefail
+          applications="$(bunx wrangler containers list --json)"
+          application="$(printf '%s' "$applications" | jq -ec '
+            [.[] | select(.name == "relayapi-media-processor")]
+            | if length == 1 then .[0]
+              else error("expected exactly one relayapi-media-processor application")
+              end
+          ')"
+          printf '%s' "$application" | jq -e '
+            (.state == "ready" or .state == "active") and
+            (.image | type == "string" and contains("relayapi-media-processor") and contains("@sha256:")) and
+            (.version != null)
+          ' >/dev/null
         working-directory: apps/api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -546,14 +586,28 @@ jobs:
           EXPECTED_WORKER_VERSION_ID: ${{ steps.deployed_worker.outputs.version_id }}
 
       - name: Roll back API code version and verify non-versioned configuration
-        # Push deploys run only after the catalog is already current, so code-only
-        # rollback is safe there. A manual run can apply a forward-only migration;
+        # Push deploys run only after the catalog is already current. Code-only
+        # rollback is allowed only when the Container image also stayed unchanged.
+        # A manual run can apply a forward-only migration;
         # restoring old code against that new schema would require compatibility
         # shims we intentionally do not carry, so manual failures need reviewed
         # forward recovery instead of automatic rollback.
         if: ${{ failure() && github.event_name == 'push' && steps.previous_worker.outputs.version_id != '' }}
         run: |
           set -euo pipefail
+          if [ "${{ steps.previous_container.outcome }}" = "success" ]; then
+            current_container_image="$(bunx wrangler containers list --json | jq -er '
+              [.[] | select(.name == "relayapi-media-processor")]
+              | if length == 0 then ""
+                elif length == 1 then .[0].image
+                else error("expected at most one relayapi-media-processor application")
+                end
+            ')"
+            if [ "$current_container_image" != "${{ steps.previous_container.outputs.image }}" ]; then
+              echo "::error::The Container image changed during this release. Worker-only rollback would create an unreviewed code/image pairing; use reviewed forward recovery instead."
+              exit 1
+            fi
+          fi
           active_version="$(bunx wrangler deployments status --json | jq -er '
             if (.versions | length) == 1 and .versions[0].percentage == 100
             then .versions[0].version_id

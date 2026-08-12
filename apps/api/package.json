@@ -28,6 +28,7 @@
 		"test:billing": "bun run scripts/run-tests-isolated.ts auth.test stripe-webhooks usage-tracking billing-flows"
 	},
 	"dependencies": {
+		"@cloudflare/containers": "catalog:",
 		"@dagrejs/dagre": "catalog:",
 		"@hono/swagger-ui": "catalog:",
 		"@hono/zod-openapi": "catalog:",

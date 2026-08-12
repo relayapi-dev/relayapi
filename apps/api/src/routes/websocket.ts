@@ -83,6 +83,7 @@ export const websocketTicket = new OpenAPIHono<{
 }>();
 
 const retrieveTicketRoute = createRoute({
+	operationId: "retrieveWebSocketTicket",
 	method: "get",
 	path: "/",
 	tags: ["Realtime"],

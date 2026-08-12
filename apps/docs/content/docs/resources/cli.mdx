@@ -1,10 +1,10 @@
 ---
 title: CLI
-description: Schedule and manage social media posts across 21 platforms from the terminal.
+description: Schedule and manage social media posts across 22 platforms from the terminal.
 icon: Terminal
 ---
 
-Schedule and manage social media posts across 21 platforms from the terminal. Built for developers and AI agents. Outputs JSON by default.
+Schedule and manage social media posts across 22 platforms from the terminal. Built for developers and AI agents. Outputs JSON by default.
 
 ## Setup
 
@@ -91,7 +91,7 @@ relay media upload ./banner.png
 | `relay posts update <id>` | Update a draft or scheduled post |
 | `relay posts delete <id>` | Delete a draft or scheduled post |
 | `relay posts retry <id>` | Retry failed targets on a post |
-| `relay posts unpublish <id>` | Unpublish from all platforms |
+| `relay posts unpublish <id>` | Attempt provider deletion for each published target; unsupported targets remain published with an error |
 
 ### Media
 
@@ -290,7 +290,10 @@ You can also use environment variables, which override the config file:
 
 ## Supported Platforms
 
-Instagram, TikTok, X (Twitter), LinkedIn, Facebook, Threads, YouTube, Bluesky, Pinterest, Reddit, Snapchat, Telegram, Google Business Profile, WhatsApp, Mastodon, Discord, and SMS.
+Instagram, TikTok, X (Twitter), LinkedIn, Facebook, Threads, YouTube, Bluesky,
+Pinterest, Reddit, Snapchat, Telegram, Google Business Profile, WhatsApp,
+Mastodon, Discord, SMS (Twilio), Beehiiv, ConvertKit, Mailchimp, Listmonk, and
+Slack.
 
 ## Links
 

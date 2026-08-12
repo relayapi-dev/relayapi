@@ -56,7 +56,10 @@ test("the registry states boundaries instead of inventing remote deadlines", () 
 	}
 });
 
-const productionTypeScriptRoots = ["apps/api/src", "packages/auth/src"] as const;
+const productionTypeScriptRoots = [
+	"apps/api/src",
+	"packages/auth/src",
+] as const;
 const productionTransportPattern =
 	/(?:fetchWithTimeout|\bfetch\s*\(|new\s+Resend|new\s+Stripe|AwsClient|\.fetch\s*\(|env\.(?:AI|IMAGES|MEDIA))/;
 const firstPartyHosts = new Set(["api.relayapi.dev", "app.relayapi.dev"]);
@@ -67,7 +70,9 @@ async function productionTypeScriptSources(): Promise<
 	const files: Array<{ path: string; source: string }> = [];
 	const glob = new Bun.Glob("**/*.{ts,tsx}");
 	for (const root of productionTypeScriptRoots) {
-		for await (const relative of glob.scan({ cwd: `${repositoryRoot}${root}` })) {
+		for await (const relative of glob.scan({
+			cwd: `${repositoryRoot}${root}`,
+		})) {
 			if (
 				relative.includes("__tests__/") ||
 				relative.endsWith(".test.ts") ||
@@ -94,8 +99,28 @@ function staticHttpsHosts(path: string, source: string): string[] {
 		true,
 	);
 	const hosts = new Set<string>();
+	function isOfficialDocumentationLiteral(node: ts.StringLiteralLike): boolean {
+		let current: ts.Node | undefined = node.parent;
+		while (current && !ts.isSourceFile(current)) {
+			if (ts.isPropertyAssignment(current)) {
+				const name = current.name;
+				if (
+					(ts.isIdentifier(name) || ts.isStringLiteralLike(name)) &&
+					name.text === "officialDocs"
+				) {
+					return true;
+				}
+			}
+			current = current.parent;
+		}
+		return false;
+	}
 	function visit(node: ts.Node): void {
-		if (ts.isStringLiteralLike(node) && node.text.startsWith("https://")) {
+		if (
+			ts.isStringLiteralLike(node) &&
+			node.text.startsWith("https://") &&
+			!isOfficialDocumentationLiteral(node)
+		) {
 			try {
 				hosts.add(new URL(node.text).hostname.toLowerCase());
 			} catch {

@@ -170,6 +170,7 @@ describe("canonical contact phone identity", () => {
 
 		expect(insertWriters.sort()).toEqual([
 			"apps/api/src/routes/contacts.ts",
+			"apps/api/src/services/ad-advanced-store.ts",
 			"apps/api/src/services/automations/webhook-receiver.ts",
 			"apps/api/src/services/contact-linker.ts",
 			"apps/api/src/services/public-growth-events.ts",

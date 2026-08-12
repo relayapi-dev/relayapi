@@ -1,0 +1,149 @@
+---
+title: Slack API
+description: Connect a Slack or GovSlack incoming webhook and publish text, Block Kit layouts, attachments, and public media links.
+icon: slack
+---
+
+## Current RelayAPI capability
+
+| Property | RelayAPI behavior |
+|----------|-------------------|
+| Platform key | `slack` |
+| Connection | Slack/GovSlack incoming-webhook bearer URL |
+| Destination | The single channel selected when the incoming webhook was created |
+| Text | Up to 40,000 characters; RelayAPI rejects instead of allowing Slack truncation |
+| Blocks | Up to 50, including blocks generated from `media` |
+| Legacy attachments | Up to 100 |
+| Payload | 1 MiB RelayAPI defensive JSON limit |
+| Scheduling | Yes, through RelayAPI |
+| Delete/reconcile | Not available through this incoming-webhook integration |
+
+## Connect an incoming webhook
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/slack \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_id": "ws_example",
+    "webhook_url": "https://hooks.slack.com/services/T00000000/B00000000/secret"
+  }'
+```
+
+RelayAPI accepts only these exact HTTPS origins:
+
+- `hooks.slack.com`
+- `hooks.slack-gov.com`
+
+The path must match `/services/{team}/{service}/{secret}`. Credentials in the URL authority, ports, query strings, fragments, and lookalike hosts are rejected.
+
+<Callout type="warn">
+Slack incoming-webhook URLs are bearer secrets. Slack actively revokes leaked URLs. Never log, publish, or commit one.
+</Callout>
+
+Slack does not provide a non-mutating endpoint that RelayAPI can use to inspect an incoming webhook. Connecting validates the issuer and URL shape, then encrypts it; the first publish is the authoritative check that the hook is active and channel policy permits posting.
+
+## Publish text
+
+```bash
+curl -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: slack-release-20260809" \
+  -d '{
+    "content": "Release 2.0 is live.",
+    "targets": ["acc_slack_example"],
+    "scheduled_at": "now",
+    "target_options": {
+      "slack": {
+        "unfurl_links": false,
+        "unfurl_media": false
+      }
+    }
+  }'
+```
+
+The connected account selects the destination. Slack incoming webhooks are bound to the channel chosen at installation, so RelayAPI does not accept a `channel` override.
+
+## Block Kit and attachments
+
+```json
+{
+  "targets": ["acc_slack_example"],
+  "scheduled_at": "now",
+  "target_options": {
+    "slack": {
+      "blocks": [
+        {
+          "type": "section",
+          "text": {"type": "mrkdwn", "text": "*Deployment complete*"}
+        }
+      ],
+      "attachments": [
+        {"color": "#2eb886", "text": "All checks passed"}
+      ]
+    }
+  }
+}
+```
+
+RelayAPI checks that `blocks` and `attachments` are arrays of objects and enforces their top-level counts. Slack remains authoritative for the schema and limits of each Block Kit/attachment object.
+
+## Media mapping
+
+Incoming webhooks reference public URLs; this integration does not upload files into Slack.
+
+- Images and GIFs become image blocks. `image_url` is limited to 3,000 characters and `alt_text` to 2,000.
+- Video and document items become Markdown links inside section blocks.
+- Every generated media block counts toward the 50-block total.
+- The source URL must remain publicly reachable by Slack.
+
+```json
+{
+  "content": "Build artifacts",
+  "targets": ["acc_slack_example"],
+  "media": [
+    {
+      "url": "https://cdn.example.com/summary.png",
+      "type": "image",
+      "alt_text": "A chart showing all build checks passing"
+    },
+    {
+      "url": "https://cdn.example.com/report.pdf",
+      "type": "document"
+    }
+  ],
+  "scheduled_at": "now"
+}
+```
+
+## `target_options.slack`
+
+| Field | Type | Behavior |
+|-------|------|----------|
+| `content` | string | Slack-specific fallback/message text |
+| `media` | array | Slack-specific media override |
+| `blocks` | object array | Custom Block Kit blocks, up to the remaining 50-block allowance |
+| `attachments` | object array | Up to 100 legacy message attachments |
+| `thread_ts` | string | Posts as a reply to an existing Slack message timestamp |
+| `unfurl_links` | boolean | Controls link unfurling |
+| `unfurl_media` | boolean | Controls media unfurling |
+
+For a threaded reply, you must obtain the parent `ts` separately. Slack's incoming-webhook response does not return the new message timestamp.
+
+## Confirmation, deletion, and retries
+
+Slack documents a successful incoming-webhook response as HTTP success with body `ok`. RelayAPI requires that exact confirmation, but Slack returns no message resource ID. A successful target therefore records `resource_id_unavailable: true` and cannot later be read or reconciled by this publisher.
+
+Incoming webhooks also do not support deleting a posted message. Disconnecting the RelayAPI account only removes RelayAPI's credential; it does not delete prior Slack messages or promise to revoke the webhook in Slack.
+
+- `429` is a definitive not-applied response; honor `Retry-After` and retry with the same RelayAPI idempotency key/body.
+- A provider `4xx` is treated as a definitive rejection. Codes such as `invalid_token`, `no_active_hooks`, `no_service`, or `team_disabled` require fixing or reconnecting the webhook.
+- A timeout, transport error, `5xx`, or HTTP success without `ok` is outcome-unknown because Slack exposes no message lookup keyed by the webhook request. Do not automatically send a duplicate.
+- Slack documents an incoming-webhook rate of approximately one message per second, with short bursts tolerated.
+
+## Official Slack references
+
+- [Sending messages using incoming webhooks](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks)
+- [Slack API rate limits](https://docs.slack.dev/apis/web-api/rate-limits/)
+- [Block Kit reference](https://api.slack.com/reference/block-kit)

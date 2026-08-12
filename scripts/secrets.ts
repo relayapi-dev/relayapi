@@ -65,6 +65,9 @@ const productionResources = JSON.parse(
 
 const developmentApiGroups = [
 	["FACEBOOK_APP_ID", "FACEBOOK_APP_SECRET"],
+	["GOOGLE_ADS_DEVELOPER_TOKEN"],
+	["TIKTOK_ADS_APP_ID", "TIKTOK_ADS_APP_SECRET"],
+	["TWITTER_ADS_CONSUMER_KEY", "TWITTER_ADS_CONSUMER_SECRET"],
 	["INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET"],
 	["THREADS_APP_ID", "THREADS_APP_SECRET"],
 	["WHATSAPP_APP_ID", "WHATSAPP_APP_SECRET"],
@@ -90,13 +93,19 @@ export const secretGroups: Record<SecretGroupName, SecretGroupSpec> = {
 				optional: [
 					"BETTER_AUTH_SECRET",
 					"RELAYAPI_DB_SSH_TARGET",
+					"OPERATIONS_ALERT_EMAIL",
+					"OPERATIONS_ALERT_WEBHOOK_URL",
 					"STRIPE_SECRET_KEY",
 					"STRIPE_PRO_PRICE_ID",
 					"STRIPE_WEBHOOK_SECRET",
 					"STRIPE_PORTAL_CONFIGURATION_ID",
+					"TIKTOK_VERIFIED_URL_PREFIXES",
 				],
 				completeGroups: developmentApiGroups,
-				exampleLiteralKeys: ["RELAYAPI_DB_SSH_TARGET"],
+				exampleLiteralKeys: [
+					"RELAYAPI_DB_SSH_TARGET",
+					"TIKTOK_VERIFIED_URL_PREFIXES",
+				],
 			},
 			{
 				id: "app-development",

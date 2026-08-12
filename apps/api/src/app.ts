@@ -31,6 +31,7 @@ import { usageTrackingMiddleware } from "./middleware/usage-tracking";
 import { workspaceValidationMiddleware } from "./middleware/workspace-validation";
 import accounts from "./routes/accounts";
 import admin from "./routes/admin";
+import adsAdvancedRouter from "./routes/ads-advanced";
 import adsRouter from "./routes/ads";
 import aiAgents from "./routes/ai-agents";
 import aiKnowledge from "./routes/ai-knowledge";
@@ -69,11 +70,13 @@ import invite from "./routes/invite";
 import inviteRedeem from "./routes/invite-redeem";
 import landingPagesRouter from "./routes/landing-pages";
 import mediaRouter from "./routes/media";
+import mediaUploadsRouter from "./routes/media-uploads";
 import oauthCallback from "./routes/oauth-callback";
 import orgSettings from "./routes/org-settings";
 import organizations from "./routes/organizations";
 import platformWebhooks from "./routes/platform-webhooks";
 import posts from "./routes/posts";
+import publishedEdits from "./routes/published-edits";
 import privacy from "./routes/privacy";
 import publicGrowth from "./routes/public-growth";
 import qrCodesRouter from "./routes/qr-codes";
@@ -84,6 +87,7 @@ import segments from "./routes/segments";
 import shortLinkRedirect from "./routes/short-link-redirect";
 import shortLinksRouter from "./routes/short-links";
 import signaturesRouter from "./routes/signatures";
+import socialActions from "./routes/social-actions";
 import streak from "./routes/streak";
 import stripeWebhooks from "./routes/stripe-webhooks";
 import subscriptionListsRouter from "./routes/subscription-lists";
@@ -95,6 +99,7 @@ import usage from "./routes/usage";
 import webhooks from "./routes/webhooks";
 import { websocketTicket, websocketUpgrade } from "./routes/websocket";
 import whatsapp from "./routes/whatsapp";
+import whatsappAdmin from "./routes/whatsapp-admin";
 import whatsappPhoneProvisioning from "./routes/whatsapp-phone-provisioning";
 import workspacesRouter from "./routes/workspaces";
 import type { Env, Variables } from "./types";
@@ -211,8 +216,9 @@ app.use("/v1/*", timed("ratelimit", rateLimitMiddleware));
 // Permission enforcement — read-only keys and workspace scoping
 app.use("/v1/*", timed("readonly", readOnlyMiddleware));
 
-// Cache parsed request body once for all downstream middleware (avoids 2-3x re-parsing).
-// MUST run before workspaceScopeMiddleware which reads parsedBody for scope validation.
+// Bound authenticated JSON and the two intentionally buffered multipart routes,
+// then seed Hono's exact-byte cache for downstream validation/idempotency/usage.
+// MUST run before workspaceScopeMiddleware, which reads parsedBody.
 app.use("/v1/*", timed("bodycache", bodyCacheMiddleware));
 
 // Validate that any referenced workspace_id belongs to the authenticated organization.
@@ -266,7 +272,14 @@ for (const path of [
 }
 for (const path of ["/v1/ads", "/v1/ads/*"]) {
 	app.use(path, async (c, next) => {
-		if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)) {
+		const isAdvancedNonSpendMutation =
+			/^\/v1\/ads\/(?:lead-forms|leads|conversion-rules|conversion-events|messaging-experiences|assets|catalogs|reports|planning)(?:\/|$)/.test(
+				c.req.path,
+			);
+		if (
+			["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+			!isAdvancedNonSpendMutation
+		) {
 			return requireManageSpendMiddleware(c, next);
 		}
 		return next();
@@ -294,12 +307,14 @@ app.use("/v1/*", timed("idempotency", idempotencyMiddleware));
 app.use("/v1/*", timed("usage", usageTrackingMiddleware));
 
 // Mount versioned routes (flat — avoids 3-level nesting that breaks OpenAPI spec generation)
+app.route("/v1/posts", publishedEdits);
 app.route("/v1/posts", posts);
 app.route("/v1/admin", admin);
 app.route("/v1/privacy", privacy);
 app.route("/v1/billing", billing);
 app.route("/v1/accounts", accounts);
 app.route("/v1/accounts", gmb);
+app.route("/v1/media", mediaUploadsRouter);
 app.route("/v1/media", mediaRouter);
 app.route("/v1/webhooks", webhooks);
 app.route("/v1/api-keys", apiKeys);
@@ -316,8 +331,10 @@ app.route("/v1/twitter", twitterEngagement);
 app.route("/v1/inbox", inbox);
 app.route("/v1/inbox", inboxAi);
 app.route("/v1/inbox", inboxFeed);
+app.route("/v1/inbox", socialActions);
 app.route("/v1/reddit", reddit);
 app.route("/v1/whatsapp", whatsapp);
+app.route("/v1/whatsapp/admin", whatsappAdmin);
 app.route("/v1/whatsapp/phone-numbers", whatsappPhoneProvisioning);
 app.route("/v1/contacts", contactsRouter);
 app.route("/v1/custom-fields", customFields);
@@ -343,6 +360,7 @@ app.route("/v1/qr-codes", qrCodesRouter);
 app.route("/v1/landing-pages", landingPagesRouter);
 app.route("/v1/short-links", shortLinksRouter);
 app.route("/v1/signatures", signaturesRouter);
+app.route("/v1/ads", adsAdvancedRouter);
 app.route("/v1/ads", adsRouter);
 app.route("/v1/auto-post-rules", autoPostRulesRouter);
 app.route("/v1", crossPostActionsRouter);
@@ -360,7 +378,7 @@ const openApiConfig: Parameters<typeof app.getOpenAPIDocument>[0] = {
 		title: "RelayAPI",
 		version: "1.0.0",
 		description:
-			"Unified social media API — post to 21 platforms via a single API",
+			"Unified social media API — post to 22 platforms via a single API",
 	},
 	servers: [{ url: "https://api.relayapi.dev" }],
 };

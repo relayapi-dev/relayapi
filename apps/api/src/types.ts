@@ -34,6 +34,8 @@ interface RelayEnvironmentOverrides {
 	// Platform OAuth credentials
 	TWITTER_CLIENT_ID?: string;
 	TWITTER_CLIENT_SECRET?: string;
+	TWITTER_ADS_CONSUMER_KEY?: string;
+	TWITTER_ADS_CONSUMER_SECRET?: string;
 	FACEBOOK_APP_ID?: string;
 	FACEBOOK_APP_SECRET?: string;
 	INSTAGRAM_APP_ID?: string;
@@ -44,6 +46,10 @@ interface RelayEnvironmentOverrides {
 	LINKEDIN_CLIENT_SECRET?: string;
 	TIKTOK_CLIENT_KEY?: string;
 	TIKTOK_CLIENT_SECRET?: string;
+	/** Comma/newline-separated HTTPS URL Prefix properties verified for the TikTok app. */
+	TIKTOK_VERIFIED_URL_PREFIXES?: string;
+	TIKTOK_ADS_APP_ID?: string;
+	TIKTOK_ADS_APP_SECRET?: string;
 	YOUTUBE_CLIENT_ID?: string;
 	YOUTUBE_CLIENT_SECRET?: string;
 	PINTEREST_APP_ID?: string;
@@ -56,6 +62,7 @@ interface RelayEnvironmentOverrides {
 	SNAPCHAT_CLIENT_SECRET?: string;
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;
+	GOOGLE_ADS_DEVELOPER_TOKEN?: string;
 	WHATSAPP_APP_ID?: string;
 	WHATSAPP_APP_SECRET?: string;
 	WHATSAPP_CONFIG_ID?: string;

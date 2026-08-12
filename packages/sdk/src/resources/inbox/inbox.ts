@@ -1,7 +1,7 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-import { APIResource } from '../../core/resource';
-import * as ConversationsAPI from './conversations';
+import { APIResource } from "../../core/resource";
+import * as ConversationsAPI from "./conversations";
 import {
   ConversationGetResponse,
   ConversationListParams,
@@ -9,10 +9,14 @@ import {
   ConversationUpdateParams,
   ConversationUpdateResponse,
   Conversations,
+  InboxMessagePlatformData,
   InboxNote,
+  InboxSocialMutationOperation,
   MessageActionResponse,
   MessageAddReactionParams,
   MessageDeleteParams,
+  MessageEditParams,
+  MessageReadReceiptParams,
   MessageRemoveReactionParams,
   MessageSendParams,
   MessageSendResponse,
@@ -22,33 +26,45 @@ import {
   NoteListResponse,
   NoteResponse,
   NoteUpdateParams,
-} from './conversations';
-import * as CommentsAPI from './comments/comments';
+} from "./conversations";
+import * as CommentsAPI from "./comments/comments";
 import {
   CommentDeleteResponse,
+  CommentEditParams,
   CommentListParams,
   CommentListResponse,
   CommentPrivateReplyParams,
   CommentPrivateReplyResponse,
+  CommentModerateParams,
   CommentReplyParams,
   CommentReplyResponse,
   CommentRetrieveParams,
   CommentRetrieveResponse,
   Comments,
-} from './comments/comments';
-import * as ReviewsAPI from './reviews/reviews';
-import { ReviewListParams, ReviewListResponse, Reviews } from './reviews/reviews';
-import { APIPromise } from '../../core/api-promise';
-import { RequestOptions } from '../../internal/request-options';
+} from "./comments/comments";
+import * as ReviewsAPI from "./reviews/reviews";
+import {
+  ReviewListParams,
+  ReviewListResponse,
+  Reviews,
+} from "./reviews/reviews";
+import { APIPromise } from "../../core/api-promise";
+import { buildHeaders } from "../../internal/headers";
+import { RequestOptions } from "../../internal/request-options";
+import { path } from "../../internal/utils/path";
 
 export class Inbox extends APIResource {
   comments: CommentsAPI.Comments = new CommentsAPI.Comments(this._client);
-  conversations: ConversationsAPI.Conversations = new ConversationsAPI.Conversations(this._client);
+  conversations: ConversationsAPI.Conversations =
+    new ConversationsAPI.Conversations(this._client);
   reviews: ReviewsAPI.Reviews = new ReviewsAPI.Reviews(this._client);
 
   /** Classify up to 50 inbox messages with Workers AI. */
-  classify(body: InboxClassifyParams, options?: RequestOptions): APIPromise<InboxClassifyResponse> {
-    return this._client.post('/v1/inbox/classify', { body, ...options });
+  classify(
+    body: InboxClassifyParams,
+    options?: RequestOptions,
+  ): APIPromise<InboxClassifyResponse> {
+    return this._client.post("/v1/inbox/classify", { body, ...options });
   }
 
   /** Generate candidate replies for a persisted conversation. */
@@ -56,12 +72,15 @@ export class Inbox extends APIResource {
     body: InboxSuggestReplyParams,
     options?: RequestOptions,
   ): APIPromise<InboxSuggestReplyResponse> {
-    return this._client.post('/v1/inbox/suggest-reply', { body, ...options });
+    return this._client.post("/v1/inbox/suggest-reply", { body, ...options });
   }
 
   /** Summarize a persisted conversation. */
-  summarize(body: InboxSummarizeParams, options?: RequestOptions): APIPromise<InboxSummarizeResponse> {
-    return this._client.post('/v1/inbox/summarize', { body, ...options });
+  summarize(
+    body: InboxSummarizeParams,
+    options?: RequestOptions,
+  ): APIPromise<InboxSummarizeResponse> {
+    return this._client.post("/v1/inbox/summarize", { body, ...options });
   }
 
   /** List conversations ordered by their calculated priority score. */
@@ -69,7 +88,7 @@ export class Inbox extends APIResource {
     query: InboxPrioritiesParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<InboxPrioritiesResponse> {
-    return this._client.get('/v1/inbox/priorities', { query, ...options });
+    return this._client.get("/v1/inbox/priorities", { query, ...options });
   }
 
   /** Search across persisted inbox messages. */
@@ -77,7 +96,7 @@ export class Inbox extends APIResource {
     query: InboxSearchParams,
     options?: RequestOptions,
   ): APIPromise<InboxSearchResponse> {
-    return this._client.get('/v1/inbox/search', { query, ...options });
+    return this._client.get("/v1/inbox/search", { query, ...options });
   }
 
   /** Retrieve aggregate inbox metrics. */
@@ -85,36 +104,77 @@ export class Inbox extends APIResource {
     query: InboxStatsParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<InboxStatsResponse> {
-    return this._client.get('/v1/inbox/stats', { query, ...options });
+    return this._client.get("/v1/inbox/stats", { query, ...options });
+  }
+
+  /** Set a provider-native reaction, vote, or rating on a post. */
+  engagePost(
+    providerPostID: string,
+    params: InboxEngagePostParams,
+    options?: RequestOptions,
+  ): APIPromise<InboxSocialMutationOperation> {
+    const { idempotency_key, ...body } = params;
+    return this._client.put(
+      path`/v1/inbox/posts/${providerPostID}/engagement`,
+      {
+        body,
+        ...options,
+        headers: buildHeaders([
+          { "Idempotency-Key": idempotency_key },
+          options?.headers,
+        ]),
+      },
+    );
+  }
+
+  /** List normalized story and post mentions for one exact account. */
+  listMentions(
+    query: InboxMentionListParams,
+    options?: RequestOptions,
+  ): APIPromise<InboxMentionListResponse> {
+    return this._client.get("/v1/inbox/mentions", { query, ...options });
+  }
+
+  /** Retrieve a durable message, comment, read-receipt, or engagement mutation. */
+  getSocialMutation(
+    operationID: string,
+    query: InboxSocialMutationGetParams,
+    options?: RequestOptions,
+  ): APIPromise<InboxSocialMutationOperation> {
+    return this._client.get(path`/v1/inbox/operations/${operationID}`, {
+      query,
+      ...options,
+    });
   }
 }
 
 export type InboxPlatform =
-  | 'twitter'
-  | 'instagram'
-  | 'facebook'
-  | 'linkedin'
-  | 'tiktok'
-  | 'youtube'
-  | 'pinterest'
-  | 'reddit'
-  | 'bluesky'
-  | 'threads'
-  | 'telegram'
-  | 'snapchat'
-  | 'googlebusiness'
-  | 'whatsapp'
-  | 'mastodon'
-  | 'discord'
-  | 'sms'
-  | 'beehiiv'
-  | 'convertkit'
-  | 'mailchimp'
-  | 'listmonk';
+  | "twitter"
+  | "instagram"
+  | "facebook"
+  | "linkedin"
+  | "tiktok"
+  | "youtube"
+  | "pinterest"
+  | "reddit"
+  | "bluesky"
+  | "threads"
+  | "telegram"
+  | "snapchat"
+  | "googlebusiness"
+  | "whatsapp"
+  | "mastodon"
+  | "discord"
+  | "sms"
+  | "beehiiv"
+  | "convertkit"
+  | "mailchimp"
+  | "listmonk"
+  | "slack";
 
-export type InboxConversationType = 'comment_thread' | 'dm' | 'review';
-export type InboxConversationStatus = 'open' | 'archived' | 'snoozed';
-export type InboxDirection = 'inbound' | 'outbound';
+export type InboxConversationType = "comment_thread" | "dm" | "review";
+export type InboxConversationStatus = "open" | "archived" | "snoozed";
+export type InboxDirection = "inbound" | "outbound";
 
 export interface InboxClassifyParams {
   messages: Array<{ id?: string; text: string }>;
@@ -122,9 +182,15 @@ export interface InboxClassifyParams {
 
 export type InboxClassifyResponse = Array<{
   id?: string;
-  sentiment: { score: number; label: 'positive' | 'neutral' | 'negative' };
-  intent: 'question' | 'complaint' | 'compliment' | 'spam' | 'feedback' | 'general';
-  urgency: 'high' | 'medium' | 'low';
+  sentiment: { score: number; label: "positive" | "neutral" | "negative" };
+  intent:
+    | "question"
+    | "complaint"
+    | "compliment"
+    | "spam"
+    | "feedback"
+    | "general";
+  urgency: "high" | "medium" | "low";
   requires_response: boolean;
 }>;
 
@@ -224,6 +290,48 @@ export interface InboxStatsResponse {
   by_platform: Record<string, { conversations: number; unread: number }>;
 }
 
+export interface InboxEngagePostParams {
+  idempotency_key: string;
+  account_id: string;
+  action:
+    | "like"
+    | "unlike"
+    | "upvote"
+    | "downvote"
+    | "clear_vote"
+    | "dislike"
+    | "clear_rating";
+}
+
+export interface InboxMentionListParams {
+  account_id: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface InboxMention {
+  id: string;
+  conversation_id: string;
+  account_id: string;
+  platform: InboxPlatform;
+  provider_message_id: string;
+  author_name: string | null;
+  author_platform_id: string | null;
+  text: string | null;
+  type: "story_mention" | "post_mention";
+  created_at: string;
+}
+
+export interface InboxMentionListResponse {
+  data: InboxMention[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface InboxSocialMutationGetParams {
+  account_id: string;
+}
+
 Inbox.Comments = Comments;
 Inbox.Conversations = Conversations;
 Inbox.Reviews = Reviews;
@@ -234,6 +342,8 @@ export declare namespace Inbox {
     type CommentRetrieveResponse as CommentRetrieveResponse,
     type CommentListResponse as CommentListResponse,
     type CommentDeleteResponse as CommentDeleteResponse,
+    type CommentEditParams as CommentEditParams,
+    type CommentModerateParams as CommentModerateParams,
     type CommentPrivateReplyResponse as CommentPrivateReplyResponse,
     type CommentReplyResponse as CommentReplyResponse,
     type CommentRetrieveParams as CommentRetrieveParams,
@@ -249,6 +359,8 @@ export declare namespace Inbox {
     type ConversationUpdateResponse as ConversationUpdateResponse,
     type MessageSendResponse as MessageSendResponse,
     type MessageActionResponse as MessageActionResponse,
+    type InboxSocialMutationOperation as InboxSocialMutationOperation,
+    type InboxMessagePlatformData as InboxMessagePlatformData,
     type InboxNote as InboxNote,
     type NoteListResponse as NoteListResponse,
     type NoteResponse as NoteResponse,
@@ -256,6 +368,8 @@ export declare namespace Inbox {
     type ConversationListParams as ConversationListParams,
     type ConversationUpdateParams as ConversationUpdateParams,
     type MessageSendParams as MessageSendParams,
+    type MessageEditParams as MessageEditParams,
+    type MessageReadReceiptParams as MessageReadReceiptParams,
     type MessageSendTypingParams as MessageSendTypingParams,
     type MessageAddReactionParams as MessageAddReactionParams,
     type MessageRemoveReactionParams as MessageRemoveReactionParams,
@@ -288,5 +402,10 @@ export declare namespace Inbox {
     type InboxSearchResponse as InboxSearchResponse,
     type InboxStatsParams as InboxStatsParams,
     type InboxStatsResponse as InboxStatsResponse,
+    type InboxEngagePostParams as InboxEngagePostParams,
+    type InboxMentionListParams as InboxMentionListParams,
+    type InboxMention as InboxMention,
+    type InboxMentionListResponse as InboxMentionListResponse,
+    type InboxSocialMutationGetParams as InboxSocialMutationGetParams,
   };
 }

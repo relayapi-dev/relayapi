@@ -3,8 +3,8 @@ import type { z } from "@hono/zod-openapi";
 import { Relay } from "../../../../packages/sdk/src/client";
 import type { CrossPostActionResponse as SdkCrossPostAction } from "../../../../packages/sdk/src/resources/cross-post-actions";
 import type {
-	PostBulkCreateResponse,
 	PostBulkCreateParams,
+	PostBulkCreateResponse,
 	PostCreateParams,
 	PostCreateResponse,
 	PostListParams,
@@ -19,9 +19,14 @@ import type {
 	PostUnpublishResponse,
 	PostUpdateResponse,
 } from "../../../../packages/sdk/src/resources/posts/posts";
-import { FilterParams, type Platform } from "../schemas/common";
+import type { PublisherTargetOptions as SdkPublisherTargetOptions } from "../../../../packages/sdk/src/resources/posts/publisher-options";
+import type { ThreadCreateParams } from "../../../../packages/sdk/src/resources/threads";
+import type { ValidateValidatePostParams } from "../../../../packages/sdk/src/resources/tools/validate";
+import { FilterParams, PLATFORMS, type Platform } from "../schemas/common";
 import { CrossPostActionResponse } from "../schemas/cross-post-actions";
 import type { CreatePostBody, PostResponse } from "../schemas/posts";
+import type { CreateThreadBody } from "../schemas/threads";
+import type { ValidatePostBody } from "../schemas/tools";
 
 type Equal<A, B> =
 	(<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -35,6 +40,8 @@ type ApiPost = z.infer<typeof PostResponse>;
 type ApiCrossPostAction = z.infer<typeof CrossPostActionResponse>;
 type ApiCreatePost = z.input<typeof CreatePostBody>;
 type ApiListPosts = z.input<typeof FilterParams>;
+type ApiThreadCreate = z.input<typeof CreateThreadBody>;
+type ApiValidatePost = z.input<typeof ValidatePostBody>;
 type SdkPost =
 	| PostCreateResponse
 	| PostRetrieveResponse
@@ -88,6 +95,37 @@ type _PublishOperationParity = Assert<
 type _CrossPostActionParity = Assert<
 	Equal<ApiCrossPostAction, SdkCrossPostAction>
 >;
+type _ApiThreadTargetOptionsParity = Assert<
+	Equal<ApiThreadCreate["target_options"], ApiCreatePost["target_options"]>
+>;
+type _ApiValidateTargetOptionsParity = Assert<
+	Equal<ApiValidatePost["target_options"], ApiCreatePost["target_options"]>
+>;
+type _SdkThreadTargetOptionsParity = Assert<
+	Equal<
+		ThreadCreateParams["target_options"],
+		PostCreateParams["target_options"]
+	>
+>;
+type _SdkValidateTargetOptionsParity = Assert<
+	Equal<
+		ValidateValidatePostParams["target_options"],
+		PostCreateParams["target_options"]
+	>
+>;
+type _ThreadMediaAltTextParity = Assert<
+	Equal<
+		NonNullable<
+			ThreadCreateParams["items"][number]["media"]
+		>[number]["alt_text"],
+		NonNullable<PostCreateParams["media"]>[number]["alt_text"]
+	>
+>;
+
+const _accountAliasOptions = {
+	acc_contract: { board_id: "board_contract" },
+} satisfies SdkPublisherTargetOptions;
+const _accountAliasBoard: string = _accountAliasOptions.acc_contract.board_id;
 
 const _reconcileRequest: PostReconcileTargetParams = {
 	outcome: "failed",
@@ -105,6 +143,37 @@ const _reconcileResponse: PostReconcileTargetResponse = {
 };
 
 describe("API/SDK contract parity", () => {
+	it("keeps every broad SDK social-platform union aligned with the canonical registry", async () => {
+		const sdkResources = new URL(
+			"../../../../packages/sdk/src/resources/",
+			import.meta.url,
+		).pathname;
+		const glob = new Bun.Glob("**/*.ts");
+		let checked = 0;
+
+		for await (const relativePath of glob.scan({ cwd: sdkResources })) {
+			const source = await Bun.file(`${sdkResources}${relativePath}`).text();
+			const platformUnion = /\bplatform\??:\s*((?:\|\s*["'][^"']+["']\s*)+);/g;
+			for (const match of source.matchAll(platformUnion)) {
+				const members = [...(match[1] ?? "").matchAll(/["']([^"']+)["']/g)].map(
+					(member) => member[1] ?? "",
+				);
+				const socialMembers = members.filter((member) =>
+					(PLATFORMS as readonly string[]).includes(member),
+				);
+				// Small platform subsets are endpoint-specific. A broad social union must
+				// be the complete canonical set instead of a copied historical snapshot.
+				if (socialMembers.length < 10) continue;
+				checked++;
+				expect([...new Set(socialMembers)].sort(), relativePath).toEqual(
+					[...PLATFORMS].sort(),
+				);
+			}
+		}
+
+		expect(checked).toBeGreaterThan(20);
+	});
+
 	it("serializes product schedule separately from cross-post retry timing", async () => {
 		const route = await Bun.file(
 			new URL("../routes/cross-post-actions.ts", import.meta.url),

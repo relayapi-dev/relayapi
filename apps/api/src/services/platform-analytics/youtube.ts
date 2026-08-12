@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -105,7 +109,6 @@ interface YTVideosResponse {
 	}[];
 }
 
-
 // ---------------------------------------------------------------------------
 // Helper: authenticated GET against the YouTube Analytics API
 // ---------------------------------------------------------------------------
@@ -123,13 +126,13 @@ async function ytAnalyticsFetch(
 			headers: { Authorization: `Bearer ${accessToken}` },
 		});
 		if (!res.ok) {
-			const errorBody = await res.text();
+			const errorBody = await readProviderText(res);
 			console.error(
 				`[youtube-analytics] Analytics API error ${res.status}: ${errorBody}`,
 			);
 			return null;
 		}
-		return (await res.json()) as YTAnalyticsResponse;
+		return (await readProviderJson(res)) as YTAnalyticsResponse;
 	} catch (err) {
 		console.error("[youtube-analytics] Network error (analytics):", err);
 		return null;
@@ -154,18 +157,15 @@ async function ytDataFetch<T = unknown>(
 			headers: { Authorization: `Bearer ${accessToken}` },
 		});
 		if (!res.ok) {
-			const errorBody = await res.text();
+			const errorBody = await readProviderText(res);
 			console.error(
 				`[youtube-analytics] Data API error ${res.status} for ${path}: ${errorBody}`,
 			);
 			return null;
 		}
-		return (await res.json()) as T;
+		return (await readProviderJson(res)) as T;
 	} catch (err) {
-		console.error(
-			`[youtube-analytics] Network error (data) for ${path}:`,
-			err,
-		);
+		console.error(`[youtube-analytics] Network error (data) for ${path}:`, err);
 		return null;
 	}
 }
@@ -175,10 +175,7 @@ async function ytDataFetch<T = unknown>(
 // ---------------------------------------------------------------------------
 
 /** Get column index by name from the analytics response */
-function colIndex(
-	response: YTAnalyticsResponse,
-	columnName: string,
-): number {
+function colIndex(response: YTAnalyticsResponse, columnName: string): number {
 	return response.columnHeaders.findIndex((h) => h.name === columnName);
 }
 
@@ -274,10 +271,7 @@ export const youtubeAnalytics: PlatformAnalyticsFetcher = {
 		if (current?.rows?.length) {
 			const row = current.rows[0] ?? [];
 			curViews = numVal(row, colIndex(current, "views"));
-			curWatchTime = numVal(
-				row,
-				colIndex(current, "estimatedMinutesWatched"),
-			);
+			curWatchTime = numVal(row, colIndex(current, "estimatedMinutesWatched"));
 			curSubsGained = numVal(row, colIndex(current, "subscribersGained"));
 			curSubsLost = numVal(row, colIndex(current, "subscribersLost"));
 			curLikes = numVal(row, colIndex(current, "likes"));
@@ -299,10 +293,7 @@ export const youtubeAnalytics: PlatformAnalyticsFetcher = {
 			prevLikes = numVal(row, colIndex(previous, "likes"));
 			prevComments = numVal(row, colIndex(previous, "comments"));
 			prevShares = numVal(row, colIndex(previous, "shares"));
-			prevSubsGained = numVal(
-				row,
-				colIndex(previous, "subscribersGained"),
-			);
+			prevSubsGained = numVal(row, colIndex(previous, "subscribersGained"));
 			prevSubsLost = numVal(row, colIndex(previous, "subscribersLost"));
 		}
 
@@ -361,9 +352,7 @@ export const youtubeAnalytics: PlatformAnalyticsFetcher = {
 
 		// Collect video IDs for the Data API lookup
 		const videoColIdx = colIndex(analytics, "video");
-		const videoIds = analytics.rows.map((row) =>
-			strVal(row, videoColIdx),
-		);
+		const videoIds = analytics.rows.map((row) => strVal(row, videoColIdx));
 
 		// Fetch video details (snippet) in batches of 50
 		const snippetMap = new Map<string, YTVideoSnippet>();
@@ -400,9 +389,7 @@ export const youtubeAnalytics: PlatformAnalyticsFetcher = {
 
 			const engagement = likes + comments + shares;
 			const engagementRate =
-				views > 0
-					? Math.round((engagement / views) * 10000) / 100
-					: 0;
+				views > 0 ? Math.round((engagement / views) * 10000) / 100 : 0;
 
 			results.push({
 				platform_post_id: videoId,

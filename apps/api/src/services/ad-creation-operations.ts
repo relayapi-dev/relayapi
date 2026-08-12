@@ -1,6 +1,7 @@
 import {
 	adAccounts,
 	adCampaigns,
+	adConnections,
 	adCreationOperations,
 	ads,
 	createDb,
@@ -21,11 +22,15 @@ import {
 } from "../lib/durable-credential-authority";
 import { durableOperationHashes } from "../lib/durable-operation";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
+import type {
+	AdCampaignProviderOptions,
+	AdCreateProviderOptions,
+} from "../schemas/ad-provider-options";
 import { getAdPlatformAdapter } from "./ad-platforms";
 import type {
 	AdPlatform,
 	AdPlatformAdapter,
+	AdProviderCredentials,
 	AdProviderObjectPhase,
 	AdTargeting,
 } from "./ad-platforms/types";
@@ -37,6 +42,7 @@ import {
 	type AdProviderBoundaryContext,
 	lockAdProviderBoundary,
 } from "./ad-provider-boundary";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 import {
 	adoptDurableUsageReservationInTransaction,
 	settleLinkedDurableUsage,
@@ -706,6 +712,7 @@ interface DurableAdRequest {
 	bidAmount?: number;
 	tracking?: { pixelId?: string; urlTags?: string };
 	specialAdCategories?: string[];
+	providerOptions?: AdCampaignProviderOptions | AdCreateProviderOptions;
 }
 
 export interface AdOperationCampaignProjectionInput {
@@ -968,7 +975,9 @@ export async function executeClaimedAdCreationOperation(
 								startDate: request.startDate,
 								endDate: request.endDate,
 								specialAdCategories: request.specialAdCategories,
+								providerOptions: request.providerOptions,
 							},
+							context.credentials,
 						),
 					touched,
 				);
@@ -989,6 +998,8 @@ export async function executeClaimedAdCreationOperation(
 									"platformCampaignId",
 								),
 								name: providerName,
+								objective,
+								currency: request.currency,
 								mode: operation.kind === "boost_post" ? "boost" : "standard",
 								targeting: request.targeting,
 								dailyBudgetCents: request.dailyBudgetCents,
@@ -1000,7 +1011,9 @@ export async function executeClaimedAdCreationOperation(
 										: request.endDate,
 								bidAmount: request.bidAmount,
 								pixelId: request.tracking?.pixelId,
+								providerOptions: request.providerOptions,
 							},
+							context.credentials,
 						),
 					touched,
 				);
@@ -1057,36 +1070,58 @@ export async function executeClaimedAdCreationOperation(
 			platformCreativeId: platformCreativeId ?? null,
 			platformAdId: platformAdId ?? null,
 		});
+		const creativeParams = {
+			name: providerName,
+			headline: request.headline,
+			body: request.body,
+			callToAction: request.callToAction,
+			linkUrl: request.linkUrl,
+			imageUrl: request.imageUrl,
+			videoUrl: request.videoUrl,
+			platformPostId:
+				operation.kind === "boost_post"
+					? requiredRequestString(request.platformPostId, "platformPostId")
+					: undefined,
+			urlTags: request.tracking?.urlTags,
+			providerOptions:
+				request.providerOptions?.platform === operation.platform &&
+				"creative" in request.providerOptions
+					? request.providerOptions
+					: undefined,
+		};
+		const platformAdParams = {
+			adSetId: platformAdSetId,
+			creativeId: platformCreativeId ?? "",
+			name: providerName,
+			active: operation.kind === "boost_post",
+			providerOptions: creativeParams.providerOptions,
+		};
 		if (phasePlan.includes("creative")) {
-			platformCreativeId = await createProviderObject(
-				env,
-				db,
-				claim,
-				"creative",
-				(context) =>
-					context.adapter.creation.createCreative(
-						context.accessToken,
-						context.platformAdAccountId,
-						{
-							name: providerName,
-							headline: request.headline,
-							body: request.body,
-							callToAction: request.callToAction,
-							linkUrl: request.linkUrl,
-							imageUrl: request.imageUrl,
-							videoUrl: request.videoUrl,
-							platformPostId:
-								operation.kind === "boost_post"
-									? requiredRequestString(
-											request.platformPostId,
-											"platformPostId",
-										)
-									: undefined,
-							urlTags: request.tracking?.urlTags,
-						},
-					),
-				touched,
-			);
+			const context = await markAdProviderBoundary(env, db, claim, "creative");
+			touched();
+			if (context.adapter.creation.createCreativeAndAd) {
+				const result = await context.adapter.creation.createCreativeAndAd(
+					context.accessToken,
+					context.platformAdAccountId,
+					creativeParams,
+					platformAdParams,
+					context.credentials,
+				);
+				platformCreativeId = result.creativeId;
+				platformAdId = result.adId;
+				await confirmAdProviderBoundary(db, claim, {
+					platformCreativeId,
+					platformAdId,
+				});
+			} else {
+				platformCreativeId = await context.adapter.creation.createCreative(
+					context.accessToken,
+					context.platformAdAccountId,
+					creativeParams,
+					context.credentials,
+				);
+				await confirmAdProviderBoundary(db, claim, { platformCreativeId });
+			}
 		}
 		if (!platformCreativeId) {
 			throw new AdPlatformError(
@@ -1094,7 +1129,7 @@ export async function executeClaimedAdCreationOperation(
 				"Could not resolve the platform creative",
 			);
 		}
-		if (phasePlan.includes("ad")) {
+		if (phasePlan.includes("ad") && !platformAdId) {
 			platformAdId = await createProviderObject(
 				env,
 				db,
@@ -1105,14 +1140,14 @@ export async function executeClaimedAdCreationOperation(
 						context.accessToken,
 						context.platformAdAccountId,
 						{
+							...platformAdParams,
 							adSetId: platformAdSetId,
 							creativeId: requiredRequestString(
 								platformCreativeId,
 								"platformCreativeId",
 							),
-							name: providerName,
-							active: operation.kind === "boost_post",
 						},
+						context.credentials,
 					),
 				touched,
 			);
@@ -1139,6 +1174,7 @@ export async function executeClaimedAdCreationOperation(
 				async () =>
 					(await markAdProviderBoundary(env, db, claim, "activation"))
 						.accessToken,
+				context.credentials,
 			);
 			await confirmAdProviderBoundary(db, claim, {});
 		}
@@ -1290,6 +1326,7 @@ async function resumeReconciledOperation(
 	operation: Operation,
 	adapter: AdPlatformAdapter,
 	accessToken: string,
+	credentials: AdProviderCredentials,
 	platformAdAccountId: string,
 ): Promise<ClaimedAdOperation | null> {
 	let providerIds: AdOperationProviderIds = {};
@@ -1310,6 +1347,7 @@ async function resumeReconciledOperation(
 				accessToken,
 				platformCampaignId,
 				platformAdSetId,
+				credentials,
 			);
 			if (!activated) {
 				const claim = { row: operation, leaseToken: operation.leaseToken };
@@ -1327,6 +1365,7 @@ async function resumeReconciledOperation(
 						async () =>
 							(await markAdProviderBoundary(env, db, claim, "activation"))
 								.accessToken,
+						context.credentials,
 					);
 					await confirmAdProviderBoundary(db, claim, {});
 				} catch (error) {
@@ -1352,18 +1391,43 @@ async function resumeReconciledOperation(
 				return { row: resumed, leaseToken: resumed.leaseToken };
 			}
 		} else {
-			const id = await adapter.creation.findCreatedObject(
-				accessToken,
-				platformAdAccountId,
-				{
-					phase: operation.phase,
-					marker: adProviderCorrelationMarker(operation.id),
-					platformCampaignId: operation.platformCampaignId ?? undefined,
-					platformAdSetId: operation.platformAdSetId ?? undefined,
-				},
-			);
-			if (!id) return null;
-			providerIds = providerIdsForPhase(operation.phase, id);
+			const correlation = {
+				phase: operation.phase,
+				marker: adProviderCorrelationMarker(operation.id),
+				platformCampaignId: operation.platformCampaignId ?? undefined,
+				platformAdSetId: operation.platformAdSetId ?? undefined,
+				platformCreativeId: operation.platformCreativeId ?? undefined,
+			};
+			if (
+				operation.phase === "creative" &&
+				adapter.creation.coalescesCreativeAndAd
+			) {
+				if (!adapter.creation.findCreatedCreativeAndAd) {
+					throw new Error(
+						"A coalesced creative/ad adapter must implement pair correlation",
+					);
+				}
+				const pair = await adapter.creation.findCreatedCreativeAndAd(
+					accessToken,
+					platformAdAccountId,
+					correlation,
+					credentials,
+				);
+				if (!pair) return null;
+				providerIds = {
+					platformCreativeId: pair.creativeId,
+					platformAdId: pair.adId,
+				};
+			} else {
+				const id = await adapter.creation.findCreatedObject(
+					accessToken,
+					platformAdAccountId,
+					correlation,
+					credentials,
+				);
+				if (!id) return null;
+				providerIds = providerIdsForPhase(operation.phase, id);
+			}
 		}
 	}
 
@@ -1486,19 +1550,27 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 
 		try {
 			const [account] = await db
-				.select({ adAccount: adAccounts, socialAccount: socialAccounts })
+				.select({
+					adAccount: adAccounts,
+					adConnection: adConnections,
+					socialAccount: socialAccounts,
+				})
 				.from(adAccounts)
-				.innerJoin(
+				.leftJoin(
+					adConnections,
+					and(
+						eq(adAccounts.adConnectionId, adConnections.id),
+						eq(adConnections.organizationId, operation.organizationId),
+					),
+				)
+				.leftJoin(
 					socialAccounts,
 					and(
 						eq(adAccounts.socialAccountId, socialAccounts.id),
 						eq(socialAccounts.organizationId, operation.organizationId),
 					),
 				)
-				.innerJoin(
-					organization,
-					eq(organization.id, socialAccounts.organizationId),
-				)
+				.innerJoin(organization, eq(organization.id, operation.organizationId))
 				.where(
 					and(
 						eq(adAccounts.id, operation.adAccountId),
@@ -1508,22 +1580,28 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 							: isNull(adAccounts.workspaceId),
 						eq(adAccounts.platform, operation.platform),
 						eq(adAccounts.status, "active"),
-						operation.workspaceId
-							? eq(socialAccounts.workspaceId, operation.workspaceId)
-							: isNull(socialAccounts.workspaceId),
-						eq(socialAccounts.lifecycleStatus, "active"),
 						eq(organization.lifecycleStatus, "active"),
 					),
 				)
 				.limit(1);
-			if (!account) {
+			const authorityWorkspaceId = account?.adConnection
+				? account.adConnection.workspaceId
+				: account?.socialAccount?.workspaceId;
+			const authorityIsActive = account?.adConnection
+				? account.adConnection.status === "active"
+				: account?.socialAccount?.lifecycleStatus === "active";
+			if (
+				!account ||
+				!authorityIsActive ||
+				authorityWorkspaceId !== operation.workspaceId
+			) {
 				await db
 					.update(adCreationOperations)
 					.set({
 						status: "manual_review",
 						leaseExpiresAt: null,
 						lastError:
-							"Paid operation cannot resume because its organization or social account is inactive",
+							"Paid operation cannot resume because its organization or provider authority is inactive",
 						updatedAt: new Date(),
 					})
 					.where(
@@ -1538,16 +1616,20 @@ export async function reconcileAdCreationOperations(env: Env): Promise<void> {
 			const adapter = getAdPlatformAdapter(account.adAccount.platform);
 			if (!adapter)
 				throw new Error("Ad adapter is unavailable for reconciliation");
-			const accessToken = await resolveAdsAccessToken(
-				account.socialAccount,
+			const credentials = await resolveAdProviderCredentials({
+				platform: account.adAccount.platform,
+				providerAdAccountId: account.adAccount.platformAdAccountId,
+				adConnection: account.adConnection,
+				legacySocialAccount: account.socialAccount,
 				env,
-			);
+			});
 			const resumed = await resumeReconciledOperation(
 				env,
 				db,
 				operation,
 				adapter,
-				accessToken,
+				credentials.accessToken,
+				credentials,
 				account.adAccount.platformAdAccountId,
 			);
 			if (!resumed) {

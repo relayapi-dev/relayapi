@@ -3,6 +3,7 @@ import {
 	fetchPublicUrl,
 } from "../lib/fetch-public-url";
 import { createStreamingMultipartBody } from "../lib/multipart-stream";
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
 	PublishError,
@@ -101,7 +102,9 @@ async function _uploadMediaAsset(
 	);
 
 	if (!leaseRes.ok) {
-		const errText = await leaseRes.text().catch(() => leaseRes.statusText);
+		const errText = await readPublisherText(leaseRes).catch(
+			() => leaseRes.statusText,
+		);
 		const raw = `HTTP ${leaseRes.status}\n${errText}`;
 		throw new PublishError(`Reddit media asset lease failed: ${errText}`, {
 			statusCode: leaseRes.status,
@@ -109,7 +112,9 @@ async function _uploadMediaAsset(
 		});
 	}
 
-	const leaseData = (await leaseRes.json()) as RedditMediaAssetResponse;
+	const leaseData = (await readPublisherJson(
+		leaseRes,
+	)) as RedditMediaAssetResponse;
 	const { args, asset } = leaseData;
 
 	// Step 2: Fetch the file binary from the provided URL
@@ -230,7 +235,7 @@ async function _submitGalleryPost(
 	});
 
 	if (!res.ok) {
-		const errText = await res.text().catch(() => res.statusText);
+		const errText = await readPublisherText(res).catch(() => res.statusText);
 		const raw = `HTTP ${res.status}\n${errText}`;
 		throw new PublishError(`Reddit gallery submit failed: ${errText}`, {
 			statusCode: res.status,
@@ -238,7 +243,7 @@ async function _submitGalleryPost(
 		});
 	}
 
-	return res.json() as Promise<RedditGallerySubmitResponse>;
+	return readPublisherJson(res) as Promise<RedditGallerySubmitResponse>;
 }
 
 interface RedditSubmitResponse {
@@ -334,7 +339,7 @@ async function submitPost(
 	});
 
 	if (!res.ok) {
-		const errText = await res.text().catch(() => res.statusText);
+		const errText = await readPublisherText(res).catch(() => res.statusText);
 		const raw = `HTTP ${res.status}\n${errText}`;
 		throw new PublishError(`Reddit submit failed: ${errText}`, {
 			statusCode: res.status,
@@ -342,7 +347,7 @@ async function submitPost(
 		});
 	}
 
-	return res.json() as Promise<RedditSubmitResponse>;
+	return readPublisherJson(res) as Promise<RedditSubmitResponse>;
 }
 
 export const redditPublisher: Publisher = {
@@ -354,13 +359,16 @@ export const redditPublisher: Publisher = {
 			const opts = request.target_options;
 
 			// Subreddit is required
-			const subreddit = opts.subreddit as string | undefined;
+			const subreddit =
+				(opts.subreddit as string | undefined) ??
+				(request.account.metadata?.default_subreddit as string | undefined);
 			if (!subreddit) {
 				return {
 					success: false,
 					error: {
 						code: "SUBREDDIT_REQUIRED",
-						message: "Reddit requires a subreddit in target_options.",
+						message:
+							"Reddit requires a subreddit in target_options or the connected account's default_subreddit.",
 					},
 				};
 			}

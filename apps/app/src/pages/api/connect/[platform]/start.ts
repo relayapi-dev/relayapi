@@ -14,6 +14,7 @@ export const GET: APIRoute = async (ctx) => {
 			{
 				redirect_url: url.searchParams.get("redirect_url") || undefined,
 				method: url.searchParams.get("method") || undefined,
+				instance_url: url.searchParams.get("instance_url") || undefined,
 				headless: url.searchParams.get("headless") || undefined,
 				workspace_id: url.searchParams.get("workspace_id") || undefined,
 			},

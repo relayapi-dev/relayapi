@@ -17,6 +17,7 @@ export const RESOURCE_NAMES = {
 		thumbnails: "relayapi-selfhost-thumbnails",
 		publicAssets: "relayapi-selfhost-public-assets",
 		queueRescue: "relayapi-selfhost-queue-rescue-ledger",
+		adReports: "relayapi-selfhost-ad-reports",
 	},
 } as const;
 
@@ -30,6 +31,7 @@ export const QUEUE_NAMES = [
 	"ads",
 	"sync",
 	"customer-webhooks",
+	"media-processing",
 	"media-cleanup-dlq",
 	"publish-dlq",
 	"email-dlq",
@@ -39,10 +41,19 @@ export const QUEUE_NAMES = [
 	"ads-dlq",
 	"sync-dlq",
 	"customer-webhooks-dlq",
+	"media-processing-dlq",
 	"queue-rescue",
 ] as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[number];
+export const ADDITIVE_QUEUE_NAMES = [
+	"media-processing",
+	"media-processing-dlq",
+] as const satisfies readonly QueueName[];
+export type AdditiveQueueName = (typeof ADDITIVE_QUEUE_NAMES)[number];
+export const ADDITIVE_QUEUE_NAME_SET: ReadonlySet<QueueName> = new Set(
+	ADDITIVE_QUEUE_NAMES,
+);
 
 // Cloudflare Free fixes Queue retention at 24 hours. Paid plans permit a longer
 // horizon, but using the same minimum everywhere keeps transient payload

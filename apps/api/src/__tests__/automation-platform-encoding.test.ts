@@ -10,8 +10,8 @@
 
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import {
-	sendMessage,
 	type SendMessageRequest,
+	sendMessage,
 } from "../services/message-sender";
 
 const originalFetch = globalThis.fetch;
@@ -296,6 +296,29 @@ describe("WhatsApp encoding", () => {
 		expect(body.type).toBe("image");
 		expect(body.image.link).toBe("https://ex.com/pic.jpg");
 		expect(body.image.caption).toBe("nice");
+	});
+
+	it("rejects an audio caption before provider I/O", async () => {
+		const { calls } = mockFetchCapture();
+		const result = await sendMessage({
+			platform: "whatsapp",
+			...base,
+			text: "",
+			attachments: [
+				{
+					type: "audio",
+					url: "https://ex.com/voice.ogg",
+					caption: "This field is not valid for WhatsApp audio.",
+				},
+			],
+		});
+
+		expect(result).toEqual({
+			success: false,
+			error:
+				"WhatsApp audio messages do not support captions; remove the caption or use a non-audio attachment.",
+		});
+		expect(calls).toHaveLength(0);
 	});
 });
 

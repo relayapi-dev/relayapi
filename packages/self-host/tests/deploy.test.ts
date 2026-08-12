@@ -21,6 +21,7 @@ import {
 const repositoryRoot = new URL("../../../", import.meta.url).pathname;
 const UPLOADED_VERSION_ID = "11111111-1111-4111-8111-111111111111";
 const RECONCILED_VERSION_ID = "22222222-2222-4222-8222-222222222222";
+const CONTAINER_VERSION_ID = "33333333-3333-4333-8333-333333333333";
 
 function versionInspection(
 	id: string,
@@ -64,6 +65,23 @@ async function writeVersionUploadOutput(
 			version: 1,
 			version_id: UPLOADED_VERSION_ID,
 		})}\n`,
+	);
+}
+
+async function appendDeployOutput(
+	options: { env?: NodeJS.ProcessEnv } | undefined,
+): Promise<void> {
+	const path = options?.env?.WRANGLER_OUTPUT_FILE_PATH;
+	if (!path)
+		throw new Error("test runner did not receive Wrangler output path");
+	await writeFile(
+		path,
+		`${JSON.stringify({
+			type: "deploy",
+			version: 1,
+			version_id: CONTAINER_VERSION_ID,
+		})}\n`,
+		{ flag: "a" },
 	);
 }
 
@@ -275,6 +293,73 @@ describe("self-host Worker rollout", () => {
 			});
 			expect(commandKinds).toEqual(["upload", "deploy", "triggers"]);
 			await expect(access(secretsPath)).rejects.toThrow();
+		} finally {
+			await rm(sourceRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("preflights and applies Container images before accepting the final rollout", async () => {
+		const sourceRoot = await mkdtemp(join(tmpdir(), "relayapi-worker-source-"));
+		const commandKinds: string[] = [];
+		try {
+			await deployWorker({
+				configPath: "/operator/.relayapi/generated/api.wrangler.json",
+				secrets: { ENCRYPTION_KEY: "secret-value" },
+				sourceRoot,
+				version: "1.2.3",
+				label: "API",
+				deployContainers: true,
+				runner: async (_command, args, options) => {
+					if (
+						args.slice(0, 2).join(" ") === "wrangler deploy" &&
+						args.includes("--dry-run")
+					) {
+						commandKinds.push("container-preflight");
+						expect(args).toContain("immediate");
+						expect(options?.env?.DOCKER_DEFAULT_PLATFORM).toBe("linux/amd64");
+						return;
+					}
+					if (args.slice(0, 3).join(" ") === "wrangler versions upload") {
+						commandKinds.push("upload");
+						await writeVersionUploadOutput(options);
+						return;
+					}
+					if (args.slice(0, 3).join(" ") === "wrangler versions deploy") {
+						commandKinds.push("candidate-deploy");
+						return;
+					}
+					if (args.slice(0, 2).join(" ") === "wrangler deploy") {
+						commandKinds.push("container-deploy");
+						expect(args).toContain("--strict");
+						expect(args).toContain("--secrets-file");
+						expect(args).toContain("gradual");
+						expect(options?.env?.DOCKER_DEFAULT_PLATFORM).toBe("linux/amd64");
+						await appendDeployOutput(options);
+						return;
+					}
+					if (args.slice(0, 3).join(" ") === "wrangler triggers deploy") {
+						commandKinds.push("triggers");
+						return;
+					}
+					throw new Error(`unexpected command: ${args.join(" ")}`);
+				},
+				captureRunner: async (_command, args) => {
+					if (args[2] === "view" && args[3] === UPLOADED_VERSION_ID) {
+						return versionInspection(UPLOADED_VERSION_ID, ["ENCRYPTION_KEY"]);
+					}
+					if (args[2] === "view" && args[3] === CONTAINER_VERSION_ID) {
+						return versionInspection(CONTAINER_VERSION_ID, ["ENCRYPTION_KEY"]);
+					}
+					throw new Error(`unexpected capture command: ${args.join(" ")}`);
+				},
+			});
+			expect(commandKinds).toEqual([
+				"container-preflight",
+				"upload",
+				"container-deploy",
+				"candidate-deploy",
+				"triggers",
+			]);
 		} finally {
 			await rm(sourceRoot, { recursive: true, force: true });
 		}

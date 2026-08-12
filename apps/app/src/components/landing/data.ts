@@ -46,7 +46,7 @@ export interface HeroChannel {
 }
 
 /**
- * The 21 publishing channels from the shared platform contract. Newsletter
+ * The 22 publishing channels from the shared platform contract. Newsletter
  * and SMS channels use initials because the landing bundle has no brand glyph
  * for them; no account/content variants are counted as extra platforms.
  */
@@ -66,6 +66,7 @@ export const heroChannels: HeroChannel[] = [
 	{ name: "WhatsApp", initial: "WA", glyph: PLATFORM_PATHS.whatsapp },
 	{ name: "Snapchat", initial: "S", glyph: PLATFORM_PATHS.snapchat },
 	{ name: "Discord", initial: "D", glyph: PLATFORM_PATHS.discord },
+	{ name: "Slack", initial: "SL" },
 	{ name: "Google Business", initial: "G", glyph: PLATFORM_PATHS.google },
 	{ name: "SMS", initial: "SM" },
 	{ name: "Beehiiv", initial: "BH" },
@@ -84,7 +85,7 @@ export const reviewTasks: ReviewTask[] = [
 	{
 		title: "Launch announcement",
 		time: "now",
-		sub: "Done. Delivered to 21 publishing channels.",
+		sub: "Done. Delivered to 22 publishing channels.",
 	},
 	{
 		title: "Weekly product digest",
@@ -218,6 +219,12 @@ export const platformLogos: PlatformLogo[] = [
 		slug: "discord",
 	},
 	{
+		name: "Slack",
+		initial: "SL",
+		slug: "slack",
+		href: "https://docs.relayapi.dev/platforms/slack",
+	},
+	{
 		name: "Google Business",
 		initial: "GB",
 		glyph: PLATFORM_PATHS.google,
@@ -300,7 +307,7 @@ export const productProofs: ProductProof[] = [
 	{
 		title: "Unified publishing contract",
 		detail:
-			"One post schema targets the 21 channel identifiers exposed by the API and SDK.",
+			"One post schema targets the 22 channel identifiers exposed by the API and SDK.",
 		status: "Available",
 	},
 	{
@@ -345,7 +352,7 @@ export interface FrontierCard {
 export const frontier: FrontierCard[] = [
 	{
 		title: "Every channel, one API",
-		body: "Consistent request format, unified error handling, and standardized responses across all 21 publishing channels.",
+		body: "Consistent request format, unified error handling, and standardized responses across all 22 publishing channels.",
 		link: "See all platforms",
 	},
 	{
@@ -401,7 +408,7 @@ export const blog: BlogPost[] = [
 	},
 	{
 		tag: "Engineering",
-		title: "Delivering to 21 publishing channels in under 100ms",
+		title: "Delivering to 22 publishing channels in under 100ms",
 		meta: "Giulio Z. · 5 min read",
 	},
 	{

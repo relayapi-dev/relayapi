@@ -1,576 +1,129 @@
 ---
 title: Snapchat API
-description: Schedule and automate Snapchat posts with RelayAPI — stories, saved stories, Spotlight videos, and Public Profile publishing.
+description: Connect an authorized Snapchat Public Profile and publish Saved Stories or Spotlight submissions.
 icon: snapchat
 ---
 
-## Quick Reference
+## Current RelayAPI capability
 
-| Property | Value |
-|----------|-------|
+| Property | RelayAPI behavior |
+|----------|-------------------|
 | Platform key | `snapchat` |
-| Auth method | OAuth 2.0 |
-| Title limit | 45 characters (Saved Stories) |
-| Description limit | 160 characters (Spotlight, including hashtags) |
-| Media per post | 1 (single image or video only) |
-| Image formats | JPEG, PNG |
-| Image max size | 5 MB |
-| Video format | MP4 only |
-| Video max size | 32 MB |
-| Video duration | 5 - 60 seconds |
-| Post types | Story, Saved Story, Spotlight |
-| Scheduling | Yes |
-| Analytics | Yes (views, viewers, screenshots, shares, completion rate) |
-
-<Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
-</Callout>
-
-## Before You Start
+| Connection | OAuth 2.0 with `snapchat-profile-api`, followed by Public Profile selection |
+| Provider access | Snapchat Public Profile API; the OAuth client must be allowlisted by Snapchat |
+| Published types | Saved Story and Spotlight |
+| Story | Not currently supported; RelayAPI cannot correlate a Story create request to a terminal provider result |
+| Media | Exactly one image or video; Spotlight requires video |
+| Scheduling | Yes, through RelayAPI |
+| Native analytics endpoints | Not currently implemented |
 
 <Callout type="warn">
-Snapchat requires a **Public Profile** (Person, Business, or Official) — regular accounts cannot use the API. Only **1 media item per post** is allowed, making Snapchat the most restrictive platform for content format. There are **no text-only posts**. Vertical orientation (**9:16**) is practically required for all content types. Stories are **ephemeral** and disappear after 24 hours. Regular Stories do **not** support captions.
+This integration is for a Snapchat **Public Profile**, not an ordinary personal identity or the Snapchat Ads API. Create the OAuth app in Snap Business Manager, request Public Profile API allowlisting for its client ID, and select a profile returned by the authorized `my_profile` endpoint.
 </Callout>
 
-## Quick Start
+## Connect a Public Profile
 
-Post a story to Snapchat:
+Start OAuth with `GET /v1/connect/snapchat`. Snapchat returns only the Public Profiles the authorizing user can access. The callback produces a `connect_token`; list and select one of those profiles:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-import Relay from '@relayapi/sdk';
-const client = new Relay();
-
-const post = await client.posts.create({
-  targets: ['snapchat'],
-  media: [
-    { url: 'https://cdn.example.com/photo.jpg', type: 'image' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    snapchat: {
-      content_type: 'story'
-    }
-  }
-});
-
-console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-client = Relay()
-
-post = client.posts.create(
-    targets=['snapchat'],
-    media=[
-        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'snapchat': {
-            'content_type': 'story'
-        }
-    }
-)
-
-print(post.id)  # post_abc123
-```
-</Tab>
-<Tab value="Go">
-```go
-client := relaygo.NewClient()
-
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Targets:     relaygo.F([]string{"snapchat"}),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
-        URL:  relaygo.F("https://cdn.example.com/photo.jpg"),
-        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
-    }}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "snapchat": map[string]interface{}{
-            "content_type": "story",
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-RelayClient client = RelayOkHttpClient.fromEnv();
-
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .addTarget("snapchat")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/photo.jpg")
-        .type(PostCreateParams.Media.Type.IMAGE)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
-            "content_type", "story"
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
 ```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
+curl --get https://api.relayapi.dev/v1/connect/snapchat/profiles \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  --data-urlencode "connect_token=$CONNECT_TOKEN"
+
+curl -X POST https://api.relayapi.dev/v1/connect/snapchat/profiles \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "targets": ["snapchat"],
-    "media": [
-      {"url": "https://cdn.example.com/photo.jpg", "type": "image"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "snapchat": {
-        "content_type": "story"
-      }
-    }
+    "connect_token": "operation-token",
+    "profile_id": "authorized-public-profile-id"
   }'
 ```
-</Tab>
-</Tabs>
 
-## Content Types
+RelayAPI stores the selected Public Profile ID as the account identity and records an internal verification marker that generic metadata updates cannot forge. A publish request cannot redirect that profile token to another profile.
 
-### Story (Ephemeral, 24 Hours)
-
-Basic story that disappears after 24 hours. No caption or text is supported on regular stories.
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  targets: ['snapchat'],
-  media: [
-    { url: 'https://cdn.example.com/image.jpg', type: 'image' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    snapchat: {
-      content_type: 'story'
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['snapchat'],
-    media=[
-        {'url': 'https://cdn.example.com/image.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'snapchat': {
-            'content_type': 'story'
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Targets:     relaygo.F([]string{"snapchat"}),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
-        URL:  relaygo.F("https://cdn.example.com/image.jpg"),
-        Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage),
-    }}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "snapchat": map[string]interface{}{
-            "content_type": "story",
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .addTarget("snapchat")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/image.jpg")
-        .type(PostCreateParams.Media.Type.IMAGE)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
-            "content_type", "story"
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "targets": ["snapchat"],
-    "media": [
-      {"url": "https://cdn.example.com/image.jpg", "type": "image"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "snapchat": {
-        "content_type": "story"
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-### Saved Story (Permanent on Public Profile)
-
-Saved stories are permanent and displayed on the user's Public Profile. The `content` field becomes the title (max 45 characters).
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  content: 'Behind the scenes look!',
-  targets: ['snapchat'],
-  media: [
-    { url: 'https://cdn.example.com/video.mp4', type: 'video' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    snapchat: {
-      content_type: 'saved_story'
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Behind the scenes look!',
-    targets=['snapchat'],
-    media=[
-        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'snapchat': {
-            'content_type': 'saved_story'
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Behind the scenes look!"),
-    Targets:     relaygo.F([]string{"snapchat"}),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
-        URL:  relaygo.F("https://cdn.example.com/video.mp4"),
-        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
-    }}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "snapchat": map[string]interface{}{
-            "content_type": "saved_story",
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Behind the scenes look!")
-    .addTarget("snapchat")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/video.mp4")
-        .type(PostCreateParams.Media.Type.VIDEO)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
-            "content_type", "saved_story"
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Behind the scenes look!",
-    "targets": ["snapchat"],
-    "media": [
-      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "snapchat": {
-        "content_type": "saved_story"
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-### Spotlight (Entertainment Feed)
-
-Spotlight is Snapchat's entertainment feed, similar to TikTok. Video only. The `content` field becomes the description (max 160 chars, supports hashtags).
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  content: 'Amazing sunset! #sunset #nature #viral',
-  targets: ['snapchat'],
-  media: [
-    { url: 'https://cdn.example.com/sunset.mp4', type: 'video' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    snapchat: {
-      content_type: 'spotlight'
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Amazing sunset! #sunset #nature #viral',
-    targets=['snapchat'],
-    media=[
-        {'url': 'https://cdn.example.com/sunset.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'snapchat': {
-            'content_type': 'spotlight'
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Amazing sunset! #sunset #nature #viral"),
-    Targets:     relaygo.F([]string{"snapchat"}),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
-        URL:  relaygo.F("https://cdn.example.com/sunset.mp4"),
-        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
-    }}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "snapchat": map[string]interface{}{
-            "content_type": "spotlight",
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Amazing sunset! #sunset #nature #viral")
-    .addTarget("snapchat")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/sunset.mp4")
-        .type(PostCreateParams.Media.Type.VIDEO)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
-            "content_type", "spotlight"
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Amazing sunset! #sunset #nature #viral",
-    "targets": ["snapchat"],
-    "media": [
-      {"url": "https://cdn.example.com/sunset.mp4", "type": "video"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "snapchat": {
-        "content_type": "spotlight"
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-<Callout type="info">
-Spotlight only accepts video content. Use vertical 9:16 format for best results. The description (max 160 characters) supports hashtags for discoverability.
+<Callout type="warn">
+Every Snapchat account created before this Public Profile verification marker was introduced must reconnect. Legacy Marketing API organization/account identities and unmarked records fail publishing and reconciliation with `SNAPCHAT_RECONNECT_REQUIRED`; RelayAPI does not guess that they represent a Public Profile.
 </Callout>
 
-### Story with Video
+## Publish a Saved Story
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  targets: ['snapchat'],
-  media: [
-    { url: 'https://cdn.example.com/clip.mp4', type: 'video' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    snapchat: {
-      content_type: 'story'
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['snapchat'],
-    media=[
-        {'url': 'https://cdn.example.com/clip.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'snapchat': {
-            'content_type': 'story'
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Targets:     relaygo.F([]string{"snapchat"}),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{{
-        URL:  relaygo.F("https://cdn.example.com/clip.mp4"),
-        Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo),
-    }}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "snapchat": map[string]interface{}{
-            "content_type": "story",
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .addTarget("snapchat")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/clip.mp4")
-        .type(PostCreateParams.Media.Type.VIDEO)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("snapchat", JsonValue.from(Map.of(
-            "content_type", "story"
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
+Use the connected account ID to select one exact Public Profile:
+
 ```bash
 curl -X POST https://api.relayapi.dev/v1/posts \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: snapchat-saved-story-20260809" \
   -d '{
-    "targets": ["snapchat"],
+    "content": "Behind the scenes",
+    "targets": ["acc_snapchat_example"],
     "media": [
-      {"url": "https://cdn.example.com/clip.mp4", "type": "video"}
+      {"url": "https://cdn.example.com/story.jpg", "type": "image"}
     ],
     "scheduled_at": "now",
     "target_options": {
-      "snapchat": {
-        "content_type": "story"
-      }
+      "snapchat": {"content_type": "saved_story"}
     }
   }'
 ```
-</Tab>
-</Tabs>
 
-## Media Requirements
+The broader `snapchat` target selector is also valid, but it expands to every
+authorized Snapchat account in the post's workspace boundary. In either case,
+each resolved account publishes only to its selected Public Profile.
 
-### Images
+Saved Story titles are limited to 45 characters. RelayAPI reports success only when Snapchat returns a successful sub-request and a Saved Story ID.
 
-| Property | Requirement |
-|----------|-------------|
-| Max per post | 1 |
-| Formats | JPEG, PNG |
-| Max file size | 20 MB |
-| Recommended | 1080 x 1920 px |
-| Aspect ratio | 9:16 (portrait) |
+## Submit a Spotlight
 
-### Videos
+```json
+{
+  "content": "Launch day #new",
+  "targets": ["acc_snapchat_example"],
+  "media": [
+    {"url": "https://cdn.example.com/spotlight.mp4", "type": "video"}
+  ],
+  "scheduled_at": "now",
+  "target_options": {
+    "snapchat": {
+      "content_type": "spotlight",
+      "locale": "en_US"
+    }
+  }
+}
+```
 
-| Property | Requirement |
-|----------|-------------|
-| Max per post | 1 |
-| Format | MP4 only |
-| Max file size | 500 MB |
-| Duration | 5 - 60 seconds |
-| Min resolution | 540 x 960 px |
-| Recommended | 1080 x 1920 px, 9:16 vertical |
+Spotlight descriptions are limited to 160 characters. A successful submission is initially `pending_review`, not proof that the Spotlight is live. RelayAPI retains Snapchat's request and Spotlight IDs and can reconcile the Spotlight to `published`, `pending_review`, or `failed` when Snapchat exposes its status.
 
-## `target_options` Fields
+## `target_options.snapchat`
 
-All fields go inside `target_options.snapchat` on your post request.
+| Field | Type | Required | Behavior |
+|-------|------|----------|----------|
+| `content_type` | `saved_story` or `spotlight` | Yes | Required typed publish surface. Generic Stories are not accepted by the public request schema. |
+| `locale` | string | Spotlight only, optional | Defaults to `en_US` |
+| `content` | string | No | Snapchat-specific content/title override |
+| `media` | array | No | Snapchat-specific media override; exactly one item |
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `content` | string | — | Override content for Snapchat specifically |
-| `media` | object[] | — | Override media for Snapchat specifically |
-| `content_type` | string | `"story"` | Post type: `"story"` (ephemeral 24h), `"saved_story"` (permanent), or `"spotlight"` (entertainment feed, video only) |
+## Media and outcomes
 
-## Common Errors
+RelayAPI downloads the source through its public-URL safety checks, encrypts the bytes as required by Snapchat, uploads bounded parts, and finalizes the media before creating content. Managed RelayAPI media accepts [direct-to-storage upload sessions up to 200 MiB](/guides/media-uploads), while the Worker-proxy endpoint remains 50 MiB; Snapchat can still reject an asset for its current codec, dimensions, duration, orientation, or content policy.
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| Public Profile required | Account does not have a Public Profile | Set up a Public Profile (Person, Business, or Official) in the Snapchat app. |
-| Media is required | No media was provided | Add an image or video. Snapchat does not support text-only posts. |
-| Only one media item | Multiple media items were attached | Remove extras. Snapchat only allows 1 image or 1 video per post. |
-| Video rejected | Duration, format, or resolution does not meet requirements | Check: 5-60 seconds, MP4 only, minimum 540 x 960 px resolution. |
-| Title too long | Saved Story title exceeds 45 characters | Shorten the content to 45 characters or less. |
-| Description too long | Spotlight description exceeds 160 characters | Shorten the content including hashtags to 160 characters or less. |
+Do not automatically retry an ambiguous creation with a new idempotency key. Saved Story creation has no correlation-safe status lookup after an ambiguous response, while Spotlight reconciliation requires the IDs returned by Snapchat.
 
-## Known Quirks
+## Common errors
 
-- **Most restrictive platform** — only 1 media item per post, no text-only posts, no carousels.
-- **Public Profile required** — must be Person, Business, or Official type. Regular accounts cannot use the API.
-- **Media is encrypted with AES-256-CBC** before upload — RelayAPI handles this internally.
-- **Stories are ephemeral** — they disappear after 24 hours. No caption or text is displayed.
-- **Saved Stories are permanent** — displayed on the Public Profile with a title limited to 45 characters.
-- **Spotlight is video-only** — description limited to 160 characters (including hashtags).
-- **9:16 vertical is practically required** for all content types.
-- **No multi-image or carousel support** — unlike Instagram or Threads.
+| Code | Meaning |
+|------|---------|
+| `CONTENT_TYPE_REQUIRED` | Dry-run validation did not receive `saved_story` or `spotlight` |
+| `SNAPCHAT_STORY_UNSUPPORTED` | A legacy/untyped caller reached the publisher without a supported surface; generic Story remains disabled |
+| `MEDIA_REQUIRED` / `TOO_MANY_MEDIA` | The request did not contain exactly one media item |
+| `VIDEO_REQUIRED` | Spotlight media was not marked as video |
+| `TITLE_TOO_LONG` | Saved Story title exceeded 45 characters |
+| `DESCRIPTION_TOO_LONG` | Spotlight description exceeded 160 characters |
+| `PROFILE_ID_MISMATCH` | A compatibility field attempted to target a profile other than the connected one |
+| `SNAPCHAT_RECONNECT_REQUIRED` | The account predates connector-verified Public Profile identity; reconnect before publishing or reconciliation |
+
+## Official Snapchat references
+
+- [Public Profile API overview](https://developers.snap.com/marketing-api/Public-Profile-API/Introduction)
+- [Public Profile API access, OAuth, and allowlisting](https://developers.snap.com/marketing-api/Public-Profile-API/GetStarted)
+- [Profile asset management](https://developers.snap.com/marketing-api/Public-Profile-API/ProfileAssetManagement)

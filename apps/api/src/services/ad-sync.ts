@@ -5,6 +5,7 @@
 import {
 	adAccounts,
 	adCampaigns,
+	adConnections,
 	adSyncLogs,
 	ads,
 	createDb,
@@ -20,9 +21,10 @@ import {
 	type ProviderReadErrorClass,
 } from "../lib/async-policy";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import { fetchAndStoreAdMetrics } from "./ad-analytics";
 import { getAdPlatformAdapter } from "./ad-platforms";
+import { requireAdCapability } from "./ad-platforms/unsupported";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 
 type SyncedCampaignObjective = (typeof adCampaigns.$inferInsert)["objective"];
 type SyncedAdStatus = (typeof ads.$inferInsert)["status"];
@@ -58,20 +60,17 @@ export async function syncExternalAds(
 	const [ctx] = await db
 		.select({
 			adAccount: adAccounts,
+			adConnection: adConnections,
 			socialAccount: socialAccounts,
 		})
 		.from(adAccounts)
-		.innerJoin(
-			socialAccounts,
-			eq(adAccounts.socialAccountId, socialAccounts.id),
-		)
+		.leftJoin(adConnections, eq(adAccounts.adConnectionId, adConnections.id))
+		.leftJoin(socialAccounts, eq(adAccounts.socialAccountId, socialAccounts.id))
 		.where(
 			and(
 				eq(adAccounts.id, adAccountId),
 				eq(adAccounts.organizationId, orgId),
 				eq(adAccounts.status, "active"),
-				eq(socialAccounts.organizationId, orgId),
-				eq(socialAccounts.lifecycleStatus, "active"),
 			),
 		)
 		.limit(1);
@@ -142,6 +141,21 @@ export async function syncExternalAds(
 		);
 		return { adsCreated: 0, adsUpdated: 0, metricsUpdated: 0 };
 	}
+	try {
+		requireAdCapability(adapter, "external_sync");
+	} catch (error) {
+		await finishAdAccountPollFailure(
+			db,
+			adAccountId,
+			orgId,
+			claim.generation,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			"permanent",
+		);
+		return { adsCreated: 0, adsUpdated: 0, metricsUpdated: 0 };
+	}
 
 	let adsCreated = 0;
 	let adsUpdated = 0;
@@ -149,10 +163,18 @@ export async function syncExternalAds(
 	let error: string | undefined;
 
 	try {
-		const accessToken = await resolveAdsAccessToken(ctx.socialAccount, env);
+		const credentials = await resolveAdProviderCredentials({
+			platform: adAccount.platform,
+			providerAdAccountId: adAccount.platformAdAccountId,
+			adConnection: ctx.adConnection,
+			legacySocialAccount: ctx.socialAccount,
+			env,
+		});
 		const result = await adapter.syncExternalAds(
-			accessToken,
+			credentials.accessToken,
 			adAccount.platformAdAccountId,
+			undefined,
+			credentials,
 		);
 
 		// Pre-fetch this ad account's existing remote ad IDs once for reporting.

@@ -5,14 +5,19 @@ import {
 	fetchPublicUrl,
 	getFixedLengthResponseBody,
 } from "../lib/fetch-public-url";
+import { FacebookTargetOptions } from "../schemas/publisher-options";
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
 	type EngagementAccount,
 	type EngagementActionResult,
+	getSucceededProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
+	recordProviderEffect,
 } from "./types";
 
 const GRAPH_API = GRAPH_BASE.facebook;
@@ -51,7 +56,7 @@ async function graphPost(
 	});
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = (await readPublisherJson(res).catch(() => ({}))) as {
 			error?: { message?: string; code?: number; error_subcode?: number };
 		};
 		const detail = err.error?.message ?? res.statusText;
@@ -93,7 +98,7 @@ async function graphPost(
 		});
 	}
 
-	return res.json() as Promise<Record<string, unknown>>;
+	return readPublisherJson(res) as Promise<Record<string, unknown>>;
 }
 
 /**
@@ -102,13 +107,14 @@ async function graphPost(
 async function createTextPost(
 	auth: FacebookAuth,
 	message: string,
+	feedOptions: Record<string, unknown> = {},
 ): Promise<{ id: string; permalink_url?: string }> {
 	// Facebook Graph API: Create page feed post (read-after-write for permalink_url)
 	// Docs: https://developers.facebook.com/docs/pages-api/posts
 	const result = await graphPost(
 		`/${auth.page_id}/feed?fields=id,permalink_url`,
 		auth,
-		{ message },
+		{ message, ...feedOptions },
 	);
 	return {
 		id: result.id as string,
@@ -144,31 +150,34 @@ async function uploadPhoto(
 }
 
 /**
- * Publish a single-image post. Returns the photo post ID.
- */
-async function createSingleImagePost(
-	auth: FacebookAuth,
-	imageUrl: string,
-	message?: string,
-): Promise<{ id: string }> {
-	const result = await uploadPhoto(auth, imageUrl, message, true);
-	// For published photos, the post_id is the feed post; fall back to id
-	return { id: result.post_id ?? result.id };
-}
-
-/**
  * Publish a multi-image post. Uploads each image unpublished, then creates
  * a feed post referencing all of them.
  */
 async function createMultiImagePost(
+	request: PublishRequest,
 	auth: FacebookAuth,
 	imageUrls: string[],
 	message?: string,
+	feedOptions: Record<string, unknown> = {},
 ): Promise<{ id: string; permalink_url?: string }> {
-	// Upload each image as unpublished
-	const uploads = await Promise.all(
-		imageUrls.map((url) => uploadPhoto(auth, url, undefined, false)),
-	);
+	const published = getSucceededProviderEffect(request, "post_published");
+	if (published?.provider_id) return { id: published.provider_id };
+	// Upload each image as unpublished and journal it before creating another.
+	const uploads: Array<{ id: string }> = [];
+	for (const [index, url] of imageUrls.entries()) {
+		const effectName = `staged_photo_${index + 1}`;
+		let photoId = getSucceededProviderEffect(request, effectName)?.provider_id;
+		if (!photoId) {
+			const uploaded = await uploadPhoto(auth, url, undefined, false);
+			photoId = uploaded.id;
+			await recordProviderEffect(request, {
+				name: effectName,
+				status: "succeeded",
+				provider_id: photoId,
+			});
+		}
+		uploads.push({ id: photoId });
+	}
 
 	// Create feed post with attached_media using indexed URL-encoded format
 	// Facebook requires attached_media[0]=..., attached_media[1]=... format
@@ -178,6 +187,14 @@ async function createMultiImagePost(
 	params.append("access_token", auth.access_token);
 	if (message) {
 		params.append("message", message);
+	}
+	for (const [key, value] of Object.entries(feedOptions)) {
+		params.append(
+			key,
+			typeof value === "object" && value !== null
+				? JSON.stringify(value)
+				: String(value),
+		);
 	}
 	for (const [i, upload] of uploads.entries()) {
 		params.append(
@@ -196,7 +213,7 @@ async function createMultiImagePost(
 	);
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = (await readPublisherJson(res).catch(() => ({}))) as {
 			error?: { message?: string };
 		};
 		const detail = err.error?.message ?? res.statusText;
@@ -207,7 +224,12 @@ async function createMultiImagePost(
 		});
 	}
 
-	const result = (await res.json()) as Record<string, unknown>;
+	const result = (await readPublisherJson(res)) as Record<string, unknown>;
+	await recordProviderEffect(request, {
+		name: "post_published",
+		status: "succeeded",
+		provider_id: result.id as string,
+	});
 	return {
 		id: result.id as string,
 		permalink_url: result.permalink_url as string | undefined,
@@ -221,8 +243,12 @@ async function createVideoPost(
 	auth: FacebookAuth,
 	videoUrl: string,
 	description?: string,
+	videoOptions: Record<string, unknown> = {},
 ): Promise<{ id: string; permalink_url?: string }> {
-	const body: Record<string, unknown> = { file_url: videoUrl };
+	const body: Record<string, unknown> = {
+		file_url: videoUrl,
+		...videoOptions,
+	};
 	if (description) {
 		body.description = description;
 	}
@@ -247,17 +273,38 @@ async function createVideoPost(
  * https://developers.facebook.com/docs/pages-api/posts
  */
 async function createPhotoStory(
+	request: PublishRequest,
 	auth: FacebookAuth,
 	imageUrl: string,
 ): Promise<{ id: string }> {
+	const published = getSucceededProviderEffect(request, "post_published");
+	if (published?.provider_id) return { id: published.provider_id };
 	// Step 1: Upload photo as unpublished
-	const photo = await uploadPhoto(auth, imageUrl, undefined, false);
+	let photoId = getSucceededProviderEffect(
+		request,
+		"staged_photo",
+	)?.provider_id;
+	if (!photoId) {
+		const photo = await uploadPhoto(auth, imageUrl, undefined, false);
+		photoId = photo.id;
+		await recordProviderEffect(request, {
+			name: "staged_photo",
+			status: "succeeded",
+			provider_id: photoId,
+		});
+	}
 
 	// Step 2: Create photo story using photo_id
 	const result = await graphPost(`/${auth.page_id}/photo_stories`, auth, {
-		photo_id: photo.id,
+		photo_id: photoId,
 	});
-	return { id: (result.post_id as string) ?? (result.id as string) };
+	const postId = (result.post_id as string) ?? (result.id as string);
+	await recordProviderEffect(request, {
+		name: "post_published",
+		status: "succeeded",
+		provider_id: postId,
+	});
+	return { id: postId };
 }
 
 /**
@@ -268,73 +315,124 @@ async function createPhotoStory(
  * https://developers.facebook.com/docs/pages-api/posts
  */
 async function createVideoStory(
+	request: PublishRequest,
 	auth: FacebookAuth,
 	videoUrl: string,
 ): Promise<{ operationId: string; postId?: string }> {
+	const finished = getSucceededProviderEffect(request, "video_finish_accepted");
+	if (finished?.provider_id) {
+		return {
+			operationId: finished.provider_id,
+			postId: getSucceededProviderEffect(request, "post_published")
+				?.provider_id,
+		};
+	}
+	const uploaded = getSucceededProviderEffect(request, "video_binary_uploaded");
+	let videoId = uploaded?.provider_id;
+	let uploadUrl: string | undefined;
 	// Step 1: Start upload
-	const startResult = await graphPost(`/${auth.page_id}/video_stories`, auth, {
-		upload_phase: "start",
-	});
-	const videoId = startResult.video_id as string;
-	const uploadUrl = startResult.upload_url as string;
+	if (!videoId) {
+		const started = getSucceededProviderEffect(request, "video_upload_started");
+		if (started) {
+			throw new PublishError(
+				"Facebook video story upload was started, but its upload URL cannot be safely reconstructed. Reconcile the recorded video operation instead of recreating it.",
+				{ code: "PUBLISH_OUTCOME_UNKNOWN" },
+			);
+		}
+		const startResult = await graphPost(
+			`/${auth.page_id}/video_stories`,
+			auth,
+			{
+				upload_phase: "start",
+			},
+		);
+		videoId = startResult.video_id as string;
+		uploadUrl = startResult.upload_url as string;
+		await recordProviderEffect(request, {
+			name: "video_upload_started",
+			status: "succeeded",
+			provider_id: videoId,
+		});
+	}
 
 	// Step 2: Upload binary to the upload_url
-	const videoRes = await fetchPublicUrl(videoUrl, { timeout: 30_000 });
-	if (!videoRes.ok) {
-		throw new PublishError(
-			`Failed to fetch story video from ${videoUrl}: ${videoRes.statusText}`,
-			{
-				statusCode: videoRes.status,
-				detail: `HTTP ${videoRes.status} ${videoRes.statusText}`,
-			},
+	if (!uploaded) {
+		if (!uploadUrl) throw new Error("Facebook video story upload URL missing.");
+		const videoRes = await fetchPublicUrl(videoUrl, { timeout: 30_000 });
+		if (!videoRes.ok) {
+			throw new PublishError(
+				`Failed to fetch story video from ${videoUrl}: ${videoRes.statusText}`,
+				{
+					statusCode: videoRes.status,
+					detail: `HTTP ${videoRes.status} ${videoRes.statusText}`,
+				},
+			);
+		}
+		const preparedVideoRes = await ensureResponseContentLength(
+			videoRes,
+			FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+			() =>
+				fetchPublicUrl(videoUrl, {
+					timeout: 30_000,
+					maxBytes: FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+				}),
 		);
-	}
-	const preparedVideoRes = await ensureResponseContentLength(
-		videoRes,
-		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
-		() =>
-			fetchPublicUrl(videoUrl, {
-				timeout: 30_000,
-				maxBytes: FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
-			}),
-	);
-	const source = getFixedLengthResponseBody(
-		preparedVideoRes,
-		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
-	);
+		const source = getFixedLengthResponseBody(
+			preparedVideoRes,
+			FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+		);
 
-	const uploadRes = await awaitResponseWithBodyCompletion(
-		fetch(uploadUrl, {
-			method: "POST",
-			headers: {
-				Authorization: `OAuth ${auth.access_token}`,
-				"Content-Type": "application/octet-stream",
-				file_size: source.contentLength.toString(),
-				offset: "0",
-			},
-			body: source.body,
-		}),
-		source.completion,
-	);
-	if (!uploadRes.ok) {
-		throw new PublishError(
-			`Facebook video story upload failed: ${uploadRes.statusText}`,
-			{
-				statusCode: uploadRes.status,
-				detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
-			},
+		const uploadRes = await awaitResponseWithBodyCompletion(
+			fetch(uploadUrl, {
+				method: "POST",
+				headers: {
+					Authorization: `OAuth ${auth.access_token}`,
+					"Content-Type": "application/octet-stream",
+					file_size: source.contentLength.toString(),
+					offset: "0",
+				},
+				body: source.body,
+			}),
+			source.completion,
 		);
+		if (!uploadRes.ok) {
+			throw new PublishError(
+				`Facebook video story upload failed: ${uploadRes.statusText}`,
+				{
+					statusCode: uploadRes.status,
+					detail: `HTTP ${uploadRes.status} ${uploadRes.statusText}`,
+				},
+			);
+		}
+		await recordProviderEffect(request, {
+			name: "video_binary_uploaded",
+			status: "succeeded",
+			provider_id: videoId,
+		});
 	}
 	// Step 3: Finish upload
 	const finishResult = await graphPost(`/${auth.page_id}/video_stories`, auth, {
 		upload_phase: "finish",
 		video_id: videoId,
 	});
+	await recordProviderEffect(request, {
+		name: "video_finish_accepted",
+		status: "succeeded",
+		provider_id: videoId,
+	});
+	const postId =
+		(finishResult.post_id as string | undefined) ??
+		(finishResult.id as string | undefined);
+	if (postId) {
+		await recordProviderEffect(request, {
+			name: "post_published",
+			status: "succeeded",
+			provider_id: postId,
+		});
+	}
 	return {
 		operationId: videoId,
-		postId:
-			(finishResult.post_id as string | undefined) ??
-			(finishResult.id as string | undefined),
+		postId,
 	};
 }
 
@@ -345,22 +443,55 @@ async function createVideoStory(
  * 3. POST /{page-id}/video_reels with upload_phase=finish
  */
 async function createReel(
+	request: PublishRequest,
 	auth: FacebookAuth,
 	videoUrl: string,
 	description?: string,
 	title?: string,
+	videoState: "DRAFT" | "SCHEDULED" | "PUBLISHED" = "PUBLISHED",
+	scheduledPublishTime?: number,
+	placeId?: string,
 ): Promise<{ operationId: string; postId?: string }> {
+	const finished = getSucceededProviderEffect(request, "video_finish_accepted");
+	if (finished?.provider_id) {
+		return {
+			operationId: finished.provider_id,
+			postId: getSucceededProviderEffect(request, "post_published")
+				?.provider_id,
+		};
+	}
+	const uploaded = getSucceededProviderEffect(request, "video_binary_uploaded");
+	let videoId = uploaded?.provider_id;
+	let uploadUrl: string | undefined;
 	// Facebook Graph API: Start reel upload (phase 1)
 	// Docs: https://developers.facebook.com/docs/video-api/guides/reels-publishing
-	const startResult = await graphPost(`/${auth.page_id}/video_reels`, auth, {
-		upload_phase: "start",
-	});
-	const videoId = startResult.video_id as string;
-	const uploadUrl = startResult.upload_url as string;
+	if (!videoId) {
+		const started = getSucceededProviderEffect(request, "video_upload_started");
+		if (started) {
+			throw new PublishError(
+				"Facebook Reel upload was started, but its upload URL cannot be safely reconstructed. Reconcile the recorded video operation instead of recreating it.",
+				{ code: "PUBLISH_OUTCOME_UNKNOWN" },
+			);
+		}
+		const startResult = await graphPost(`/${auth.page_id}/video_reels`, auth, {
+			upload_phase: "start",
+		});
+		videoId = startResult.video_id as string;
+		uploadUrl = startResult.upload_url as string;
+		await recordProviderEffect(request, {
+			name: "video_upload_started",
+			status: "succeeded",
+			provider_id: videoId,
+		});
+	}
 
 	// Fetch the video binary from source URL
-	const videoRes = await fetchPublicUrl(videoUrl, { timeout: 30_000 });
-	if (!videoRes.ok) {
+	if (!uploaded && !uploadUrl)
+		throw new Error("Facebook Reel upload URL missing.");
+	const videoRes = uploaded
+		? null
+		: await fetchPublicUrl(videoUrl, { timeout: 30_000 });
+	if (videoRes && !videoRes.ok) {
 		throw new PublishError(
 			`Failed to fetch reel video from ${videoUrl}: ${videoRes.statusText}`,
 			{
@@ -369,37 +500,43 @@ async function createReel(
 			},
 		);
 	}
-	const preparedVideoRes = await ensureResponseContentLength(
-		videoRes,
-		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
-		() =>
-			fetchPublicUrl(videoUrl, {
-				timeout: 30_000,
-				maxBytes: FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
-			}),
-	);
-	const source = getFixedLengthResponseBody(
-		preparedVideoRes,
-		FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
-	);
+	const preparedVideoRes = videoRes
+		? await ensureResponseContentLength(
+				videoRes,
+				FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+				() =>
+					fetchPublicUrl(videoUrl, {
+						timeout: 30_000,
+						maxBytes: FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+					}),
+			)
+		: null;
+	const source = preparedVideoRes
+		? getFixedLengthResponseBody(
+				preparedVideoRes,
+				FACEBOOK_STREAM_UPLOAD_MAX_BYTES,
+			)
+		: null;
 
 	// Facebook Graph API: Upload reel video binary (phase 2)
 	// Method must be POST, Content-Type must be application/octet-stream, offset header required
 	// Docs: https://developers.facebook.com/docs/video-api/guides/reels-publishing
-	const uploadRes = await awaitResponseWithBodyCompletion(
-		fetch(uploadUrl, {
-			method: "POST",
-			headers: {
-				Authorization: `OAuth ${auth.access_token}`,
-				"Content-Type": "application/octet-stream",
-				offset: "0",
-				file_size: source.contentLength.toString(),
-			},
-			body: source.body,
-		}),
-		source.completion,
-	);
-	if (!uploadRes.ok) {
+	const uploadRes = source
+		? await awaitResponseWithBodyCompletion(
+				fetch(uploadUrl as string, {
+					method: "POST",
+					headers: {
+						Authorization: `OAuth ${auth.access_token}`,
+						"Content-Type": "application/octet-stream",
+						offset: "0",
+						file_size: source.contentLength.toString(),
+					},
+					body: source.body,
+				}),
+				source.completion,
+			)
+		: null;
+	if (uploadRes && !uploadRes.ok) {
 		throw new PublishError(
 			`Facebook reel upload failed: ${uploadRes.statusText}`,
 			{
@@ -408,13 +545,23 @@ async function createReel(
 			},
 		);
 	}
+	if (uploadRes) {
+		await recordProviderEffect(request, {
+			name: "video_binary_uploaded",
+			status: "succeeded",
+			provider_id: videoId,
+		});
+	}
 	// Facebook Graph API: Finish reel upload (phase 3)
-	// video_state: "PUBLISHED" is required to actually publish the reel
+	// Official Reels Publishing guide, section "Publish a Reel":
+	// https://developers.facebook.com/docs/video-api/guides/reels-publishing
+	// video_state is DRAFT, SCHEDULED, or PUBLISHED; a scheduled Reel also uses
+	// scheduled_publish_time (Unix seconds), and location tagging uses place.
 	// Docs: https://developers.facebook.com/docs/video-api/guides/reels-publishing
 	const finishBody: Record<string, unknown> = {
 		upload_phase: "finish",
 		video_id: videoId,
-		video_state: "PUBLISHED",
+		video_state: videoState,
 	};
 	if (description) {
 		finishBody.description = description;
@@ -422,15 +569,34 @@ async function createReel(
 	if (title) {
 		finishBody.title = title;
 	}
+	if (scheduledPublishTime !== undefined) {
+		finishBody.scheduled_publish_time = scheduledPublishTime;
+	}
+	if (placeId) {
+		finishBody.place = placeId;
+	}
 
 	const finishResult = await graphPost(
 		`/${auth.page_id}/video_reels`,
 		auth,
 		finishBody,
 	);
+	await recordProviderEffect(request, {
+		name: "video_finish_accepted",
+		status: "succeeded",
+		provider_id: videoId,
+	});
+	const postId = finishResult.post_id as string | undefined;
+	if (postId) {
+		await recordProviderEffect(request, {
+			name: "post_published",
+			status: "succeeded",
+			provider_id: postId,
+		});
+	}
 	return {
 		operationId: videoId,
-		postId: finishResult.post_id as string | undefined,
+		postId,
 	};
 }
 
@@ -441,14 +607,167 @@ async function postFirstComment(
 	auth: FacebookAuth,
 	postId: string,
 	message: string,
-): Promise<void> {
+): Promise<string> {
 	// Facebook Graph API: Post a comment on a published object
 	// Docs: https://developers.facebook.com/docs/graph-api/reference/object/comments/
-	await graphPost(`/${postId}/comments`, auth, { message });
+	const result = await graphPost(`/${postId}/comments`, auth, { message });
+	return result.id as string;
+}
+
+async function publishFirstCommentOnce(
+	request: PublishRequest,
+	auth: FacebookAuth,
+	postId: string,
+	message: string,
+): Promise<void> {
+	if (getSucceededProviderEffect(request, "first_comment")) return;
+	let commentId: string;
+	try {
+		commentId = await postFirstComment(auth, postId, message);
+	} catch {
+		return;
+	}
+	await recordProviderEffect(request, {
+		name: "first_comment",
+		status: "succeeded",
+		provider_id: commentId,
+	});
 }
 
 export const facebookPublisher: Publisher = {
 	platform: "facebook",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		const operationId = request.provider_operation_id?.trim();
+		if (!operationId) {
+			return {
+				success: false,
+				provider_outcome: { disposition: "outcome_unknown" },
+				error: {
+					code: "MISSING_PROVIDER_OPERATION_ID",
+					message:
+						"Facebook video reconciliation requires the original video ID.",
+				},
+			};
+		}
+
+		try {
+			const auth: FacebookAuth = {
+				access_token: request.account.access_token,
+				page_id: request.account.platform_account_id,
+			};
+			// Meta's video status endpoint exposes phase-level processing state.
+			// https://developers.facebook.com/docs/graph-api/reference/video/
+			// Section: Reading, fields `status` and `permalink_url`.
+			const res = await graphFetch(
+				`${GRAPH_API}/${encodeURIComponent(operationId)}?fields=status,permalink_url`,
+				auth,
+			);
+			if (!res.ok) {
+				const raw = await readPublisherText(res).catch(() => res.statusText);
+				throw new PublishError(
+					`Facebook video status failed: ${res.statusText}`,
+					{
+						statusCode: res.status,
+						detail: `HTTP ${res.status}\n${raw}`,
+					},
+				);
+			}
+			const data = (await readPublisherJson(res)) as {
+				id?: string;
+				permalink_url?: string;
+				status?: {
+					video_status?: string;
+					uploading_phase?: { status?: string; errors?: unknown[] };
+					processing_phase?: { status?: string; errors?: unknown[] };
+					publishing_phase?: { status?: string; errors?: unknown[] };
+				};
+			};
+			const status = data.status;
+			const phaseStates = [
+				status?.uploading_phase?.status,
+				status?.processing_phase?.status,
+				status?.publishing_phase?.status,
+			]
+				.filter((value): value is string => typeof value === "string")
+				.map((value) => value.toLowerCase());
+			const videoState = status?.video_status?.toLowerCase();
+			const hasErrors = [
+				status?.uploading_phase?.errors,
+				status?.processing_phase?.errors,
+				status?.publishing_phase?.errors,
+			].some((errors) => Array.isArray(errors) && errors.length > 0);
+			const isFailed =
+				hasErrors ||
+				videoState === "error" ||
+				videoState === "failed" ||
+				phaseStates.some((state) => state === "error" || state === "failed");
+			const providerState =
+				status?.video_status ??
+				phaseStates.at(-1) ??
+				request.provider_state ??
+				"missing_status";
+
+			if (isFailed) {
+				return {
+					success: false,
+					provider_outcome: {
+						disposition: "failed",
+						provider_operation_id: operationId,
+						platform_post_id: request.platform_post_id ?? undefined,
+						provider_state: providerState,
+					},
+					error: {
+						code: "FACEBOOK_VIDEO_FAILED",
+						message: "Facebook failed to process or publish the video.",
+					},
+				};
+			}
+
+			const isReady =
+				videoState === "ready" ||
+				videoState === "published" ||
+				status?.publishing_phase?.status?.toLowerCase() === "complete";
+			if (isReady) {
+				const postId =
+					request.platform_post_id?.trim() || data.id || operationId;
+				return {
+					success: true,
+					platform_post_id: postId,
+					platform_url: data.permalink_url,
+					provider_outcome: {
+						disposition: "published",
+						provider_operation_id: operationId,
+						platform_post_id: postId,
+						platform_url: data.permalink_url,
+						provider_state: providerState,
+					},
+				};
+			}
+
+			return {
+				success: true,
+				platform_post_id: request.platform_post_id ?? undefined,
+				provider_outcome: {
+					disposition: "processing",
+					provider_operation_id: operationId,
+					platform_post_id: request.platform_post_id ?? undefined,
+					provider_state: providerState,
+				},
+			};
+		} catch (error) {
+			const result = classifyPublishError(error);
+			return {
+				...result,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					provider_operation_id: operationId,
+					platform_post_id: request.platform_post_id ?? undefined,
+					provider_state: request.provider_state ?? undefined,
+				},
+			};
+		}
+	},
 
 	async comment(
 		account: EngagementAccount,
@@ -474,9 +793,36 @@ export const facebookPublisher: Publisher = {
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
-			const opts = request.target_options;
-			const pageId =
-				(opts.page_id as string) ?? request.account.platform_account_id;
+			const parsedOptions = FacebookTargetOptions.safeParse(
+				request.target_options,
+			);
+			if (!parsedOptions.success) {
+				const issue = parsedOptions.error.issues[0];
+				const path = issue?.path.length ? ` ${issue.path.join(".")}` : "";
+				return {
+					success: false,
+					error: {
+						code: "INVALID_FACEBOOK_TARGET_OPTIONS",
+						message: `Invalid Facebook target option${path}: ${issue?.message ?? "validation failed"}.`,
+					},
+				};
+			}
+			const opts = parsedOptions.data;
+			const pageId = request.account.platform_account_id;
+			if (
+				typeof opts.page_id === "string" &&
+				opts.page_id.trim() &&
+				opts.page_id.trim() !== pageId
+			) {
+				return {
+					success: false,
+					error: {
+						code: "PAGE_ID_MISMATCH",
+						message:
+							"target_options.page_id does not match the connected Facebook Page.",
+					},
+				};
+			}
 			const auth: FacebookAuth = {
 				access_token: request.account.access_token,
 				page_id: pageId,
@@ -488,6 +834,172 @@ export const facebookPublisher: Publisher = {
 			const contentType = opts.content_type as string | undefined;
 			const firstComment = opts.first_comment as string | undefined;
 			const title = opts.title as string | undefined;
+			const isFeed = contentType === undefined || contentType === "feed";
+			const published = opts.published as boolean | undefined;
+			const placeId =
+				typeof opts.place_id === "string" && opts.place_id.trim()
+					? opts.place_id.trim()
+					: undefined;
+			const targeting = opts.targeting;
+			const feedTargeting = opts.feed_targeting;
+			const reelState = (opts.reel_state ?? "PUBLISHED") as unknown;
+			const reelScheduledAt = opts.reel_scheduled_publish_time;
+			if (opts.place_id !== undefined && !/^\d+$/.test(placeId ?? "")) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_PLACE_ID",
+						message: "Facebook place_id must be a numeric Graph object ID.",
+					},
+				};
+			}
+
+			if (published !== undefined && typeof published !== "boolean") {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_PUBLISHED_OPTION",
+						message: "Facebook published must be boolean.",
+					},
+				};
+			}
+			if (published !== undefined && !isFeed) {
+				return {
+					success: false,
+					error: {
+						code: "FACEBOOK_OPTION_REQUIRES_FEED",
+						message: "Facebook published is supported only for feed posts.",
+					},
+				};
+			}
+			if ((targeting !== undefined || feedTargeting !== undefined) && !isFeed) {
+				return {
+					success: false,
+					error: {
+						code: "FACEBOOK_OPTION_REQUIRES_FEED",
+						message:
+							"Facebook targeting and feed_targeting are supported only for feed posts.",
+					},
+				};
+			}
+			if (placeId && contentType === "story") {
+				return {
+					success: false,
+					error: {
+						code: "FACEBOOK_OPTION_UNSUPPORTED_FOR_STORY",
+						message:
+							"Facebook place_id is supported for feed posts and Reels, not Stories.",
+					},
+				};
+			}
+			for (const [name, value] of [
+				["targeting", targeting],
+				["feed_targeting", feedTargeting],
+			] as const) {
+				if (
+					value !== undefined &&
+					(!value || typeof value !== "object" || Array.isArray(value))
+				) {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_FACEBOOK_TARGETING",
+							message: `Facebook ${name} must be an object.`,
+						},
+					};
+				}
+			}
+			if (published === false && firstComment) {
+				return {
+					success: false,
+					error: {
+						code: "FIRST_COMMENT_REQUIRES_PUBLISHED_POST",
+						message:
+							"Facebook first_comment cannot be added to an unpublished post.",
+					},
+				};
+			}
+			if (firstComment && !isFeed) {
+				return {
+					success: false,
+					error: {
+						code: "FACEBOOK_OPTION_REQUIRES_FEED",
+						message: "Facebook first_comment is supported only for feed posts.",
+					},
+				};
+			}
+			if (
+				reelState !== "DRAFT" &&
+				reelState !== "SCHEDULED" &&
+				reelState !== "PUBLISHED"
+			) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_REEL_STATE",
+						message:
+							"Facebook reel_state must be DRAFT, SCHEDULED, or PUBLISHED.",
+					},
+				};
+			}
+			if (opts.reel_state !== undefined && contentType !== "reel") {
+				return {
+					success: false,
+					error: {
+						code: "FACEBOOK_OPTION_REQUIRES_REEL",
+						message: "Facebook reel_state is supported only for Reel posts.",
+					},
+				};
+			}
+			let reelScheduledPublishSeconds: number | undefined;
+			if (reelState === "SCHEDULED") {
+				if (typeof reelScheduledAt !== "string") {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_REEL_SCHEDULE",
+							message:
+								"Facebook reel_state SCHEDULED requires reel_scheduled_publish_time.",
+						},
+					};
+				}
+				const scheduledMs = Date.parse(reelScheduledAt);
+				const now = Date.now();
+				if (
+					!Number.isFinite(scheduledMs) ||
+					scheduledMs <= now + 10 * 60 * 1000 ||
+					scheduledMs > now + 29 * 24 * 60 * 60 * 1000
+				) {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_REEL_SCHEDULE",
+							message:
+								"Facebook Reel scheduling must be more than 10 minutes and no more than 29 days in the future.",
+						},
+					};
+				}
+				reelScheduledPublishSeconds = Math.floor(scheduledMs / 1000);
+			} else if (reelScheduledAt !== undefined) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_REEL_SCHEDULE",
+						message:
+							"Facebook reel_scheduled_publish_time requires reel_state SCHEDULED.",
+					},
+				};
+			}
+
+			// Official Page posts reference: published=false creates an unpublished
+			// post; targeting is strict, feed_targeting is preferential, and place is
+			// the location Page ID. https://developers.facebook.com/docs/pages-api/posts
+			const feedOptions: Record<string, unknown> = {};
+			if (published !== undefined) feedOptions.published = published;
+			if (placeId) feedOptions.place = placeId;
+			if (targeting !== undefined) feedOptions.targeting = targeting;
+			if (feedTargeting !== undefined)
+				feedOptions.feed_targeting = feedTargeting;
 
 			let postId: string;
 			let permalinkUrl: string | undefined;
@@ -512,7 +1024,7 @@ export const facebookPublisher: Publisher = {
 				const firstMedia = media[0];
 				if (!firstMedia) throw new Error("No media found");
 				if (firstMedia.type === "video") {
-					const result = await createVideoStory(auth, firstMedia.url);
+					const result = await createVideoStory(request, auth, firstMedia.url);
 					return {
 						success: true,
 						platform_post_id: result.postId,
@@ -526,7 +1038,7 @@ export const facebookPublisher: Publisher = {
 						},
 					};
 				} else {
-					const result = await createPhotoStory(auth, firstMedia.url);
+					const result = await createPhotoStory(request, auth, firstMedia.url);
 					postId = result.id;
 				}
 				if (!postId?.trim()) {
@@ -564,26 +1076,40 @@ export const facebookPublisher: Publisher = {
 				}
 
 				const result = await createReel(
+					request,
 					auth,
 					media[0]?.url,
 					content || undefined,
 					title,
+					reelState,
+					reelScheduledPublishSeconds,
+					placeId,
 				);
+				const reelDisposition =
+					reelState === "DRAFT"
+						? "provider_draft"
+						: reelState === "SCHEDULED"
+							? "scheduled"
+							: "processing";
+				const reelUrl =
+					reelState === "PUBLISHED" && result.postId
+						? `https://www.facebook.com/reel/${result.postId}`
+						: undefined;
 
 				return {
 					success: true,
 					platform_post_id: result.postId,
-					platform_url: result.postId
-						? `https://www.facebook.com/reel/${result.postId}`
-						: undefined,
+					platform_url: reelUrl,
 					provider_outcome: {
-						disposition: "processing",
+						disposition: reelDisposition,
 						provider_operation_id: result.operationId,
 						platform_post_id: result.postId,
-						platform_url: result.postId
-							? `https://www.facebook.com/reel/${result.postId}`
-							: undefined,
-						provider_state: "reel_finish_accepted",
+						platform_url: reelUrl,
+						provider_state: `reel_${reelState.toLowerCase()}`,
+						next_reconcile_at:
+							reelState === "SCHEDULED" && typeof reelScheduledAt === "string"
+								? reelScheduledAt
+								: undefined,
 					},
 				};
 			}
@@ -604,6 +1130,16 @@ export const facebookPublisher: Publisher = {
 					},
 				};
 			}
+			if (videos.length > 0 && placeId) {
+				return {
+					success: false,
+					error: {
+						code: "PLACE_UNSUPPORTED_FOR_VIDEO_FEED",
+						message:
+							"Facebook's Page video endpoint does not support place; use a text, image, or Reel post.",
+					},
+				};
+			}
 
 			if (videos.length > 0) {
 				// Video post (single video only)
@@ -618,30 +1154,49 @@ export const facebookPublisher: Publisher = {
 						},
 					};
 				}
-				const result = await createVideoPost(
-					auth,
-					videos[0]?.url ?? "",
-					content || undefined,
-				);
-				postId = result.id;
-				permalinkUrl = result.permalink_url;
+				const recorded = getSucceededProviderEffect(request, "post_published");
+				if (recorded?.provider_id) {
+					postId = recorded.provider_id;
+				} else {
+					const result = await createVideoPost(
+						auth,
+						videos[0]?.url ?? "",
+						content || undefined,
+						Object.fromEntries(
+							Object.entries(feedOptions).filter(([key]) => key !== "place"),
+						),
+					);
+					postId = result.id;
+					permalinkUrl = result.permalink_url;
+					await recordProviderEffect(request, {
+						name: "post_published",
+						status: "succeeded",
+						provider_id: postId,
+					});
+				}
 			} else if (images.length > 1) {
 				// Multi-image post
 				const result = await createMultiImagePost(
+					request,
 					auth,
 					images.map((m) => m.url),
 					content || undefined,
+					feedOptions,
 				);
 				postId = result.id;
 				permalinkUrl = result.permalink_url;
 			} else if (images.length === 1) {
-				// Single image post
-				const result = await createSingleImagePost(
+				// Stage the image then create the authoritative /feed object so the
+				// documented published/place/targeting fields apply consistently.
+				const result = await createMultiImagePost(
+					request,
 					auth,
-					images[0]?.url ?? "",
+					[images[0]?.url ?? ""],
 					content || undefined,
+					feedOptions,
 				);
 				postId = result.id;
+				permalinkUrl = result.permalink_url;
 			} else {
 				// Text-only post
 				if (!content) {
@@ -653,19 +1208,24 @@ export const facebookPublisher: Publisher = {
 						},
 					};
 				}
-				const result = await createTextPost(auth, content);
-				postId = result.id;
-				permalinkUrl = result.permalink_url;
+				const recorded = getSucceededProviderEffect(request, "post_published");
+				if (recorded?.provider_id) {
+					postId = recorded.provider_id;
+				} else {
+					const result = await createTextPost(auth, content, feedOptions);
+					postId = result.id;
+					permalinkUrl = result.permalink_url;
+					await recordProviderEffect(request, {
+						name: "post_published",
+						status: "succeeded",
+						provider_id: postId,
+					});
+				}
 			}
 
 			// First comment (feed posts only)
-			if (firstComment) {
-				try {
-					await postFirstComment(auth, postId, firstComment);
-				} catch {
-					// Non-fatal — the post was already published
-				}
-			}
+			if (firstComment && published !== false)
+				await publishFirstCommentOnce(request, auth, postId, firstComment);
 			if (!postId?.trim()) {
 				throw new Error("Facebook response did not include a post ID.");
 			}
@@ -677,19 +1237,30 @@ export const facebookPublisher: Publisher = {
 				parts.length === 2
 					? `https://www.facebook.com/${parts[0]}/posts/${parts[1]}`
 					: `https://www.facebook.com/${auth.page_id}/posts/${postId}`;
-			const platformUrl = permalinkUrl ?? fallbackUrl;
+			const platformUrl =
+				published === false ? undefined : (permalinkUrl ?? fallbackUrl);
+			const feedDisposition =
+				published === false
+					? "provider_draft"
+					: videos.length > 0
+						? "processing"
+						: "published";
 
 			return {
 				success: true,
 				platform_post_id: postId,
 				platform_url: platformUrl,
 				provider_outcome: {
-					disposition: videos.length > 0 ? "processing" : "published",
+					disposition: feedDisposition,
 					provider_operation_id: videos.length > 0 ? postId : undefined,
 					platform_post_id: postId,
 					platform_url: platformUrl,
 					provider_state:
-						videos.length > 0 ? "video_upload_accepted" : "created",
+						published === false
+							? "unpublished"
+							: videos.length > 0
+								? "video_upload_accepted"
+								: "created",
 				},
 			};
 		} catch (err) {

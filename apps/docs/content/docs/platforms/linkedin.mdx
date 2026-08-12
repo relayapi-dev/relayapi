@@ -24,7 +24,7 @@ icon: linkedin
 | Analytics | Yes (impressions, reach, likes, comments, shares, clicks, views) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
@@ -37,7 +37,7 @@ LinkedIn actively **suppresses posts with external links** — expect a 40-50% r
 
 Post to LinkedIn:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -50,20 +50,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-post = client.posts.create(
-    content='I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...',
-    targets=['linkedin'],
-    scheduled_at='now',
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -112,7 +98,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Text posts have the highest organic reach on LinkedIn. First ~210 characters are visible before the "see more" fold, so front-load your hook.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -120,15 +106,6 @@ const post = await client.posts.create({
   targets: ['linkedin'],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='I spent 3 years building the wrong product.\n\nHere is what I learned about validating ideas before writing code...',
-    targets=['linkedin'],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -165,7 +142,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Single Image Post
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -176,18 +153,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Our new office setup!',
-    targets=['linkedin'],
-    media=[
-        {'url': 'https://cdn.example.com/office.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -236,7 +201,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 LinkedIn supports up to 20 images per post. Cannot include videos or documents alongside images.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -249,20 +214,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Highlights from our team retreat!',
-    targets=['linkedin'],
-    media=[
-        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -321,7 +272,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Video Post
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -332,18 +283,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Watch our latest product demo',
-    targets=['linkedin'],
-    media=[
-        {'url': 'https://cdn.example.com/demo.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -392,7 +331,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 LinkedIn uniquely supports document uploads that display as swipeable carousels. Upload a PDF, PPT, PPTX, DOC, or DOCX file. Max 100 MB, up to 300 pages.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -408,23 +347,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Download our 2024 Industry Report',
-    targets=['linkedin'],
-    media=[
-        {'url': 'https://cdn.example.com/report.pdf', 'type': 'document'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'linkedin': {
-            'document_title': '2024 Industry Report',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -492,7 +414,7 @@ Document carousels are one of the highest-engagement post formats on LinkedIn. E
 
 LinkedIn actively suppresses posts containing external URLs — expect a 40-50% reach drop. Put links in the first comment instead.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -505,20 +427,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='We just published our guide to API design patterns.\n\nLink in the first comment.',
-    targets=['linkedin'],
-    scheduled_at='now',
-    target_options={
-        'linkedin': {
-            'first_comment': 'Read the full guide here: https://example.com/api-guide',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -574,9 +482,9 @@ Putting links in the main `content` field causes a significant reach penalty on 
 
 ### Company Page Post
 
-Post to a company page instead of a personal profile by targeting the company account.
+Post to a company page instead of a personal profile by targeting the RelayAPI account created when that organization was selected during the LinkedIn connection flow. The connected member or organization URN is authoritative for every post; a post cannot use an option to redirect that OAuth token to another company.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -584,15 +492,6 @@ const post = await client.posts.create({
   targets: ['acc_linkedin_company'],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Update from our organization!',
-    targets=['acc_linkedin_company'],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -669,7 +568,7 @@ All fields go inside `target_options.linkedin` on your post request.
 | `first_comment` | string | Auto-posted first comment. Put links here to avoid reach suppression. |
 | `document_title` | string | Title displayed on PDF/document carousel posts |
 | `disable_link_preview` | boolean | Suppress URL preview card in the post (default: false) |
-| `organization_urn` | string | Target a specific company page: `urn:li:organization:123456` |
+| `organization_urn` | string | Deprecated identity assertion only. If supplied, it must exactly match the connected member/organization URN; it never retargets the post. |
 
 ## Common Errors
 
@@ -680,6 +579,7 @@ All fields go inside `target_options.linkedin` on your post request.
 | Publishing failed max retries | All retry attempts failed | Temporary issue — retry manually after a few minutes. |
 | Token expired | OAuth token expired | Reconnect the account via the dashboard or Connect API. |
 | Cannot mix media types | Images + videos or images + documents in same post | Use only one media type per post. GIFs count as video. |
+| `ORGANIZATION_URN_MISMATCH` | Deprecated `organization_urn` does not equal the connector-selected identity | Target the correct connected account and remove the compatibility field; RelayAPI rejects the mismatch before provider I/O. |
 
 ## Known Quirks
 

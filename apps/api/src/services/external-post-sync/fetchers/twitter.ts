@@ -1,20 +1,20 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../../lib/provider-response";
 // ---------------------------------------------------------------------------
 // X/Twitter Posts Fetcher
 // Docs: https://docs.x.com/x-api/posts/timelines/api-reference/get-users-id-tweets
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
+import type { ExternalPostFetcher, ExternalPostData } from "../types";
 import { RateLimitError } from "../types";
 import { parseRateLimitHeaders } from "../rate-limits";
 
 const BASE = "https://api.x.com/2";
 const DEFAULT_LIMIT = 100;
 
-const TWEET_FIELDS =
-	"created_at,public_metrics,text,attachments,entities";
+const TWEET_FIELDS = "created_at,public_metrics,text,attachments,entities";
 const EXPANSIONS = "attachments.media_keys";
 const MEDIA_FIELDS = "url,preview_image_url,type";
 
@@ -63,10 +63,10 @@ async function xFetch<T = unknown>(
 		);
 	}
 	if (!res.ok) {
-		const body = await res.text();
+		const body = await readProviderText(res);
 		throw new Error(`X API ${res.status}: ${body}`);
 	}
-	return { data: (await res.json()) as T, headers: res.headers };
+	return { data: (await readProviderJson(res)) as T, headers: res.headers };
 }
 
 function parseTweet(

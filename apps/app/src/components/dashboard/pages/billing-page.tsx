@@ -36,7 +36,7 @@ const plans = [
     period: "/month",
     features: [
       "200 API calls/month",
-      "All 21 platforms",
+      "All 22 platforms",
       "Unlimited profiles",
       "Media uploads",
       "Webhook notifications",
@@ -50,7 +50,7 @@ const plans = [
     features: [
       "10,000 API calls included",
       "$1 per 1,000 extra calls",
-      "All 21 platforms",
+      "All 22 platforms",
       "Unlimited profiles",
       "Comments API included",
       "Analytics API included",

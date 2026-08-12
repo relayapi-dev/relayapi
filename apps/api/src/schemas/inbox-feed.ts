@@ -174,6 +174,23 @@ export const ConversationIdParam = z.object({
 	id: z.string().describe("Conversation ID"),
 });
 
+export const InboxMessagePlatformData = z
+	.object({
+		message_type: z
+			.enum(["story_mention", "post_mention", "story_reply", "share"])
+			.optional(),
+		story_id: z.string().optional(),
+		story_url: z.string().optional(),
+		whatsapp_group_id: z.string().optional(),
+		whatsapp_flow: z
+			.object({
+				name: z.string().optional(),
+				has_response: z.boolean(),
+			})
+			.optional(),
+	})
+	.passthrough();
+
 export const ConversationDetailMessage = z.object({
 	id: z.string().describe("Message ID"),
 	conversation_id: z.string().describe("Conversation ID"),
@@ -186,9 +203,14 @@ export const ConversationDetailMessage = z.object({
 	attachments: z.any().describe("Attachments"),
 	sentiment_score: z.number().nullable().describe("Sentiment score"),
 	classification: z.string().nullable().describe("Message classification"),
-	platform_data: z.any().describe("Platform-specific data"),
+	platform_data: InboxMessagePlatformData.nullable().describe(
+		"Platform-specific metadata. WhatsApp Flow submissions expose only response presence/name here; response values remain in the automation event.",
+	),
 	is_hidden: z.boolean().describe("Whether message is hidden"),
 	is_liked: z.boolean().describe("Whether message is liked"),
+	edit_revision: z.number().int().nonnegative(),
+	edited_at: z.string().datetime().nullable(),
+	provider_read_at: z.string().datetime().nullable(),
 	created_at: z.string().describe("Message timestamp"),
 });
 

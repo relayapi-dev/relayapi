@@ -1,15 +1,12 @@
-import {
-	createDb,
-	posts,
-	socialAccounts,
-} from "@relayapi/db";
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
-import { getCachedBestTimes, type BestTimeSlot } from "./best-time-cache";
+import { createDb, type Database, posts, socialAccounts } from "@relayapi/db";
+import { and, eq, gte, inArray, isNull, lte, type SQL } from "drizzle-orm";
+import { workspaceScopeSqlCondition } from "../lib/workspace-scope";
+import type { Env, Variables } from "../types";
+import { type BestTimeSlot, getCachedBestTimes } from "./best-time-cache";
 import {
 	listQueueSchedules,
 	type StoredQueueSchedule,
 } from "./queue-schedules";
-import type { Env } from "../types";
 
 export interface SlotCandidate {
 	slot_at: string;
@@ -19,6 +16,10 @@ export interface SlotCandidate {
 }
 
 export interface FindSlotOptions {
+	db?: Database;
+	workspaceScope?: Variables["workspaceScope"];
+	/** Undefined means every authorized workspace; null means org-scoped only. */
+	workspaceId?: string | null;
 	accountId?: string;
 	after?: Date;
 	strategy?: "queue" | "best-time" | "smart";
@@ -111,6 +112,9 @@ export async function findBestSlots(
 	options: FindSlotOptions = {},
 ): Promise<{ slots: SlotCandidate[]; fallback: boolean }> {
 	const {
+		db: requestDb,
+		workspaceScope = "all",
+		workspaceId,
 		accountId,
 		after = new Date(),
 		strategy = "smart",
@@ -118,7 +122,7 @@ export async function findBestSlots(
 		excludeTimes = [],
 	} = options;
 
-	const db = createDb(env.HYPERDRIVE.connectionString);
+	const db = requestDb ?? createDb(env.HYPERDRIVE.connectionString);
 	// PostgreSQL owns schedule state; KV is only a short-lived cache.
 	const schedules = await listQueueSchedules(db, env.KV, orgId);
 	const schedule = schedules.find((s) => s.is_default) ?? schedules[0];
@@ -132,7 +136,12 @@ export async function findBestSlots(
 	// For best-time strategy, also generate candidates from engagement data
 	let bestTimeData: BestTimeSlot[] = [];
 	if (strategy === "best-time" || strategy === "smart") {
-		bestTimeData = await getCachedBestTimes(env, orgId);
+		bestTimeData = await getCachedBestTimes(env, db, {
+			organizationId: orgId,
+			workspaceScope,
+			workspaceId,
+			accountId,
+		});
 	}
 
 	// Build candidate set
@@ -170,17 +179,24 @@ export async function findBestSlots(
 	windowStart.setMinutes(windowStart.getMinutes() - 5);
 	windowEnd.setMinutes(windowEnd.getMinutes() + 5);
 
+	const collisionConditions: SQL[] = [
+		eq(posts.organizationId, orgId),
+		workspaceScopeSqlCondition(workspaceScope, posts.workspaceId),
+		inArray(posts.status, ["scheduled", "publishing"]),
+		gte(posts.scheduledAt, windowStart),
+		lte(posts.scheduledAt, windowEnd),
+	];
+	if (workspaceId !== undefined) {
+		collisionConditions.push(
+			workspaceId === null
+				? isNull(posts.workspaceId)
+				: eq(posts.workspaceId, workspaceId),
+		);
+	}
 	const scheduledPosts = await db
 		.select({ scheduledAt: posts.scheduledAt })
 		.from(posts)
-		.where(
-			and(
-				eq(posts.organizationId, orgId),
-				inArray(posts.status, ["scheduled", "publishing"]),
-				gte(posts.scheduledAt, windowStart),
-				lte(posts.scheduledAt, windowEnd),
-			),
-		);
+		.where(and(...collisionConditions));
 
 	// Count conflicts per candidate (posts within +/- 5 minutes)
 	const conflictCounts = new Map<string, number>();
@@ -198,10 +214,22 @@ export async function findBestSlots(
 	// Load account preferences if accountId provided
 	let postingWindows: Array<{ day_of_week: number; start_hour: number; end_hour: number }> = [];
 	if (accountId) {
+		const accountConditions: SQL[] = [
+			eq(socialAccounts.id, accountId),
+			eq(socialAccounts.organizationId, orgId),
+			workspaceScopeSqlCondition(workspaceScope, socialAccounts.workspaceId),
+		];
+		if (workspaceId !== undefined) {
+			accountConditions.push(
+				workspaceId === null
+					? isNull(socialAccounts.workspaceId)
+					: eq(socialAccounts.workspaceId, workspaceId),
+			);
+		}
 		const [account] = await db
 			.select({ schedulingPreferences: socialAccounts.schedulingPreferences })
 			.from(socialAccounts)
-			.where(eq(socialAccounts.id, accountId))
+			.where(and(...accountConditions))
 			.limit(1);
 		if (account?.schedulingPreferences) {
 			const prefs = account.schedulingPreferences as {

@@ -24,6 +24,16 @@ export const API_VERSIONS = {
 	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning
 	// 202604 remains supported; latest verified 2026-07-15 is 202607.
 	linkedin: "202604",
+	// https://developers.google.com/google-ads/api/docs/release-notes
+	google_ads: "v25",
+	// https://business-api.tiktok.com/gateway/docs/index
+	tiktok_business: "v1.3",
+	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning
+	linkedin_marketing: "202607",
+	// https://github.com/pinterest/api-description/tree/main/v5
+	pinterest_ads: "v5",
+	// https://docs.x.com/x-ads-api/campaign-management/reference
+	twitter_ads: "12",
 } as const;
 
 export const GRAPH_BASE = {

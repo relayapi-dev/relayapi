@@ -11,7 +11,7 @@ import {
 import type { Env, Variables } from "../types";
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
+const MAX_STREAMED_REPLAY_REQUEST_BYTES = 64 * 1024 * 1024;
 const MAX_REPLAY_RESPONSE_BYTES = 1024 * 1024;
 const KEY_RE = /^[A-Za-z0-9._:-]{8,255}$/;
 
@@ -126,9 +126,15 @@ async function drainRequestBody(request: Request): Promise<void> {
  */
 export function trackRequestDigest(request: Request): DigestTracker {
 	const declaredBytes = parseContentLength(request.headers);
-	if (declaredBytes !== null && declaredBytes > MAX_REQUEST_BYTES) {
+	if (
+		declaredBytes !== null &&
+		declaredBytes > MAX_STREAMED_REPLAY_REQUEST_BYTES
+	) {
 		void request.body?.cancel().catch(() => {});
-		throw new ResponseTooLargeError(MAX_REQUEST_BYTES, declaredBytes);
+		throw new ResponseTooLargeError(
+			MAX_STREAMED_REPLAY_REQUEST_BYTES,
+			declaredBytes,
+		);
 	}
 	if (!request.body) {
 		return {
@@ -139,7 +145,7 @@ export function trackRequestDigest(request: Request): DigestTracker {
 
 	const bounded = createBoundedReadableBody(
 		request.body,
-		MAX_REQUEST_BYTES,
+		MAX_STREAMED_REPLAY_REQUEST_BYTES,
 		declaredBytes,
 	);
 	let writeDigest: (chunk: Uint8Array) => Promise<void>;
@@ -306,8 +312,9 @@ export const idempotencyMiddleware = createMiddleware<{
 	let bodyDigest: Promise<string>;
 	try {
 		if (c.req.raw.bodyUsed) {
-			// JSON body-cache has already retained the exact source text.
-			bodyDigest = sha256Hex(await c.req.text());
+			// The bounded body cache seeded arrayBuffer first, so JSON and allowlisted
+			// multipart requests are hashed without decoding or reserialization.
+			bodyDigest = sha256Hex(await c.req.arrayBuffer());
 		} else {
 			const tracked = trackRequestDigest(c.req.raw);
 			c.req.raw = tracked.request;

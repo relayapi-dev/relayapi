@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 /**
  * Inbox backfill service — fetches historical comments/DMs from platform APIs
  * when an account is first connected, storing them in the inbox DB tables.
@@ -138,7 +139,7 @@ async function backfillFacebook(
 		return;
 	}
 
-	const postsJson = (await postsRes.json()) as {
+	const postsJson = (await readProviderJson(postsRes)) as {
 		data: Array<{
 			id: string;
 			message?: string;
@@ -190,7 +191,7 @@ async function fetchAndStoreFacebookComments(
 		const res = await fetch(url);
 		if (!res.ok) break;
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				from?: {
@@ -283,7 +284,7 @@ async function backfillInstagram(
 		return;
 	}
 
-	const mediaJson = (await mediaRes.json()) as {
+	const mediaJson = (await readProviderJson(mediaRes)) as {
 		data: Array<{
 			id: string;
 			caption?: string;
@@ -337,7 +338,7 @@ async function fetchAndStoreInstagramComments(
 		const res = await fetch(url);
 		if (!res.ok) break;
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				from?: { username: string; id?: string };
@@ -430,7 +431,7 @@ async function backfillYouTube(
 			break;
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items: Array<{
 				id: string;
 				snippet: {
@@ -571,7 +572,7 @@ async function backfillGoogleBusiness(
 		return;
 	}
 
-	const accountsJson = (await accountsRes.json()) as {
+	const accountsJson = (await readProviderJson(accountsRes)) as {
 		accounts: Array<{ name: string }>;
 	};
 	const gmbAccount = accountsJson.accounts?.[0];
@@ -595,7 +596,7 @@ async function backfillGoogleBusiness(
 			);
 			return;
 		}
-		const locJson = (await locRes.json()) as {
+		const locJson = (await readProviderJson(locRes)) as {
 			locations: Array<{ name: string }>;
 		};
 		locationName = locJson.locations?.[0]?.name;
@@ -627,7 +628,7 @@ async function backfillGoogleBusiness(
 			break;
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			reviews: Array<{
 				name: string;
 				reviewer: { displayName: string };

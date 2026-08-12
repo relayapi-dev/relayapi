@@ -1,3 +1,4 @@
+import { readProviderText } from "../../lib/provider-response";
 import {
 	automationBindings,
 	createDb,
@@ -638,7 +639,7 @@ export async function syncAutomationBinding(
 		return;
 	}
 
-	const detail = await response.text();
+	const detail = await readProviderText(response);
 	if (!response.ok) {
 		const error = new Error(
 			`Meta messenger_profile sync failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`,

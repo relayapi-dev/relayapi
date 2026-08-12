@@ -233,8 +233,7 @@ function assertManagedStripePrice(
 					metadata?: Record<string, string>;
 				})
 			: null;
-	if (product?.active !== true)
-		failures.push("expanded active product");
+	if (product?.active !== true) failures.push("expanded active product");
 	if (product?.tax_code != null) failures.push("absence of product tax code");
 	if (
 		product?.metadata?.[STRIPE_MANAGED_BY_KEY] !== STRIPE_MANAGED_BY_VALUE ||
@@ -435,6 +434,7 @@ export type WorkerBinding = {
 	queue_name?: string;
 	class_name?: string;
 	script_name?: string;
+	workflow_name?: string;
 	text?: string;
 	simple?: { limit?: number; period?: number; mitigation_timeout?: number };
 };
@@ -616,6 +616,14 @@ export function assertQueueRescueLifecycle(value: Lifecycle): void {
 	);
 }
 
+export function assertAdReportLifecycle(value: Lifecycle): void {
+	assertExpiringBucketLifecycle(
+		resources.adReportBucket,
+		resources.adReportRetentionSeconds,
+		value,
+	);
+}
+
 export function assertDurableBucketLifecycle(
 	bucketName: string,
 	value: Lifecycle,
@@ -678,7 +686,8 @@ export function assertMediaCors(value: BucketCors): void {
 			sorted(resources.mediaCors.methods).join("\0") ||
 		sorted(rule.allowed?.headers).join("\0") !==
 			sorted(resources.mediaCors.headers).join("\0") ||
-		(rule.exposeHeaders?.length ?? 0) !== 0 ||
+		sorted(rule.exposeHeaders).join("\0") !==
+			sorted(resources.mediaCors.exposeHeaders).join("\0") ||
 		rule.maxAgeSeconds !== resources.mediaCors.maxAgeSeconds
 	) {
 		throw new Error(
@@ -1250,6 +1259,16 @@ async function verifyProduction(): Promise<void> {
 				),
 		},
 		{
+			label: "ad report R2 bucket",
+			run: async () =>
+				assertBucket(
+					resources.adReportBucket,
+					await result<Bucket>(
+						`${base}/r2/buckets/${resources.adReportBucket}`,
+					),
+				),
+		},
+		{
 			label: "public assets R2 bucket",
 			run: async () =>
 				assertBucket(
@@ -1322,6 +1341,15 @@ async function verifyProduction(): Promise<void> {
 				assertQueueRescueLifecycle(
 					await result<Lifecycle>(
 						`${base}/r2/buckets/${resources.queueRescueBucket}/lifecycle`,
+					),
+				),
+		},
+		{
+			label: "ad report R2 lifecycle",
+			run: async () =>
+				assertAdReportLifecycle(
+					await result<Lifecycle>(
+						`${base}/r2/buckets/${resources.adReportBucket}/lifecycle`,
 					),
 				),
 		},

@@ -30,6 +30,12 @@ const config: SelfHostConfig = {
 		r2Jurisdiction: "eu",
 	},
 	features: { email: false, ai: false, downloader: false },
+	publishing: {
+		tiktokVerifiedUrlPrefixes: [
+			"https://media.example.com/tiktok/",
+			"https://assets.example.com/exports/tiktok/",
+		],
+	},
 	resources: { kvNamespaceId: "kv-id", hyperdriveId: "hd-id", queues },
 };
 
@@ -38,7 +44,11 @@ describe("generated Wrangler configurations", () => {
 		const generated = apiWranglerConfig(config, "/source") as {
 			name: string;
 			observability: {
-				traces: { enabled: boolean; persist: boolean; head_sampling_rate: number };
+				traces: {
+					enabled: boolean;
+					persist: boolean;
+					head_sampling_rate: number;
+				};
 			};
 			vars: Record<string, string>;
 			routes: Array<{ pattern: string }>;
@@ -78,6 +88,18 @@ describe("generated Wrangler configurations", () => {
 		expect(generated.vars.AI_EMBEDDING_MODEL).toBe("text-embedding-3-small");
 		expect(generated.vars.AI_INFERENCE_PROVIDER).toBe("workers_ai");
 		expect(generated.vars.AI_INFERENCE_MODEL).toBe("@cf/zai-org/glm-4.7-flash");
+		expect(generated.vars.TIKTOK_VERIFIED_URL_PREFIXES).toBe(
+			"https://media.example.com/tiktok/\nhttps://assets.example.com/exports/tiktok/",
+		);
+		expect(
+			generated.r2_buckets.some(
+				(binding) =>
+					(binding as { binding?: string; bucket_name?: string }).binding ===
+						"AD_REPORT_BUCKET" &&
+					(binding as { bucket_name?: string }).bucket_name ===
+						RESOURCE_NAMES.buckets.adReports,
+			),
+		).toBe(true);
 		expect(
 			generated.r2_buckets.every(({ jurisdiction }) => jurisdiction === "eu"),
 		).toBe(true);
@@ -98,7 +120,11 @@ describe("generated Wrangler configurations", () => {
 		const generated = appWranglerConfig(config, "/source") as {
 			main: string;
 			observability: {
-				traces: { enabled: boolean; persist: boolean; head_sampling_rate: number };
+				traces: {
+					enabled: boolean;
+					persist: boolean;
+					head_sampling_rate: number;
+				};
 			};
 			assets: { directory: string };
 			vars: Record<string, string>;
@@ -143,6 +169,15 @@ describe("generated Wrangler configurations", () => {
 			},
 		]);
 		expect(generated.queues).toBeUndefined();
+	});
+
+	test("omits TikTok pull authority when no verified prefix is configured", () => {
+		const withoutTikTokPrefixes = structuredClone(config);
+		delete withoutTikTokPrefixes.publishing;
+		const generated = apiWranglerConfig(withoutTikTokPrefixes, "/source") as {
+			vars: Record<string, string>;
+		};
+		expect(generated.vars).not.toHaveProperty("TIKTOK_VERIFIED_URL_PREFIXES");
 	});
 
 	test("writes only the derived smoke digest to both self-hosted Worker configs", () => {

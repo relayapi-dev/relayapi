@@ -347,6 +347,7 @@ async function processClaimedAction(
 			refresh_token: null,
 			platform_account_id: account.platformAccountId,
 			username: account.username,
+			metadata: account.metadata as Record<string, unknown> | null,
 		};
 		const requestStartedAt = new Date();
 		const armed = await updateFenced(db, action, "executing", {

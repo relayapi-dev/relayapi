@@ -87,7 +87,7 @@ function currentPostgresTables(): Set<string> {
 }
 
 describe("pre-freeze schema capability trace", () => {
-	test("the full ledger exactly covers 143 active tables plus four removed legacy shapes", async () => {
+	test("the full ledger exactly covers 158 active tables plus four removed legacy shapes", async () => {
 		const ledger = await auditLedgerRows();
 		const physicalTables = currentPostgresTables();
 		const removed = ledger.filter(({ disposition }) =>
@@ -97,10 +97,10 @@ describe("pre-freeze schema capability trace", () => {
 			({ disposition }) => !disposition.includes("remove"),
 		);
 
-		expect(physicalTables.size).toBe(143);
-		expect(ledger).toHaveLength(147);
+		expect(physicalTables.size).toBe(158);
+		expect(ledger).toHaveLength(162);
 		expect(ledger.map(({ ordinal }) => ordinal)).toEqual(
-			Array.from({ length: 147 }, (_, index) => index + 1),
+			Array.from({ length: 162 }, (_, index) => index + 1),
 		);
 		expect(removed.map(({ table }) => table).sort()).toEqual([
 			"public.byos_configs",

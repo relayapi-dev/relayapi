@@ -886,12 +886,17 @@ interface WhatsAppWebhookBody {
 				messaging_product: string;
 				metadata: { phone_number_id: string };
 				contacts?: Array<{
-					profile: { name: string };
-					wa_id: string;
+					profile: { name?: string; username?: string };
+					wa_id?: string;
+					user_id?: string;
+					parent_user_id?: string;
 				}>;
 				messages?: Array<{
 					id: string;
-					from: string;
+					from?: string;
+					from_user_id?: string;
+					from_parent_user_id?: string;
+					group_id?: string;
 					timestamp: string;
 					type: string;
 					text?: { body: string };
@@ -900,8 +905,23 @@ interface WhatsAppWebhookBody {
 					id: string;
 					status: "sent" | "delivered" | "read" | "failed";
 					timestamp: string;
-					recipient_id: string;
+					recipient_id?: string;
+					recipient_user_id?: string;
+					recipient_parent_user_id?: string;
+					group_id?: string;
 					errors?: Array<{ code: number; title: string }>;
+				}>;
+				groups?: Array<{
+					timestamp?: string | number;
+					group_id?: string;
+					request_id?: string;
+					type?: string;
+					subject?: string;
+					description?: string;
+					invite_link?: string;
+					join_approval_mode?: "auto_approve" | "approval_required";
+					errors?: Array<Record<string, unknown>>;
+					[key: string]: unknown;
 				}>;
 			};
 		}>;
@@ -927,6 +947,18 @@ export async function processWhatsAppWebhook(
 
 			// The same WhatsApp number can be connected by multiple orgs — fan-out.
 			for (const lookup of lookups) {
+				if (change.value.groups?.length && change.field.startsWith("group_")) {
+					await env.INBOX_QUEUE.send({
+						type: "whatsapp_webhook",
+						platform: "whatsapp",
+						platform_account_id: phoneNumberId,
+						organization_id: lookup.orgId,
+						account_id: lookup.accountId,
+						event_type: change.field,
+						payload: change.value,
+						received_at: new Date().toISOString(),
+					} satisfies InboxQueueMessage);
+				}
 				// Incoming messages
 				if (change.value.messages?.length) {
 					await env.INBOX_QUEUE.send({

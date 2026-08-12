@@ -76,7 +76,7 @@ Create `.cursor-plugin/marketplace.json` at the repo root:
     {
       "name": "relayapi",
       "source": "relayapi",
-      "description": "Post to 21 platforms via a single unified API"
+      "description": "Post to 22 platforms via a single unified API"
     }
   ]
 }

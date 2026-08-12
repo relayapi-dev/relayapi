@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { type createDb, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
@@ -238,7 +239,9 @@ app.openapi(retweet, async (c) => {
 	);
 
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
+		const body = (await readProviderJson(res).catch(
+			() => ({}),
+		)) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
 		return c.json(
 			{
@@ -302,7 +305,9 @@ app.openapi(undoRetweet, async (c) => {
 	);
 
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
+		const body = (await readProviderJson(res).catch(
+			() => ({}),
+		)) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
 		return c.json(
 			{
@@ -370,7 +375,9 @@ app.openapi(bookmark, async (c) => {
 	);
 
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
+		const body = (await readProviderJson(res).catch(
+			() => ({}),
+		)) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
 		return c.json(
 			{
@@ -434,7 +441,9 @@ app.openapi(removeBookmark, async (c) => {
 	);
 
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
+		const body = (await readProviderJson(res).catch(
+			() => ({}),
+		)) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
 		return c.json(
 			{
@@ -502,7 +511,9 @@ app.openapi(follow, async (c) => {
 	);
 
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
+		const body = (await readProviderJson(res).catch(
+			() => ({}),
+		)) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
 		return c.json(
 			{
@@ -512,7 +523,7 @@ app.openapi(follow, async (c) => {
 			502,
 		);
 	}
-	const data = (await res.json().catch(() => ({}))) as {
+	const data = (await readProviderJson(res).catch(() => ({}))) as {
 		data?: { following?: boolean; pending_follow?: boolean };
 	};
 	return c.json(
@@ -578,7 +589,9 @@ app.openapi(unfollow, async (c) => {
 	);
 
 	if (!res.ok) {
-		const body = (await res.json().catch(() => ({}))) as TwitterApiError;
+		const body = (await readProviderJson(res).catch(
+			() => ({}),
+		)) as TwitterApiError;
 		const { message, code } = parseTwitterError(res.status, body);
 		return c.json(
 			{

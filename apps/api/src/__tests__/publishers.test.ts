@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { PLATFORM_LIMITS } from "../config/platform-limits";
 import { getPublisher, isSupportedPlatform } from "../publishers";
 import { PLATFORMS } from "../schemas/common";
 
@@ -173,9 +174,8 @@ describe("Pinterest content limits", () => {
 		expect(title.length).toBeGreaterThan(100);
 	});
 
-	it("500 character description limit", () => {
-		const desc = "a".repeat(501);
-		expect(desc.length).toBeGreaterThan(500);
+	it("uses the runtime 800 character description limit", () => {
+		expect(PLATFORM_LIMITS.pinterest.chars.maxChars).toBe(800);
 	});
 });
 

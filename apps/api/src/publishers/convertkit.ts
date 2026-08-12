@@ -1,3 +1,4 @@
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
 	PublishError,
@@ -51,13 +52,13 @@ export const convertkitPublisher: Publisher = {
 				},
 			);
 			if (!response.ok) {
-				const body = await response.text();
+				const body = await readPublisherText(response);
 				throw new PublishError(
 					`Kit broadcast status failed (${response.status})`,
 					{ statusCode: response.status, detail: body },
 				);
 			}
-			const data = (await response.json()) as {
+			const data = (await readPublisherJson(response)) as {
 				broadcast?: {
 					id?: number;
 					stats?: { status?: string; progress?: number };
@@ -93,9 +94,14 @@ export const convertkitPublisher: Publisher = {
 			}
 			if (status === "draft") {
 				return {
-					success: true,
+					success: false,
 					platform_post_id: id,
-					provider_outcome: { disposition: "accepted", ...shared },
+					provider_outcome: { disposition: "failed", ...shared },
+					error: {
+						code: "PROVIDER_DRAFT_REQUIRES_MANUAL_ACTION",
+						message:
+							"Kit reports this broadcast as a draft; RelayAPI cannot advance or track provider drafts.",
+					},
 				};
 			}
 			return {
@@ -115,12 +121,33 @@ export const convertkitPublisher: Publisher = {
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
 			const apiKey = request.account.access_token;
+			const opts = request.target_options;
+			if (opts.send_at === null) {
+				return {
+					success: false,
+					error: {
+						code: "PROVIDER_DRAFT_UNSUPPORTED",
+						message:
+							'RelayAPI does not create Kit provider drafts; use top-level scheduled_at: "draft" for a local Relay draft, or provide a send_at timestamp.',
+					},
+				};
+			}
+			const media = Array.isArray(opts.media) ? opts.media : request.media;
+			if (media.length > 0) {
+				return {
+					success: false,
+					error: {
+						code: "UNSUPPORTED_MEDIA_TYPE",
+						message:
+							"Kit broadcasts accept text or HTML content; Relay media attachments are not supported.",
+					},
+				};
+			}
 
 			if (!apiKey) {
 				throw new Error("CONTENT_ERROR: Kit API key is required.");
 			}
 
-			const opts = request.target_options;
 			const subject =
 				(opts.subject as string) ??
 				(request.content?.split("\n")[0]?.slice(0, 100) || "Newsletter Update");
@@ -147,19 +174,33 @@ export const convertkitPublisher: Publisher = {
 			}
 
 			// email_template_id replaces v3's email_layout_template
-			const templateId = opts.email_template_id as number | undefined;
-			if (templateId) {
+			const templateId = opts.email_template_id;
+			if (
+				templateId !== undefined &&
+				(typeof templateId !== "number" ||
+					!Number.isSafeInteger(templateId) ||
+					templateId < 1)
+			) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_EMAIL_TEMPLATE_ID",
+						message: "Kit email_template_id must be a positive integer.",
+					},
+				};
+			}
+			if (templateId !== undefined) {
 				createBody.email_template_id = templateId;
 			}
 
-			// The official section documents null as a draft and a timestamp as a
-			// scheduled send; it does not expose a separate immediate-send action.
-			// Default one minute ahead to use the documented scheduling behavior and
-			// avoid a network-delayed "now" timestamp becoming a past timestamp.
-			// Users can override the schedule through target_options.send_at.
-			const sendAt = opts.send_at as string | undefined;
-			createBody.send_at =
-				sendAt ?? new Date(Date.now() + 60_000).toISOString();
+			// The official section documents null as a provider draft and a timestamp
+			// as a scheduled send. RelayAPI rejects drafts until it can represent that
+			// lifecycle terminally. Default one minute ahead to avoid a network-delayed
+			// "now" timestamp becoming a past timestamp.
+			const requestedSendAt = opts.send_at as string | undefined;
+			const effectiveSendAt =
+				requestedSendAt ?? new Date(Date.now() + 60_000).toISOString();
+			createBody.send_at = effectiveSendAt;
 
 			const createRes = await fetch(`${KIT_API}/broadcasts`, {
 				method: "POST",
@@ -172,7 +213,7 @@ export const convertkitPublisher: Publisher = {
 			});
 
 			if (!createRes.ok) {
-				const err = (await createRes.json().catch(() => ({}))) as {
+				const err = (await readPublisherJson(createRes).catch(() => ({}))) as {
 					errors?: Array<{ message?: string }>;
 					error?: string;
 					message?: string;
@@ -202,7 +243,7 @@ export const convertkitPublisher: Publisher = {
 				);
 			}
 
-			const created = (await createRes.json()) as {
+			const created = (await readPublisherJson(createRes)) as {
 				// Official response schema, field `broadcast.public_url`.
 				broadcast?: {
 					id?: number;
@@ -219,6 +260,25 @@ export const convertkitPublisher: Publisher = {
 			const platformUrl =
 				created.broadcast?.public_url ??
 				`https://app.kit.com/broadcasts/${broadcastId}`;
+			if (created.broadcast?.status?.toLowerCase() === "draft") {
+				return {
+					success: false,
+					platform_post_id: String(broadcastId),
+					platform_url: platformUrl,
+					provider_outcome: {
+						disposition: "failed",
+						provider_operation_id: String(broadcastId),
+						platform_post_id: String(broadcastId),
+						platform_url: platformUrl,
+						provider_state: "draft",
+					},
+					error: {
+						code: "PROVIDER_DRAFT_REQUIRES_MANUAL_ACTION",
+						message:
+							"Kit created a draft instead of the requested scheduled broadcast; RelayAPI will not report it as published or poll it indefinitely.",
+					},
+				};
+			}
 			return {
 				success: true,
 				platform_post_id: String(broadcastId),
@@ -230,7 +290,7 @@ export const convertkitPublisher: Publisher = {
 					platform_url: platformUrl,
 					provider_state: created.broadcast?.status ?? "scheduled",
 					next_reconcile_at:
-						created.broadcast?.send_at ?? String(createBody.send_at),
+						created.broadcast?.send_at ?? String(effectiveSendAt),
 				},
 			};
 		} catch (err) {

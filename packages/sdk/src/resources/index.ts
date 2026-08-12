@@ -84,6 +84,7 @@ export {
   type AdListAudiencesParams,
   type AdAddAudienceUsersParams,
 } from './ads';
+export * from './ads-advanced';
 export {
   APIKeys,
   type APIKeyCreateResponse,

@@ -2,11 +2,15 @@ import {
 	exponentialBackoffSeconds,
 	QUEUE_DELIVERY_RETRY,
 } from "../lib/async-policy";
+import {
+	type AdvancedAdReportQueueMessage,
+	processAdvancedAdReportJob,
+} from "../services/ad-report-jobs";
 import { syncAdMetrics, syncExternalAds } from "../services/ad-sync";
 import type { Env } from "../types";
 import { recordQueueFailure } from "./failures";
 
-interface AdsMessage {
+interface AdsSyncMessage {
 	type: "sync_metrics" | "sync_external";
 	org_id: string;
 	ad_account_id?: string;
@@ -16,6 +20,8 @@ interface AdsMessage {
 	sync_generation?: number;
 	metrics_poll_generation?: number;
 }
+
+type AdsMessage = AdsSyncMessage | AdvancedAdReportQueueMessage;
 
 function isAdsMessage(value: unknown): value is AdsMessage {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -27,6 +33,15 @@ function isAdsMessage(value: unknown): value is AdsMessage {
 	if (body.type === "sync_external") {
 		return (
 			typeof body.ad_account_id === "string" && body.ad_account_id.length > 0
+		);
+	}
+	if (body.type === "advanced_report") {
+		return (
+			typeof body.report_job_id === "string" &&
+			body.report_job_id.length > 0 &&
+			Object.keys(body).every((key) =>
+				["type", "org_id", "report_job_id"].includes(key),
+			)
 		);
 	}
 	return false;
@@ -73,6 +88,13 @@ export async function consumeAdsQueue(
 							syncGeneration: body.sync_generation,
 						},
 					);
+					break;
+				}
+				case "advanced_report": {
+					await processAdvancedAdReportJob(env, {
+						organizationId: body.org_id,
+						reportJobId: body.report_job_id,
+					});
 					break;
 				}
 			}

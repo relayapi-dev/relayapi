@@ -5,14 +5,20 @@ import {
 	getChunkedResponseBody,
 	parseContentLength,
 } from "../lib/fetch-public-url";
+import { TwitterTargetOptions } from "../schemas/publisher-options";
+import { readPublisherJson } from "./provider-response";
 import {
 	classifyPublishError,
 	type EngagementAccount,
 	type EngagementActionResult,
+	getSucceededProviderEffect,
+	mergeProviderEffects,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	recordProviderEffect,
 } from "./types";
 
 const TWITTER_API = `https://api.x.com/${API_VERSIONS.twitter}`;
@@ -25,6 +31,12 @@ interface TwitterAuth {
 interface TwitterPoll {
 	options: string[];
 	duration_minutes: number;
+}
+
+interface TwitterSensitiveMediaWarning {
+	adult_content: boolean;
+	graphic_violence: boolean;
+	other: boolean;
 }
 
 type TwitterMedia = { url: string; type?: string };
@@ -137,7 +149,7 @@ async function createTweet(
 	});
 
 	if (!res.ok) {
-		const err = await res.json().catch(() => ({}));
+		const err = await readPublisherJson(res).catch(() => ({}));
 		const detail =
 			(err as { detail?: string }).detail ??
 			(err as { message?: string }).message ??
@@ -188,7 +200,7 @@ async function createTweet(
 		});
 	}
 
-	const result = (await res.json()) as { data: { id: string } };
+	const result = (await readPublisherJson(res)) as { data: { id: string } };
 	return { id: result.data.id };
 }
 
@@ -201,6 +213,7 @@ async function uploadMedia(
 	mediaUrl: string,
 	mediaType: string,
 	altText?: string,
+	sensitiveMediaWarning?: TwitterSensitiveMediaWarning,
 ): Promise<string> {
 	// Fetch the media file
 	let mediaRes = await fetchPublicUrl(mediaUrl, { timeout: 30_000 });
@@ -250,7 +263,7 @@ async function uploadMedia(
 	});
 	if (!initRes.ok) {
 		void mediaRes.body?.cancel().catch(() => {});
-		const err = await initRes.json().catch(() => ({}));
+		const err = await readPublisherJson(initRes).catch(() => ({}));
 		const detail =
 			(err as { detail?: string }).detail ??
 			(err as { message?: string }).message ??
@@ -272,7 +285,7 @@ async function uploadMedia(
 			detail: raw,
 		});
 	}
-	const initData = (await initRes.json()) as {
+	const initData = (await readPublisherJson(initRes)) as {
 		data: { id: string; media_key: string };
 	};
 	const mediaId = initData.data.id;
@@ -295,7 +308,7 @@ async function uploadMedia(
 			body: formData,
 		});
 		if (!appendRes.ok) {
-			const err = await appendRes.json().catch(() => ({}));
+			const err = await readPublisherJson(appendRes).catch(() => ({}));
 			const detail =
 				(err as { detail?: string }).detail ??
 				(err as { message?: string }).message ??
@@ -324,7 +337,7 @@ async function uploadMedia(
 		},
 	);
 	if (!finalizeRes.ok) {
-		const err = await finalizeRes.json().catch(() => ({}));
+		const err = await readPublisherJson(finalizeRes).catch(() => ({}));
 		const detail =
 			(err as { detail?: string }).detail ??
 			(err as { message?: string }).message ??
@@ -337,7 +350,7 @@ async function uploadMedia(
 		});
 	}
 
-	const finalizeData = (await finalizeRes.json()) as {
+	const finalizeData = (await readPublisherJson(finalizeRes)) as {
 		data: {
 			id: string;
 			processing_info?: { state: string; check_after_secs?: number };
@@ -353,16 +366,71 @@ async function uploadMedia(
 		);
 	}
 
-	// X API v2: Set media metadata (alt text)
+	// X API v2: Set media metadata (alt text and sensitive-media warnings).
 	// Docs: https://docs.x.com/x-api/media/create-media-metadata
-	if (altText) {
-		await twitterFetch(`${TWITTER_API}/media/metadata`, auth, {
-			method: "POST",
-			body: JSON.stringify({
-				id: mediaId,
-				metadata: { alt_text: { text: altText.slice(0, 1000) } },
-			}),
-		});
+	// The official example names adult_content, graphic_violence, and other
+	// inside metadata.sensitive_media_warning. A metadata rejection must stop
+	// before POST /tweets so Relay never reports a post missing required labels.
+	if (altText || sensitiveMediaWarning) {
+		const metadata: Record<string, unknown> = {};
+		if (altText) metadata.alt_text = { text: altText.slice(0, 1000) };
+		if (sensitiveMediaWarning) {
+			metadata.sensitive_media_warning = sensitiveMediaWarning;
+		}
+		const metadataRes = await twitterFetch(
+			`${TWITTER_API}/media/metadata`,
+			auth,
+			{
+				method: "POST",
+				body: JSON.stringify({
+					id: mediaId,
+					metadata,
+				}),
+			},
+		);
+		const metadataResult = (await readPublisherJson(metadataRes).catch(
+			() => undefined,
+		)) as
+			| {
+					data?: { id?: string };
+					errors?: Array<{ detail?: string; message?: string; title?: string }>;
+					message?: string;
+			  }
+			| undefined;
+		const logicalError = metadataResult?.errors?.[0];
+		if (
+			!metadataRes.ok ||
+			logicalError !== undefined ||
+			metadataResult?.data?.id !== mediaId
+		) {
+			const err = metadataResult ?? {};
+			const detail =
+				logicalError?.detail ??
+				logicalError?.message ??
+				logicalError?.title ??
+				err.message ??
+				(metadataRes.ok
+					? "X did not confirm the media metadata update"
+					: undefined) ??
+				metadataRes.statusText;
+			const raw = `HTTP ${metadataRes.status}\n${JSON.stringify(err)}`;
+			if (metadataRes.status === 401) {
+				throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+					statusCode: metadataRes.status,
+					detail: raw,
+				});
+			}
+			if (metadataRes.status === 429) {
+				throw new PublishError(`RATE_LIMITED: ${detail}`, {
+					statusCode: metadataRes.status,
+					detail: raw,
+				});
+			}
+			throw new PublishError(`Twitter media metadata failed: ${detail}`, {
+				statusCode: metadataRes.status,
+				detail: raw,
+			});
+		}
 	}
 
 	return mediaId;
@@ -388,7 +456,7 @@ async function pollMediaStatus(
 		});
 
 		if (!res.ok) {
-			const err = await res.json().catch(() => ({}));
+			const err = await readPublisherJson(res).catch(() => ({}));
 			const detail =
 				(err as { detail?: string }).detail ??
 				(err as { message?: string }).message ??
@@ -403,7 +471,7 @@ async function pollMediaStatus(
 		}
 
 		// v2 response wraps under { data: { processing_info } }
-		const response = (await res.json()) as {
+		const response = (await readPublisherJson(res)) as {
 			data: {
 				processing_info?: {
 					state: string;
@@ -470,7 +538,7 @@ export const twitterPublisher: Publisher = {
 				},
 			);
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const detail =
 					(err as { detail?: string }).detail ??
 					(err as { message?: string }).message ??
@@ -529,7 +597,7 @@ export const twitterPublisher: Publisher = {
 				body: JSON.stringify({ text, quote_tweet_id: platformPostId }),
 			});
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const detail =
 					(err as { detail?: string }).detail ??
 					(err as { message?: string }).message ??
@@ -552,7 +620,7 @@ export const twitterPublisher: Publisher = {
 					detail: raw,
 				});
 			}
-			const result = (await res.json()) as { data: { id: string } };
+			const result = (await readPublisherJson(res)) as { data: { id: string } };
 			return { success: true, platform_post_id: result.data.id };
 		} catch (err) {
 			const result = classifyPublishError(err);
@@ -561,10 +629,33 @@ export const twitterPublisher: Publisher = {
 	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
-		let threadHasPublished = false;
+		let threadEffects: ProviderEffect[] = (
+			request.effect_recorder?.effects ?? []
+		)
+			.filter(
+				(effect) =>
+					effect.name.startsWith("thread_item_") &&
+					effect.status === "succeeded",
+			)
+			.slice();
+		let threadHasPublished = threadEffects.length > 0;
 		try {
 			const auth: TwitterAuth = { access_token: request.account.access_token };
-			const opts = request.target_options;
+			const parsedOptions = TwitterTargetOptions.safeParse(
+				request.target_options,
+			);
+			if (!parsedOptions.success) {
+				const issue = parsedOptions.error.issues[0];
+				const path = issue?.path.length ? ` ${issue.path.join(".")}` : "";
+				return {
+					success: false,
+					error: {
+						code: "INVALID_TWITTER_TARGET_OPTIONS",
+						message: `Invalid X target option${path}: ${issue?.message ?? "validation failed"}.`,
+					},
+				};
+			}
+			const opts = parsedOptions.data;
 
 			// Check for thread
 			const threadItems = opts.thread as
@@ -584,13 +675,34 @@ export const twitterPublisher: Publisher = {
 						},
 					};
 				}
+				if (
+					opts.place_id !== undefined ||
+					opts.sensitive_media_warning !== undefined
+				) {
+					return {
+						success: false,
+						error: {
+							code: "UNSUPPORTED_THREAD_OPTION",
+							message:
+								"X place_id and sensitive_media_warning currently apply only to single-post publishing, not RelayAPI thread sequences.",
+						},
+					};
+				}
 				return await publishThread(
 					auth,
 					threadItems,
 					request.account.username,
 					opts.reply_to as string | undefined,
-					() => {
+					request,
+					async (tweetId, index) => {
+						const effect: ProviderEffect = {
+							name: `thread_item_${index + 1}`,
+							status: "succeeded",
+							provider_id: tweetId,
+						};
+						await recordProviderEffect(request, effect);
 						threadHasPublished = true;
+						threadEffects = mergeProviderEffects(threadEffects, [effect]);
 					},
 				);
 			}
@@ -674,6 +786,34 @@ export const twitterPublisher: Publisher = {
 			const media =
 				(opts.media as Array<{ url: string; type?: string }>) ?? request.media;
 			let mediaIds: string[] | undefined;
+			const sensitiveMediaWarning = opts.sensitive_media_warning as
+				| Partial<TwitterSensitiveMediaWarning>
+				| undefined;
+			if (
+				sensitiveMediaWarning &&
+				(typeof sensitiveMediaWarning.adult_content !== "boolean" ||
+					typeof sensitiveMediaWarning.graphic_violence !== "boolean" ||
+					typeof sensitiveMediaWarning.other !== "boolean")
+			) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_SENSITIVE_MEDIA_WARNING",
+						message:
+							"X sensitive_media_warning requires adult_content, graphic_violence, and other booleans.",
+					},
+				};
+			}
+			if (sensitiveMediaWarning && media.length === 0) {
+				return {
+					success: false,
+					error: {
+						code: "SENSITIVE_MEDIA_REQUIRES_MEDIA",
+						message:
+							"X sensitive_media_warning requires at least one media attachment.",
+					},
+				};
+			}
 
 			if (media && media.length > 0) {
 				validateTwitterMedia(media);
@@ -684,6 +824,7 @@ export const twitterPublisher: Publisher = {
 							m.url,
 							m.type ?? "image",
 							(m as { alt_text?: string }).alt_text,
+							sensitiveMediaWarning as TwitterSensitiveMediaWarning | undefined,
 						),
 					),
 				);
@@ -713,6 +854,11 @@ export const twitterPublisher: Publisher = {
 				extraParams.share_with_followers = opts.share_with_followers;
 			if (opts.tagged_user_ids)
 				extraParams.tagged_user_ids = opts.tagged_user_ids;
+			if (typeof opts.place_id === "string" && opts.place_id.trim()) {
+				// Official Create Post reference: top-level `geo` requires place_id.
+				// https://docs.x.com/x-api/posts/create-post
+				extraParams.geo = { place_id: opts.place_id.trim() };
+			}
 
 			const result = await createTweet(
 				auth,
@@ -735,10 +881,37 @@ export const twitterPublisher: Publisher = {
 		} catch (err) {
 			const threadItems = request.target_options.thread;
 			const isThread = Array.isArray(threadItems) && threadItems.length > 0;
-			return classifyPublishError(err, {
+			const result = classifyPublishError(err, {
 				safeToRetryRateLimit: !isThread || !threadHasPublished,
 				definitiveHttpRejection: isThread && !threadHasPublished,
 			});
+			if (isThread && threadEffects.length > 0) {
+				const rootId = threadEffects[0]?.provider_id;
+				const username =
+					request.account.username ?? request.account.platform_account_id;
+				return {
+					...result,
+					success: false,
+					platform_post_id: rootId,
+					platform_url: rootId
+						? `https://x.com/${username}/status/${rootId}`
+						: undefined,
+					provider_outcome: {
+						disposition: "partial",
+						platform_post_id: rootId,
+						provider_state: `${threadEffects.length}_thread_items_published`,
+						effects: [
+							...threadEffects,
+							{
+								name: `thread_item_${threadEffects.length + 1}`,
+								status: "outcome_unknown",
+								error: result.error,
+							},
+						],
+					},
+				};
+			}
+			return result;
 		}
 	},
 };
@@ -751,12 +924,23 @@ async function publishThread(
 	}>,
 	username: string | null,
 	replyToId?: string,
-	onFirstPublished?: () => void,
+	request?: Pick<PublishRequest, "effect_recorder">,
+	onPublished?: (tweetId: string, index: number) => Promise<void>,
 ): Promise<PublishResult> {
 	let firstTweetId: string | undefined;
 	let parentId: string | undefined = replyToId;
+	const publishedIds: string[] = [];
 
 	for (const [i, item] of items.entries()) {
+		const recorded = request
+			? getSucceededProviderEffect(request, `thread_item_${i + 1}`)
+			: undefined;
+		if (recorded?.provider_id) {
+			publishedIds.push(recorded.provider_id);
+			if (i === 0) firstTweetId = recorded.provider_id;
+			parentId = recorded.provider_id;
+			continue;
+		}
 		let mediaIds: string[] | undefined;
 		if (item.media && item.media.length > 0) {
 			validateTwitterMedia(item.media);
@@ -773,10 +957,11 @@ async function publishThread(
 		}
 
 		const result = await createTweet(auth, item.content, mediaIds, parentId);
+		publishedIds.push(result.id);
+		await onPublished?.(result.id, i);
 
 		if (i === 0) {
 			firstTweetId = result.id;
-			onFirstPublished?.();
 		}
 		parentId = result.id;
 	}
@@ -788,5 +973,15 @@ async function publishThread(
 		success: true,
 		platform_post_id: firstTweetId,
 		platform_url: tweetUrl,
+		provider_outcome: {
+			disposition: "published",
+			platform_post_id: firstTweetId,
+			platform_url: tweetUrl,
+			effects: publishedIds.map((providerId, index) => ({
+				name: `thread_item_${index + 1}`,
+				status: "succeeded",
+				provider_id: providerId,
+			})),
+		},
 	};
 }

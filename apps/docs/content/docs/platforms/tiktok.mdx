@@ -1,708 +1,325 @@
 ---
 title: TikTok API
-description: Schedule and automate TikTok posts with RelayAPI — videos, photo carousels, privacy levels, duet/stitch settings, and AI disclosures.
+description: Publish compliant TikTok videos and photo carousels with explicit creator choices, consent, and verified media sources.
 icon: tiktok
 ---
 
-## Quick Reference
+## Quick reference
 
-| Property | Value |
-|----------|-------|
+| Property | RelayAPI behavior |
+| --- | --- |
 | Platform key | `tiktok` |
-| Auth method | OAuth 2.0 |
-| Character limit | 2,200 (video caption), 4,000 (photo description) |
-| Photo title limit | 90 characters (auto-truncated, hashtags stripped) |
-| Photos per post | 35 (carousel) |
-| Videos per post | 1 |
-| Photo formats | JPEG, PNG, WebP |
-| Photo max size | 20 MB |
-| Video formats | MP4, MOV, WebM |
-| Video max size | 4 GB |
-| Video duration | 3 sec - 10 min |
-| Post types | Video, Photo Carousel |
-| Scheduling | Yes |
-| Analytics | Limited (likes, comments, shares, views) |
-
-<Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
-</Callout>
-
-## Before You Start
+| Authentication | OAuth 2.0 with `video.publish` and `video.upload` |
+| Publishing mode | Direct Post or creator-inbox upload |
+| Media | Exactly one video with `duration_ms`, or 1–35 photos; no text-only or mixed-media posts |
+| Video caption | 2,200 UTF-16 code units |
+| Photo title | First 90 Unicode code points of `content` |
+| Photo description | 4,000 UTF-16 code units |
+| Video sources | Bounded `FILE_UPLOAD`, or verified `PULL_FROM_URL` |
+| Photo sources | Verified `PULL_FROM_URL` only |
+| Lifecycle | RelayAPI records TikTok's `publish_id` and polls the status API |
 
 <Callout type="warn">
-TikTok has **no text-only posts** — media is always required. Each creator has **account-specific privacy level options** that must be fetched before posting. Content moderation is **more aggressive via API** than in the native app. All posts require consent flags, which RelayAPI sends automatically. TikTok enforces a **daily posting limit** for API posts that is separate from the native app limit and varies by account.
+RelayAPI does not choose privacy, interaction, commercial-disclosure, preview,
+or consent values for a creator. Your application must render TikTok's current
+choices, show the exact content preview, obtain the creator's choices and
+consent, and then send every required field explicitly.
 </Callout>
 
-## Quick Start
-
-Post a video to TikTok:
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-import Relay from '@relayapi/sdk';
-
-const client = new Relay();
-
-const post = await client.posts.create({
-  content: 'Check out this amazing sunset! #sunset #nature',
-  targets: ['tiktok'],
-  media: [
-    { url: 'https://cdn.example.com/sunset.mp4', type: 'video' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    tiktok: {
-      privacy_level: 'PUBLIC_TO_EVERYONE',
-      allow_comment: true,
-      allow_duet: true,
-      allow_stitch: true
-    }
-  }
-});
-
-console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-
-post = client.posts.create(
-    content='Check out this amazing sunset! #sunset #nature',
-    targets=['tiktok'],
-    media=[
-        {'url': 'https://cdn.example.com/sunset.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'tiktok': {
-            'privacy_level': 'PUBLIC_TO_EVERYONE',
-            'allow_comment': True,
-            'allow_duet': True,
-            'allow_stitch': True
-        }
-    }
-)
-
-print(post.id)  # post_abc123
-```
-</Tab>
-<Tab value="Go">
-```go
-client := relaygo.NewClient()
-
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Check out this amazing sunset! #sunset #nature"),
-    Targets:     relaygo.F([]string{"tiktok"}),
-    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/sunset.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "tiktok": map[string]interface{}{
-            "privacy_level": "PUBLIC_TO_EVERYONE",
-            "allow_comment": true,
-            "allow_duet":    true,
-            "allow_stitch":  true,
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-RelayClient client = RelayOkHttpClient.fromEnv();
-
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Check out this amazing sunset! #sunset #nature")
-    .addTarget("tiktok")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/sunset.mp4")
-        .type(PostCreateParams.Media.Type.VIDEO)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
-            "privacy_level", "PUBLIC_TO_EVERYONE",
-            "allow_comment", true,
-            "allow_duet", true,
-            "allow_stitch", true
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Check out this amazing sunset! #sunset #nature",
-    "targets": ["tiktok"],
-    "media": [
-      {"url": "https://cdn.example.com/sunset.mp4", "type": "video"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "tiktok": {
-        "privacy_level": "PUBLIC_TO_EVERYONE",
-        "allow_comment": true,
-        "allow_duet": true,
-        "allow_stitch": true
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-## Content Types
-
-### Video Post
-
-Standard TikTok video. Vertical 9:16 is the only format that performs well. Caption limited to 2,200 characters.
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  content: 'Check out this amazing sunset! #sunset #nature',
-  targets: ['tiktok'],
-  media: [
-    { url: 'https://cdn.example.com/sunset.mp4', type: 'video' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    tiktok: {
-      privacy_level: 'PUBLIC_TO_EVERYONE',
-      allow_comment: true,
-      allow_duet: true,
-      allow_stitch: true
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Check out this amazing sunset! #sunset #nature',
-    targets=['tiktok'],
-    media=[
-        {'url': 'https://cdn.example.com/sunset.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'tiktok': {
-            'privacy_level': 'PUBLIC_TO_EVERYONE',
-            'allow_comment': True,
-            'allow_duet': True,
-            'allow_stitch': True
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Check out this amazing sunset! #sunset #nature"),
-    Targets:     relaygo.F([]string{"tiktok"}),
-    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/sunset.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "tiktok": map[string]interface{}{
-            "privacy_level": "PUBLIC_TO_EVERYONE",
-            "allow_comment": true,
-            "allow_duet":    true,
-            "allow_stitch":  true,
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Check out this amazing sunset! #sunset #nature")
-    .addTarget("tiktok")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/sunset.mp4")
-        .type(PostCreateParams.Media.Type.VIDEO)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
-            "privacy_level", "PUBLIC_TO_EVERYONE",
-            "allow_comment", true,
-            "allow_duet", true,
-            "allow_stitch", true
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Check out this amazing sunset! #sunset #nature",
-    "targets": ["tiktok"],
-    "media": [
-      {"url": "https://cdn.example.com/sunset.mp4", "type": "video"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "tiktok": {
-        "privacy_level": "PUBLIC_TO_EVERYONE",
-        "allow_comment": true,
-        "allow_duet": true,
-        "allow_stitch": true
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-### Photo Carousel (Up to 35 Images)
-
-Photos are auto-resized to 1080x1920. The `content` field becomes the title (max 90 chars, hashtags stripped). Use the `description` field in target_options for the full caption (up to 4,000 chars).
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  content: 'My travel highlights',
-  targets: ['tiktok'],
-  media: [
-    { url: 'https://cdn.example.com/photo1.jpg', type: 'image' },
-    { url: 'https://cdn.example.com/photo2.jpg', type: 'image' },
-    { url: 'https://cdn.example.com/photo3.jpg', type: 'image' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    tiktok: {
-      privacy_level: 'PUBLIC_TO_EVERYONE',
-      allow_comment: true,
-      description: 'Full trip recap from our weekend adventure! #travel #roadtrip',
-      auto_add_music: true,
-      photo_cover_index: 0
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='My travel highlights',
-    targets=['tiktok'],
-    media=[
-        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'tiktok': {
-            'privacy_level': 'PUBLIC_TO_EVERYONE',
-            'allow_comment': True,
-            'description': 'Full trip recap from our weekend adventure! #travel #roadtrip',
-            'auto_add_music': True,
-            'photo_cover_index': 0
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content: relaygo.F("My travel highlights"),
-    Targets: relaygo.F([]string{"tiktok"}),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{
-        {URL: relaygo.F("https://cdn.example.com/photo1.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
-        {URL: relaygo.F("https://cdn.example.com/photo2.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
-        {URL: relaygo.F("https://cdn.example.com/photo3.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
-    }),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "tiktok": map[string]interface{}{
-            "privacy_level":   "PUBLIC_TO_EVERYONE",
-            "allow_comment":   true,
-            "description":     "Full trip recap from our weekend adventure! #travel #roadtrip",
-            "auto_add_music":  true,
-            "photo_cover_index": 0,
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("My travel highlights")
-    .addTarget("tiktok")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/photo1.jpg")
-        .type(PostCreateParams.Media.Type.IMAGE)
-        .build())
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/photo2.jpg")
-        .type(PostCreateParams.Media.Type.IMAGE)
-        .build())
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/photo3.jpg")
-        .type(PostCreateParams.Media.Type.IMAGE)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
-            "privacy_level", "PUBLIC_TO_EVERYONE",
-            "allow_comment", true,
-            "description", "Full trip recap from our weekend adventure! #travel #roadtrip",
-            "auto_add_music", true,
-            "photo_cover_index", 0
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "My travel highlights",
-    "targets": ["tiktok"],
-    "media": [
-      {"url": "https://cdn.example.com/photo1.jpg", "type": "image"},
-      {"url": "https://cdn.example.com/photo2.jpg", "type": "image"},
-      {"url": "https://cdn.example.com/photo3.jpg", "type": "image"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "tiktok": {
-        "privacy_level": "PUBLIC_TO_EVERYONE",
-        "allow_comment": true,
-        "description": "Full trip recap from our weekend adventure! #travel #roadtrip",
-        "auto_add_music": true,
-        "photo_cover_index": 0
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-<Callout type="info">
-Photo titles are automatically truncated to 90 characters, and hashtags and URLs are stripped from the title. Use the `description` field for your full caption with hashtags.
+<Callout type="warn">
+Connections authorized before RelayAPI added creator-inbox uploads do not have
+the new `video.upload` grant automatically. Reconnect TikTok before using
+`publish_mode: 'inbox'`; token refresh cannot add a scope the user never
+granted.
 </Callout>
 
-### Video with AI Disclosure
+## Required creator flow
 
-If your video contains AI-generated content, disclose it using the `video_made_with_ai` flag.
+Before creating a TikTok post:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
+1. Call [`GET /v1/accounts/{id}/tiktok-creator-info`](/api-reference/accounts/getTikTokCreatorInfo).
+2. Show the connected creator and only the returned `privacy_level_options`.
+3. Disable comment, duet, or stitch choices that creator info reports as disabled.
+4. For video, validate the media duration against `max_video_post_duration_sec`.
+5. Show the exact content preview and the appropriate TikTok commercial-content and Music Usage Confirmation notices.
+6. After the creator makes each choice and expressly consents, submit the post with the required booleans.
+
+RelayAPI queries creator info again immediately before provider I/O. A stale
+privacy choice, an interaction disabled since the UI was rendered, or a video
+longer than the creator's current limit fails before TikTok publish
+initialization.
+
+TikTok requires users to select privacy and interaction settings without a
+default. The two consent attestations are literal `true` values, but they are
+not automatic defaults: set them only after the creator previews the exact
+post and completes the required consent step.
+
+## Publish a video
+
+All eight creator-choice fields shown below are required for a video. Set both
+commercial disclosure fields explicitly even for non-commercial content.
+
 ```typescript
 const post = await client.posts.create({
-  content: 'AI-generated art experiment #aiart',
+  content: 'A quiet morning by the sea #travel',
   targets: ['tiktok'],
-  media: [
-    { url: 'https://cdn.example.com/ai-art.mp4', type: 'video' }
-  ],
   scheduled_at: 'now',
+  media: [{
+    url: 'https://media.example.com/tiktok/morning.mp4',
+    type: 'video',
+    mime_type: 'video/mp4',
+    duration_ms: 18_000,
+  }],
   target_options: {
     tiktok: {
       privacy_level: 'PUBLIC_TO_EVERYONE',
       allow_comment: true,
-      allow_duet: true,
-      allow_stitch: true,
-      video_made_with_ai: true
-    }
-  }
+      allow_duet: false,
+      allow_stitch: false,
+      brand_content_toggle: false,
+      brand_organic_toggle: false,
+      content_preview_confirmed: true,
+      express_consent_given: true,
+      source_mode: 'file_upload',
+    },
+  },
 });
 ```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='AI-generated art experiment #aiart',
-    targets=['tiktok'],
-    media=[
-        {'url': 'https://cdn.example.com/ai-art.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'tiktok': {
-            'privacy_level': 'PUBLIC_TO_EVERYONE',
-            'allow_comment': True,
-            'allow_duet': True,
-            'allow_stitch': True,
-            'video_made_with_ai': True
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("AI-generated art experiment #aiart"),
-    Targets:     relaygo.F([]string{"tiktok"}),
-    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/ai-art.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "tiktok": map[string]interface{}{
-            "privacy_level":      "PUBLIC_TO_EVERYONE",
-            "allow_comment":      true,
-            "allow_duet":         true,
-            "allow_stitch":       true,
-            "video_made_with_ai": true,
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("AI-generated art experiment #aiart")
-    .addTarget("tiktok")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/ai-art.mp4")
-        .type(PostCreateParams.Media.Type.VIDEO)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
-            "privacy_level", "PUBLIC_TO_EVERYONE",
-            "allow_comment", true,
-            "allow_duet", true,
-            "allow_stitch", true,
-            "video_made_with_ai", true
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
+
+The same request with curl:
+
 ```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
+curl --fail-with-body -X POST https://api.relayapi.dev/v1/posts \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "content": "AI-generated art experiment #aiart",
+  --data '{
+    "content": "A quiet morning by the sea #travel",
     "targets": ["tiktok"],
-    "media": [
-      {"url": "https://cdn.example.com/ai-art.mp4", "type": "video"}
-    ],
     "scheduled_at": "now",
+    "media": [{
+      "url": "https://media.example.com/tiktok/morning.mp4",
+      "type": "video",
+      "mime_type": "video/mp4",
+      "duration_ms": 18000
+    }],
     "target_options": {
       "tiktok": {
         "privacy_level": "PUBLIC_TO_EVERYONE",
         "allow_comment": true,
-        "allow_duet": true,
-        "allow_stitch": true,
-        "video_made_with_ai": true
+        "allow_duet": false,
+        "allow_stitch": false,
+        "brand_content_toggle": false,
+        "brand_organic_toggle": false,
+        "content_preview_confirmed": true,
+        "express_consent_given": true,
+        "source_mode": "file_upload"
       }
     }
   }'
 ```
-</Tab>
-</Tabs>
 
-### Draft to Creator Inbox
+`FILE_UPLOAD` does not put binary data in the JSON request. RelayAPI fetches the
+media URL through its guarded public-media client, validates the response MIME
+type and declared length, initializes TikTok's upload, and streams bounded,
+sequential chunks to TikTok. MP4, MOV, and WebM are accepted; the provider limit
+is 4 GB. RelayAPI's own media library has a separate 200 MiB direct-to-storage
+upload-session limit (and a 50 MiB Worker-proxy limit)
+described in [Media Uploads](/guides/media-uploads).
 
-Send a post to the creator's inbox as a draft instead of publishing directly.
+## Publish a photo carousel
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
+TikTok photo publishing always uses `PULL_FROM_URL`. Every image must use an
+HTTPS URL under a TikTok URL prefix that was verified by the RelayAPI operator
+and pinned when this account connected.
+
 ```typescript
 const post = await client.posts.create({
-  content: 'Review before posting',
+  content: 'Weekend in Cornwall',
   targets: ['tiktok'],
-  media: [
-    { url: 'https://cdn.example.com/video.mp4', type: 'video' }
-  ],
   scheduled_at: 'now',
+  media: [
+    { url: 'https://media.example.com/tiktok/cornwall-1.jpg', type: 'image' },
+    { url: 'https://media.example.com/tiktok/cornwall-2.jpg', type: 'image' },
+  ],
   target_options: {
     tiktok: {
-      privacy_level: 'PUBLIC_TO_EVERYONE',
+      privacy_level: 'MUTUAL_FOLLOW_FRIENDS',
       allow_comment: true,
-      allow_duet: true,
-      allow_stitch: true,
-      draft: true
-    }
-  }
+      brand_content_toggle: false,
+      brand_organic_toggle: false,
+      content_preview_confirmed: true,
+      express_consent_given: true,
+      source_mode: 'pull_from_url',
+      description: 'The complete weekend recap #cornwall',
+      photo_cover_index: 0,
+      auto_add_music: false,
+    },
+  },
 });
 ```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Review before posting',
-    targets=['tiktok'],
-    media=[
-        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'tiktok': {
-            'privacy_level': 'PUBLIC_TO_EVERYONE',
-            'allow_comment': True,
-            'allow_duet': True,
-            'allow_stitch': True,
-            'draft': True
-        }
-    }
-)
+
+Duet and stitch do not apply to photos. `source_mode: "file_upload"` is not
+supported for photo posts. Direct mode sends `DIRECT_POST`; inbox mode sends
+TikTok's official `MEDIA_UPLOAD` flow.
+
+## Upload to the creator inbox
+
+Set `publish_mode: 'inbox'` to upload media for the creator to finish in TikTok
+after receiving the provider notification. This is not a RelayAPI local draft:
+the bytes have reached TikTok, while privacy, interaction, disclosure, and final
+publishing choices happen in TikTok.
+
+```typescript
+const post = await client.posts.create({
+  content: '',
+  targets: ['tiktok'],
+  scheduled_at: 'now',
+  media: [{
+    url: 'https://media.example.com/tiktok/rough-cut.mp4',
+    type: 'video',
+    mime_type: 'video/mp4',
+    duration_ms: 24_000,
+  }],
+  target_options: {
+    tiktok: {
+      publish_mode: 'inbox',
+      source_mode: 'file_upload',
+    },
+  },
+});
 ```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Review before posting"),
-    Targets:     relaygo.F([]string{"tiktok"}),
-    Media:       relaygo.F([]relaygo.PostNewParamsMedia{{URL: relaygo.F("https://cdn.example.com/video.mp4"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeVideo)}}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "tiktok": map[string]interface{}{
-            "privacy_level": "PUBLIC_TO_EVERYONE",
-            "allow_comment": true,
-            "allow_duet":    true,
-            "allow_stitch":  true,
-            "draft":         true,
-        },
-    }),
-})
+
+Inbox mode rejects Direct Post fields including `privacy_level`, interaction
+choices, disclosure/consent attestations, AI/music flags, and
+`video_cover_timestamp_ms`. TikTok's video inbox endpoint accepts only
+`source_info`, so `description` is also rejected for inbox video; add the
+caption when completing the post in TikTok. Photo inbox uploads can retain the
+photo title/description and `photo_cover_index` supported by TikTok's
+`MEDIA_UPLOAD` photo contract.
+
+## Media source selection
+
+| Media and request | Result |
+| --- | --- |
+| Video, `source_mode: "file_upload"` | RelayAPI performs bounded TikTok `FILE_UPLOAD`; no verified prefix is needed |
+| Video, `source_mode: "pull_from_url"` | Allowed only when the URL matches a prefix pinned to the connected account |
+| Video, `source_mode` omitted, URL is pinned | RelayAPI uses `PULL_FROM_URL` |
+| Video, `source_mode` omitted, URL is not pinned | RelayAPI falls back to bounded `FILE_UPLOAD` |
+| Photos | Every image must match a pinned prefix; TikTok requires `PULL_FROM_URL` |
+
+For pull mode, the media must remain publicly reachable over HTTPS for TikTok's
+download window and must not redirect. A URL that is merely on the same site is
+not sufficient: its hostname and path must be beneath a configured, verified
+prefix.
+
+Verified prefixes are connection authority, not caller-controlled post
+options. The operator configures them, and RelayAPI snapshots the canonical
+list into the TikTok account when OAuth completes. Changing the operator list
+does not silently expand an existing account's media authority; reconnect the
+account to adopt the new list.
+
+For self-hosted installations, configure the non-secret list in
+`relayapi.selfhost.json` before connecting TikTok:
+
+```json
+{
+  "publishing": {
+    "tiktokVerifiedUrlPrefixes": [
+      "https://media.example.com/tiktok/"
+    ]
+  }
+}
 ```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Review before posting")
-    .addTarget("tiktok")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/video.mp4")
-        .type(PostCreateParams.Media.Type.VIDEO)
-        .build())
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("tiktok", JsonValue.from(Map.of(
-            "privacy_level", "PUBLIC_TO_EVERYONE",
-            "allow_comment", true,
-            "allow_duet", true,
-            "allow_stitch", true,
-            "draft", true
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Review before posting",
-    "targets": ["tiktok"],
-    "media": [
-      {"url": "https://cdn.example.com/video.mp4", "type": "video"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "tiktok": {
-        "privacy_level": "PUBLIC_TO_EVERYONE",
-        "allow_comment": true,
-        "allow_duet": true,
-        "allow_stitch": true,
-        "draft": true
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
 
-## Media Requirements
+The deployment CLI validates and emits this as the API Worker's
+`TIKTOK_VERIFIED_URL_PREFIXES` variable. Each prefix must use HTTPS and contain
+no credentials, IP host, non-default port, query string, or fragment. Its path
+must end in `/`, which keeps `/media/` from authorizing `/mediaevil`. Verify the
+same exact prefix in the TikTok developer application's URL properties first.
 
-### Videos
+## Provider media limits
 
-| Property | Requirement |
-|----------|-------------|
-| Max per post | 1 |
-| Formats | MP4, MOV, WebM |
-| Max file size | 4 GB |
-| Max duration | 10 minutes |
-| Min duration | 3 seconds |
-| Aspect ratio | 9:16 vertical (only format that performs well) |
-| Recommended | 1080 x 1920 px, H.264, 30fps |
+| Media | TikTok limit |
+| --- | --- |
+| Video container | MP4, MOV, or WebM |
+| Video codec | H.264, H.265, VP8, or VP9 |
+| Video frame rate | 23–60 FPS |
+| Video dimensions | Each side 360–4,096 pixels |
+| Video duration | At most 10 minutes and no longer than fresh creator info allows |
+| Video size | At most 4 GB |
+| Photo format | JPEG or WebP |
+| Photo dimensions | At most 1080p |
+| Photo size | At most 20 MB each |
 
-### Photos
+RelayAPI can best-effort normalize ready media when processing is enabled, but
+TikTok remains authoritative for its provider limits. RelayAPI's media library
+accepts direct-to-storage upload sessions up to 200 MiB; the Worker-proxy
+endpoint remains 50 MiB.
 
-| Property | Requirement |
-|----------|-------------|
-| Max per carousel | 35 |
-| Formats | JPEG, PNG, WebP |
-| Max file size | 20 MB per image |
-| Resolution | Auto-resized to 1080 x 1920 px |
+## `target_options.tiktok`
 
-<Callout type="info">
-You cannot mix photos and videos in the same post. A post is either a single video or a photo carousel.
-</Callout>
+| Field | Required | Behavior |
+| --- | --- | --- |
+| `publish_mode` | No | `direct` by default; `inbox` uses TikTok's official creator-inbox upload and rejects Direct Post-only fields |
+| `privacy_level` | Yes | Explicit creator selection; RelayAPI checks it against fresh `privacy_level_options` |
+| `allow_comment` | Yes | Explicit creator choice; `true` is rejected when comments are disabled for the creator |
+| `allow_duet` | Yes for video | Explicit video choice; `true` is rejected when duet is disabled |
+| `allow_stitch` | Yes for video | Explicit video choice; `true` is rejected when stitch is disabled |
+| `brand_content_toggle` | Yes | `true` means paid partnership/third-party promotion |
+| `brand_organic_toggle` | Yes | `true` means the creator's own brand or business |
+| `content_preview_confirmed` | Yes, literal `true` | Attests that the creator previewed this exact content |
+| `express_consent_given` | Yes, literal `true` | Attests that the creator expressly consented after TikTok's required notice |
+| `source_mode` | No | `file_upload` or `pull_from_url`; photo posts always use pull mode |
+| `description` | No | Video caption override up to 2,200; photo description up to 4,000 |
+| `video_made_with_ai` | No | Sends TikTok's AI-generated-content disclosure for video |
+| `video_cover_timestamp_ms` | No | Video cover frame position in milliseconds |
+| `photo_cover_index` | No | Zero-based carousel cover index; defaults to `0` |
+| `auto_add_music` | No | Requests TikTok-recommended music for photos |
+| `content` / `media` | No | TikTok-specific override of the shared post fields |
 
-## `target_options` Fields
+The fields marked required apply to Direct Post. Inbox mode rejects those
+Direct Post choices instead. `brand_content_toggle: true` cannot be combined
+with `SELF_ONLY`. Video media must include `duration_ms` so RelayAPI can enforce
+both TikTok's global limit and the creator-specific limit before publish
+initialization. Legacy `draft` and `commercial_content_type` options are
+rejected before provider I/O. Use `publish_mode: 'inbox'` for TikTok's provider
+inbox; use the two explicit disclosure booleans for Direct Post.
 
-All fields go inside `target_options.tiktok` on your post request.
+## Processing and errors
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `content` | string | No | Override caption for TikTok specifically |
-| `media` | object[] | No | Override media for TikTok specifically |
-| `privacy_level` | string | Yes | Must match creator's allowed values: `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR`, `SELF_ONLY` |
-| `allow_comment` | boolean | Yes | Allow comments on the post |
-| `allow_duet` | boolean | Yes (video) | Allow duets with the video |
-| `allow_stitch` | boolean | Yes (video) | Allow stitches with the video |
-| `description` | string | No | Long-form caption for photo carousels (max 4,000 chars) |
-| `video_cover_timestamp_ms` | number | No | Thumbnail frame position in milliseconds (default: 1000) |
-| `photo_cover_index` | number | No | Cover image index for carousels (0-based) |
-| `auto_add_music` | boolean | No | Let TikTok automatically add music (photos only) |
-| `video_made_with_ai` | boolean | No | AI-generated content disclosure |
-| `draft` | boolean | No | Send to Creator Inbox as draft instead of publishing |
-| `commercial_content_type` | string | No | `"none"`, `"brand_organic"`, `"brand_content"` |
+RelayAPI persists TikTok's `publish_id` before continuing, polls
+`/v2/post/publish/status/fetch/`, and reconciles retries from that provider
+operation rather than initializing a duplicate post. `PROCESSING_UPLOAD` and
+`PROCESSING_DOWNLOAD` remain nonterminal; `PUBLISH_COMPLETE` is terminal even
+when TikTok does not expose a public post ID. `FAILED` records TikTok's failure
+reason.
 
-<Callout type="info">
-The consent flags `content_preview_confirmed` and `express_consent_given` are always sent automatically by RelayAPI. You do not need to set them.
-</Callout>
+Common pre-provider errors include:
 
-## Common Errors
+| Code | Meaning |
+| --- | --- |
+| `PRIVACY_LEVEL_UNAVAILABLE` | The requested privacy level is absent from fresh creator info |
+| `COMMENTS_DISABLED_BY_CREATOR` | The request enabled comments although creator settings disable them |
+| `VIDEO_INTERACTIONS_REQUIRED` | A video omitted `allow_duet` or `allow_stitch` |
+| `COMMERCIAL_DISCLOSURE_REQUIRED` | One of the two disclosure booleans was omitted |
+| `TIKTOK_CONSENT_REQUIRED` | Preview confirmation or express consent was not explicitly `true` |
+| `VIDEO_TOO_LONG_FOR_CREATOR` | The media duration exceeds fresh creator info |
+| `VIDEO_DURATION_REQUIRED` | Video media omitted the required `duration_ms` |
+| `TIKTOK_VERIFIED_MEDIA_URL_REQUIRED` | Pull-mode media is outside the account's immutable verified prefixes |
+| `PHOTO_FILE_UPLOAD_UNSUPPORTED` | A photo request selected `file_upload` |
+| `DIRECT_OPTION_WITH_INBOX_MODE` | An inbox upload included a Direct Post-only choice |
+| `VIDEO_INBOX_DESCRIPTION_UNSUPPORTED` | An inbox video supplied a description that must instead be added when completing the post in TikTok |
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| Too many posts in 24h | Daily API posting limit reached | Wait for the limit to reset, or post via the native TikTok app. |
-| Platform API timeout | TikTok servers slow processing large videos | Check publish status after a few minutes. The video may still be processing. |
-| Privacy level not available | Requested level does not match creator's settings | Fetch creator info to get the list of allowed privacy levels for this account. |
-| Spam risk flagged | Content moderation triggered | Review content. API moderation is stricter than the native app. |
-| Duplicate content | Same content posted recently | Modify caption or swap media files. |
-| Video download failed | Media URL is inaccessible to TikTok servers | Use a direct download URL from a CDN. |
+TikTok also applies creator posting caps, app active-user caps, moderation, and
+client-audit restrictions. An unaudited TikTok client can be limited to private
+visibility regardless of RelayAPI's request.
 
-## Known Quirks
+## Official TikTok references
 
-- **Consent flags are mandatory** — posts fail without them. RelayAPI sends these automatically.
-- **Privacy levels are per-creator** — you must fetch the available options for each account before posting.
-- **Content moderation is more aggressive via API** than in the native TikTok app.
-- **Photo titles auto-truncated to 90 characters** with hashtags and URLs stripped. Use the `description` field for longer text.
-- **Photos are auto-resized** to 1080x1920 regardless of original dimensions.
-- **Large videos uploaded in chunks** (5-64 MB per chunk) for reliability.
-- **Cannot mix photos and videos** in the same post.
-- **Cannot read existing comments** — TikTok API is write-only for comments.
-- **No DMs** are available via the TikTok API.
+- [Direct Post API](https://developers.tiktok.com/doc/content-posting-api-reference-direct-post)
+- [Upload video to the creator inbox](https://developers.tiktok.com/doc/content-posting-api-reference-upload-video/)
+- [Query Creator Info](https://developers.tiktok.com/doc/content-posting-api-reference-query-creator-info)
+- [Direct Post UX and consent guidelines](https://developers.tiktok.com/doc/content-sharing-guidelines/)
+- [Media Transfer Guide](https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide)
+- [Photo Post API](https://developers.tiktok.com/doc/content-posting-api-reference-photo-post/)
+- [Publish status](https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status)

@@ -12,7 +12,14 @@
  */
 
 import { GRAPH_BASE } from "../config/api-versions";
+import { readResponseJson } from "../lib/fetch-public-url";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
+
+const DIRECT_MESSAGE_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
+
+function readDirectMessageJson<T>(response: Response): Promise<T> {
+	return readResponseJson<T>(response, DIRECT_MESSAGE_RESPONSE_MAX_BYTES);
+}
 
 /**
  * A single interactive button on a text/card message.
@@ -147,6 +154,14 @@ export async function sendMessage(
 async function sendWhatsApp(
 	req: SendMessageRequest,
 ): Promise<SendMessageResult> {
+	const firstAttachment = req.attachments?.[0];
+	if (firstAttachment?.type === "audio" && firstAttachment.caption?.trim()) {
+		return {
+			success: false,
+			error:
+				"WhatsApp audio messages do not support captions; remove the caption or use a non-audio attachment.",
+		};
+	}
 	const body = buildWhatsAppBody(req);
 
 	const res = await fetchWithTimeout(
@@ -163,16 +178,18 @@ async function sendWhatsApp(
 	);
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = await readDirectMessageJson<{
 			error?: { message?: string };
-		};
+		}>(res).catch((): { error?: { message?: string } } => ({}));
 		return {
 			success: false,
 			error: err.error?.message ?? `HTTP ${res.status}`,
 		};
 	}
 
-	const data = (await res.json()) as { messages?: Array<{ id: string }> };
+	const data = await readDirectMessageJson<{
+		messages?: Array<{ id: string }>;
+	}>(res);
 	return confirmedMessageResult("WhatsApp", data.messages?.[0]?.id);
 }
 
@@ -234,7 +251,7 @@ function buildWhatsAppBody(req: SendMessageRequest): Record<string, unknown> {
 			type,
 			[type]: {
 				link: firstAttachment.url,
-				...(firstAttachment.caption
+				...(firstAttachment.type !== "audio" && firstAttachment.caption
 					? { caption: firstAttachment.caption }
 					: {}),
 			},
@@ -265,13 +282,15 @@ async function sendTelegram(
 	);
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = await readDirectMessageJson<{
 			description?: string;
-		};
+		}>(res).catch((): { description?: string } => ({}));
 		return { success: false, error: err.description ?? `HTTP ${res.status}` };
 	}
 
-	const data = (await res.json()) as { result?: { message_id?: number } };
+	const data = await readDirectMessageJson<{
+		result?: { message_id?: number };
+	}>(res);
 	return confirmedMessageResult("Telegram", data.result?.message_id);
 }
 
@@ -435,17 +454,21 @@ async function sendTwitterDM(
 	);
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = await readDirectMessageJson<{
 			detail?: string;
 			errors?: Array<{ message: string }>;
-		};
+		}>(res).catch(
+			(): { detail?: string; errors?: Array<{ message: string }> } => ({}),
+		);
 		return {
 			success: false,
 			error: err.errors?.[0]?.message ?? err.detail ?? `HTTP ${res.status}`,
 		};
 	}
 
-	const data = (await res.json()) as { data?: { dm_event_id?: string } };
+	const data = await readDirectMessageJson<{
+		data?: { dm_event_id?: string };
+	}>(res);
 	return confirmedMessageResult("X", data.data?.dm_event_id);
 }
 
@@ -471,16 +494,16 @@ async function sendInstagramDM(
 	);
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = await readDirectMessageJson<{
 			error?: { message?: string };
-		};
+		}>(res).catch((): { error?: { message?: string } } => ({}));
 		return {
 			success: false,
 			error: err.error?.message ?? `HTTP ${res.status}`,
 		};
 	}
 
-	const data = (await res.json()) as { message_id?: string };
+	const data = await readDirectMessageJson<{ message_id?: string }>(res);
 	return confirmedMessageResult("Instagram", data.message_id);
 }
 
@@ -507,16 +530,16 @@ async function sendFacebookMessage(
 	);
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = await readDirectMessageJson<{
 			error?: { message?: string };
-		};
+		}>(res).catch((): { error?: { message?: string } } => ({}));
 		return {
 			success: false,
 			error: err.error?.message ?? `HTTP ${res.status}`,
 		};
 	}
 
-	const data = (await res.json()) as { message_id?: string };
+	const data = await readDirectMessageJson<{ message_id?: string }>(res);
 	return confirmedMessageResult("Facebook", data.message_id);
 }
 
@@ -661,9 +684,9 @@ async function sendRedditMessage(
 		return { success: false, error: `HTTP ${res.status}` };
 	}
 
-	const data = (await res.json().catch(() => null)) as {
+	const data = await readDirectMessageJson<{
 		json?: { errors?: Array<[string, string, string]> };
-	} | null;
+	}>(res).catch(() => null);
 	const errors = data?.json?.errors ?? [];
 	if (errors.length > 0) {
 		return {

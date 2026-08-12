@@ -6,6 +6,7 @@ import { paginatedResponse } from "./common";
 
 export const WebhookEventEnum = z.enum([
 	"post.published",
+	"post.provider_draft",
 	"post.partial",
 	"post.failed",
 	"post.scheduled",

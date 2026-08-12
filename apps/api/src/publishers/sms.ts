@@ -1,9 +1,14 @@
+import { mapConcurrently } from "../lib/concurrency";
+import { readResponseJson } from "../lib/fetch-public-url";
 import {
 	classifyPublishError,
+	getSucceededProviderEffect,
 	type ProviderEffect,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
+	recordProviderEffect,
 } from "./types";
 
 /**
@@ -19,9 +24,223 @@ import {
  */
 
 const TWILIO_API = "https://api.twilio.com/2010-04-01";
+const TWILIO_RESPONSE_MAX_BYTES = 256 * 1024;
+
+interface TwilioMessageStatus {
+	sid?: string;
+	status?: string;
+	error_code?: number | null;
+	error_message?: string | null;
+}
+
+function twilioStatusKind(
+	status: string,
+): "delivered" | "sent" | "pending" | "failed" | "unknown" {
+	switch (status.toLowerCase()) {
+		case "delivered":
+		case "read":
+			return "delivered";
+		case "sent":
+			return "sent";
+		case "accepted":
+		case "scheduled":
+		case "queued":
+		case "sending":
+			return "pending";
+		case "failed":
+		case "undelivered":
+		case "canceled":
+			return "failed";
+		default:
+			return "unknown";
+	}
+}
+
+async function fetchTwilioMessageStatus(
+	accountSid: string,
+	authToken: string,
+	messageSid: string,
+): Promise<TwilioMessageStatus> {
+	const credentials = btoa(`${accountSid}:${authToken}`);
+	const res = await fetch(
+		`${TWILIO_API}/Accounts/${encodeURIComponent(accountSid)}/Messages/${encodeURIComponent(messageSid)}.json`,
+		{ headers: { Authorization: `Basic ${credentials}` } },
+	);
+	const data = await readResponseJson<
+		TwilioMessageStatus & { code?: number; message?: string }
+	>(res, TWILIO_RESPONSE_MAX_BYTES).catch(
+		(): TwilioMessageStatus & { code?: number; message?: string } => ({}),
+	);
+	if (!res.ok) {
+		throw new Error(
+			`Twilio message status failed (${res.status}): ${data.message ?? res.statusText}`,
+		);
+	}
+	return data;
+}
 
 export const smsPublisher: Publisher = {
 	platform: "sms",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		const messageIds = [
+			...request.effects.flatMap((effect) =>
+				effect.provider_id?.trim() ? [effect.provider_id.trim()] : [],
+			),
+			...(request.provider_operation_id?.trim()
+				? [request.provider_operation_id.trim()]
+				: []),
+			...(request.platform_post_id?.trim()
+				? [request.platform_post_id.trim()]
+				: []),
+		].filter((id, index, all) => all.indexOf(id) === index);
+		if (messageIds.length === 0) {
+			return {
+				success: false,
+				provider_outcome: { disposition: "outcome_unknown" },
+				error: {
+					code: "MISSING_PROVIDER_OPERATION_ID",
+					message: "Twilio reconciliation requires at least one Message SID.",
+				},
+			};
+		}
+
+		try {
+			const statuses = await mapConcurrently(messageIds, 4, (id) =>
+				fetchTwilioMessageStatus(
+					request.account.platform_account_id,
+					request.account.access_token,
+					id,
+				),
+			);
+			const kinds = statuses.map((item) =>
+				twilioStatusKind(item.status ?? "unknown"),
+			);
+			const effects: ProviderEffect[] = statuses.map((item, index) => {
+				const kind = kinds[index];
+				const failed = kind === "failed";
+				return {
+					name: request.effects[index]?.name ?? `recipient_${index + 1}`,
+					status: failed
+						? "failed"
+						: kind === "unknown" || kind === "pending"
+							? "outcome_unknown"
+							: "succeeded",
+					provider_id: item.sid ?? messageIds[index],
+					...(failed
+						? {
+								error: {
+									code: item.error_code
+										? `TWILIO_${item.error_code}`
+										: "SMS_DELIVERY_FAILED",
+									message:
+										item.error_message ??
+										`Twilio message entered ${item.status ?? "failed"} state.`,
+								},
+							}
+						: {}),
+				};
+			});
+			const providerState = statuses
+				.map((item) => item.status ?? "unknown")
+				.join(",");
+			const onlyId = messageIds.length === 1 ? messageIds[0] : undefined;
+			const failedCount = kinds.filter((kind) => kind === "failed").length;
+			const unknownCount = kinds.filter((kind) => kind === "unknown").length;
+
+			if (failedCount === kinds.length) {
+				return {
+					success: false,
+					platform_post_id: onlyId,
+					provider_outcome: {
+						disposition: "failed",
+						provider_operation_id: onlyId,
+						platform_post_id: onlyId,
+						provider_state: providerState,
+						effects,
+					},
+					error: {
+						code: "SMS_DELIVERY_FAILED",
+						message: "Twilio reports that every message failed delivery.",
+					},
+				};
+			}
+			if (failedCount > 0) {
+				return {
+					success: false,
+					platform_post_id: onlyId,
+					provider_outcome: {
+						disposition: "partial",
+						provider_operation_id: onlyId,
+						platform_post_id: onlyId,
+						provider_state: providerState,
+						effects,
+					},
+					error: {
+						code: "PARTIAL_DELIVERY",
+						message: `${failedCount} of ${kinds.length} Twilio messages failed delivery.`,
+					},
+				};
+			}
+			if (unknownCount > 0) {
+				return {
+					success: false,
+					platform_post_id: onlyId,
+					provider_outcome: {
+						disposition: "outcome_unknown",
+						provider_operation_id: onlyId,
+						platform_post_id: onlyId,
+						provider_state: providerState,
+						effects,
+					},
+					error: {
+						code: "PUBLISH_OUTCOME_UNKNOWN",
+						message: "Twilio returned an undocumented message status.",
+					},
+				};
+			}
+			if (kinds.some((kind) => kind === "pending")) {
+				return {
+					success: true,
+					platform_post_id: onlyId,
+					provider_outcome: {
+						disposition: "accepted",
+						provider_operation_id: onlyId,
+						platform_post_id: onlyId,
+						provider_state: providerState,
+						effects,
+					},
+				};
+			}
+			const disposition = kinds.every((kind) => kind === "delivered")
+				? ("delivered" as const)
+				: ("sent" as const);
+			return {
+				success: true,
+				platform_post_id: onlyId,
+				provider_outcome: {
+					disposition,
+					provider_operation_id: onlyId,
+					platform_post_id: onlyId,
+					provider_state: providerState,
+					effects,
+				},
+			};
+		} catch (error) {
+			const result = classifyPublishError(error);
+			return {
+				...result,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					provider_operation_id:
+						messageIds.length === 1 ? messageIds[0] : undefined,
+					platform_post_id: request.platform_post_id ?? undefined,
+					provider_state: request.provider_state ?? undefined,
+					effects: request.effects,
+				},
+			};
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -29,12 +248,27 @@ export const smsPublisher: Publisher = {
 			const authToken = request.account.access_token;
 			const opts = request.target_options;
 
-			const fromNumber = opts.from_number as string | undefined;
+			const fromNumber =
+				(request.account.metadata?.from_number as string | undefined) ??
+				(request.account.metadata?.default_from_number as string | undefined);
 
 			if (!fromNumber) {
 				throw new Error(
-					"Missing from_number. Provide it in target_options or account metadata.",
+					"Missing the connector-verified SMS sender. Reconnect this Twilio account.",
 				);
+			}
+			if (
+				typeof opts.from_number === "string" &&
+				opts.from_number.trim() !== fromNumber
+			) {
+				return {
+					success: false,
+					error: {
+						code: "SMS_SENDER_MISMATCH",
+						message:
+							"target_options.from_number does not match the sender verified by this SMS connection.",
+					},
+				};
 			}
 
 			const phoneNumbers = opts.phone_numbers as string[] | undefined;
@@ -88,7 +322,18 @@ export const smsPublisher: Publisher = {
 				error: string | null;
 			}> = [];
 
-			for (const phone of phoneNumbers) {
+			for (const [recipientIndex, phone] of phoneNumbers.entries()) {
+				const effectName = `recipient_${recipientIndex + 1}`;
+				const confirmed = getSucceededProviderEffect(request, effectName);
+				if (confirmed?.provider_id) {
+					results.push({
+						phone,
+						sid: confirmed.provider_id,
+						status: "accepted",
+						error: null,
+					});
+					continue;
+				}
 				const params = new URLSearchParams({
 					To: phone,
 					From: fromNumber,
@@ -118,8 +363,16 @@ export const smsPublisher: Publisher = {
 				);
 
 				if (res.ok) {
-					const data = (await res.json()) as { sid?: string; status?: string };
+					const data = await readResponseJson<{
+						sid?: string;
+						status?: string;
+					}>(res, TWILIO_RESPONSE_MAX_BYTES);
 					if (data.sid?.trim()) {
+						await recordProviderEffect(request, {
+							name: effectName,
+							status: "succeeded",
+							provider_id: data.sid,
+						});
 						results.push({
 							phone,
 							sid: data.sid,
@@ -135,10 +388,12 @@ export const smsPublisher: Publisher = {
 						});
 					}
 				} else {
-					const err = (await res.json().catch(() => ({}))) as {
+					const err = await readResponseJson<{
 						code?: number;
 						message?: string;
-					};
+					}>(res, TWILIO_RESPONSE_MAX_BYTES).catch(
+						(): { code?: number; message?: string } => ({}),
+					);
 					results.push({
 						phone,
 						sid: null,

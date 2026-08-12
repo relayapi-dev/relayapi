@@ -1,5 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
+	type Database,
 	inboxConversationNotes,
 	inboxConversations,
 	inboxMessages,
@@ -15,6 +16,7 @@ import {
 	INVALID_CURSOR_BODY,
 	InvalidPaginationCursorError,
 } from "../lib/pagination-cursor";
+import { readProviderJson } from "../lib/provider-response";
 import {
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
@@ -61,6 +63,7 @@ import {
 	searchMessages,
 	updateConversation,
 } from "../services/inbox-persistence";
+import { resolveWhatsAppOutboundBsuid } from "../services/whatsapp-identity";
 import type { Env, Variables } from "../types";
 import { igGraphHost, resolveInboxTarget } from "./inbox-helpers";
 
@@ -72,6 +75,46 @@ function trackedProviderFetch(
 	...args: Parameters<typeof fetch>
 ): Promise<Response> {
 	return mutation.track(label, () => fetch(...args));
+}
+
+async function resolveWhatsAppConversationRecipient(
+	db: Database,
+	encryptionKey: string,
+	input: {
+		organizationId: string;
+		accountId: string;
+		conversationId: string;
+		platformConversationId: string;
+		participantMetadata: unknown;
+	},
+): Promise<{ id: string; type: "individual" | "group" }> {
+	const metadata =
+		input.participantMetadata &&
+		typeof input.participantMetadata === "object" &&
+		!Array.isArray(input.participantMetadata)
+			? (input.participantMetadata as Record<string, unknown>)
+			: null;
+	const group =
+		metadata?.whatsappGroup &&
+		typeof metadata.whatsappGroup === "object" &&
+		!Array.isArray(metadata.whatsappGroup)
+			? (metadata.whatsappGroup as Record<string, unknown>)
+			: null;
+	if (
+		typeof group?.id === "string" &&
+		group.id === input.platformConversationId
+	) {
+		return { id: group.id, type: "group" };
+	}
+	const bsuid = await resolveWhatsAppOutboundBsuid(db, encryptionKey, {
+		organizationId: input.organizationId,
+		accountId: input.accountId,
+		conversationId: input.conversationId,
+	});
+	return {
+		id: bsuid ?? input.platformConversationId,
+		type: "individual",
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +178,9 @@ function serializeMessage(row: {
 	platformData: unknown;
 	isHidden: boolean | null;
 	isLiked: boolean | null;
+	editRevision: number;
+	editedAt: Date | null;
+	providerReadAt: Date | null;
 	createdAt: Date;
 }) {
 	return {
@@ -152,6 +198,9 @@ function serializeMessage(row: {
 		platform_data: row.platformData,
 		is_hidden: row.isHidden ?? false,
 		is_liked: row.isLiked ?? false,
+		edit_revision: row.editRevision,
+		edited_at: row.editedAt?.toISOString() ?? null,
+		provider_read_at: row.providerReadAt?.toISOString() ?? null,
 		created_at: row.createdAt.toISOString(),
 	};
 }
@@ -746,7 +795,7 @@ app.openapi(sendMessageRoute, async (c) => {
 						`https://${msgHost}/${API_VERSIONS.meta_graph}/${conversation.platformConversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
 					);
 					if (convRes.ok) {
-						const convJson = (await convRes.json()) as {
+						const convJson = (await readProviderJson(convRes)) as {
 							participants?: { data: Array<{ id: string }> };
 						};
 						recipientId = convJson.participants?.data?.find(
@@ -811,7 +860,7 @@ app.openapi(sendMessageRoute, async (c) => {
 						},
 					);
 					if (!res.ok) return c.json({ success: false }, 200);
-					const json = (await res.json()) as { message_id?: string };
+					const json = (await readProviderJson(res)) as { message_id?: string };
 					lastMessageId = json.message_id;
 				} else if (attachments && attachments.length > 0) {
 					// Send attachments as attachment messages
@@ -847,7 +896,9 @@ app.openapi(sendMessageRoute, async (c) => {
 						);
 						if (res.ok) {
 							providerAccepted = true;
-							const json = (await res.json()) as { message_id?: string };
+							const json = (await readProviderJson(res)) as {
+								message_id?: string;
+							};
 							lastMessageId = json.message_id;
 							if (json.message_id) sentMids.push(json.message_id);
 						}
@@ -873,7 +924,9 @@ app.openapi(sendMessageRoute, async (c) => {
 						);
 						if (res.ok) {
 							providerAccepted = true;
-							const json = (await res.json()) as { message_id?: string };
+							const json = (await readProviderJson(res)) as {
+								message_id?: string;
+							};
 							lastMessageId = json.message_id;
 							if (json.message_id) sentMids.push(json.message_id);
 						}
@@ -911,7 +964,7 @@ app.openapi(sendMessageRoute, async (c) => {
 						},
 					);
 					if (!res.ok) return c.json({ success: false }, 200);
-					const json = (await res.json()) as { message_id?: string };
+					const json = (await readProviderJson(res)) as { message_id?: string };
 					lastMessageId = json.message_id;
 				}
 
@@ -974,7 +1027,17 @@ app.openapi(sendMessageRoute, async (c) => {
 					return c.json({ success: false }, 200);
 				}
 
-				const recipientPhone = conversation.platformConversationId;
+				const recipient = await resolveWhatsAppConversationRecipient(
+					db,
+					c.env.ENCRYPTION_KEY,
+					{
+						organizationId: orgId,
+						accountId: account.id,
+						conversationId: conversation.id,
+						platformConversationId: conversation.platformConversationId,
+						participantMetadata: conversation.participantMetadata,
+					},
+				);
 				const replyAuthorization = await authorizeConversationReply(
 					db,
 					c.env.ENCRYPTION_KEY,
@@ -984,7 +1047,7 @@ app.openapi(sendMessageRoute, async (c) => {
 						conversationId: conversation.id,
 						accountId: account.id,
 						platform: "whatsapp",
-						recipientIdentifier: recipientPhone,
+						recipientIdentifier: recipient.id,
 					},
 				);
 				if (!replyAuthorization.authorized) {
@@ -1019,8 +1082,8 @@ app.openapi(sendMessageRoute, async (c) => {
 								: "document";
 					waBody = {
 						messaging_product: "whatsapp",
-						recipient_type: "individual",
-						to: recipientPhone,
+						recipient_type: recipient.type,
+						to: recipient.id,
 						type: waType,
 						[waType]: { link: att.url, ...(text && { caption: text }) },
 						...waContext,
@@ -1028,8 +1091,8 @@ app.openapi(sendMessageRoute, async (c) => {
 				} else if (text) {
 					waBody = {
 						messaging_product: "whatsapp",
-						recipient_type: "individual",
-						to: recipientPhone,
+						recipient_type: recipient.type,
+						to: recipient.id,
 						type: "text",
 						text: { body: text },
 						...waContext,
@@ -1056,7 +1119,7 @@ app.openapi(sendMessageRoute, async (c) => {
 				);
 
 				if (!waRes.ok) {
-					const errData = (await waRes.json()) as {
+					const errData = (await readProviderJson(waRes)) as {
 						error?: { code?: number; message?: string };
 					};
 					if (errData.error?.code === 131047) {
@@ -1072,7 +1135,7 @@ app.openapi(sendMessageRoute, async (c) => {
 					return c.json({ success: false }, 200);
 				}
 
-				const waJson = (await waRes.json()) as {
+				const waJson = (await readProviderJson(waRes)) as {
 					messages?: Array<{ id: string }>;
 				};
 				const waMessageId = waJson.messages?.[0]?.id;
@@ -1181,7 +1244,7 @@ app.openapi(sendTypingRoute, async (c) => {
 						`${GRAPH_BASE.facebook}/${conversation.platformConversationId}?access_token=${encodeURIComponent(account.accessToken)}&fields=participants`,
 					);
 					if (!convRes.ok) return c.json({ success: true }, 200);
-					const convJson = (await convRes.json()) as {
+					const convJson = (await readProviderJson(convRes)) as {
 						participants?: { data: Array<{ id: string }> };
 					};
 					recipientId = convJson.participants?.data?.find(
@@ -1304,6 +1367,17 @@ app.openapi(addReactionRoute, async (c) => {
 				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
+				const recipient = await resolveWhatsAppConversationRecipient(
+					db,
+					c.env.ENCRYPTION_KEY,
+					{
+						organizationId: orgId,
+						accountId: account.id,
+						conversationId: conversation.id,
+						platformConversationId: conversation.platformConversationId,
+						participantMetadata: conversation.participantMetadata,
+					},
+				);
 
 				// Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#reaction-messages
 				const waRes = await trackedProviderFetch(
@@ -1318,8 +1392,8 @@ app.openapi(addReactionRoute, async (c) => {
 						},
 						body: JSON.stringify({
 							messaging_product: "whatsapp",
-							recipient_type: "individual",
-							to: conversation.platformConversationId,
+							recipient_type: recipient.type,
+							to: recipient.id,
 							type: "reaction",
 							reaction: {
 								message_id: msg.platformMessageId,
@@ -1431,6 +1505,17 @@ app.openapi(removeReactionRoute, async (c) => {
 				if (!conversation.platformConversationId) {
 					return c.json({ success: false }, 200);
 				}
+				const recipient = await resolveWhatsAppConversationRecipient(
+					db,
+					c.env.ENCRYPTION_KEY,
+					{
+						organizationId: orgId,
+						accountId: account.id,
+						conversationId: conversation.id,
+						platformConversationId: conversation.platformConversationId,
+						participantMetadata: conversation.participantMetadata,
+					},
+				);
 
 				// Send empty emoji to remove reaction
 				const waRes = await trackedProviderFetch(
@@ -1445,8 +1530,8 @@ app.openapi(removeReactionRoute, async (c) => {
 						},
 						body: JSON.stringify({
 							messaging_product: "whatsapp",
-							recipient_type: "individual",
-							to: conversation.platformConversationId,
+							recipient_type: recipient.type,
+							to: recipient.id,
 							type: "reaction",
 							reaction: {
 								message_id: msg.platformMessageId,

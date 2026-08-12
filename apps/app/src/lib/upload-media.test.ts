@@ -8,6 +8,174 @@ afterEach(() => {
 });
 
 describe("uploadMedia", () => {
+	it("uses resumable multipart upload above 64 MiB and returns the stable reference URL", async () => {
+		const calls: string[] = [];
+		let completionBody: unknown;
+		const file = {
+			name: "large-video.mp4",
+			type: "video/mp4",
+			size: 64 * 1024 * 1024 + 1,
+			slice: () => new Blob(["part"], { type: "video/mp4" }),
+		} as File;
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.toString()
+						: input.url;
+			calls.push(url);
+			if (url === "/api/media/uploads") {
+				expect(JSON.parse(String(init?.body))).toEqual({
+					filename: "large-video.mp4",
+					content_type: "video/mp4",
+					size_bytes: 64 * 1024 * 1024 + 1,
+					workspace_id: "ws_video",
+				});
+				return Response.json({
+					id: "mup_large",
+					media_id: "med_large",
+					mode: "multipart",
+					status: "created",
+					part_size: 64 * 1024 * 1024,
+					part_count: 2,
+				});
+			}
+			if (url === "/api/media/uploads/mup_large/parts") {
+				return Response.json({
+					parts: [1, 2].map((part) => ({
+						part_number: part,
+						upload_url: `https://uploads.example.test/part-${part}`,
+						upload_headers: {},
+					})),
+				});
+			}
+			if (url.startsWith("https://uploads.example.test/part-")) {
+				return new Response(null, {
+					status: 200,
+					headers: { ETag: `"etag-${url.at(-1)}"` },
+				});
+			}
+			if (url === "/api/media/uploads/mup_large/complete") {
+				completionBody = JSON.parse(String(init?.body));
+				return Response.json({
+					id: "med_large",
+					filename: "large-video.mp4",
+					mime_type: "video/mp4",
+					size: 64 * 1024 * 1024 + 1,
+					url: "https://signed.example.test/temporary",
+					reference_url: "https://media.example.test/stable/large-video.mp4",
+				});
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		}) as unknown as typeof fetch;
+
+		const result = await uploadMedia(file, { workspaceId: "ws_video" });
+
+		expect(result.url).toBe(
+			"https://media.example.test/stable/large-video.mp4",
+		);
+		expect(completionBody).toEqual({
+			parts: [
+				{ part_number: 1, etag: '"etag-1"' },
+				{ part_number: 2, etag: '"etag-2"' },
+			],
+		});
+		expect(calls).toEqual([
+			"/api/media/uploads",
+			"/api/media/uploads/mup_large/parts",
+			"https://uploads.example.test/part-1",
+			"https://uploads.example.test/part-2",
+			"/api/media/uploads/mup_large/complete",
+		]);
+	});
+
+	it("aborts multipart state when storage does not expose an ETag", async () => {
+		const file = {
+			name: "large-video.mp4",
+			type: "video/mp4",
+			size: 64 * 1024 * 1024 + 1,
+			slice: () => new Blob(["part"], { type: "video/mp4" }),
+		} as File;
+		let aborted = false;
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.toString()
+						: input.url;
+			if (url === "/api/media/uploads") {
+				return Response.json({
+					id: "mup_no_etag",
+					media_id: "med_no_etag",
+					mode: "multipart",
+					status: "created",
+					part_size: 64 * 1024 * 1024,
+					part_count: 2,
+				});
+			}
+			if (url === "/api/media/uploads/mup_no_etag/parts") {
+				return Response.json({
+					parts: [1, 2].map((part) => ({
+						part_number: part,
+						upload_url: `https://uploads.example.test/no-etag-${part}`,
+						upload_headers: {},
+					})),
+				});
+			}
+			if (url.startsWith("https://uploads.example.test/no-etag-")) {
+				return new Response(null, { status: 200 });
+			}
+			if (url === "/api/media/uploads/mup_no_etag") {
+				if (aborted) return new Response(null, { status: 204 });
+				return Response.json({
+					id: "mup_no_etag",
+					status: "uploading",
+					media: null,
+				});
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		}) as unknown as typeof fetch;
+		const priorFetch = globalThis.fetch;
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (
+				url === "/api/media/uploads/mup_no_etag" &&
+				init?.method === "DELETE"
+			) {
+				aborted = true;
+				return new Response(null, { status: 204 });
+			}
+			return priorFetch(input, init);
+		}) as unknown as typeof fetch;
+
+		await expect(uploadMedia(file)).rejects.toThrow("did not expose ETag");
+		expect(aborted).toBe(true);
+	});
+
+	it("rejects media above 200 MiB before making a request", async () => {
+		let requested = false;
+		globalThis.fetch = (async () => {
+			requested = true;
+			throw new Error("unexpected");
+		}) as unknown as typeof fetch;
+		const file = {
+			name: "too-large.mp4",
+			type: "video/mp4",
+			size: 200 * 1024 * 1024 + 1,
+		} as File;
+
+		await expect(uploadMedia(file)).rejects.toThrow("cannot exceed 200 MiB");
+		expect(requested).toBe(false);
+	});
+
 	it("keeps presigned and fallback uploads in the requested workspace", async () => {
 		let presignBody: unknown;
 		const calls: string[] = [];

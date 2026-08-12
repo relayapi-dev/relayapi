@@ -1,9 +1,37 @@
 import { describe, expect, it } from "bun:test";
-import Relay from "../src";
+import Relay, { POST_TARGET_PLATFORMS } from "../src";
 
 const API_KEY = ["rlay", "test", "resource-parity"].join("_");
 
 describe("hand-written resource parity", () => {
+	it("exposes the exact typed 22-platform publishing union", () => {
+		expect(POST_TARGET_PLATFORMS).toEqual([
+			"twitter",
+			"instagram",
+			"facebook",
+			"linkedin",
+			"tiktok",
+			"youtube",
+			"pinterest",
+			"reddit",
+			"bluesky",
+			"threads",
+			"telegram",
+			"snapchat",
+			"googlebusiness",
+			"whatsapp",
+			"mastodon",
+			"discord",
+			"sms",
+			"beehiiv",
+			"convertkit",
+			"mailchimp",
+			"listmonk",
+			"slack",
+		]);
+		expect(new Set(POST_TARGET_PLATFORMS).size).toBe(22);
+	});
+
 	it("maps API-owned email intent routes", async () => {
 		const requests: Array<{ body: string; method: string; url: string }> = [];
 		const client = new Relay({
@@ -396,6 +424,45 @@ describe("hand-written resource parity", () => {
 			"/v1/tools/youtube/transcript",
 			"/v1/tools/jobs/tj_1",
 		]);
+	});
+
+	it("maps the typed ad audience account and JSON-rule contracts", async () => {
+		const requests: Array<{ body: string; method: string; url: string }> = [];
+		const client = new Relay({
+			apiKey: API_KEY,
+			baseURL: "https://api.example.test",
+			maxRetries: 0,
+			fetch: async (input, init) => {
+				requests.push({
+					body: String(init?.body ?? ""),
+					method: init?.method ?? "GET",
+					url: String(input),
+				});
+				return Response.json({ data: [], next_cursor: null, has_more: false });
+			},
+		});
+
+		await client.ads.listAudiences({ ad_account_id: "ada_1" });
+		await client.ads.createAudience({
+			ad_account_id: "ada_1",
+			name: "Pricing visitors",
+			type: "website",
+			pixel_id: "pixel_1",
+			rule: { url: { contains: "pricing" } },
+		});
+
+		expect(
+			requests.map(
+				({ method, url }) =>
+					`${method} ${new URL(url).pathname}${new URL(url).search}`,
+			),
+		).toEqual([
+			"GET /v1/ads/audiences?ad_account_id=ada_1",
+			"POST /v1/ads/audiences",
+		]);
+		expect(JSON.parse(requests[1]?.body ?? "{}").rule).toEqual({
+			url: { contains: "pricing" },
+		});
 	});
 
 	it("does not expose API routes that do not exist", () => {

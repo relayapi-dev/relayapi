@@ -424,6 +424,12 @@ describe("queue rescue ledger", () => {
 			),
 		).toBe("relayapi-selfhost-sync-dlq");
 		expect(
+			inferAutomaticRescueOriginQueue(hosted, {
+				type: "advanced_report",
+				report_job_id: "adrep_1",
+			}),
+		).toBe("relayapi-ads-dlq");
+		expect(
 			inferAutomaticRescueOriginQueue(hosted, { unknown: true }),
 		).toBeNull();
 	});

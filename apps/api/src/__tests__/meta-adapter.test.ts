@@ -128,6 +128,7 @@ describe("meta paid-object crash recovery", () => {
 			await metaAdAdapter.creation.createAdSet("tok", "act_123", {
 				campaignId: "campaign_1",
 				name: "Launch",
+				objective: "traffic",
 				mode: "standard",
 				targeting: {
 					ageMin: 25,
@@ -160,6 +161,7 @@ describe("meta paid-object crash recovery", () => {
 			await metaAdAdapter.creation.createAdSet("tok", "act_123", {
 				campaignId: "campaign_1",
 				name: "Launch",
+				objective: "traffic",
 				mode: "standard",
 				targeting: {
 					ageMin: 25,

@@ -1,15 +1,15 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-import { APIResource } from '../../core/resource';
-import * as TelegramAPI from './telegram';
+import { APIResource } from "../../core/resource";
+import * as TelegramAPI from "./telegram";
 import {
   Telegram,
   TelegramInitiateConnectionParams,
   TelegramInitiateConnectionResponse,
   TelegramPollConnectionStatusParams,
   TelegramPollConnectionStatusResponse,
-} from './telegram';
-import * as WhatsappAPI from './whatsapp';
+} from "./telegram";
+import * as WhatsappAPI from "./whatsapp";
 import {
   Whatsapp,
   WhatsappCompleteEmbeddedSignupParams,
@@ -17,20 +17,20 @@ import {
   WhatsappConnectViaCredentialsParams,
   WhatsappConnectViaCredentialsResponse,
   WhatsappGetSDKConfigResponse,
-} from './whatsapp';
-import * as FacebookAPI from './facebook/facebook';
-import { Facebook } from './facebook/facebook';
-import * as GooglebusinessAPI from './googlebusiness/googlebusiness';
-import { Googlebusiness } from './googlebusiness/googlebusiness';
-import * as LinkedinAPI from './linkedin/linkedin';
-import { Linkedin } from './linkedin/linkedin';
-import * as PinterestAPI from './pinterest/pinterest';
-import { Pinterest } from './pinterest/pinterest';
-import * as SnapchatAPI from './snapchat/snapchat';
-import { Snapchat } from './snapchat/snapchat';
-import { APIPromise } from '../../core/api-promise';
-import { RequestOptions } from '../../internal/request-options';
-import { path } from '../../internal/utils/path';
+} from "./whatsapp";
+import * as FacebookAPI from "./facebook/facebook";
+import { Facebook } from "./facebook/facebook";
+import * as GooglebusinessAPI from "./googlebusiness/googlebusiness";
+import { Googlebusiness } from "./googlebusiness/googlebusiness";
+import * as LinkedinAPI from "./linkedin/linkedin";
+import { Linkedin } from "./linkedin/linkedin";
+import * as PinterestAPI from "./pinterest/pinterest";
+import { Pinterest } from "./pinterest/pinterest";
+import * as SnapchatAPI from "./snapchat/snapchat";
+import { Snapchat } from "./snapchat/snapchat";
+import { APIPromise } from "../../core/api-promise";
+import { RequestOptions } from "../../internal/request-options";
+import { path } from "../../internal/utils/path";
 
 export class Connect extends APIResource {
   telegram: TelegramAPI.Telegram = new TelegramAPI.Telegram(this._client);
@@ -38,7 +38,8 @@ export class Connect extends APIResource {
   facebook: FacebookAPI.Facebook = new FacebookAPI.Facebook(this._client);
   linkedin: LinkedinAPI.Linkedin = new LinkedinAPI.Linkedin(this._client);
   pinterest: PinterestAPI.Pinterest = new PinterestAPI.Pinterest(this._client);
-  googlebusiness: GooglebusinessAPI.Googlebusiness = new GooglebusinessAPI.Googlebusiness(this._client);
+  googlebusiness: GooglebusinessAPI.Googlebusiness =
+    new GooglebusinessAPI.Googlebusiness(this._client);
   snapchat: SnapchatAPI.Snapchat = new SnapchatAPI.Snapchat(this._client);
 
   /**
@@ -49,22 +50,25 @@ export class Connect extends APIResource {
    */
   completeOAuthCallback(
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'threads'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'mastodon',
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "threads"
+      | "snapchat"
+      | "googlebusiness"
+      | "mastodon",
     body: ConnectCompleteOAuthCallbackParams,
     options?: RequestOptions,
   ): APIPromise<ConnectCompleteOAuthCallbackResponse> {
-    return this._client.post(path`/v1/connect/${platform}`, { body, ...options });
+    return this._client.post(path`/v1/connect/${platform}`, {
+      body,
+      ...options,
+    });
   }
 
   /**
@@ -74,7 +78,35 @@ export class Connect extends APIResource {
     body: ConnectCreateBlueskyConnectionParams,
     options?: RequestOptions,
   ): APIPromise<ConnectCreateBlueskyConnectionResponse> {
-    return this._client.post('/v1/connect/bluesky', { body, ...options });
+    return this._client.post("/v1/connect/bluesky", { body, ...options });
+  }
+
+  /**
+   * Validate and connect a Discord incoming webhook.
+   */
+  connectDiscord(
+    body: ConnectDiscordParams,
+    options?: RequestOptions,
+  ): APIPromise<ConnectCredentialResponse> {
+    return this._client.post("/v1/connect/discord", { body, ...options });
+  }
+
+  /**
+   * Validate and connect a Twilio account and its default SMS sender.
+   */
+  connectSms(
+    body: ConnectSmsParams,
+    options?: RequestOptions,
+  ): APIPromise<ConnectCredentialResponse> {
+    return this._client.post("/v1/connect/sms", { body, ...options });
+  }
+
+  /** Connect a Slack incoming webhook. */
+  connectSlack(
+    body: ConnectSlackParams,
+    options?: RequestOptions,
+  ): APIPromise<ConnectCredentialResponse> {
+    return this._client.post("/v1/connect/slack", { body, ...options });
   }
 
   /**
@@ -85,7 +117,7 @@ export class Connect extends APIResource {
     query: ConnectFetchPendingDataParams,
     options?: RequestOptions,
   ): APIPromise<ConnectFetchPendingDataResponse> {
-    return this._client.get('/v1/connect/pending-data', { query, ...options });
+    return this._client.get("/v1/connect/pending-data", { query, ...options });
   }
 
   /**
@@ -94,22 +126,25 @@ export class Connect extends APIResource {
    */
   startOAuthFlow(
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'threads'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'mastodon',
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "threads"
+      | "snapchat"
+      | "googlebusiness"
+      | "mastodon",
     query: ConnectStartOAuthFlowParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<ConnectStartOAuthFlowResponse> {
-    return this._client.get(path`/v1/connect/${platform}`, { query, ...options });
+    return this._client.get(path`/v1/connect/${platform}`, {
+      query,
+      ...options,
+    });
   }
 
   /**
@@ -119,7 +154,7 @@ export class Connect extends APIResource {
     body: ConnectBeehiivParams,
     options?: RequestOptions,
   ): APIPromise<ConnectNewsletterResponse> {
-    return this._client.post('/v1/connect/beehiiv', { body, ...options });
+    return this._client.post("/v1/connect/beehiiv", { body, ...options });
   }
 
   /**
@@ -129,7 +164,7 @@ export class Connect extends APIResource {
     body: ConnectConvertKitParams,
     options?: RequestOptions,
   ): APIPromise<ConnectNewsletterResponse> {
-    return this._client.post('/v1/connect/convertkit', { body, ...options });
+    return this._client.post("/v1/connect/convertkit", { body, ...options });
   }
 
   /**
@@ -139,7 +174,7 @@ export class Connect extends APIResource {
     body: ConnectMailchimpParams,
     options?: RequestOptions,
   ): APIPromise<ConnectNewsletterResponse> {
-    return this._client.post('/v1/connect/mailchimp', { body, ...options });
+    return this._client.post("/v1/connect/mailchimp", { body, ...options });
   }
 
   /**
@@ -149,14 +184,14 @@ export class Connect extends APIResource {
     body: ConnectListMonkParams,
     options?: RequestOptions,
   ): APIPromise<ConnectNewsletterResponse> {
-    return this._client.post('/v1/connect/listmonk', { body, ...options });
+    return this._client.post("/v1/connect/listmonk", { body, ...options });
   }
 }
 
 export type ConnectCompleteOAuthCallbackResponse =
   | { account: ConnectCompleteOAuthCallbackResponse.Account }
   | {
-      status: 'pending_selection';
+      status: "pending_selection";
       connect_token: string;
       platform: string;
     };
@@ -177,23 +212,28 @@ export namespace ConnectCompleteOAuthCallbackResponse {
     metadata: { [key: string]: unknown } | null;
 
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "bluesky"
+      | "threads"
+      | "telegram"
+      | "snapchat"
+      | "googlebusiness"
+      | "whatsapp"
+      | "mastodon"
+      | "discord"
+      | "sms"
+      | "beehiiv"
+      | "convertkit"
+      | "mailchimp"
+      | "listmonk"
+      | "slack";
 
     platform_account_id: string;
 
@@ -223,23 +263,28 @@ export namespace ConnectCreateBlueskyConnectionResponse {
     metadata: { [key: string]: unknown } | null;
 
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "bluesky"
+      | "threads"
+      | "telegram"
+      | "snapchat"
+      | "googlebusiness"
+      | "whatsapp"
+      | "mastodon"
+      | "discord"
+      | "sms"
+      | "beehiiv"
+      | "convertkit"
+      | "mailchimp"
+      | "listmonk"
+      | "slack";
 
     platform_account_id: string;
 
@@ -256,23 +301,28 @@ export namespace ConnectCreateBlueskyConnectionResponse {
  */
 export interface ConnectFetchPendingDataResponse {
   platform:
-    | 'twitter'
-    | 'instagram'
-    | 'facebook'
-    | 'linkedin'
-    | 'tiktok'
-    | 'youtube'
-    | 'pinterest'
-    | 'reddit'
-    | 'bluesky'
-    | 'threads'
-    | 'telegram'
-    | 'snapchat'
-    | 'googlebusiness'
-    | 'whatsapp'
-    | 'mastodon'
-    | 'discord'
-    | 'sms';
+    | "twitter"
+    | "instagram"
+    | "facebook"
+    | "linkedin"
+    | "tiktok"
+    | "youtube"
+    | "pinterest"
+    | "reddit"
+    | "bluesky"
+    | "threads"
+    | "telegram"
+    | "snapchat"
+    | "googlebusiness"
+    | "whatsapp"
+    | "mastodon"
+    | "discord"
+    | "sms"
+    | "beehiiv"
+    | "convertkit"
+    | "mailchimp"
+    | "listmonk"
+    | "slack";
 
   /**
    * Authoritative workspace selected when the OAuth flow started
@@ -283,7 +333,7 @@ export interface ConnectFetchPendingDataResponse {
    * Outcome of the headless OAuth exchange. 'pending_selection' means a secondary
    * selection step (e.g. Facebook page) is required.
    */
-  status: 'success' | 'pending_selection' | 'error';
+  status: "success" | "pending_selection" | "error";
 
   /**
    * Connected account — present when status is 'success'
@@ -329,23 +379,28 @@ export namespace ConnectFetchPendingDataResponse {
     metadata: { [key: string]: unknown } | null;
 
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "bluesky"
+      | "threads"
+      | "telegram"
+      | "snapchat"
+      | "googlebusiness"
+      | "whatsapp"
+      | "mastodon"
+      | "discord"
+      | "sms"
+      | "beehiiv"
+      | "convertkit"
+      | "mailchimp"
+      | "listmonk"
+      | "slack";
 
     platform_account_id: string;
 
@@ -410,6 +465,32 @@ export interface ConnectCreateBlueskyConnectionParams {
   workspace_id?: string;
 }
 
+export interface ConnectCredentialResponse {
+  account: ConnectCompleteOAuthCallbackResponse.Account;
+}
+
+export interface ConnectDiscordParams {
+  /** Discord incoming webhook bearer URL. */
+  webhook_url: string;
+  workspace_id?: string;
+}
+
+export interface ConnectSmsParams {
+  /** Twilio Account SID. */
+  account_sid: string;
+  /** Twilio Auth Token. */
+  auth_token: string;
+  /** Twilio-owned SMS-capable sender in E.164 format. */
+  from_number: string;
+  workspace_id?: string;
+}
+
+export interface ConnectSlackParams {
+  /** Slack or GovSlack incoming webhook bearer URL. */
+  webhook_url: string;
+  workspace_id?: string;
+}
+
 export interface ConnectFetchPendingDataParams {
   /**
    * Temporary token from headless OAuth flow
@@ -427,6 +508,11 @@ export interface ConnectStartOAuthFlowParams {
    * Auth method variant (e.g. "direct" for Instagram Login instead of Facebook Login)
    */
   method?: string;
+
+  /**
+   * Required for Mastodon. Public HTTPS origin of the account's home instance.
+   */
+  instance_url?: string;
 
   /**
    * URL to redirect after OAuth completes
@@ -482,10 +568,14 @@ export declare namespace Connect {
   export {
     type ConnectCompleteOAuthCallbackResponse as ConnectCompleteOAuthCallbackResponse,
     type ConnectCreateBlueskyConnectionResponse as ConnectCreateBlueskyConnectionResponse,
+    type ConnectCredentialResponse as ConnectCredentialResponse,
     type ConnectFetchPendingDataResponse as ConnectFetchPendingDataResponse,
     type ConnectStartOAuthFlowResponse as ConnectStartOAuthFlowResponse,
     type ConnectCompleteOAuthCallbackParams as ConnectCompleteOAuthCallbackParams,
     type ConnectCreateBlueskyConnectionParams as ConnectCreateBlueskyConnectionParams,
+    type ConnectDiscordParams as ConnectDiscordParams,
+    type ConnectSmsParams as ConnectSmsParams,
+    type ConnectSlackParams as ConnectSlackParams,
     type ConnectFetchPendingDataParams as ConnectFetchPendingDataParams,
     type ConnectStartOAuthFlowParams as ConnectStartOAuthFlowParams,
   };

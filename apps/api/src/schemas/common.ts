@@ -67,6 +67,7 @@ export const FilterParams = PaginationParams.extend({
 			"scheduled",
 			"publishing",
 			"published",
+			"provider_draft",
 			"failed",
 			"partial",
 		])

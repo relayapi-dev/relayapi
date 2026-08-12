@@ -1,9 +1,23 @@
-import type { QueueName } from "./constants.js";
+import type { AdditiveQueueName, QueueName } from "./constants.js";
+
+export type PersistedQueueIds = Record<
+	Exclude<QueueName, AdditiveQueueName>,
+	string
+> &
+	Partial<Record<AdditiveQueueName, string>>;
+
+export type ResolvedCloudflareResources = {
+	kvNamespaceId: string;
+	hyperdriveId: string;
+	queues: Record<QueueName, string>;
+};
 
 export interface SelfHostFeatures {
 	email: boolean;
 	ai: boolean;
 	downloader: boolean;
+	/** Opt-in Cloudflare Container + Workflow media normalization. */
+	mediaProcessing?: boolean;
 }
 
 export interface SelfHostConfig {
@@ -28,13 +42,20 @@ export interface SelfHostConfig {
 		hyperdriveCaCertificateId?: string;
 	};
 	features: SelfHostFeatures;
+	publishing?: {
+		/**
+		 * Non-secret HTTPS URL prefixes verified in the operator's TikTok app.
+		 * These are copied into immutable account metadata when TikTok connects.
+		 */
+		tiktokVerifiedUrlPrefixes: string[];
+	};
 	github?: {
 		repository: string;
 	};
 	resources?: {
 		kvNamespaceId: string;
 		hyperdriveId: string;
-		queues: Record<QueueName, string>;
+		queues: PersistedQueueIds;
 	};
 }
 

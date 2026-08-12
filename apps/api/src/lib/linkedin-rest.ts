@@ -1,3 +1,4 @@
+import { readProviderJson } from "./provider-response";
 import { API_VERSIONS } from "../config/api-versions";
 
 export const LINKEDIN_API_BASE = "https://api.linkedin.com";
@@ -95,7 +96,9 @@ async function fetchLinkedInOrganizationLookups(
 
 	if (!res.ok) return new Map();
 
-	const json = (await res.json()) as LinkedInOrganizationsLookupResponse;
+	const json = (await readProviderJson(
+		res,
+	)) as LinkedInOrganizationsLookupResponse;
 	return new Map(Object.entries(json.results ?? {}));
 }
 
@@ -113,7 +116,7 @@ export async function fetchLinkedInAccessibleOrganizations(
 
 	if (!aclRes.ok) return [];
 
-	const aclJson = (await aclRes.json()) as LinkedInOrgAclResponse;
+	const aclJson = (await readProviderJson(aclRes)) as LinkedInOrgAclResponse;
 	const organizations = new Map<string, { id: string; urn: string }>();
 
 	for (const element of aclJson.elements ?? []) {
@@ -123,10 +126,9 @@ export async function fetchLinkedInAccessibleOrganizations(
 		organizations.set(id, { id, urn });
 	}
 
-	const lookupById = await fetchLinkedInOrganizationLookups(
-		accessToken,
-		[...organizations.keys()],
-	).catch(() => new Map<string, LinkedInOrganizationLookup>());
+	const lookupById = await fetchLinkedInOrganizationLookups(accessToken, [
+		...organizations.keys(),
+	]).catch(() => new Map<string, LinkedInOrganizationLookup>());
 
 	return [...organizations.values()].map(({ id, urn }) => {
 		const lookup = lookupById.get(id);

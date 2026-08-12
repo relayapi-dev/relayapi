@@ -80,6 +80,12 @@ export function apiWranglerConfig(
 			AI_EMBEDDING_MODEL: "text-embedding-3-small",
 			AI_INFERENCE_PROVIDER: "workers_ai",
 			AI_INFERENCE_MODEL: "@cf/zai-org/glm-4.7-flash",
+			...(config.publishing?.tiktokVerifiedUrlPrefixes.length
+				? {
+						TIKTOK_VERIFIED_URL_PREFIXES:
+							config.publishing.tiktokVerifiedUrlPrefixes.join("\n"),
+					}
+				: {}),
 			...(maintenanceSmokeBypassSha256
 				? {
 						MAINTENANCE_SMOKE_BYPASS_SHA256: maintenanceSmokeBypassSha256,
@@ -88,9 +94,50 @@ export function apiWranglerConfig(
 		},
 		...(config.features.ai ? { ai: { binding: "AI" } } : {}),
 		durable_objects: {
-			bindings: [{ name: "REALTIME", class_name: "RealtimeDO" }],
+			bindings: [
+				{ name: "REALTIME", class_name: "RealtimeDO" },
+				...(config.features.mediaProcessing
+					? [
+							{
+								name: "MEDIA_PROCESSOR",
+								class_name: "MediaProcessorContainer",
+							},
+						]
+					: []),
+			],
 		},
-		migrations: [{ tag: "v1", new_sqlite_classes: ["RealtimeDO"] }],
+		migrations: [
+			{ tag: "v1", new_sqlite_classes: ["RealtimeDO"] },
+			// Legacy Durable Object migrations are an append-only lifecycle. Keep v2
+			// even while the optional runtime binding is disabled so an operator can
+			// never roll the deployed migration tag backwards after opting in once.
+			{
+				tag: "v2",
+				new_sqlite_classes: ["MediaProcessorContainer"],
+			},
+		],
+		...(config.features.mediaProcessing
+			? {
+					workflows: [
+						{
+							binding: "MEDIA_PROCESSING_WORKFLOW",
+							name: "relayapi-selfhost-media-processing",
+							class_name: "MediaProcessingWorkflow",
+							limits: { steps: 20 },
+						},
+					],
+					containers: [
+						{
+							name: "relayapi-selfhost-media-processor",
+							class_name: "MediaProcessorContainer",
+							image: join(sourceRoot, "apps/api/media-processor/Dockerfile"),
+							image_build_context: join(sourceRoot, "apps/api/media-processor"),
+							instance_type: "standard-1",
+							max_instances: 2,
+						},
+					],
+				}
+			: {}),
 		kv_namespaces: [{ binding: "KV", id: config.resources.kvNamespaceId }],
 		r2_buckets: [
 			r2Binding(
@@ -111,6 +158,11 @@ export function apiWranglerConfig(
 			r2Binding(
 				"QUEUE_RESCUE_BUCKET",
 				RESOURCE_NAMES.buckets.queueRescue,
+				config.cloudflare.r2Jurisdiction,
+			),
+			r2Binding(
+				"AD_REPORT_BUCKET",
+				RESOURCE_NAMES.buckets.adReports,
 				config.cloudflare.r2Jurisdiction,
 			),
 		],
@@ -160,6 +212,10 @@ export function apiWranglerConfig(
 				{
 					binding: "CUSTOMER_WEBHOOK_QUEUE",
 					queue: cloudflareQueueName("customer-webhooks"),
+				},
+				{
+					binding: "MEDIA_PROCESSING_QUEUE",
+					queue: cloudflareQueueName("media-processing"),
 				},
 				{
 					binding: "QUEUE_RESCUE_QUEUE",
@@ -222,6 +278,13 @@ export function apiWranglerConfig(
 					max_concurrency: 5,
 					dead_letter_queue: cloudflareQueueName("customer-webhooks-dlq"),
 				}),
+				consumer("media-processing", {
+					max_batch_size: 1,
+					max_batch_timeout: 1,
+					max_retries: 5,
+					max_concurrency: 2,
+					dead_letter_queue: cloudflareQueueName("media-processing-dlq"),
+				}),
 				...[
 					"media-cleanup-dlq",
 					"publish-dlq",
@@ -232,6 +295,7 @@ export function apiWranglerConfig(
 					"ads-dlq",
 					"sync-dlq",
 					"customer-webhooks-dlq",
+					"media-processing-dlq",
 				].map((queue) =>
 					consumer(queue as Parameters<typeof cloudflareQueueName>[0], {
 						max_batch_size: 10,

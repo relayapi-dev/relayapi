@@ -3,6 +3,7 @@
 	"description": "Create and publish or schedule a post to one or more social media platforms.",
 	"url": "/posts",
 	"method": "POST",
+	"body": "{{parameters}}",
 	"parameters": [
 		{
 			"name": "content",
@@ -19,7 +20,7 @@
 				"type": "text",
 				"label": "Account ID or Platform"
 			},
-			"help": "Account IDs (acc_*), platform names (twitter), or workspace IDs (grp_*). Use the List Accounts RPC to find IDs."
+			"help": "Account IDs (acc_*), platform names (twitter), or workspace IDs (ws_*). Use the List Accounts or List Workspaces RPC to find IDs."
 		},
 		{
 			"name": "scheduled_at",
@@ -50,9 +51,40 @@
 							{ "label": "Image", "value": "image" },
 							{ "label": "Video", "value": "video" },
 							{ "label": "GIF", "value": "gif" },
-							{ "label": "Document", "value": "document" }
+							{ "label": "Document", "value": "document" },
+							{ "label": "Audio", "value": "audio" }
 						],
 						"default": "image"
+					},
+					{
+						"name": "mime_type",
+						"type": "text",
+						"label": "MIME Type",
+						"help": "Authoritative MIME type when known, for example audio/mpeg"
+					},
+					{
+						"name": "alt_text",
+						"type": "text",
+						"label": "Alt Text",
+						"help": "Accessible media description"
+					},
+					{
+						"name": "width",
+						"type": "uinteger",
+						"label": "Width",
+						"help": "Width in pixels when known"
+					},
+					{
+						"name": "height",
+						"type": "uinteger",
+						"label": "Height",
+						"help": "Height in pixels when known"
+					},
+					{
+						"name": "duration_ms",
+						"type": "uinteger",
+						"label": "Duration (Milliseconds)",
+						"help": "Media duration in milliseconds. Required for TikTok video validation."
 					}
 				]
 			}
@@ -63,6 +95,13 @@
 			"label": "Timezone",
 			"default": "UTC",
 			"help": "IANA timezone (e.g. America/New_York). Only used with scheduled timestamps."
+		},
+		{
+			"name": "target_options",
+			"type": "json",
+			"label": "Target Options",
+			"advanced": true,
+			"help": "A JSON object keyed by platform, account ID, or workspace ID. Examples: {\"whatsapp\":{\"to\":\"15551234567\"}}, {\"snapchat\":{\"content_type\":\"saved_story\"}}, or {\"tiktok\":{\"privacy_level\":\"SELF_ONLY\",\"allow_comment\":true,\"allow_duet\":false,\"allow_stitch\":false,\"brand_content_toggle\":false,\"brand_organic_toggle\":false,\"content_preview_confirmed\":true,\"express_consent_given\":true}}. Make validates the JSON before sending it; RelayAPI requires the top level and every target value to be objects."
 		}
 	],
 	"response": {

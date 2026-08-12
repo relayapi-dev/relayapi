@@ -1,3 +1,4 @@
+import { readProviderJson } from "../../lib/provider-response";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -58,10 +59,7 @@ function authHeaders(accessToken: string): Record<string, string> {
 	};
 }
 
-function handleApiError(
-	context: string,
-	body: TwitterErrorResponse,
-): void {
+function handleApiError(context: string, body: TwitterErrorResponse): void {
 	if (body.errors) {
 		console.error(
 			`[twitter-analytics] ${context}:`,
@@ -101,12 +99,14 @@ async function fetchAllTweetsInRange(
 		);
 
 		if (!res.ok) {
-			const body = (await res.json().catch(() => ({}))) as TwitterErrorResponse;
+			const body = (await readProviderJson(res).catch(
+				() => ({}),
+			)) as TwitterErrorResponse;
 			handleApiError("fetchAllTweetsInRange", body);
 			break;
 		}
 
-		const json = (await res.json()) as TwitterTweetsResponse;
+		const json = (await readProviderJson(res)) as TwitterTweetsResponse;
 		if (json.data) {
 			allTweets.push(...json.data);
 		}
@@ -137,14 +137,18 @@ export const twitterAnalytics: PlatformAnalyticsFetcher = {
 			);
 
 			if (userRes.ok) {
-				const userJson = (await userRes.json()) as TwitterUserResponse;
+				const userJson = (await readProviderJson(
+					userRes,
+				)) as TwitterUserResponse;
 				const metrics = userJson.data.public_metrics;
 				followers = metrics.followers_count;
 				following = metrics.following_count;
 				tweetCount = metrics.tweet_count;
 				listedCount = metrics.listed_count;
 			} else {
-				const body = (await userRes.json().catch(() => ({}))) as TwitterErrorResponse;
+				const body = (await readProviderJson(userRes).catch(
+					() => ({}),
+				)) as TwitterErrorResponse;
 				handleApiError("getOverview/user", body);
 			}
 		} catch (err) {
@@ -222,12 +226,14 @@ export const twitterAnalytics: PlatformAnalyticsFetcher = {
 			);
 
 			if (!res.ok) {
-				const body = (await res.json().catch(() => ({}))) as TwitterErrorResponse;
+				const body = (await readProviderJson(res).catch(
+					() => ({}),
+				)) as TwitterErrorResponse;
 				handleApiError("getPostMetrics", body);
 				return [];
 			}
 
-			const json = (await res.json()) as TwitterTweetsResponse;
+			const json = (await readProviderJson(res)) as TwitterTweetsResponse;
 			if (!json.data) {
 				return [];
 			}

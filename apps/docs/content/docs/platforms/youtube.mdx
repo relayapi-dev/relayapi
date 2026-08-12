@@ -19,12 +19,13 @@ icon: youtube
 | Video max duration | 15 min (unverified), 12 hours (verified) |
 | Thumbnail formats | JPEG, PNG, GIF |
 | Thumbnail max size | 2 MB |
+| Thumbnails per post | 1, attached to the single video |
 | Post types | Video, Shorts (auto-detected) |
 | Scheduling | Yes |
 | Analytics | Yes (likes, comments, shares, views) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
@@ -37,7 +38,7 @@ YouTube is a **video-only platform** — every post requires exactly one video f
 
 Upload a video to YouTube:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -60,30 +61,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-post = client.posts.create(
-    content='In this tutorial, I walk through building a REST API from scratch.',
-    targets=['youtube'],
-    media=[
-        {'url': 'https://cdn.example.com/tutorial.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'youtube': {
-            'title': 'Build a REST API from Scratch',
-            'visibility': 'public',
-            'made_for_kids': False,
-        },
-    },
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -163,7 +140,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Any video longer than 3 minutes or with a horizontal aspect ratio becomes a regular YouTube video. Supports custom thumbnails, tags, and categories.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -183,27 +160,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='In this tutorial, I walk through building a REST API from scratch.\n\n#programming #tutorial',
-    targets=['youtube'],
-    media=[
-        {'url': 'https://cdn.example.com/tutorial.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'youtube': {
-            'title': 'Build a REST API from Scratch',
-            'visibility': 'public',
-            'category_id': '27',
-            'made_for_kids': False,
-            'tags': ['api', 'tutorial', 'programming'],
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -279,7 +235,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Auto-detected: video must be 3 minutes or shorter AND have a vertical (9:16) aspect ratio. No separate flag is needed. Custom thumbnails are **not** supported for Shorts via the API.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -296,24 +252,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Quick tip for better API design!',
-    targets=['youtube'],
-    media=[
-        {'url': 'https://cdn.example.com/short.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'youtube': {
-            'title': 'Quick API Tip',
-            'visibility': 'public',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -384,7 +322,7 @@ Shorts are auto-detected based on duration (3 minutes or less) and aspect ratio 
 
 Upload a custom thumbnail for regular videos. Not supported for Shorts.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -405,28 +343,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Full tutorial on modern API architecture.',
-    targets=['youtube'],
-    media=[
-        {
-            'url': 'https://cdn.example.com/video.mp4',
-            'type': 'video',
-            'thumbnail': 'https://cdn.example.com/thumbnail.jpg',
-        },
-    ],
-    scheduled_at='now',
-    target_options={
-        'youtube': {
-            'title': 'How to Build Modern APIs',
-            'visibility': 'public',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -502,7 +418,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Automatically post and pin a comment after the video is published.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -520,25 +436,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Tutorial on building REST APIs from scratch.',
-    targets=['youtube'],
-    media=[
-        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'youtube': {
-            'title': 'API Tutorial',
-            'visibility': 'public',
-            'first_comment': 'Thanks for watching! Links to all resources mentioned are below.',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -608,7 +505,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 When scheduling a YouTube video, the upload happens immediately but the video remains private. At the scheduled time, visibility switches to your target setting and the first comment is posted.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -626,25 +523,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='New video dropping tomorrow!',
-    targets=['youtube'],
-    media=[
-        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
-    ],
-    scheduled_at='2026-03-15T14:00:00Z',
-    target_options={
-        'youtube': {
-            'title': 'Big Announcement',
-            'visibility': 'public',
-            'first_comment': 'What do you think? Let me know in the comments!',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -776,28 +654,18 @@ All fields go inside `target_options.youtube` on your post request.
 - **Daily upload quotas** vary by channel and are enforced by YouTube.
 - **Scheduled videos upload immediately as private** — the URL exists right away but is not publicly visible.
 
+## Comment moderation and video ratings
+
+With `youtube.force-ssl`, RelayAPI can edit an owned comment, set moderation to
+`approve`, `hold_for_review`, or `reject`, and rate a video with `like`,
+`dislike`, or `clear_rating`. Reauthorize an older connection that lacks the
+scope. Every provider write is idempotent and durable; see [Published Edits and
+Social Actions](/guides/published-edits-and-social-actions).
+
 ## Automations
 
-YouTube automation uses Data API v3. PubSubHubbub drives new-video events; comments + live chat are polling-based.
+<Callout type="warn">
+RelayAPI does not currently register executable YouTube-specific comment, live-chat, or new-video triggers, nor YouTube reply/moderation send nodes. YouTube PubSub notifications are not yet persisted and dispatched into the automation runtime. Do not build workflows against the previously proposed `youtube_*` node names; they are not part of the current API contract.
+</Callout>
 
-### Triggers
-
-| Type | Fires on |
-| --- | --- |
-| `youtube_comment` | New comment on a video |
-| `youtube_live_chat` | Live chat message during a broadcast |
-| `youtube_new_video` | New video published (PubSub) |
-
-### Send nodes
-
-Base: `https://www.googleapis.com/youtube/v3`.
-
-| Node | Endpoint | Required fields |
-| --- | --- | --- |
-| `youtube_reply_to_comment` | `POST /comments?part=snippet` | `text`, `parent_id` |
-| `youtube_send_live_chat` | `POST /liveChat/messages?part=snippet` | `text`, `live_chat_id` |
-| `youtube_moderate_comment` | `POST /comments/setModerationStatus` | `comment_id`, `moderation_status` ∈ heldForReview\|published\|rejected |
-
-### Rate limits
-
-- 10,000 quota units/day. Comment inserts ≈ 50 units, live chat messages ≈ 5 units. Budget accordingly.
+You can still schedule YouTube publication with the normal posts API and invoke platform-independent RelayAPI automation actions where their documented inputs apply.

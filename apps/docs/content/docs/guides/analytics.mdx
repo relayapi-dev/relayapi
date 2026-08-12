@@ -1,0 +1,93 @@
+---
+title: Analytics
+description: Understand stored post analytics, live provider analytics, workspace scope, filters, and pagination.
+icon: ChartNoAxesCombined
+---
+
+## Two analytics surfaces
+
+RelayAPI exposes two complementary analytics surfaces:
+
+| Surface | Endpoints | Data source |
+|---------|-----------|-------------|
+| Stored post analytics | `/v1/analytics`, `/daily-metrics`, `/best-time`, `/content-decay`, `/post-timeline`, `/posting-frequency`, `/youtube/daily-views` | Snapshots collected for posts published through RelayAPI |
+| Native platform analytics | `/v1/analytics/channels` and `/v1/analytics/platform/*` | Live or provider-cached metrics for a connected account |
+
+Stored analytics are useful for cross-platform reporting and smart scheduling. Native analytics expose provider-specific audience and account dimensions when the connected account has the required provider scopes.
+
+## Workspace isolation
+
+Every stored analytics row is authorized through its owning post's `workspace_id`. A post target or analytics snapshot cannot widen that authority.
+
+- With an all-workspace key, omitting `workspace_id` returns every post in the organization.
+- With a workspace-scoped key, omission returns every post that key may access. This is not an authorization bypass.
+- Organization-scoped posts (`workspace_id: null`) are shared with credentials that have at least one workspace grant. A zero-grant credential sees no operational rows.
+- Supplying `workspace_id` narrows the query and is always checked against the key's grants.
+- Supplying `account_id` or `post_id` first validates that resource's organization and workspace. An inaccessible resource returns `403`; an unknown or foreign-organization resource returns `404`.
+
+Native account analytics apply the connected account's workspace boundary in the same way.
+
+## Post analytics and pagination
+
+`GET /v1/analytics` accepts `workspace_id`, `account_id`, `post_id`, `platform`, `from_date`, `to_date`, `limit`, and `offset`.
+
+```bash
+curl --get https://api.relayapi.dev/v1/analytics \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  --data-urlencode "workspace_id=ws_example" \
+  --data-urlencode "platform=youtube" \
+  --data-urlencode "limit=20"
+```
+
+The response separates the current page from totals across the complete filtered result:
+
+```json
+{
+  "data": [],
+  "overview": {
+    "total_posts": 42,
+    "total_impressions": 12000,
+    "total_likes": 830,
+    "total_comments": 91,
+    "total_shares": 54,
+    "total_clicks": 210,
+    "total_views": 9900
+  },
+  "has_more": true,
+  "next_offset": 20,
+  "truncated": true
+}
+```
+
+Follow `next_offset` while `has_more` is true. `limit` defaults to 20 and accepts 1–100. `truncated` remains as a compatibility signal that the complete matching target set is larger than the returned page.
+
+## Aggregates and timelines
+
+| Endpoint | Purpose | Important behavior |
+|----------|---------|--------------------|
+| `GET /v1/analytics/daily-metrics` | Daily post and engagement totals | Defaults to the last 30 days; supports workspace, account, platform, and date filters |
+| `GET /v1/analytics/best-time` | Engagement by UTC weekday and hour | Supports the same filters; results may be cached for up to six hours |
+| `GET /v1/analytics/content-decay?post_id=...` | Cumulative engagement decay for one post | `days` accepts 1–90; inaccessible posts are rejected before snapshots are read |
+| `GET /v1/analytics/post-timeline?post_id=...` | Per-day snapshots for one post | Supports `from_date` and `to_date` |
+| `GET /v1/analytics/posting-frequency` | Weekly posting frequency versus engagement | Runs as a database aggregate and supports workspace, account, platform, and date filters |
+| `GET /v1/analytics/youtube/daily-views?account_id=...` | Daily views for one YouTube account | Rejects non-YouTube accounts; watch-time and subscriber fields remain `0` until those dimensions are collected |
+
+Best-time cache entries include the organization, credential workspace scope, exact workspace filter, account, platform, and date window. Metrics from one authorization boundary therefore cannot satisfy another boundary's cache lookup.
+
+## Live platform analytics
+
+Use the native endpoints when you need account-level follower, reach, audience, or provider-specific dimensions:
+
+```text
+GET /v1/analytics/channels
+GET /v1/analytics/platform/overview?account_id=acc_example
+GET /v1/analytics/platform/posts?account_id=acc_example
+GET /v1/analytics/platform/audience?account_id=acc_example
+GET /v1/analytics/platform/daily?account_id=acc_example
+```
+
+Availability varies by platform, account type, app review, and granted OAuth scopes. A connected account can publish successfully while native analytics remain unavailable; inspect the endpoint response and reconnect the account when it reports missing scopes.
+
+## Smart scheduling
+
+The same scoped best-time signal feeds [`scheduled_at: "auto"`](/guides/smart-scheduling). Auto-scheduling narrows historical engagement and collision checks to the new post's exact workspace. Calling `GET /v1/queue/find-slot` directly uses the caller's complete authorized workspace scope.

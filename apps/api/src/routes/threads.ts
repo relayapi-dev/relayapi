@@ -308,6 +308,7 @@ app.openapi(createThread, async (c) => {
 		orgId,
 		relayMediaInput,
 		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
 	);
 	const mediaViolation = relayMediaPolicy.violationFor(relayMediaInput);
 	if (mediaViolation) {
@@ -372,6 +373,9 @@ app.openapi(createThread, async (c) => {
 	} else if (isAuto) {
 		const { findBestSlot } = await import("../services/slot-finder");
 		const slot = await findBestSlot(c.env, orgId, {
+			db,
+			workspaceScope: c.get("workspaceScope"),
+			workspaceId,
 			accountId: resolved[0]?.accounts[0]?.id,
 			after: new Date(),
 			strategy: "smart",

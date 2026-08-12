@@ -13,6 +13,51 @@
       "snapshotSha256": "7609b706f901baf909966ca3be56f9163a1ef8220fb3a085769a020277eaa35d",
       "drizzleVersion": "7",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "tag": "0001_luxuriant_scorpion",
+      "folderMillis": 1786309145888,
+      "sha256": "88fab9e277cf2c58f7a0e90de4735058cc9009b8abc5a1861cd7aab51fd66c8c",
+      "snapshotSha256": "7032b360dacf8650df91b984785dccaebc66a91fe17801c292772239f041b41d",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "tag": "0002_cooing_mandroid",
+      "folderMillis": 1786309612284,
+      "sha256": "80df35e4e44c4ce31c794f1178e5ef0f39f8a3f7dacff16efdf5414424b83a3d",
+      "snapshotSha256": "48a078cf89555fce2432f2cd77a0069fab8d01e99591c9059b1c56706d5dc755",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "tag": "0003_keen_lionheart",
+      "folderMillis": 1786313317883,
+      "sha256": "173e037a0c9f01e65b0d1a69f7305091eef005d8b4520d8a4244f7051f6f80df",
+      "snapshotSha256": "605933fb0dea3e136950184beae321b4901ea7a434e9c6b24d750bfeb9f0ab14",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "tag": "0004_happy_ken_ellis",
+      "folderMillis": 1786394067510,
+      "sha256": "0d19e07ae693a32faeb984d2e42f074ba34dd73d0127c810ac7aa8de927027b3",
+      "snapshotSha256": "3dd6acc73fc1586b6242b106e466084ff39283a96940026bebd424e74e2bdcb6",
+      "drizzleVersion": "7",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "tag": "0005_silky_leader",
+      "folderMillis": 1786561468634,
+      "sha256": "d71635b2ce66a336c915d901884f8501e25b0ab2510cf9ecb9e891afb7db6164",
+      "snapshotSha256": "3f9e77ff5613ccfdd3043893067c08c11d37bb1e40910a189d7a0fab5cd391e5",
+      "drizzleVersion": "7",
+      "breakpoints": true
     }
   ]
 }

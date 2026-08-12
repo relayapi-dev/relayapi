@@ -31,7 +31,12 @@
 				{ "label": "WhatsApp", "value": "whatsapp" },
 				{ "label": "Mastodon", "value": "mastodon" },
 				{ "label": "Discord", "value": "discord" },
-				{ "label": "SMS", "value": "sms" }
+				{ "label": "Slack", "value": "slack" },
+				{ "label": "SMS", "value": "sms" },
+				{ "label": "Beehiiv", "value": "beehiiv" },
+				{ "label": "Kit (ConvertKit)", "value": "convertkit" },
+				{ "label": "Mailchimp", "value": "mailchimp" },
+				{ "label": "Listmonk", "value": "listmonk" }
 			]
 		}
 	],

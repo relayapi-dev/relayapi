@@ -2,8 +2,13 @@ import type { Platform } from "../schemas/common";
 
 export interface MediaAttachment {
 	url: string;
-	type?: "image" | "video" | "gif" | "document";
+	type?: "image" | "video" | "gif" | "document" | "audio";
 	alt_text?: string;
+	mime_type?: string;
+	width?: number;
+	height?: number;
+	duration_ms?: number;
+	thumbnail?: string;
 }
 
 export interface PublishRequest {
@@ -12,6 +17,12 @@ export interface PublishRequest {
 	 * provider exposes an idempotency control for the relevant mutation.
 	 */
 	operation_id: string;
+	/**
+	 * Durable journal for provider-side mutations that form one logical publish.
+	 * Publishers must await `record()` immediately after the provider confirms an
+	 * effect and consult `effects` before repeating a non-idempotent step.
+	 */
+	effect_recorder?: PublishEffectRecorder;
 	content: string | null;
 	media: MediaAttachment[];
 	target_options: Record<string, unknown>;
@@ -48,6 +59,7 @@ export type PublishErrorCode =
 
 export type ProviderDisposition =
 	| "published"
+	| "provider_draft"
 	| "sent"
 	| "delivered"
 	| "scheduled"
@@ -69,15 +81,78 @@ export interface ProviderEffect {
 	};
 }
 
+export interface PublishEffectRecorder {
+	/** Effects already committed for this logical publish operation. */
+	readonly effects: readonly ProviderEffect[];
+	/** Persist one confirmed effect before starting the next provider mutation. */
+	record(effect: ProviderEffect): Promise<void>;
+}
+
+/** Return a previously confirmed effect that can be reused during a retry. */
+export function getSucceededProviderEffect(
+	request: Pick<PublishRequest, "effect_recorder">,
+	name: string,
+): ProviderEffect | undefined {
+	return request.effect_recorder?.effects.find(
+		(effect) =>
+			effect.name === name &&
+			effect.status === "succeeded" &&
+			!!effect.provider_id?.trim(),
+	);
+}
+
+/**
+ * Merge effect projections without ever downgrading a confirmed success. Effect
+ * names are stable step identities within one logical publish operation.
+ */
+export function mergeProviderEffects(
+	...groups: Array<readonly ProviderEffect[] | null | undefined>
+): ProviderEffect[] {
+	const merged = new Map<string, ProviderEffect>();
+	for (const effects of groups) {
+		for (const effect of effects ?? []) {
+			const existing = merged.get(effect.name);
+			if (existing?.status === "succeeded") continue;
+			merged.set(effect.name, effect);
+		}
+	}
+	return [...merged.values()];
+}
+
+/** Await the runner's durable journal before continuing to another mutation. */
+export async function recordProviderEffect(
+	request: Pick<PublishRequest, "effect_recorder">,
+	effect: ProviderEffect,
+): Promise<void> {
+	const existing = request.effect_recorder?.effects.find(
+		(candidate) => candidate.name === effect.name,
+	);
+	if (existing?.status === "succeeded") {
+		if (
+			effect.status === "succeeded" &&
+			existing.provider_id !== effect.provider_id
+		) {
+			throw new Error(
+				`Provider effect ${effect.name} was already recorded with a different provider ID.`,
+			);
+		}
+		return;
+	}
+	await request.effect_recorder?.record(effect);
+}
+
 interface ProviderOutcomeEvidence {
+	/** How a nonterminal operation is expected to become terminal. */
+	reconciliation?: "poll" | "webhook";
 	/** Provider job/request/upload identifier. Never expose this as a post ID. */
 	provider_operation_id?: string;
 	/** Provider-native, publicly addressable content/message identifier. */
 	platform_post_id?: string;
 	/**
 	 * Explicit exception for APIs that confirm terminal creation but intentionally
-	 * withhold a resource ID (for example a non-public TikTok post). Never set this
-	 * merely because a documented ID field was absent.
+	 * withhold a resource ID (for example a non-public TikTok post or a Slack
+	 * Incoming Webhook's plain `ok` response). Never set this merely because a
+	 * documented ID field was absent.
 	 */
 	resource_id_unavailable?: boolean;
 	platform_url?: string;
@@ -90,6 +165,11 @@ interface ProviderOutcomeEvidence {
 
 type TerminalProviderOutcome = ProviderOutcomeEvidence & {
 	disposition: "published" | "sent" | "delivered";
+};
+
+/** Provider accepted and durably stored content, but did not make it public. */
+type TerminalProviderDraftOutcome = ProviderOutcomeEvidence & {
+	disposition: "provider_draft";
 };
 
 type NonTerminalProviderOutcome = ProviderOutcomeEvidence & {
@@ -112,6 +192,7 @@ type NonSuccessProviderOutcome = ProviderOutcomeEvidence & {
  */
 export type ProviderOutcome =
 	| TerminalProviderOutcome
+	| TerminalProviderDraftOutcome
 	| NonTerminalProviderOutcome
 	| NonSuccessProviderOutcome;
 
@@ -131,6 +212,10 @@ export function isTerminalProviderSuccess(outcome: ProviderOutcome): boolean {
 	return TERMINAL_PROVIDER_SUCCESS_DISPOSITIONS.has(outcome.disposition);
 }
 
+export function isTerminalProviderDraft(outcome: ProviderOutcome): boolean {
+	return outcome.disposition === "provider_draft";
+}
+
 export function isNonTerminalProviderOutcome(
 	outcome: ProviderOutcome,
 ): boolean {
@@ -139,11 +224,12 @@ export function isNonTerminalProviderOutcome(
 
 /** A terminal success needs a real resource/message ID, or per-effect IDs. */
 export function hasTerminalProviderEvidence(outcome: ProviderOutcome): boolean {
-	if (!isTerminalProviderSuccess(outcome)) return false;
+	if (!isTerminalProviderSuccess(outcome) && !isTerminalProviderDraft(outcome)) {
+		return false;
+	}
 	if (outcome.platform_post_id?.trim()) return true;
 	if (
 		outcome.resource_id_unavailable === true &&
-		outcome.provider_operation_id?.trim() &&
 		outcome.provider_state?.trim()
 	) {
 		return true;
@@ -218,6 +304,7 @@ export interface EngagementAccount {
 	refresh_token: string | null;
 	platform_account_id: string;
 	username: string | null;
+	metadata?: Record<string, unknown> | null;
 }
 
 export interface EngagementActionResult {

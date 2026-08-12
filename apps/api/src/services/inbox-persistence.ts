@@ -26,11 +26,11 @@ import {
 	type SQL,
 	sql,
 } from "drizzle-orm";
+import { deriveProtectedContactSubjectLocator } from "../lib/consent-hmac";
 import {
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
 } from "../lib/pagination-cursor";
-import { deriveProtectedContactSubjectLocator } from "../lib/consent-hmac";
 import { workspaceScopeSqlCondition } from "../lib/workspace-scope";
 import { findMatchingContact } from "./contact-linker";
 
@@ -145,6 +145,7 @@ export async function upsertConversation(
 			participantName: data.participantName ?? null,
 			participantPlatformId: data.participantPlatformId ?? null,
 			participantAvatar: data.participantAvatar ?? null,
+			participantMetadata: data.participantMetadata ?? {},
 			lastMessageText: data.lastMessageText ?? null,
 			lastMessageAt: data.lastMessageAt ?? now,
 			lastMessageDirection: data.lastMessageDirection ?? "inbound",
@@ -169,6 +170,11 @@ export async function upsertConversation(
 				// the only path allowed to overwrite these with a real name/avatar.
 				participantName: sql`COALESCE(${inboxConversations.participantName}, ${data.participantName ?? null})`,
 				participantAvatar: sql`COALESCE(${inboxConversations.participantAvatar}, ${data.participantAvatar ?? null})`,
+				...(data.participantMetadata
+					? {
+							participantMetadata: sql`COALESCE(${inboxConversations.participantMetadata}, '{}'::jsonb) || ${data.participantMetadata}`,
+						}
+					: {}),
 				status: "open",
 				closedAt: null,
 				contentExpiresAt: null,

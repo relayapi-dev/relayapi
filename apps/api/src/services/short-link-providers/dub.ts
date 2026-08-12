@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 /**
  * Dub.co short link provider.
  *
@@ -41,11 +45,11 @@ export const dubProvider: ShortLinkProvider = {
 			: await request();
 
 		if (!res.ok) {
-			const text = await res.text();
+			const text = await readProviderText(res);
 			throw new Error(`Dub API error (${res.status}): ${text}`);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			id?: string;
 			externalId?: string;
 			shortLink?: string;
@@ -123,7 +127,7 @@ export const dubProvider: ShortLinkProvider = {
 					timeout: 5_000,
 				});
 				if (res.ok) {
-					const data = (await res.json()) as { clicks: number };
+					const data = (await readProviderJson(res)) as { clicks: number };
 					result.set(target.key, data.clicks ?? 0);
 				}
 			} catch {

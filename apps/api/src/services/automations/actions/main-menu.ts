@@ -1,3 +1,4 @@
+import { readProviderText } from "../../../lib/provider-response";
 import { contactChannels, contacts, socialAccounts } from "@relayapi/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { GRAPH_BASE } from "../../../config/api-versions";
@@ -175,7 +176,7 @@ const changeMainMenu: ActionHandler<ChangeMainMenuAction> = async (
 			},
 		);
 		if (!response.ok) {
-			const detail = await response.text();
+			const detail = await readProviderText(response);
 			const message = `change_main_menu failed (${response.status})${detail ? `: ${detail.slice(0, 500)}` : ""}`;
 			if (response.status >= 500) throw new Error(message);
 			throw new AutomationExternalEffectKnownFailureError(message);

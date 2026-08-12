@@ -84,6 +84,15 @@ export interface APIKeyCreateResponse {
   /** Whether this key can create or increase provider spend */
   can_manage_spend: boolean;
 
+  /** Whether this key can decrypt and view ad leads */
+  can_view_ad_leads: boolean;
+
+  /** Whether this key can promote and manage ad leads */
+  can_manage_ad_leads: boolean;
+
+  /** Whether this key can configure and submit ad conversions */
+  can_manage_ad_conversions: boolean;
+
   /**
    * Key prefix
    */
@@ -161,6 +170,15 @@ export namespace APIKeyListResponse {
     /** Whether this key can create or increase provider spend */
     can_manage_spend: boolean;
 
+    /** Whether this key can decrypt and view ad leads */
+    can_view_ad_leads: boolean;
+
+    /** Whether this key can promote and manage ad leads */
+    can_manage_ad_leads: boolean;
+
+    /** Whether this key can configure and submit ad conversions */
+    can_manage_ad_conversions: boolean;
+
     /**
      * Key prefix (e.g. rlay*live*)
      */
@@ -198,6 +216,15 @@ export interface APIKeyCreateParams {
 
   /** Allow creation or increases of provider spend. */
   can_manage_spend?: boolean;
+
+  /** Allow this key to decrypt and view ad leads. */
+  can_view_ad_leads?: boolean;
+
+  /** Allow this key to promote and manage ad leads. */
+  can_manage_ad_leads?: boolean;
+
+  /** Allow this key to configure and submit ad conversions. */
+  can_manage_ad_conversions?: boolean;
 
   /**
    * Number of days until the key expires

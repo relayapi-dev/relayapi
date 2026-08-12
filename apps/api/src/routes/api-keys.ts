@@ -277,6 +277,10 @@ app.openapi(listApiKeys, async (c) => {
 				can_view_billing: k.permissions?.includes("view_billing") ?? false,
 				can_manage_billing: k.permissions?.includes("manage_billing") ?? false,
 				can_manage_spend: k.permissions?.includes("manage_spend") ?? false,
+				can_view_ad_leads: k.permissions?.includes("view_ad_leads") ?? false,
+				can_manage_ad_leads: k.permissions?.includes("manage_ad_leads") ?? false,
+				can_manage_ad_conversions:
+					k.permissions?.includes("manage_ad_conversions") ?? false,
 			})),
 			next_cursor: hasMore
 				? (() => {
@@ -326,7 +330,10 @@ app.openapi(createApiKey, async (c) => {
 		body.can_manage_api_keys ||
 		body.can_view_billing ||
 		body.can_manage_billing ||
-		body.can_manage_spend;
+		body.can_manage_spend ||
+		body.can_view_ad_leads ||
+		body.can_manage_ad_leads ||
+		body.can_manage_ad_conversions;
 
 	const rawKey = generateRawKey();
 	const hashedKey = await hashKey(rawKey);
@@ -354,8 +361,13 @@ app.openapi(createApiKey, async (c) => {
 					...(body.can_view_billing ? ["view_billing"] : []),
 					...(body.can_manage_billing ? ["manage_billing"] : []),
 					...(body.can_manage_spend ? ["manage_spend"] : []),
+					...(body.can_view_ad_leads ? ["view_ad_leads"] : []),
+					...(body.can_manage_ad_leads ? ["manage_ad_leads"] : []),
+					...(body.can_manage_ad_conversions
+						? ["manage_ad_conversions"]
+						: []),
 				]
-			: ["read"];
+			: ["read", ...(body.can_view_ad_leads ? ["view_ad_leads"] : [])];
 
 	const createdByPrincipal = c.get("principalId");
 	try {
@@ -693,6 +705,9 @@ app.openapi(createApiKey, async (c) => {
 			can_view_billing: body.can_view_billing,
 			can_manage_billing: body.can_manage_billing,
 			can_manage_spend: body.can_manage_spend,
+			can_view_ad_leads: body.can_view_ad_leads,
+			can_manage_ad_leads: body.can_manage_ad_leads,
+			can_manage_ad_conversions: body.can_manage_ad_conversions,
 		},
 		201,
 	);

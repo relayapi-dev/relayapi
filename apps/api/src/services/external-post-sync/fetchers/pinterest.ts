@@ -1,12 +1,13 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../../lib/provider-response";
 // ---------------------------------------------------------------------------
 // Pinterest Pins Fetcher
 // Docs: https://developers.pinterest.com/docs/api/v5/pins-list/
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
+import type { ExternalPostFetcher, ExternalPostData } from "../types";
 import { RateLimitError } from "../types";
 import { parseRateLimitHeaders } from "../rate-limits";
 
@@ -59,10 +60,10 @@ async function pinFetch<T = unknown>(
 		);
 	}
 	if (!res.ok) {
-		const body = await res.text();
+		const body = await readProviderText(res);
 		throw new Error(`Pinterest API ${res.status}: ${body}`);
 	}
-	return { data: (await res.json()) as T, headers: res.headers };
+	return { data: (await readProviderJson(res)) as T, headers: res.headers };
 }
 
 function parsePin(raw: PinterestRawPin): ExternalPostData {
@@ -73,7 +74,8 @@ function parsePin(raw: PinterestRawPin): ExternalPostData {
 	const media = raw.media;
 	if (media?.media_type === "video") {
 		mediaType = "video";
-		thumbnailUrl = media.images?.["600x"]?.url ?? raw.media?.cover_image_url ?? null;
+		thumbnailUrl =
+			media.images?.["600x"]?.url ?? raw.media?.cover_image_url ?? null;
 	} else if (media?.media_type === "multiple_images") {
 		mediaType = "carousel";
 	} else {
@@ -145,7 +147,10 @@ export const pinterestPostFetcher: ExternalPostFetcher = {
 		return {
 			posts,
 			nextCursor: nextCursor && items.length === limit ? nextCursor : null,
-			hasMore: nextCursor != null && items.length === limit && posts.length === items.length,
+			hasMore:
+				nextCursor != null &&
+				items.length === limit &&
+				posts.length === items.length,
 			rateLimit,
 		};
 	},

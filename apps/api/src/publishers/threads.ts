@@ -1,12 +1,18 @@
 import { GRAPH_BASE } from "../config/api-versions";
+import { ThreadsTargetOptions } from "../schemas/publisher-options";
+import { readPublisherJson } from "./provider-response";
 import {
 	classifyPublishError,
 	type EngagementAccount,
 	type EngagementActionResult,
+	getSucceededProviderEffect,
+	mergeProviderEffects,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	recordProviderEffect,
 } from "./types";
 
 const GRAPH_API = GRAPH_BASE.threads;
@@ -61,7 +67,7 @@ async function graphPost(
 	});
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = (await readPublisherJson(res).catch(() => ({}))) as {
 			error?: { message?: string; code?: number; error_subcode?: number };
 		};
 		const detail = err.error?.message ?? res.statusText;
@@ -92,7 +98,7 @@ async function graphPost(
 		});
 	}
 
-	return res.json() as Promise<Record<string, unknown>>;
+	return readPublisherJson(res) as Promise<Record<string, unknown>>;
 }
 
 async function graphGet(
@@ -110,7 +116,7 @@ async function graphGet(
 	const res = await fetch(url);
 
 	if (!res.ok) {
-		const err = (await res.json().catch(() => ({}))) as {
+		const err = (await readPublisherJson(res).catch(() => ({}))) as {
 			error?: { message?: string };
 		};
 		const detail = err.error?.message ?? res.statusText;
@@ -121,7 +127,7 @@ async function graphGet(
 		});
 	}
 
-	return res.json() as Promise<Record<string, unknown>>;
+	return readPublisherJson(res) as Promise<Record<string, unknown>>;
 }
 
 /**
@@ -187,6 +193,7 @@ async function pollContainerStatus(
 async function publishContainer(
 	auth: ThreadsAuth,
 	containerId: string,
+	onPublished?: (postId: string) => Promise<void>,
 ): Promise<{ id: string; permalink: string | null }> {
 	// Threads API: Publish a media container (step 2 of publishing)
 	// Docs: https://developers.facebook.com/docs/threads/posts#step-2--publish-a-threads-media-container
@@ -194,6 +201,10 @@ async function publishContainer(
 		creation_id: containerId,
 	});
 	const postId = result.id as string;
+	// Journal the visible post before any optional read-after-write request. A
+	// Worker termination during permalink lookup must not make a retry publish the
+	// same prepared container a second time.
+	await onPublished?.(postId);
 
 	// Fetch the actual permalink from the API after publish completes
 	let permalink: string | null = null;
@@ -215,9 +226,10 @@ async function publishContainer(
 async function publishSinglePost(
 	auth: ThreadsAuth,
 	text: string,
-	media?: { url: string; type?: string },
+	media?: { url: string; type?: string; alt_text?: string },
 	replyToId?: string,
 	extraParams?: Record<string, unknown>,
+	onPublished?: (postId: string) => Promise<void>,
 ): Promise<{ id: string; permalink: string | null }> {
 	const params: Record<string, unknown> = {};
 
@@ -231,6 +243,9 @@ async function publishSinglePost(
 		}
 		if (text) {
 			params.text = text;
+		}
+		if (media.alt_text) {
+			params.alt_text = media.alt_text;
 		}
 	} else {
 		params.media_type = "TEXT";
@@ -253,7 +268,7 @@ async function publishSinglePost(
 	// Docs recommend waiting ~30 seconds before publishing for images
 	await pollContainerStatus(auth, containerId);
 
-	const published = await publishContainer(auth, containerId);
+	const published = await publishContainer(auth, containerId, onPublished);
 	return published;
 }
 
@@ -262,10 +277,11 @@ async function publishSinglePost(
  */
 async function publishCarousel(
 	auth: ThreadsAuth,
-	items: Array<{ url: string; type?: string }>,
+	items: Array<{ url: string; type?: string; alt_text?: string }>,
 	text?: string,
 	replyToId?: string,
 	extraParams?: Record<string, unknown>,
+	onPublished?: (postId: string) => Promise<void>,
 ): Promise<{ id: string; permalink: string | null }> {
 	// Threads carousels require 2-20 items
 	if (items.length < 2) {
@@ -295,6 +311,9 @@ async function publishCarousel(
 			childParams.video_url = item.url;
 		} else {
 			childParams.image_url = item.url;
+		}
+		if (item.alt_text) {
+			childParams.alt_text = item.alt_text;
 		}
 
 		const childId = await createContainer(auth, childParams);
@@ -327,7 +346,7 @@ async function publishCarousel(
 	// Poll parent container before publishing
 	await pollContainerStatus(auth, parentId);
 
-	return publishContainer(auth, parentId);
+	return publishContainer(auth, parentId, onPublished);
 }
 
 /**
@@ -339,19 +358,30 @@ async function publishThreadSequence(
 		content: string;
 		media?: Array<{ url: string; type?: string }>;
 	}>,
-	onRootPublished?: () => void,
+	request?: Pick<PublishRequest, "effect_recorder">,
+	rootExtraParams?: Record<string, unknown>,
+	onPublished?: (postId: string, index: number) => Promise<void>,
 ): Promise<{ rootId: string; permalink: string | null }> {
 	let rootId: string | undefined;
 	let rootPermalink: string | null = null;
 	let previousId: string | undefined;
 
-	for (const item of items) {
+	for (const [index, item] of items.entries()) {
 		// Validate character limit per item
 		const itemCharacters = countThreadsCharacters(item.content);
 		if (itemCharacters > 500) {
 			throw new Error(
 				`CONTENT_ERROR: Thread item exceeds the 500-character limit (${itemCharacters} characters).`,
 			);
+		}
+
+		const recorded = request
+			? getSucceededProviderEffect(request, `thread_item_${index + 1}`)
+			: undefined;
+		if (recorded?.provider_id) {
+			if (!rootId) rootId = recorded.provider_id;
+			previousId = recorded.provider_id;
+			continue;
 		}
 
 		let published: { id: string; permalink: string | null };
@@ -363,6 +393,10 @@ async function publishThreadSequence(
 				item.media,
 				item.content || undefined,
 				previousId,
+				index === 0 ? rootExtraParams : undefined,
+				async (postId) => {
+					await onPublished?.(postId, index);
+				},
 			);
 		} else if (item.media && item.media.length === 1) {
 			// Single media in thread
@@ -371,6 +405,10 @@ async function publishThreadSequence(
 				item.content,
 				item.media[0],
 				previousId,
+				index === 0 ? rootExtraParams : undefined,
+				async (postId) => {
+					await onPublished?.(postId, index);
+				},
 			);
 		} else {
 			// Text-only in thread
@@ -379,13 +417,16 @@ async function publishThreadSequence(
 				item.content,
 				undefined,
 				previousId,
+				index === 0 ? rootExtraParams : undefined,
+				async (postId) => {
+					await onPublished?.(postId, index);
+				},
 			);
 		}
 
 		if (!rootId) {
 			rootId = published.id;
 			rootPermalink = published.permalink;
-			onRootPublished?.();
 		}
 		previousId = published.id;
 	}
@@ -420,9 +461,32 @@ export const threadsPublisher: Publisher = {
 	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
-		let threadHasPublished = false;
+		let threadEffects: ProviderEffect[] = (
+			request.effect_recorder?.effects ?? []
+		)
+			.filter(
+				(effect) =>
+					effect.name.startsWith("thread_item_") &&
+					effect.status === "succeeded",
+			)
+			.slice();
+		let threadHasPublished = threadEffects.length > 0;
 		try {
-			const opts = request.target_options;
+			const parsedOptions = ThreadsTargetOptions.safeParse(
+				request.target_options,
+			);
+			if (!parsedOptions.success) {
+				const issue = parsedOptions.error.issues[0];
+				const path = issue?.path.length ? ` ${issue.path.join(".")}` : "";
+				return {
+					success: false,
+					error: {
+						code: "INVALID_THREADS_TARGET_OPTIONS",
+						message: `Invalid Threads target option${path}: ${issue?.message ?? "validation failed"}.`,
+					},
+				};
+			}
+			const opts = parsedOptions.data;
 			const auth: ThreadsAuth = {
 				access_token: request.account.access_token,
 				user_id: request.account.platform_account_id,
@@ -431,6 +495,82 @@ export const threadsPublisher: Publisher = {
 			const content = (opts.content as string) ?? request.content ?? "";
 			const media =
 				(opts.media as Array<{ url: string; type?: string }>) ?? request.media;
+
+			// Official Threads API docs:
+			// - Polls: https://developers.facebook.com/docs/threads/create-posts/polls
+			//   POST /threads field `poll_attachment` with option_a..option_d;
+			//   polls are limited to text-only posts and 2-4 options of 1-25 chars.
+			// - Quote Posts: https://developers.facebook.com/docs/threads/posts/quote-posts
+			//   POST /threads field `quote_post_id`.
+			// - Location Tagging: https://developers.facebook.com/docs/threads/create-posts/location-tagging
+			//   POST /threads field `location_id` (requires threads_location_tagging).
+			const extraParams: Record<string, unknown> = {};
+			if (opts.topic_tag) extraParams.topic_tag = opts.topic_tag;
+			if (opts.reply_control) extraParams.reply_control = opts.reply_control;
+			if (opts.link_attachment)
+				extraParams.link_attachment = opts.link_attachment;
+			if (
+				opts.quote_post_id !== undefined &&
+				(typeof opts.quote_post_id !== "string" ||
+					!/^\d+$/.test(opts.quote_post_id.trim()))
+			) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_QUOTE_POST_ID",
+						message: "Threads quote_post_id must be a numeric media ID.",
+					},
+				};
+			}
+			if (typeof opts.quote_post_id === "string") {
+				extraParams.quote_post_id = opts.quote_post_id.trim();
+			}
+			if (
+				opts.location_id !== undefined &&
+				(typeof opts.location_id !== "string" ||
+					!/^\d+$/.test(opts.location_id.trim()))
+			) {
+				return {
+					success: false,
+					error: {
+						code: "INVALID_LOCATION_ID",
+						message: "Threads location_id must be a numeric Meta location ID.",
+					},
+				};
+			}
+			if (typeof opts.location_id === "string") {
+				extraParams.location_id = opts.location_id.trim();
+			}
+			const poll = opts.poll as { options?: unknown } | undefined;
+			if (poll) {
+				if (
+					!Array.isArray(poll.options) ||
+					poll.options.length < 2 ||
+					poll.options.length > 4 ||
+					poll.options.some(
+						(option) =>
+							typeof option !== "string" ||
+							option.length < 1 ||
+							option.length > 25,
+					)
+				) {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_POLL",
+							message:
+								"Threads polls require 2-4 options, each 1-25 characters.",
+						},
+					};
+				}
+				const providerPoll = Object.fromEntries(
+					(poll.options as string[]).map((option, index) => [
+						`option_${String.fromCharCode(97 + index)}`,
+						option,
+					]),
+				);
+				extraParams.poll_attachment = JSON.stringify(providerPoll);
+			}
 
 			// Check for thread sequence
 			const threadItems = opts.thread as
@@ -441,9 +581,32 @@ export const threadsPublisher: Publisher = {
 				| undefined;
 
 			if (threadItems && threadItems.length > 0) {
-				const result = await publishThreadSequence(auth, threadItems, () => {
-					threadHasPublished = true;
-				});
+				if (poll) {
+					return {
+						success: false,
+						error: {
+							code: "POLL_UNSUPPORTED_IN_THREAD",
+							message:
+								"Threads poll options cannot be combined with RelayAPI thread sequences.",
+						},
+					};
+				}
+				const result = await publishThreadSequence(
+					auth,
+					threadItems,
+					request,
+					extraParams,
+					async (id, index) => {
+						const effect: ProviderEffect = {
+							name: `thread_item_${index + 1}`,
+							status: "succeeded",
+							provider_id: id,
+						};
+						await recordProviderEffect(request, effect);
+						threadHasPublished = true;
+						threadEffects = mergeProviderEffects(threadEffects, [effect]);
+					},
+				);
 				const username =
 					request.account.username ?? request.account.platform_account_id;
 
@@ -452,6 +615,13 @@ export const threadsPublisher: Publisher = {
 					platform_post_id: result.rootId,
 					platform_url:
 						result.permalink ?? `https://www.threads.net/@${username}`,
+					provider_outcome: {
+						disposition: "published",
+						platform_post_id: result.rootId,
+						platform_url:
+							result.permalink ?? `https://www.threads.net/@${username}`,
+						effects: threadEffects,
+					},
 				};
 			}
 
@@ -467,11 +637,15 @@ export const threadsPublisher: Publisher = {
 				};
 			}
 
-			const extraParams: Record<string, unknown> = {};
-			if (opts.topic_tag) extraParams.topic_tag = opts.topic_tag;
-			if (opts.reply_control) extraParams.reply_control = opts.reply_control;
-			if (opts.link_attachment)
-				extraParams.link_attachment = opts.link_attachment;
+			if (poll && media.length > 0) {
+				return {
+					success: false,
+					error: {
+						code: "POLL_REQUIRES_TEXT_POST",
+						message: "Threads polls can be attached only to text-only posts.",
+					},
+				};
+			}
 
 			const username =
 				request.account.username ?? request.account.platform_account_id;
@@ -514,10 +688,36 @@ export const threadsPublisher: Publisher = {
 		} catch (err) {
 			const threadItems = request.target_options.thread;
 			const isThread = Array.isArray(threadItems) && threadItems.length > 0;
-			return classifyPublishError(err, {
+			const result = classifyPublishError(err, {
 				safeToRetryRateLimit: !isThread || !threadHasPublished,
 				definitiveHttpRejection: isThread && !threadHasPublished,
 			});
+			if (isThread && threadEffects.length > 0) {
+				const rootId = threadEffects[0]?.provider_id;
+				const username =
+					request.account.username ?? request.account.platform_account_id;
+				return {
+					...result,
+					success: false,
+					platform_post_id: rootId,
+					platform_url: `https://www.threads.net/@${username}`,
+					provider_outcome: {
+						disposition: "partial",
+						platform_post_id: rootId,
+						platform_url: `https://www.threads.net/@${username}`,
+						provider_state: `${threadEffects.length}_thread_items_published`,
+						effects: [
+							...threadEffects,
+							{
+								name: `thread_item_${threadEffects.length + 1}`,
+								status: "outcome_unknown",
+								error: result.error,
+							},
+						],
+					},
+				};
+			}
+			return result;
 		}
 	},
 };

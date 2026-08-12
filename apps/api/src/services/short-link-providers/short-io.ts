@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 /**
  * Short.io short link provider.
  *
@@ -48,11 +52,11 @@ export const shortIoProvider: ShortLinkProvider = {
 			? await providerMutation.track("short_io.short_link.create", request)
 			: await request();
 		if (!res.ok) {
-			const text = await res.text();
+			const text = await readProviderText(res);
 			throw new Error(`Short.io API error (${res.status}): ${text}`);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			shortURL?: string;
 			idString?: string;
 			DomainId?: number;
@@ -145,7 +149,7 @@ export const shortIoProvider: ShortLinkProvider = {
 					},
 				);
 				if (statsRes.ok) {
-					const stats = (await statsRes.json()) as {
+					const stats = (await readProviderJson(statsRes)) as {
 						totalClicks?: number;
 						total_clicks?: number;
 						clicks?: number;

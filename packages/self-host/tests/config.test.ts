@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parsePostgresUrl } from "../src/cloudflare.js";
+import { QUEUE_NAMES } from "../src/constants.js";
 import {
 	validateConfig,
 	validateHyperdriveCaCertificateId,
@@ -31,6 +32,40 @@ describe("self-host configuration", () => {
 		expect(validateConfig(baseConfig)).toEqual(baseConfig);
 	});
 
+	test("canonicalizes TikTok verified URL prefixes as non-secret publishing config", () => {
+		expect(
+			validateConfig({
+				...baseConfig,
+				publishing: {
+					tiktokVerifiedUrlPrefixes: [
+						"https://media.example.com/tiktok/",
+						"https://media.example.com/tiktok/",
+					],
+				},
+			}).publishing,
+		).toEqual({
+			tiktokVerifiedUrlPrefixes: ["https://media.example.com/tiktok/"],
+		});
+
+		for (const invalid of [
+			"http://media.example.com/tiktok/",
+			"https://user@media.example.com/tiktok/",
+			"https://media.example.com:8443/tiktok/",
+			"https://media.example.com/tiktok/?version=1",
+			"https://media.example.com/tiktok/#media",
+			"https://192.0.2.10/tiktok/",
+			"https://[2001:db8::1]/tiktok/",
+			"https://media.example.com/tiktok",
+		]) {
+			expect(() =>
+				validateConfig({
+					...baseConfig,
+					publishing: { tiktokVerifiedUrlPrefixes: [invalid] },
+				}),
+			).toThrow("publishing.tiktokVerifiedUrlPrefixes[0]");
+		}
+	});
+
 	test("upgrades an older config to explicit public-host and R2 defaults", () => {
 		const legacy = structuredClone(baseConfig) as unknown as Record<
 			string,
@@ -43,6 +78,39 @@ describe("self-host configuration", () => {
 			publicHostname: "go.example.com",
 			r2Jurisdiction: "default",
 		});
+	});
+
+	test("accepts v1 resource pins from before media-processing queues existed", () => {
+		const legacyQueues = Object.fromEntries(
+			QUEUE_NAMES.filter(
+				(name) =>
+					name !== "media-processing" && name !== "media-processing-dlq",
+			).map((name) => [name, `id-${name}`]),
+		);
+		const parsed = validateConfig({
+			...baseConfig,
+			resources: {
+				kvNamespaceId: "kv-id",
+				hyperdriveId: "hyperdrive-id",
+				queues: legacyQueues,
+			},
+		});
+		expect(parsed.resources?.queues.publish).toBe("id-publish");
+		expect(parsed.resources?.queues["media-processing"]).toBeUndefined();
+		expect(parsed.resources?.queues["media-processing-dlq"]).toBeUndefined();
+
+		const missingLegacyQueue = structuredClone(legacyQueues);
+		delete missingLegacyQueue.publish;
+		expect(() =>
+			validateConfig({
+				...baseConfig,
+				resources: {
+					kvNamespaceId: "kv-id",
+					hyperdriveId: "hyperdrive-id",
+					queues: missingLegacyQueue,
+				},
+			}),
+		).toThrow("resources.queues.publish");
 	});
 
 	test("validates and canonicalizes Hyperdrive CA certificate intent", () => {

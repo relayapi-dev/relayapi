@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { relative } from "node:path";
 import {
 	LOCAL_MEDIA_TARGET_PLATFORMS,
 	MEDIA_TARGET_CONCURRENCY,
@@ -15,6 +16,7 @@ const MEDIA_PUBLISHERS = [
 	"pinterest.ts",
 	"reddit.ts",
 	"snapchat.ts",
+	"tiktok.ts",
 	"twitter.ts",
 	"youtube.ts",
 ];
@@ -24,12 +26,63 @@ const KNOWN_LENGTH_STREAM_FILES = [
 	"facebook.ts",
 	"linkedin.ts",
 	"snapchat.ts",
+	"tiktok.ts",
 	"twitter.ts",
 	"youtube.ts",
 	"../lib/multipart-stream.ts",
 ];
 
+const PUBLISHER_SOURCE_FILES = Array.from(
+	new Bun.Glob("*.ts").scanSync({
+		cwd: `${import.meta.dir}/../publishers`,
+		absolute: true,
+	}),
+);
+
+const ALLOWED_NON_PROVIDER_BODY_READS = new Map<string, string[]>([
+	["durable-objects/post-updates.ts", ["request.json()"]],
+	["middleware/idempotency.ts", ["c.req.arrayBuffer()"]],
+	["middleware/usage-tracking.ts", ["file.text()"]],
+	["routes/ideas.ts", ["file.arrayBuffer()"]],
+	["routes/posts.ts", ["file.text()"]],
+	["routes/public-growth.ts", ["c.req.json()"]],
+]);
+
 describe("publisher isolate memory guards", () => {
+	it("bounds every publisher response body before materializing it", async () => {
+		for (const filename of PUBLISHER_SOURCE_FILES) {
+			const source = await Bun.file(filename).text();
+			expect(source, filename).not.toMatch(/\.(?:json|text)\s*\(\s*\)/);
+		}
+	});
+
+	it("bounds provider and control-plane responses outside publishers", async () => {
+		const sourceRoot = new URL("../", import.meta.url).pathname.replace(
+			/\/$/,
+			"",
+		);
+		const files = Array.from(
+			new Bun.Glob("**/*.ts").scanSync({ cwd: sourceRoot, absolute: true }),
+		).filter(
+			(filename) =>
+				!filename.includes("/__tests__/") &&
+				!filename.includes("/publishers/") &&
+				!filename.endsWith("/lib/fetch-public-url.ts"),
+		);
+
+		for (const filename of files) {
+			const relativePath = relative(sourceRoot, filename);
+			let source = await Bun.file(filename).text();
+			for (const allowed of ALLOWED_NON_PROVIDER_BODY_READS.get(relativePath) ??
+				[]) {
+				source = source.replace(allowed, "allowedBoundedBodyRead()");
+			}
+			expect(source, relativePath).not.toMatch(
+				/\.(?:json|text|arrayBuffer|blob)\s*\(\s*\)/,
+			);
+		}
+	});
+
 	it("does not reintroduce unbounded whole-media Body readers", async () => {
 		for (const filename of MEDIA_PUBLISHERS) {
 			const source = await Bun.file(

@@ -16,6 +16,7 @@ import {
 	loadRelayMediaPolicy,
 	RelayMediaPolicyError,
 } from "../lib/relay-media-policy";
+import { MediaProcessingRequest } from "../schemas/media";
 import type { Env } from "../types";
 
 function fixture<T>(value: unknown): T {
@@ -30,15 +31,25 @@ type ReadyRow = {
 };
 
 function policyDb(rows: ReadyRow[]): Database {
+	let joined = false;
 	const query = {
 		from: () => query,
-		where: async () =>
-			rows.map((row) => ({
-				storageProvider: "r2" as const,
-				storageBucketLocator: "relayapi-media",
-				storageRegion: "default",
-				...row,
-			})),
+		innerJoin: () => {
+			joined = true;
+			return query;
+		},
+		where: () =>
+			joined
+				? query
+				: Promise.resolve(
+						rows.map((row) => ({
+							storageProvider: "r2" as const,
+							storageBucketLocator: "relayapi-media",
+							storageRegion: "default",
+							...row,
+						})),
+					),
+		orderBy: async () => [],
 	};
 	return fixture<Database>({ select: () => query });
 }
@@ -68,7 +79,51 @@ function signingEnv(
 }
 
 describe("stored media policy", () => {
-	it("accepts only allowlisted persisted metadata within 50 MiB", () => {
+	it("accepts only processor options that the private container implements", () => {
+		expect(
+			MediaProcessingRequest.parse({
+				operation: "normalize",
+				profile: "automatic-v1",
+				options: { compression_mode: "smaller", fail_open: true },
+			}),
+		).toMatchObject({
+			operation: "normalize",
+			options: { compression_mode: "smaller", fail_open: true },
+		});
+		expect(
+			MediaProcessingRequest.parse({
+				operation: "cover",
+				profile: "instagram.reels",
+				options: { timestamp_seconds: 12.5 },
+			}),
+		).toMatchObject({
+			operation: "cover",
+			options: { timestamp_seconds: 12.5 },
+		});
+		expect(
+			MediaProcessingRequest.safeParse({
+				operation: "cover",
+				profile: "invalid profile",
+				options: { timestamp_seconds: 0 },
+			}).success,
+		).toBe(false);
+		expect(
+			MediaProcessingRequest.safeParse({
+				operation: "normalize",
+				profile: "automatic-v1",
+				options: { unimplemented: "x".repeat(20_000) },
+			}).success,
+		).toBe(false);
+		expect(
+			MediaProcessingRequest.safeParse({
+				operation: "cover",
+				profile: "instagram.reels",
+				options: { timestamp_seconds: 86_401 },
+			}).success,
+		).toBe(false);
+	});
+
+	it("accepts only allowlisted persisted metadata within 200 MiB", () => {
 		expect(
 			validateStoredMediaObject(
 				fixture<R2Object>({
@@ -266,6 +321,51 @@ describe("Relay media ownership and signing policy", () => {
 });
 
 describe("media policy integration fences", () => {
+	it("applies workspace authorization to every request-time media snapshot", () => {
+		const policy = readFileSync(
+			new URL("../lib/relay-media-policy.ts", import.meta.url),
+			"utf8",
+		);
+		expect(policy).toContain(
+			"workspaceScopeSqlCondition(workspaceScope, media.workspaceId)",
+		);
+		for (const route of ["posts.ts", "threads.ts", "ideas.ts"]) {
+			const source = readFileSync(
+				new URL(`../routes/${route}`, import.meta.url),
+				"utf8",
+			);
+			expect(source).toContain('c.get("workspaceScope")');
+		}
+		const signing = readFileSync(
+			new URL("../lib/r2-presign.ts", import.meta.url),
+			"utf8",
+		);
+		expect(signing).toContain("rootWorkspaceId");
+		expect(signing).toContain("eq(media.workspaceId, rootWorkspaceId)");
+		for (const service of ["publisher-runner.ts", "thread-publisher.ts"]) {
+			const source = readFileSync(
+				new URL(`../services/${service}`, import.meta.url),
+				"utf8",
+			);
+			expect(source).toContain("post.workspaceId");
+		}
+	});
+
+	it("uses the high-level private Container boundary without low-level lifecycle calls", () => {
+		const source = readFileSync(
+			new URL("../durable-objects/media-processor.ts", import.meta.url),
+			"utf8",
+		);
+		expect(source).toContain(
+			'import { Container } from "@cloudflare/containers"',
+		);
+		expect(source).toContain("extends Container");
+		expect(source).toContain("enableInternet = false");
+		expect(source).toContain("this.containerFetch(");
+		expect(source).not.toContain(".start(");
+		expect(source).not.toContain("getTcpPort(");
+	});
+
 	it("validates before every stale-upload promotion and retires invalid objects", () => {
 		const source = readFileSync(
 			new URL("../services/media-reliability.ts", import.meta.url),

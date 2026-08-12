@@ -5,6 +5,7 @@ import {
 	MAX_MEDIA_UPLOAD_BYTES,
 	normalizeMediaMimeType,
 } from "./media-storage-policy";
+import { workspaceScopeSqlCondition } from "./workspace-scope";
 
 export const RELAY_MEDIA_HOST = "media.relayapi.dev";
 
@@ -123,7 +124,10 @@ export class RelayMediaPolicy {
 	}
 
 	violationFor(value: unknown): RelayMediaViolation | null {
-		for (const reference of collectRelayMediaReferences(value, this.relayMediaHost)) {
+		for (const reference of collectRelayMediaReferences(
+			value,
+			this.relayMediaHost,
+		)) {
 			if (!reference.storageKey) {
 				return {
 					url: reference.url,
@@ -178,6 +182,7 @@ export async function loadRelayMediaPolicy(
 	organizationId: string,
 	value: unknown,
 	relayMediaHost = RELAY_MEDIA_HOST,
+	workspaceScope: "all" | string[] = "all",
 ): Promise<RelayMediaPolicy> {
 	const references = collectRelayMediaReferences(value, relayMediaHost);
 	const storageKeys = [
@@ -207,6 +212,7 @@ export async function loadRelayMediaPolicy(
 		.where(
 			and(
 				eq(media.organizationId, organizationId),
+				workspaceScopeSqlCondition(workspaceScope, media.workspaceId),
 				eq(media.status, "ready"),
 				inArray(media.storageKey, storageKeys),
 				isNull(media.deletionRequestedAt),
@@ -234,7 +240,11 @@ export async function loadRelayMediaPolicy(
 			size: row.size,
 		});
 	}
-	return new RelayMediaPolicy(references, readyMediaByStorageKey, relayMediaHost);
+	return new RelayMediaPolicy(
+		references,
+		readyMediaByStorageKey,
+		relayMediaHost,
+	);
 }
 
 export async function assertRelayMediaReady(
@@ -242,12 +252,14 @@ export async function assertRelayMediaReady(
 	organizationId: string,
 	value: unknown,
 	relayMediaHost = RELAY_MEDIA_HOST,
+	workspaceScope: "all" | string[] = "all",
 ): Promise<RelayMediaPolicy> {
 	const policy = await loadRelayMediaPolicy(
 		db,
 		organizationId,
 		value,
 		relayMediaHost,
+		workspaceScope,
 	);
 	const violation = policy.violationFor(value);
 	if (violation) throw new RelayMediaPolicyError(violation);

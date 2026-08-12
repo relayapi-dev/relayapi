@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { generateId, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
@@ -13,6 +14,7 @@ import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { escapeLinkedInCommentary } from "../publishers/linkedin";
+import type { MediaAttachment } from "../publishers/types";
 import { ErrorResponse, PLATFORMS } from "../schemas/common";
 import {
 	DownloadBody,
@@ -34,6 +36,16 @@ import {
 	ValidatePostBody,
 	ValidatePostResponse,
 } from "../schemas/tools";
+import {
+	getPlatformContentLimit,
+	getPlatformMediaFileLimit,
+	resolvePlatformMediaForValidation,
+	validatePlatformPostInput,
+} from "../services/platform-post-validation";
+import {
+	hasEffectivePostPayload,
+	resolvePostTargetOptions,
+} from "../services/post-content-resolution";
 import { resolveTargets } from "../services/target-resolver";
 import {
 	createToolJob,
@@ -227,22 +239,41 @@ app.openapi(validatePost, async (c) => {
 		});
 	}
 
-	// Validate content length per platform
-	const content = body.content ?? "";
+	const targetOptions = body.target_options as
+		| Record<string, Record<string, unknown>>
+		| undefined;
+	const sharedContent = body.content ?? "";
+	const sharedMedia = (body.media ?? []) as MediaAttachment[];
 	for (const target of resolved) {
-		const limits = PLATFORM_LIMITS[target.platform];
-		if (!limits) continue;
+		const options = resolvePostTargetOptions(
+			targetOptions ?? null,
+			target.platform,
+			target.key,
+		);
+		const content =
+			typeof options.content === "string" && options.content.trim()
+				? options.content
+				: sharedContent;
+		const media = resolvePlatformMediaForValidation(sharedMedia, options);
+		const targetErrors = validatePlatformPostInput(
+			target.platform,
+			content,
+			media,
+			options,
+		);
+		for (const error of targetErrors) {
+			errors.push({ target: target.key, ...error });
+		}
 
-		const charCount = countChars(content, target.platform);
-		const maxChars = limits.chars.maxChars;
-
-		if (charCount > maxChars) {
-			errors.push({
-				target: target.key,
-				code: "CONTENT_TOO_LONG",
-				message: `Content is ${charCount}/${maxChars} characters for ${target.platform}.`,
-			});
-		} else if (charCount > maxChars * 0.9) {
+		const lengthContent =
+			typeof options.content_html === "string" ? options.content_html : content;
+		const maxChars = getPlatformContentLimit(
+			target.platform,
+			media.length > 0,
+			options,
+		);
+		const charCount = countChars(lengthContent, target.platform);
+		if (charCount <= maxChars && charCount > maxChars * 0.9) {
 			warnings.push({
 				target: target.key,
 				code: "CONTENT_NEAR_LIMIT",
@@ -251,67 +282,16 @@ app.openapi(validatePost, async (c) => {
 		}
 	}
 
-	// Validate media count per platform
-	const mediaItems = body.media ?? [];
-	if (mediaItems.length > 0) {
-		const images = mediaItems.filter(
-			(m) => !m.type || m.type === "image" || m.type === "gif",
-		);
-		const videos = mediaItems.filter((m) => m.type === "video");
-
-		for (const target of resolved) {
-			const limits = PLATFORM_LIMITS[target.platform];
-			if (!limits) continue;
-
-			if (
-				images.length > limits.media.maxImages &&
-				limits.media.maxImages > 0
-			) {
-				errors.push({
-					target: target.key,
-					code: "TOO_MANY_IMAGES",
-					message: `${target.platform} allows max ${limits.media.maxImages} images, got ${images.length}.`,
-				});
-			}
-
-			if (videos.length > limits.media.maxVideos) {
-				errors.push({
-					target: target.key,
-					code: "TOO_MANY_VIDEOS",
-					message: `${target.platform} allows max ${limits.media.maxVideos} videos, got ${videos.length}.`,
-				});
-			}
-
-			if (
-				limits.media.maxImages === 0 &&
-				images.length > 0 &&
-				videos.length === 0
-			) {
-				errors.push({
-					target: target.key,
-					code: "IMAGES_NOT_SUPPORTED",
-					message: `${target.platform} requires video content.`,
-				});
-			}
-		}
-	}
-
 	// Validate no content and no media
-	if (!body.content && mediaItems.length === 0) {
-		const hasTargetContent = body.target_options
-			? Object.values(body.target_options).some(
-					(opts) => "content" in (opts as Record<string, unknown>),
-				)
-			: false;
-
-		if (!hasTargetContent) {
-			errors.push({
-				target: "_post",
-				code: "EMPTY_POST",
-				message:
-					"Post must have content, media, or per-target content in target_options.",
-			});
-		}
+	if (
+		!hasEffectivePostPayload(body.content ?? null, body.media, targetOptions)
+	) {
+		errors.push({
+			target: "_post",
+			code: "EMPTY_POST",
+			message:
+				"Post must have content, media, or a supported per-target payload in target_options.",
+		});
 	}
 
 	return c.json(
@@ -374,30 +354,11 @@ app.openapi(validateMedia, async (c) => {
 	> = {};
 
 	if (accessible && size !== null) {
-		const isVideo = contentType?.startsWith("video/") ?? false;
-		const isGif = contentType === "image/gif";
-
 		for (const platform of PLATFORMS) {
-			const limits = PLATFORM_LIMITS[platform];
-
-			// Use GIF-specific limit when available, otherwise fall back to image limit
-			const maxSize = isVideo
-				? limits.media.maxVideoSize
-				: isGif && limits.media.maxGifSize
-					? limits.media.maxGifSize
-					: limits.media.maxImageSize;
-
-			// Check MIME type support
-			let mimeTypeSupported: boolean | undefined;
-			if (contentType) {
-				const allowedTypes = isVideo
-					? limits.media.allowedVideoTypes
-					: limits.media.allowedImageTypes;
-				mimeTypeSupported =
-					allowedTypes.length > 0
-						? allowedTypes.includes(contentType)
-						: undefined;
-			}
+			const { maxSize, mimeTypeSupported } = getPlatformMediaFileLimit(
+				platform,
+				contentType,
+			);
 
 			platformLimits[platform] = {
 				within_limit: size <= maxSize,
@@ -469,7 +430,7 @@ app.openapi(checkSubreddit, async (c) => {
 			);
 		}
 
-		const json = (await response.json()) as {
+		const json = (await readProviderJson(response)) as {
 			data: {
 				display_name: string;
 				title: string;
@@ -693,7 +654,7 @@ app.openapi(resolveMention, async (c) => {
 			);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			elements?: Array<{
 				id: number;
 				localizedName?: string;

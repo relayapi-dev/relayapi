@@ -2,8 +2,13 @@ import { mapConcurrently } from "../lib/concurrency";
 import { isSelfHosted } from "../lib/deployment-mode";
 import { processPendingStripeEvents } from "../routes/stripe-webhooks";
 import { processAccountRevocations } from "../services/account-revocation";
+import { pruneExpiredAdvancedAdLeads } from "../services/ad-advanced-store";
 import { reconcileAdCreationOperations } from "../services/ad-creation-operations";
 import { reconcileAdMutationOperations } from "../services/ad-mutation-operations";
+import {
+	recoverAdvancedAdReportJobs,
+	retainAdvancedAdReports,
+} from "../services/ad-report-jobs";
 import { syncAllExternalAds } from "../services/ad-sync";
 import { processAiKnowledgeDocuments } from "../services/ai-knowledge";
 import { enqueueAnalyticsRefresh } from "../services/analytics-refresh";
@@ -39,9 +44,14 @@ import { reconcileInboxEventEffects } from "../services/inbox-effect-reconciler"
 import { cleanupOldConversations } from "../services/inbox-maintenance";
 import { generateInvoices } from "../services/invoice-generator";
 import {
+	cleanupExpiredMediaDerivatives,
+	reconcileMediaProcessingJobs,
+} from "../services/media-processing-jobs";
+import {
 	reconcileMediaDeletions,
 	reconcileMediaUploads,
 } from "../services/media-reliability";
+import { cleanupExpiredMediaUploadSessions } from "../services/media-upload-session-cleanup";
 import { cleanupOneTimeCapabilities } from "../services/one-time-capability-cleanup";
 import {
 	pruneApiRequestLogs,
@@ -65,6 +75,7 @@ import { processRecyclingPosts } from "../services/recycling-processor";
 import { processAutoPostRules } from "../services/rss-generator";
 import { processScheduledPosts } from "../services/scheduler";
 import { syncShortLinkClicks } from "../services/short-link-click-sync";
+import { reconcileSocialMutationOperations } from "../services/social-mutation-projection";
 import { checkStreaks } from "../services/streak";
 import { reconcileMissingStripeBillingAuthorities } from "../services/stripe-billing-authority";
 import { cleanupExpiredTelegramConnectionChallenges } from "../services/telegram-connection";
@@ -236,6 +247,10 @@ export async function handleScheduled(
 						run: () => reconcileAdMutationOperations(env),
 					},
 					{
+						name: "advanced_ad_reports",
+						run: () => recoverAdvancedAdReportJobs(env),
+					},
+					{
 						name: "idempotency_receipts",
 						run: () => reconcileIdempotencyReceipts(env),
 					},
@@ -247,12 +262,24 @@ export async function handleScheduled(
 					{ name: "media_deletions", run: () => reconcileMediaDeletions(env) },
 					{ name: "media_uploads", run: () => reconcileMediaUploads(env) },
 					{
+						name: "media_processing",
+						run: () => reconcileMediaProcessingJobs(env),
+					},
+					{
+						name: "media_upload_session_expiry",
+						run: () => cleanupExpiredMediaUploadSessions(env),
+					},
+					{
 						name: "ai_knowledge_ingestion",
 						run: () => processAiKnowledgeDocuments(env),
 					},
 					{
 						name: "provider_outcomes",
 						run: () => reconcileProviderOutcomes(env),
+					},
+					{
+						name: "social_mutations",
+						run: () => reconcileSocialMutationOperations(env),
 					},
 					{
 						name: "post_publish",
@@ -349,8 +376,20 @@ export async function handleScheduled(
 						run: () => retainTimedDomainData(env),
 					},
 					{
+						name: "media_derivative_retention",
+						run: () => cleanupExpiredMediaDerivatives(env),
+					},
+					{
 						name: "financial_retention",
 						run: () => retainFinancialData(env),
+					},
+					{
+						name: "advanced_ad_report_retention",
+						run: () => retainAdvancedAdReports(env),
+					},
+					{
+						name: "advanced_ad_lead_retention",
+						run: () => pruneExpiredAdvancedAdLeads(env),
 					},
 				],
 				event.scheduledTime,

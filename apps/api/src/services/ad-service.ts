@@ -5,7 +5,9 @@
 import {
 	adAccounts,
 	adCampaigns,
+	adConnections,
 	adCreationOperations,
+	adReportJobs,
 	ads,
 	createDb,
 	eq,
@@ -22,6 +24,10 @@ import {
 	canAccessWorkspaceScope,
 	workspaceScopeSqlCondition,
 } from "../lib/workspace-scope";
+import type {
+	AdCampaignProviderOptions,
+	AdCreateProviderOptions,
+} from "../schemas/ad-provider-options";
 import type { Env } from "../types";
 import { resolveAdsAccessToken } from "./ad-access-token";
 import {
@@ -49,6 +55,8 @@ import {
 	AdAuthoritativeNotAppliedError,
 	AdPlatformError,
 } from "./ad-platforms/types";
+import { requireAdCapability } from "./ad-platforms/unsupported";
+import { deleteExactAdReportArtifacts } from "./ad-report-artifact-cleanup";
 import {
 	settleDurableUsageReservation,
 	type UsageReservation,
@@ -188,23 +196,24 @@ async function getAdAccountContext(
 	const [adAcc] = await db
 		.select({
 			adAccount: adAccounts,
+			adConnection: adConnections,
 			socialAccount: socialAccounts,
 		})
 		.from(adAccounts)
-		.innerJoin(
+		.leftJoin(adConnections, eq(adAccounts.adConnectionId, adConnections.id))
+		.leftJoin(
 			socialAccounts,
 			and(
 				eq(adAccounts.socialAccountId, socialAccounts.id),
 				eq(socialAccounts.organizationId, orgId),
 			),
 		)
-		.innerJoin(organization, eq(organization.id, socialAccounts.organizationId))
+		.innerJoin(organization, eq(organization.id, adAccounts.organizationId))
 		.where(
 			and(
 				eq(adAccounts.id, adAccountId),
 				eq(adAccounts.organizationId, orgId),
 				eq(adAccounts.status, "active"),
-				eq(socialAccounts.lifecycleStatus, "active"),
 				eq(organization.lifecycleStatus, "active"),
 			),
 		)
@@ -283,6 +292,7 @@ async function upsertAdAccounts(
  */
 async function pruneUnmatchedAdAccounts(
 	db: Database,
+	env: Env,
 	orgId: string,
 	adPlatform: AdPlatform,
 	platformAdAccountIds: string[],
@@ -300,7 +310,7 @@ async function pruneUnmatchedAdAccounts(
 	if (stale.length === 0) return;
 
 	const staleIds = stale.map((r) => r.id);
-	const [campaignRefs, adRefs, operationRefs] = await Promise.all([
+	const [campaignRefs, adRefs, operationRefs, reportRefs] = await Promise.all([
 		db
 			.select({ adAccountId: adCampaigns.adAccountId })
 			.from(adCampaigns)
@@ -313,6 +323,15 @@ async function pruneUnmatchedAdAccounts(
 			.select({ adAccountId: adCreationOperations.adAccountId })
 			.from(adCreationOperations)
 			.where(inArray(adCreationOperations.adAccountId, staleIds)),
+		db
+			.select({
+				id: adReportJobs.id,
+				organizationId: adReportJobs.organizationId,
+				adAccountId: adReportJobs.adAccountId,
+				resultObjectKey: adReportJobs.resultObjectKey,
+			})
+			.from(adReportJobs)
+			.where(inArray(adReportJobs.adAccountId, staleIds)),
 	]);
 	const referenced = new Set<string>([
 		...campaignRefs.map((r) => r.adAccountId),
@@ -324,6 +343,13 @@ async function pruneUnmatchedAdAccounts(
 	const neutralize = staleIds.filter((id) => referenced.has(id));
 
 	if (deletable.length > 0) {
+		// Deleting an ad account cascades its report jobs, which hold the only exact
+		// private-object projection. Remove those objects before the projections.
+		const deletingAccountIds = new Set(deletable);
+		await deleteExactAdReportArtifacts(
+			env.AD_REPORT_BUCKET,
+			reportRefs.filter((job) => deletingAccountIds.has(job.adAccountId)),
+		);
 		await db.delete(adAccounts).where(inArray(adAccounts.id, deletable));
 	}
 	if (neutralize.length > 0) {
@@ -518,6 +544,7 @@ export async function discoverAdAccounts(
 	if (unmatchedPlatformAdAccountIds.length > 0) {
 		await pruneUnmatchedAdAccounts(
 			db,
+			env,
 			orgId,
 			adPlatform,
 			unmatchedPlatformAdAccountIds,
@@ -544,6 +571,7 @@ export async function createCampaign(
 		startDate?: string;
 		endDate?: string;
 		specialAdCategories?: string[];
+		providerOptions?: AdCampaignProviderOptions;
 		/** Stable request/Queue identity. Required before creating paid objects. */
 		operationKey?: string;
 	},
@@ -571,6 +599,7 @@ export async function createCampaign(
 			"No adapter",
 		);
 	}
+	requireAdCapability(adapter, "campaign_create");
 	const currency = authoritativeAdCurrency(
 		ctx.adAccount.currency,
 		params.currency,
@@ -578,6 +607,26 @@ export async function createCampaign(
 	);
 	const { operationKey, ...baseRequest } = params;
 	const request = { ...baseRequest, currency };
+	if (
+		params.providerOptions &&
+		params.providerOptions.platform !== ctx.adPlatform
+	) {
+		throw new AdAuthoritativeNotAppliedError(
+			"INVALID_PROVIDER_OPTIONS",
+			"provider_options.platform must match the selected ad account",
+		);
+	}
+	try {
+		adapter.validateCreateCampaign?.({
+			...request,
+			providerOptions: params.providerOptions,
+		});
+	} catch (error) {
+		if (error instanceof AdPlatformError) {
+			throw new AdAuthoritativeNotAppliedError(error);
+		}
+		throw error;
+	}
 	const operation = await beginAdCreationOperation({
 		db,
 		organizationId: orgId,
@@ -648,6 +697,7 @@ export async function createAd(
 		durationDays?: number;
 		startDate?: string;
 		endDate?: string;
+		providerOptions?: AdCreateProviderOptions;
 		/** Stable request/Queue identity. Required before creating paid objects. */
 		operationKey?: string;
 	},
@@ -675,6 +725,8 @@ export async function createAd(
 			"No adapter",
 		);
 	}
+	requireAdCapability(adapter, "ad_create");
+	if (!params.campaignId) requireAdCapability(adapter, "campaign_create");
 	if (params.targeting && adapter.canonicalizeTargeting) {
 		// Validate the complete provider projection before the durable operation
 		// can stage a request boundary.
@@ -686,6 +738,27 @@ export async function createAd(
 	]);
 	const { operationKey, ...baseRequest } = params;
 	const request = { ...baseRequest, currency };
+	if (
+		params.providerOptions &&
+		params.providerOptions.platform !== ctx.adPlatform
+	) {
+		throw new AdAuthoritativeNotAppliedError(
+			"INVALID_PROVIDER_OPTIONS",
+			"provider_options.platform must match the selected ad account",
+		);
+	}
+	try {
+		adapter.validateCreateAd?.({
+			...request,
+			campaignId: params.campaignId,
+			providerOptions: params.providerOptions,
+		});
+	} catch (error) {
+		if (error instanceof AdPlatformError) {
+			throw new AdAuthoritativeNotAppliedError(error);
+		}
+		throw error;
+	}
 	if (params.campaignId) {
 		const [campaign] = await db
 			.select({ currency: adCampaigns.currency })
@@ -771,6 +844,7 @@ export async function boostPost(
 		bidAmount?: number;
 		tracking?: { pixelId?: string; urlTags?: string };
 		specialAdCategories?: string[];
+		providerOptions?: AdCreateProviderOptions;
 		/** Stable request/Queue identity. Required before creating paid objects. */
 		operationKey?: string;
 	},
@@ -787,6 +861,7 @@ export async function boostPost(
 	// (post_target_id) or a natively-published post synced into external_posts
 	// (external_post_id). Exactly one is provided (enforced by BoostPostBody).
 	let platformPostId: string;
+	let sourcePlatform: string;
 	let postSocialAccountId: string | null = null;
 	let sourceWorkspaceId: string | null = null;
 
@@ -815,6 +890,7 @@ export async function boostPost(
 			);
 		}
 		platformPostId = ext.platformPostId;
+		sourcePlatform = ext.platform;
 		postSocialAccountId = ext.socialAccountId;
 		sourceWorkspaceId = ext.workspaceId;
 	} else {
@@ -859,6 +935,7 @@ export async function boostPost(
 			);
 		}
 		platformPostId = target.platformPostId;
+		sourcePlatform = target.platform;
 		postSocialAccountId = target.socialAccountId;
 		sourceWorkspaceId = targetRow.workspaceId;
 	}
@@ -874,6 +951,12 @@ export async function boostPost(
 		throw new AdAuthoritativeNotAppliedError(
 			"INVALID_STATE",
 			"The promoted post must belong to the ad account workspace",
+		);
+	}
+	if (socialPlatformToAdPlatform(sourcePlatform) !== ctx.adPlatform) {
+		throw new AdAuthoritativeNotAppliedError(
+			"INVALID_STATE",
+			`A ${sourcePlatform} post cannot be promoted through a ${ctx.adPlatform} ad account`,
 		);
 	}
 
@@ -901,10 +984,40 @@ export async function boostPost(
 			"No adapter",
 		);
 	}
+	requireAdCapability(adapter, "boost");
+	if (
+		params.providerOptions &&
+		params.providerOptions.platform !== ctx.adPlatform
+	) {
+		throw new AdAuthoritativeNotAppliedError(
+			"INVALID_PROVIDER_OPTIONS",
+			"provider_options.platform must match the selected ad account",
+		);
+	}
 	if (params.targeting && adapter.canonicalizeTargeting) {
 		// Unsupported targeting is a clean pre-boundary rejection, not an
 		// ambiguous paid-object attempt.
 		adapter.canonicalizeTargeting(params.targeting);
+	}
+	try {
+		adapter.validateCreateAd?.({
+			name: params.name ?? "Boosted post",
+			objective: params.objective ?? "engagement",
+			dailyBudgetCents: params.dailyBudgetCents,
+			lifetimeBudgetCents: params.lifetimeBudgetCents,
+			currency: params.currency,
+			startDate: params.startDate,
+			endDate: params.endDate,
+			specialAdCategories: params.specialAdCategories,
+			platformPostId,
+			providerOptions: params.providerOptions,
+			...(params.targeting ? { targeting: params.targeting } : {}),
+		});
+	} catch (error) {
+		if (error instanceof AdPlatformError) {
+			throw new AdAuthoritativeNotAppliedError(error);
+		}
+		throw error;
 	}
 
 	const currency = authoritativeAdCurrency(
@@ -1025,6 +1138,7 @@ export async function updateAd(
 		getAdPlatformAdapter(ctx.adPlatform),
 		"The ad",
 	);
+	requireAdCapability(adapter, "mutation");
 	const [campaign] = await db
 		.select()
 		.from(adCampaigns)
@@ -1137,7 +1251,11 @@ export async function cancelAd(
 		await getAdAccountContext(db, ad.adAccountId, orgId),
 		"The ad",
 	);
-	requireProviderContext(getAdPlatformAdapter(ctx.adPlatform), "The ad");
+	const adapter = requireProviderContext(
+		getAdPlatformAdapter(ctx.adPlatform),
+		"The ad",
+	);
+	requireAdCapability(adapter, "mutation");
 	const payload: CancelAdMutationPayload = {
 		kind: "cancel_ad",
 		adId,
@@ -1220,7 +1338,11 @@ export async function updateCampaign(
 		await getAdAccountContext(db, campaign.adAccountId, orgId),
 		"The campaign",
 	);
-	requireProviderContext(getAdPlatformAdapter(ctx.adPlatform), "The campaign");
+	const adapter = requireProviderContext(
+		getAdPlatformAdapter(ctx.adPlatform),
+		"The campaign",
+	);
+	requireAdCapability(adapter, "mutation");
 	const platformAdSetId = (
 		campaign.metadata as { platformAdSetId?: string } | null
 	)?.platformAdSetId;
@@ -1361,7 +1483,11 @@ export async function cancelCampaign(
 		await getAdAccountContext(db, campaign.adAccountId, orgId),
 		"The campaign",
 	);
-	requireProviderContext(getAdPlatformAdapter(ctx.adPlatform), "The campaign");
+	const adapter = requireProviderContext(
+		getAdPlatformAdapter(ctx.adPlatform),
+		"The campaign",
+	);
+	requireAdCapability(adapter, "mutation");
 	const payload: CancelCampaignMutationPayload = {
 		kind: "cancel_campaign",
 		campaignId,

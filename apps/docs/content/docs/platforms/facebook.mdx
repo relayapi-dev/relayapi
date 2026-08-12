@@ -23,7 +23,7 @@ icon: facebook
 | Analytics | Yes (impressions, likes, comments, shares, clicks, views) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
@@ -32,11 +32,18 @@ icon: facebook
 Facebook API posting only works with **Pages** — you cannot post to personal profiles. The user must be a **Page Admin or Editor**. After connecting via OAuth, you must select which Facebook Page to post to. Facebook tokens expire frequently, so subscribe to the `account.disconnected` webhook to catch token expirations proactively. Images over 4 MB are frequently rejected in practice even though the stated limit is higher.
 </Callout>
 
+<Callout type="warn">
+Published Page post editing requires `pages_manage_posts`; comment editing and
+engagement require `pages_manage_engagement`; Messenger read receipts require
+`pages_messaging`. Reauthorize an older Facebook Page connection that lacks a
+needed grant; a refresh token does not grant new permissions.
+</Callout>
+
 ## Quick Start
 
 Post to a Facebook Page:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -50,21 +57,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-
-post = client.posts.create(
-    content='Exciting news from our Page!',
-    targets=['facebook'],
-    scheduled_at='now'
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -113,7 +105,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Facebook is one of few platforms that supports text-only posts. First ~480 characters are visible before the "See more" fold.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -121,15 +113,6 @@ const post = await client.posts.create({
   targets: ['facebook'],
   scheduled_at: 'now'
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Just a text update for our followers.',
-    targets=['facebook'],
-    scheduled_at='now'
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -166,7 +149,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Single Image Post
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -177,18 +160,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now'
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Check out this photo!',
-    targets=['facebook'],
-    media=[
-        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now'
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -237,7 +208,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Up to 10 images per post. Cannot mix images and videos in the same post.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -250,20 +221,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now'
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Photo dump from our event!',
-    targets=['facebook'],
-    media=[
-        {'url': 'https://cdn.example.com/photo1.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo2.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/photo3.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now'
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -324,7 +281,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Single video per post. Up to 4 GB, max 240 minutes for feed videos.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -335,18 +292,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now'
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Watch our latest video!',
-    targets=['facebook'],
-    media=[
-        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now'
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -395,7 +340,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Media is required for stories. Text captions are **not** displayed on Facebook Stories. Interactive stickers are **not** available via the API.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -410,22 +355,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['facebook'],
-    media=[
-        {'url': 'https://cdn.example.com/story.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'facebook': {
-            'content_type': 'story'
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -486,7 +415,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Single vertical video, 3-60 seconds. Reels support a separate `title` field.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -503,24 +432,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Behind the scenes of our latest shoot',
-    targets=['facebook'],
-    media=[
-        {'url': 'https://cdn.example.com/reel.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'facebook': {
-            'content_type': 'reel',
-            'title': 'Studio day'
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -587,7 +498,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Automatically post a first comment after publishing. Useful for adding links without suppressing reach.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -603,23 +514,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='New product launch!',
-    targets=['facebook'],
-    media=[
-        {'url': 'https://cdn.example.com/product.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'facebook': {
-            'first_comment': 'Link to purchase: https://shop.example.com'
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -687,7 +581,7 @@ First comments only work with feed posts. They are not supported on Stories or R
 
 Post to multiple Facebook Pages in a single request by targeting different account IDs.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -695,15 +589,6 @@ const post = await client.posts.create({
   targets: ['acc_fb_brand1', 'acc_fb_brand2'],
   scheduled_at: 'now'
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='News from all our brands!',
-    targets=['acc_fb_brand1', 'acc_fb_brand2'],
-    scheduled_at='now'
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -772,7 +657,37 @@ All fields go inside `target_options.facebook` on your post request.
 | `content_type` | string | `"story"` or `"reel"` (default: feed post) |
 | `title` | string | Reel title (only for reels, separate from content/caption) |
 | `first_comment` | string | Auto-posted first comment (feed posts only, not stories or reels) |
-| `page_id` | string | Target a specific Page for multi-page accounts |
+| `published` | boolean | Feed only; `false` creates an unpublished provider-side Page post and cannot be combined with `first_comment` |
+| `place_id` | string | Numeric Page/location ID for feed posts or Reels; unavailable for Stories |
+| `targeting` | object | Feed-only strict audience restriction; people outside it cannot view the post |
+| `feed_targeting` | object | Feed-only preferred News Feed audience; people outside it may still see the post |
+| `reel_state` | string | Reel only: `DRAFT`, `SCHEDULED`, or `PUBLISHED` |
+| `reel_scheduled_publish_time` | datetime | Required only for `reel_state: 'SCHEDULED'`; more than 10 minutes and no more than 29 days ahead |
+| `page_id` | string | Legacy exact-match assertion for the Page selected during connection; it cannot retarget the credential |
+
+```typescript
+await client.posts.create({
+  content: 'A local preview before launch',
+  targets: ['facebook'],
+  scheduled_at: 'now',
+  target_options: {
+    facebook: {
+      published: false,
+      place_id: '123456789012345',
+      targeting: {
+        geo_locations: { countries: ['GB'] },
+        age_min: 18,
+      },
+      feed_targeting: {
+        geo_locations: { cities: [{ key: '2420605', radius: 20, distance_unit: 'mile' }] },
+      },
+    },
+  },
+});
+```
+
+Facebook colored/background posts are not exposed: RelayAPI has no verified
+official Page-create contract for that field and rejects rather than guessing.
 
 ## Common Errors
 
@@ -795,6 +710,15 @@ All fields go inside `target_options.facebook` on your post request.
 - **Tokens expire frequently** — subscribe to the `account.disconnected` webhook to detect token expirations.
 - **GIFs should use `type: "video"`** — they auto-play and loop when sent as video type.
 - **First ~480 characters visible** before the "See more" fold on feed posts.
+
+## Published edits and social actions
+
+RelayAPI can edit published Page post text and owned comments, hide/unhide
+comments, like/unlike posts, and send Messenger read receipts for persisted
+inbound messages. These provider writes require durable idempotency and the
+appropriate `pages_manage_posts`, `pages_manage_engagement`, or
+`pages_messaging` grant. See [Published Edits and Social
+Actions](/guides/published-edits-and-social-actions).
 
 ## Automations
 

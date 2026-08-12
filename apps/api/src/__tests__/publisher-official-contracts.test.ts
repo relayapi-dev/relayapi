@@ -157,6 +157,16 @@ describe("official publisher contract validation", () => {
 				code: "CONTENT_ERROR",
 			},
 			{
+				publisher: linkedinPublisher,
+				request: request("linkedin", {
+					platformAccountId: "urn:li:organization:connected",
+					targetOptions: {
+						organization_urn: "urn:li:organization:other",
+					},
+				}),
+				code: "ORGANIZATION_URN_MISMATCH",
+			},
+			{
 				publisher: telegramPublisher,
 				request: request("telegram", { media: images(11) }),
 				code: "TOO_MANY_MEDIA",
@@ -183,12 +193,24 @@ describe("official publisher contract validation", () => {
 				publisher: smsPublisher,
 				request: request("sms", {
 					content: "x".repeat(1601),
+					metadata: { from_number: "+15550000000" },
 					targetOptions: {
 						from_number: "+15550000000",
 						phone_numbers: ["+15551111111"],
 					},
 				}),
 				code: "CONTENT_TOO_LONG",
+			},
+			{
+				publisher: smsPublisher,
+				request: request("sms", {
+					metadata: { from_number: "+15550000000" },
+					targetOptions: {
+						from_number: "+15559999999",
+						phone_numbers: ["+15551111111"],
+					},
+				}),
+				code: "SMS_SENDER_MISMATCH",
 			},
 			{
 				publisher: facebookPublisher,
@@ -205,7 +227,7 @@ describe("official publisher contract validation", () => {
 				publisher: discordPublisher,
 				request: request("discord", {
 					media: images(11),
-					accessToken: "https://discord.com/api/webhooks/id/token",
+					accessToken: "https://discord.com/api/webhooks/123/token",
 				}),
 				code: "TOO_MANY_MEDIA",
 			},
@@ -250,7 +272,7 @@ describe("official publisher contract validation", () => {
 					preview_text: "Preview",
 					scheduled_at: "2026-08-01T10:00:00Z",
 				},
-				metadata: { publication_id: "publication-1" },
+				platformAccountId: "publication-1",
 			}),
 		);
 
@@ -316,7 +338,7 @@ describe("official publisher contract validation", () => {
 					send_at: "2026-08-01T10:00:00Z",
 					headers: { "X-Campaign": "relay" },
 				},
-				metadata: { instance_url: "https://8.8.8.8" },
+				platformAccountId: "https://8.8.8.8",
 			}),
 		);
 
@@ -355,6 +377,7 @@ describe("official publisher contract validation", () => {
 		}) as unknown as typeof fetch;
 		const sms = await smsPublisher.publish(
 			request("sms", {
+				metadata: { from_number: "+15550000000" },
 				targetOptions: {
 					from_number: "+15550000000",
 					phone_numbers: ["+15551111111", "+15552222222"],
@@ -367,6 +390,39 @@ describe("official publisher contract validation", () => {
 		expect(sms.provider_outcome?.effects).toEqual([
 			expect.objectContaining({ status: "succeeded", provider_id: "SM123" }),
 			expect.objectContaining({ status: "failed" }),
+		]);
+	});
+
+	it("retains every Telegram media-group message ID for durable cleanup", async () => {
+		globalThis.fetch = (async () =>
+			Response.json({
+				ok: true,
+				result: [
+					{ message_id: 101, chat: { id: -1001, type: "channel" } },
+					{ message_id: 102, chat: { id: -1001, type: "channel" } },
+				],
+			})) as unknown as typeof fetch;
+
+		const result = await telegramPublisher.publish(
+			request("telegram", {
+				platformAccountId: "-1001",
+				media: images(2),
+			}),
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.platform_post_id).toBe("101");
+		expect(result.provider_outcome?.effects).toEqual([
+			{
+				name: "telegram_message_0",
+				status: "succeeded",
+				provider_id: "101",
+			},
+			{
+				name: "telegram_message_1",
+				status: "succeeded",
+				provider_id: "102",
+			},
 		]);
 	});
 
@@ -447,7 +503,7 @@ describe("official publisher contract validation", () => {
 		}) as unknown as typeof fetch;
 		const result = await discordPublisher.publish(
 			request("discord", {
-				accessToken: "https://discord.com/api/webhooks/id/token",
+				accessToken: "https://discord.com/api/webhooks/123/token",
 				targetOptions: { embeds: [{ footer: {} }] },
 			}),
 		);

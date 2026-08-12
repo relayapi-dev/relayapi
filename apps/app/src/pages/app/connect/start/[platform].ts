@@ -27,11 +27,17 @@ export const GET: APIRoute = async (ctx) => {
 
 	try {
 		const method = ctx.url.searchParams.get("method") || undefined;
+		const instanceUrl = ctx.url.searchParams.get("instance_url") || undefined;
 		const workspaceId = ctx.url.searchParams.get("workspace_id") || undefined;
 		const redirectUrl = `${ctx.url.origin}/app/connect/callback/${platform}`;
 		const data = await client.connect.startOAuthFlow(
 			platform as Parameters<typeof client.connect.startOAuthFlow>[0],
-			{ redirect_url: redirectUrl, method, workspace_id: workspaceId },
+			{
+				redirect_url: redirectUrl,
+				method,
+				instance_url: instanceUrl,
+				workspace_id: workspaceId,
+			},
 			requestOptions,
 		);
 		return Response.redirect(data.auth_url, 302);

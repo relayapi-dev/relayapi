@@ -123,7 +123,22 @@ export class Analytics extends APIResource {
 export interface AnalyticsRetrieveResponse {
   data: Array<AnalyticsRetrieveResponse.Data>;
 
+  /**
+   * Whether another result page is available
+   */
+  has_more: boolean;
+
+  /**
+   * Offset for the next page, or null when complete
+   */
+  next_offset: number | null;
+
   overview?: AnalyticsRetrieveResponse.Overview;
+
+  /**
+   * True when the matching target set exceeds the per-response cap. Narrow by from_date/to_date/platform to see the full set.
+   */
+  truncated?: boolean;
 }
 
 export namespace AnalyticsRetrieveResponse {
@@ -145,7 +160,12 @@ export namespace AnalyticsRetrieveResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     /**
      * Post ID
@@ -289,7 +309,12 @@ export interface AnalyticsGetContentDecayResponse {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   post_id: string;
 }
@@ -635,7 +660,12 @@ export interface AnalyticsRetrieveParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   /**
    * Filter by post ID
@@ -646,6 +676,11 @@ export interface AnalyticsRetrieveParams {
    * End date (ISO 8601 date string)
    */
   to_date?: string;
+
+  /**
+   * Filter by workspace ID
+   */
+  workspace_id?: string;
 }
 
 export interface AnalyticsGetBestTimeParams {
@@ -679,12 +714,22 @@ export interface AnalyticsGetBestTimeParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   /**
    * End date (ISO 8601)
    */
   to_date?: string;
+
+  /**
+   * Filter by workspace ID
+   */
+  workspace_id?: string;
 }
 
 export interface AnalyticsGetContentDecayParams {
@@ -747,12 +792,22 @@ export interface AnalyticsGetPostingFrequencyParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   /**
    * End date (ISO 8601)
    */
   to_date?: string;
+
+  /**
+   * Filter by workspace ID
+   */
+  workspace_id?: string;
 }
 
 export interface AnalyticsListDailyMetricsParams {
@@ -786,12 +841,22 @@ export interface AnalyticsListDailyMetricsParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   /**
    * End date (ISO 8601)
    */
   to_date?: string;
+
+  /**
+   * Filter by workspace ID
+   */
+  workspace_id?: string;
 }
 
 export interface AnalyticsListChannelsParams {

@@ -7,6 +7,7 @@ describe("self-host automation media compatibility", () => {
 			uploadSchema,
 			uploadRoute,
 			resolver,
+			messageSender,
 			storageLocator,
 			wrangler,
 		] = await Promise.all([
@@ -20,6 +21,12 @@ describe("self-host automation media compatibility", () => {
 			Bun.file(
 				new URL(
 					"../../../apps/api/src/services/automations/automation-media.ts",
+					import.meta.url,
+				),
+			).text(),
+			Bun.file(
+				new URL(
+					"../../../apps/api/src/services/message-sender.ts",
 					import.meta.url,
 				),
 			).text(),
@@ -48,6 +55,14 @@ describe("self-host automation media compatibility", () => {
 		expect(resolver).toContain("eq(media.organizationId, organizationId)");
 		expect(resolver).toContain("workspaceCondition");
 		expect(resolver).toContain("resolveRelayMediaForPublish");
+		expect(messageSender).toContain('firstAttachment?.type === "audio"');
+		expect(messageSender).toContain(
+			"WhatsApp audio messages do not support captions",
+		);
+		expect(messageSender).toContain(
+			"const DIRECT_MESSAGE_RESPONSE_MAX_BYTES = 2 * 1024 * 1024",
+		);
+		expect(messageSender).not.toMatch(/\.json\s*\(\s*\)/);
 		expect(storageLocator).toContain("byosPutRetries(body)");
 		expect(storageLocator).toContain("? 0");
 		expect(readme).toContain("without replaying a consumed request body");

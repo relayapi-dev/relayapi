@@ -6,7 +6,6 @@ import {
 	Play,
 	Plus,
 	RefreshCw,
-	Search,
 	Target,
 	Trash2,
 	Upload,
@@ -17,12 +16,18 @@ import {
 import { motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { AccountFilterButton } from "@/components/dashboard/account-filter-button";
-import type { AccountOption } from "@/components/dashboard/account-search-combobox";
-import { AdAccountCombobox } from "@/components/dashboard/ads/ad-account-combobox";
+import {
+	AdAccountCombobox,
+	type AdAccountOption,
+} from "@/components/dashboard/ads/ad-account-combobox";
 import { AdAnalyticsSheet } from "@/components/dashboard/ads/ad-analytics-sheet";
 import { CreateAdDialog } from "@/components/dashboard/ads/create-ad-dialog";
 import { CreateAudienceDialog } from "@/components/dashboard/ads/create-audience-dialog";
 import { CreateCampaignDialog } from "@/components/dashboard/ads/create-campaign-dialog";
+import {
+	type AdPlatformCapabilities,
+	liveWriteCapability,
+} from "@/components/dashboard/ads/provider-contract";
 import { useFilterQuery } from "@/components/dashboard/filter-context";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { PageToolbar } from "@/components/dashboard/page-toolbar";
@@ -37,7 +42,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { LoadMore } from "@/components/ui/load-more";
-import { useMutation, usePaginatedApi } from "@/hooks/use-api";
+import { useApi, useMutation, usePaginatedApi } from "@/hooks/use-api";
 import { cn } from "@/lib/utils";
 
 const stagger = {
@@ -57,13 +62,21 @@ const fadeUp = {
 
 interface AdAccount {
 	id: string;
-	social_account_id: string;
+	ad_connection_id: string | null;
+	social_account_id: string | null;
 	platform: string;
 	platform_ad_account_id: string;
 	name: string | null;
 	currency: string | null;
 	timezone: string | null;
 	status: string | null;
+	capabilities?: Record<
+		string,
+		{
+			state: "supported" | "requires_approval" | "unsupported";
+			reason?: string;
+		}
+	>;
 	boostable_social_account_ids?: string[];
 }
 
@@ -251,6 +264,8 @@ export function AdsPage({
 	const [adSource, setAdSource] = useState("all");
 	const [campaignStatus, setCampaignStatus] = useState("all");
 	const [selectedAdAccountId, setSelectedAdAccountId] = useState<string>("");
+	const [selectedAudienceAccountSnapshot, setSelectedAudienceAccountSnapshot] =
+		useState<AdAccountOption | null>(null);
 
 	// Dialogs
 	const [createAdOpen, setCreateAdOpen] = useState(false);
@@ -261,10 +276,6 @@ export function AdsPage({
 	const [uploadAudienceId, setUploadAudienceId] = useState<string>("");
 	const [analyticsAdId, setAnalyticsAdId] = useState<string | null>(null);
 	const [analyticsAdName, setAnalyticsAdName] = useState("");
-	const [discoverOpen, setDiscoverOpen] = useState(false);
-	const [discoverSocialId, setDiscoverSocialId] = useState<string | null>(null);
-	const [discovering, setDiscovering] = useState(false);
-	const [discoverError, setDiscoverError] = useState<string | null>(null);
 	const [accountActionError, setAccountActionError] = useState<string | null>(
 		null,
 	);
@@ -273,6 +284,10 @@ export function AdsPage({
 	>(null);
 
 	// --- Data ---
+	const { data: platformCapabilityResponse } = useApi<{
+		data: AdPlatformCapabilities[];
+	}>("ads/platforms");
+	const adPlatformCapabilities = platformCapabilityResponse?.data ?? [];
 	const adsQuery = {
 		...filterQuery,
 		...(adStatus !== "all" ? { status: adStatus } : {}),
@@ -334,6 +349,35 @@ export function AdsPage({
 		loadingMore: accountsLoadingMore,
 		refetch: accountsRefetch,
 	} = usePaginatedApi<AdAccount>("ads/accounts", { query: filterQuery });
+	const selectedAudienceAccount =
+		selectedAudienceAccountSnapshot?.id === selectedAdAccountId
+			? selectedAudienceAccountSnapshot
+			: adAccounts.find((account) => account.id === selectedAdAccountId);
+	const audienceDialogAccounts =
+		selectedAudienceAccountSnapshot &&
+		!adAccounts.some(
+			(account) => account.id === selectedAudienceAccountSnapshot.id,
+		)
+			? [...adAccounts, selectedAudienceAccountSnapshot]
+			: adAccounts;
+	const audienceCreateCapability = liveWriteCapability(
+		selectedAudienceAccount?.platform,
+		"audience_create",
+		adPlatformCapabilities,
+	);
+	const canCreateAudience = audienceCreateCapability.state === "supported";
+	const audienceOperationSupported = (
+		audience: Audience,
+		operation: "audience_create" | "audience_upload",
+	) => {
+		const accountPlatform = audienceDialogAccounts.find(
+			(account) => account.id === audience.ad_account_id,
+		)?.platform;
+		return (
+			liveWriteCapability(accountPlatform, operation, adPlatformCapabilities)
+				.state === "supported"
+		);
+	};
 
 	// Set default ad account for audiences tab
 	useEffect(() => {
@@ -436,39 +480,6 @@ export function AdsPage({
 		[accountsRefetch, adsRefetch, campaignsRefetch],
 	);
 
-	const handleDiscoverAccounts = useCallback(
-		async (socialAccountId: string) => {
-			setDiscovering(true);
-			setDiscoverError(null);
-			try {
-				const res = await fetch(
-					`/api/ads/accounts?social_account_id=${encodeURIComponent(socialAccountId)}`,
-				);
-				if (!res.ok) {
-					const json = (await res.json().catch(() => null)) as {
-						error?: { message?: string };
-					} | null;
-					throw new Error(
-						json?.error?.message || "Failed to discover ad accounts.",
-					);
-				}
-				accountsRefetch();
-				setDiscoverOpen(false);
-				setDiscoverSocialId(null);
-				setDiscoverError(null);
-			} catch (err) {
-				setDiscoverError(
-					err instanceof Error
-						? err.message
-						: "Failed to discover ad accounts.",
-				);
-			} finally {
-				setDiscovering(false);
-			}
-		},
-		[accountsRefetch],
-	);
-
 	const handleUpdateAd = useCallback(
 		async (id: string, status: string) => {
 			await fetch(`/api/ads/${id}`, {
@@ -515,14 +526,19 @@ export function AdsPage({
 								Create Campaign
 							</Button>
 						) : activeTab === "audiences" ? (
-							<Button size="sm" onClick={() => setCreateAudienceOpen(true)}>
+							<Button
+								size="sm"
+								onClick={() => setCreateAudienceOpen(true)}
+								disabled={!canCreateAudience}
+								title={
+									canCreateAudience
+										? "Create Audience"
+										: (audienceCreateCapability.reason ??
+											"Audience creation is unavailable for this account.")
+								}
+							>
 								<Plus className="size-4" />
 								Create Audience
-							</Button>
-						) : activeTab === "accounts" ? (
-							<Button size="sm" onClick={() => setDiscoverOpen(true)}>
-								<Search className="size-4" />
-								Discover Ad Accounts
 							</Button>
 						) : undefined
 					}
@@ -898,6 +914,7 @@ export function AdsPage({
 						<AdAccountCombobox
 							value={selectedAdAccountId}
 							onSelect={setSelectedAdAccountId}
+							onSelectAccount={setSelectedAudienceAccountSnapshot}
 							workspaceId={filterQuery.workspace_id}
 							className="w-full sm:w-64"
 						/>
@@ -984,27 +1001,37 @@ export function AdsPage({
 												</td>
 												<td className="px-4 py-3 text-right">
 													<div className="flex items-center justify-end gap-1">
-														{aud.type === "customer_list" && (
+														{aud.type === "customer_list" &&
+															audienceOperationSupported(
+																aud,
+																"audience_upload",
+															) && (
+																<button
+																	type="button"
+																	onClick={() => {
+																		setUploadAudienceId(aud.id);
+																		setUploadUsersOpen(true);
+																	}}
+																	className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+																	title="Upload users"
+																>
+																	<Upload className="size-3.5" />
+																</button>
+															)}
+														{(!aud.platform_audience_id ||
+															audienceOperationSupported(
+																aud,
+																"audience_create",
+															)) && (
 															<button
 																type="button"
-																onClick={() => {
-																	setUploadAudienceId(aud.id);
-																	setUploadUsersOpen(true);
-																}}
-																className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-																title="Upload users"
+																onClick={() => handleDeleteAudience(aud.id)}
+																className="p-1 rounded hover:bg-destructive/20 transition-colors text-muted-foreground hover:text-destructive"
+																title="Delete"
 															>
-																<Upload className="size-3.5" />
+																<Trash2 className="size-3.5" />
 															</button>
 														)}
-														<button
-															type="button"
-															onClick={() => handleDeleteAudience(aud.id)}
-															className="p-1 rounded hover:bg-destructive/20 transition-colors text-muted-foreground hover:text-destructive"
-															title="Delete"
-														>
-															<Trash2 className="size-3.5" />
-														</button>
 													</div>
 												</td>
 											</motion.tr>
@@ -1026,6 +1053,21 @@ export function AdsPage({
 			{/* ====== ACCOUNTS TAB ====== */}
 			{activeTab === "accounts" && (
 				<>
+					<div className="rounded-[12px] border border-border bg-muted/30 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+						Dedicated ad-connection creation, credential rotation, revocation,
+						and provider account discovery are currently API-only. The dashboard
+						lists validated accounts and can queue syncs after an operator
+						completes the{" "}
+						<a
+							href="https://docs.relayapi.dev/guides/advertising-platforms#create-rotate-inspect-and-revoke-connections"
+							className="font-medium text-primary underline-offset-4 hover:underline"
+							target="_blank"
+							rel="noreferrer"
+						>
+							dedicated connection flow
+						</a>
+						.
+					</div>
 					{(accountsError || accountActionError || accountActionSuccess) && (
 						<>
 							{accountActionSuccess && (
@@ -1051,16 +1093,17 @@ export function AdsPage({
 								No ad accounts found
 							</p>
 							<p className="text-xs text-muted-foreground mt-1">
-								Select a connected social account to discover its ad accounts
+								Create and validate a dedicated advertising connection through
+								the API, then refresh this page.
 							</p>
-							<Button
-								variant="outline"
-								className="mt-4"
-								onClick={() => setDiscoverOpen(true)}
+							<a
+								href="https://docs.relayapi.dev/guides/advertising-platforms#create-rotate-inspect-and-revoke-connections"
+								className="mt-4 inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+								target="_blank"
+								rel="noreferrer"
 							>
-								<Search className="size-4" />
-								Discover Ad Accounts
-							</Button>
+								Open API setup guide
+							</a>
 						</div>
 					) : (
 						<>
@@ -1146,12 +1189,14 @@ export function AdsPage({
 				open={createAdOpen}
 				onOpenChange={setCreateAdOpen}
 				adAccounts={adAccounts}
+				platformCapabilities={adPlatformCapabilities}
 				onCreated={adsRefetch}
 			/>
 			<CreateAdDialog
 				open={boostDialogOpen}
 				onOpenChange={setBoostDialogOpen}
 				adAccounts={adAccounts}
+				platformCapabilities={adPlatformCapabilities}
 				onCreated={adsRefetch}
 				boostMode
 			/>
@@ -1159,12 +1204,16 @@ export function AdsPage({
 				open={createCampaignOpen}
 				onOpenChange={setCreateCampaignOpen}
 				adAccounts={adAccounts}
+				platformCapabilities={adPlatformCapabilities}
 				onCreated={campaignsRefetch}
 			/>
 			<CreateAudienceDialog
 				open={createAudienceOpen}
 				onOpenChange={setCreateAudienceOpen}
 				existingAudiences={audiences.map((a) => ({ id: a.id, name: a.name }))}
+				adAccounts={audienceDialogAccounts}
+				platformCapabilities={adPlatformCapabilities}
+				initialAdAccountId={selectedAdAccountId || undefined}
 				onCreated={audiencesRefetch}
 			/>
 
@@ -1174,28 +1223,6 @@ export function AdsPage({
 				onOpenChange={setUploadUsersOpen}
 				audienceId={uploadAudienceId}
 				onUploaded={audiencesRefetch}
-			/>
-
-			{/* Discover Ad Accounts Dialog */}
-			<DiscoverAdAccountsDialog
-				open={discoverOpen}
-				onOpenChange={(o) => {
-					if (!o && !discovering) {
-						setDiscoverOpen(false);
-						setDiscoverSocialId(null);
-						setDiscoverError(null);
-					}
-				}}
-				selectedId={discoverSocialId}
-				onSelect={(id) => {
-					setDiscoverSocialId(id);
-					setDiscoverError(null);
-				}}
-				onDiscover={() =>
-					discoverSocialId && handleDiscoverAccounts(discoverSocialId)
-				}
-				discovering={discovering}
-				error={discoverError}
 			/>
 
 			{/* Analytics Sheet */}
@@ -1308,155 +1335,6 @@ function UploadUsersDialog({
 							<Upload className="size-4" />
 						)}
 						{loading ? "Uploading..." : "Upload"}
-					</Button>
-				</div>
-			</DialogContent>
-		</Dialog>
-	);
-}
-
-// --- Discover Ad Accounts Dialog ---
-
-const AD_PLATFORMS = [
-	"facebook",
-	"instagram",
-	"twitter",
-	"tiktok",
-	"linkedin",
-	"pinterest",
-];
-
-function DiscoverAdAccountsDialog({
-	open,
-	onOpenChange,
-	selectedId,
-	onSelect,
-	onDiscover,
-	discovering,
-	error,
-}: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	selectedId: string | null;
-	onSelect: (id: string | null) => void;
-	onDiscover: () => void;
-	discovering: boolean;
-	error: string | null;
-}) {
-	const [accounts, setAccounts] = useState<AccountOption[]>([]);
-	const [loading, setLoading] = useState(false);
-
-	useEffect(() => {
-		if (!open) return;
-		setLoading(true);
-		const url = new URL("/api/accounts", window.location.origin);
-		url.searchParams.set("platforms", AD_PLATFORMS.join(","));
-		url.searchParams.set("limit", "50");
-		fetch(url.toString())
-			.then((r) => (r.ok ? r.json() : null))
-			.then((json) => {
-				if (json?.data) setAccounts(json.data);
-			})
-			.catch(() => {})
-			.finally(() => setLoading(false));
-	}, [open]);
-
-	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-sm">
-				<DialogHeader>
-					<DialogTitle>Discover Ad Accounts</DialogTitle>
-					<DialogDescription>
-						Select a connected social account to discover its ad accounts.
-					</DialogDescription>
-				</DialogHeader>
-				<div className="space-y-3">
-					{loading ? (
-						<div className="flex items-center justify-center py-6">
-							<Loader2 className="size-5 animate-spin text-muted-foreground" />
-						</div>
-					) : accounts.length === 0 ? (
-						<p className="text-sm text-muted-foreground text-center py-6">
-							No social accounts with ads support found
-						</p>
-					) : (
-						<div className="max-h-56 overflow-y-auto rounded-md border border-border divide-y divide-border">
-							{accounts.map((acc) => (
-								<button
-									key={acc.id}
-									type="button"
-									onClick={() =>
-										onSelect(selectedId === acc.id ? null : acc.id)
-									}
-									className={cn(
-										"w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
-										selectedId === acc.id ? "bg-accent" : "hover:bg-accent/50",
-									)}
-								>
-									{acc.avatar_url ? (
-										<img
-											src={acc.avatar_url}
-											alt=""
-											className="size-7 rounded-full object-cover shrink-0"
-										/>
-									) : (
-										<div
-											className={cn(
-												"flex size-7 items-center justify-center rounded-full text-[10px] font-bold text-white shrink-0",
-												platformConfig[acc.platform]?.classes
-													?.replace(/text-\S+/, "")
-													.trim() || "bg-neutral-700",
-											)}
-										>
-											{acc.platform.slice(0, 2).toUpperCase()}
-										</div>
-									)}
-									<div className="flex-1 min-w-0">
-										<div className="text-sm font-medium truncate">
-											{acc.display_name || acc.username || "Account"}
-										</div>
-										<div className="text-[11px] text-muted-foreground capitalize">
-											{acc.platform}
-										</div>
-									</div>
-									{selectedId === acc.id && (
-										<div className="size-5 rounded-full bg-primary flex items-center justify-center shrink-0">
-											<svg
-												aria-hidden="true"
-												className="size-3 text-primary-foreground"
-												fill="none"
-												viewBox="0 0 24 24"
-												stroke="currentColor"
-												strokeWidth={3}
-											>
-												<path
-													strokeLinecap="round"
-													strokeLinejoin="round"
-													d="M5 13l4 4L19 7"
-												/>
-											</svg>
-										</div>
-									)}
-								</button>
-							))}
-						</div>
-					)}
-					{error && (
-						<div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
-							{error}
-						</div>
-					)}
-					<Button
-						onClick={onDiscover}
-						disabled={!selectedId || discovering}
-						className="w-full gap-1.5"
-					>
-						{discovering ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Search className="size-4" />
-						)}
-						{discovering ? "Discovering..." : "Discover"}
 					</Button>
 				</div>
 			</DialogContent>

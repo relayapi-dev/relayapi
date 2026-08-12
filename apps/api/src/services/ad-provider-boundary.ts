@@ -1,11 +1,21 @@
 import { getBillingPolicy } from "@relayapi/config";
-import { adAccounts, type Database, eq, socialAccounts } from "@relayapi/db";
+import {
+	adAccounts,
+	adConnections,
+	type Database,
+	eq,
+	socialAccounts,
+} from "@relayapi/db";
 import { and } from "drizzle-orm";
 import { isSelfHosted } from "../lib/deployment-mode";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import { getAdPlatformAdapter } from "./ad-platforms";
-import type { AdPlatform, AdPlatformAdapter } from "./ad-platforms/types";
+import type {
+	AdPlatform,
+	AdPlatformAdapter,
+	AdProviderCredentials,
+} from "./ad-platforms/types";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 import { lockOrganizationSubscription } from "./subscription-authority";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -13,6 +23,7 @@ type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 export interface AdProviderBoundaryContext {
 	adapter: AdPlatformAdapter;
 	accessToken: string;
+	credentials: AdProviderCredentials;
 	platform: AdPlatform;
 	platformAdAccountId: string;
 }
@@ -49,11 +60,14 @@ export async function lockAdProviderBoundary(
 		);
 	}
 
-	// Discover without a lock so the revocation-safe lock order remains social
-	// account first, ad account second. The locked ad row below rechecks this
-	// exact relationship and fails closed if it changed in between.
+	// Discover without a lock so the revocation-safe lock order remains provider
+	// credential first, ad account second. The locked ad row rechecks the exact
+	// relationship and fails closed if it changed in between.
 	const [discovered] = await tx
-		.select({ socialAccountId: adAccounts.socialAccountId })
+		.select({
+			socialAccountId: adAccounts.socialAccountId,
+			adConnectionId: adAccounts.adConnectionId,
+		})
 		.from(adAccounts)
 		.where(
 			and(
@@ -69,37 +83,63 @@ export async function lockAdProviderBoundary(
 		};
 	}
 
-	const [socialAccount] = await tx
-		.select()
-		.from(socialAccounts)
-		.where(
-			and(
-				eq(socialAccounts.id, discovered.socialAccountId),
-				eq(socialAccounts.organizationId, input.organizationId),
-			),
-		)
-		.for("share")
-		.limit(1);
-	const [adAccount] = await tx
-		.select()
-		.from(adAccounts)
-		.where(
-			and(
-				eq(adAccounts.id, input.adAccountId),
-				eq(adAccounts.organizationId, input.organizationId),
-				eq(adAccounts.socialAccountId, discovered.socialAccountId),
-			),
-		)
-		.for("share")
-		.limit(1);
+	const [adConnection] = discovered.adConnectionId
+		? await tx
+				.select()
+				.from(adConnections)
+				.where(
+					and(
+						eq(adConnections.id, discovered.adConnectionId),
+						eq(adConnections.organizationId, input.organizationId),
+					),
+				)
+				.for("share")
+				.limit(1)
+		: [];
+	const [socialAccount] = discovered.socialAccountId
+		? await tx
+				.select()
+				.from(socialAccounts)
+				.where(
+					and(
+						eq(socialAccounts.id, discovered.socialAccountId),
+						eq(socialAccounts.organizationId, input.organizationId),
+					),
+				)
+				.for("share")
+				.limit(1)
+		: [];
+	const accountAuthorityCondition = discovered.adConnectionId
+		? eq(adAccounts.adConnectionId, discovered.adConnectionId)
+		: discovered.socialAccountId
+			? eq(adAccounts.socialAccountId, discovered.socialAccountId)
+			: undefined;
+	const [adAccount] = accountAuthorityCondition
+		? await tx
+				.select()
+				.from(adAccounts)
+				.where(
+					and(
+						eq(adAccounts.id, input.adAccountId),
+						eq(adAccounts.organizationId, input.organizationId),
+						accountAuthorityCondition,
+					),
+				)
+				.for("share")
+				.limit(1)
+		: [];
 
 	if (
-		!socialAccount ||
 		!adAccount ||
-		socialAccount.lifecycleStatus !== "active" ||
+		(!adConnection && !socialAccount) ||
+		(adConnection
+			? adConnection.status !== "active" ||
+				adConnection.workspaceId !== input.workspaceId ||
+				adConnection.platform !== input.platform
+			: socialAccount?.lifecycleStatus !== "active" ||
+				socialAccount.workspaceId !== input.workspaceId) ||
 		adAccount.status !== "active" ||
 		adAccount.workspaceId !== input.workspaceId ||
-		socialAccount.workspaceId !== input.workspaceId ||
 		adAccount.platform !== input.platform
 	) {
 		return {
@@ -136,8 +176,14 @@ export async function lockAdProviderBoundary(
 		};
 	}
 	try {
-		const accessToken = await resolveAdsAccessToken(socialAccount, env);
-		if (!accessToken) {
+		const credentials = await resolveAdProviderCredentials({
+			platform: adAccount.platform,
+			providerAdAccountId: adAccount.platformAdAccountId,
+			adConnection,
+			legacySocialAccount: socialAccount,
+			env,
+		});
+		if (!credentials.accessToken) {
 			return {
 				ok: false,
 				message: "The exact provider credential is no longer available",
@@ -147,7 +193,8 @@ export async function lockAdProviderBoundary(
 			ok: true,
 			context: {
 				adapter,
-				accessToken,
+				accessToken: credentials.accessToken,
+				credentials,
 				platform: adAccount.platform,
 				platformAdAccountId: adAccount.platformAdAccountId,
 			},

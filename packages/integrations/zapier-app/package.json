@@ -1,7 +1,7 @@
 {
   "name": "zapier-relayapi",
   "version": "0.1.0",
-  "description": "RelayAPI integration for Zapier — post to 21 platforms",
+  "description": "RelayAPI integration for Zapier — post to 22 platforms",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -10,10 +10,10 @@
     "zapier:validate": "zapier-platform validate"
   },
   "dependencies": {
-    "zapier-platform-core": "19.0.0"
+    "zapier-platform-core": "19.1.0"
   },
   "devDependencies": {
-    "zapier-platform-cli": "19.0.0",
+    "zapier-platform-cli": "19.1.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },

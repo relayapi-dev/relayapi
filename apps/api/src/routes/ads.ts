@@ -3,14 +3,22 @@
 // ---------------------------------------------------------------------------
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { adAccounts, adAudiences, adCampaigns, ads, eq } from "@relayapi/db";
+import {
+	adAccounts,
+	adAudiences,
+	adCampaigns,
+	adConnections,
+	ads,
+	eq,
+	socialAccounts,
+} from "@relayapi/db";
 import { and, desc, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { decryptAccountToken } from "../lib/account-token-crypto";
 import { durableCredentialAuthorityAdmission } from "../lib/durable-credential-authority";
 import { trackAuthoritativeAmbiguousMutation } from "../lib/mutation-effect";
+import { resolveOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
@@ -23,9 +31,12 @@ import {
 	AdAccountResponse,
 	AdAnalyticsParams,
 	AdAnalyticsResponse,
+	AdConnectionMutationResponse,
+	AdConnectionResponse,
 	AddAudienceUsersBody,
 	AdListParams,
 	AdListResponse,
+	AdPlatformCapabilitiesResponse,
 	AdResponse,
 	AudienceListParams,
 	AudienceListResponse,
@@ -35,10 +46,14 @@ import {
 	CampaignListResponse,
 	CampaignResponse,
 	CreateAdBody,
+	CreateAdConnectionBody,
 	CreateAudienceBody,
 	CreateCampaignBody,
+	DiscoverAdAccountsBody,
 	InterestResponse,
 	ListAdAccountsParams,
+	ListAdConnectionsParams,
+	RotateAdConnectionCredentialsBody,
 	SearchInterestsParams,
 	SyncQueuedResponse,
 	UpdateAdBody,
@@ -47,11 +62,22 @@ import {
 import { ErrorResponse, IdParam } from "../schemas/common";
 import * as adAnalytics from "../services/ad-analytics";
 import * as adAudienceService from "../services/ad-audience";
-import { getAdPlatformAdapter } from "../services/ad-platforms";
+import {
+	createValidatedAdConnection,
+	discoverAdAccountsForConnection,
+	revokeAdConnection,
+	rotateValidatedAdConnection,
+} from "../services/ad-connection-service";
+import {
+	getAdPlatformAdapter,
+	getAdPlatformAdapters,
+} from "../services/ad-platforms";
 import {
 	AdAuthoritativeNotAppliedError,
 	AdPlatformError,
 } from "../services/ad-platforms/types";
+import { requireAdCapability } from "../services/ad-platforms/unsupported";
+import { resolveAdProviderCredentials } from "../services/ad-provider-credentials";
 import * as adService from "../services/ad-service";
 import { toServiceAdTargeting } from "../services/ad-targeting";
 import type { Env, Variables } from "../types";
@@ -189,6 +215,54 @@ async function authorizeAudience(
 	return markDeniedAdMutation(c, assertWorkspaceScope(c, row.workspaceId));
 }
 
+function serializeAdConnection(connection: typeof adConnections.$inferSelect) {
+	return {
+		id: connection.id,
+		workspace_id: connection.workspaceId,
+		platform: connection.platform,
+		provider_principal_id: connection.providerPrincipalId,
+		display_name: connection.displayName,
+		status: connection.status,
+		credential_version: connection.credentialVersion,
+		scopes: connection.scopes,
+		access_token_expires_at:
+			connection.accessTokenExpiresAt?.toISOString() ?? null,
+		refresh_token_expires_at:
+			connection.refreshTokenExpiresAt?.toISOString() ?? null,
+		last_error: connection.lastError,
+		created_at: connection.createdAt.toISOString(),
+		updated_at: connection.updatedAt.toISOString(),
+	};
+}
+
+async function authorizedAdConnection(
+	c: AppContext,
+	id: string,
+): Promise<typeof adConnections.$inferSelect | Response> {
+	const [connection] = await c
+		.get("db")
+		.select()
+		.from(adConnections)
+		.where(
+			and(
+				eq(adConnections.id, id),
+				eq(adConnections.organizationId, c.get("orgId")),
+			),
+		)
+		.limit(1);
+	if (!connection) {
+		markAdMutationNotApplied(c);
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Ad connection not found" } },
+			404,
+		);
+	}
+	return (
+		markDeniedAdMutation(c, assertWorkspaceScope(c, connection.workspaceId)) ??
+		connection
+	);
+}
+
 async function requireSpendEligiblePlan(
 	c: AppContext,
 ): Promise<Response | undefined> {
@@ -250,30 +324,46 @@ function handleAdError(c: AppContext, err: unknown) {
 		const status =
 			err.code === "NOT_FOUND"
 				? 404
-				: err.code === "PLAN_UPGRADE_REQUIRED" ||
-						err.code === "CREDENTIAL_NO_LONGER_AUTHORIZED"
-					? 403
-					: err.code === "IDEMPOTENCY_KEY_REQUIRED" ||
-							err.code === "IDEMPOTENCY_KEY_REUSED"
-						? 400
-						: err.code === "OPERATION_IN_PROGRESS" ||
-								err.code === "UNKNOWN_EXTERNAL_OUTCOME" ||
-								err.code === "MANUAL_REVIEW_REQUIRED" ||
-								err.code === "AD_MUTATION_IN_PROGRESS" ||
-								err.code === "AD_MUTATION_UNKNOWN" ||
-								err.code === "AD_MUTATION_MANUAL_REVIEW" ||
-								err.code === "AUTHORITY_REVOKED_PENDING"
-							? 409
-							: err.code === "INVALID_STATE" ||
-									err.code === "INVALID_BUDGET" ||
-									err.code === "CURRENCY_MISMATCH"
-								? 400
-								: err.code === "UNSUPPORTED_PLATFORM" ||
-										err.code === "UNSUPPORTED_FEATURE" ||
-										err.code === "UNSUPPORTED_TARGETING" ||
-										err.code === "UNSUPPORTED_CURRENCY"
-									? 422
-									: 500;
+				: err.code === "AD_CONNECTION_ALREADY_EXISTS" ||
+						err.code === "AD_ACCOUNT_ALREADY_CONNECTED"
+					? 409
+					: err.code === "PLAN_UPGRADE_REQUIRED" ||
+							err.code === "CREDENTIAL_NO_LONGER_AUTHORIZED" ||
+							err.code === "ADS_CONNECTION_REVOKED" ||
+							err.code === "ADS_CONNECTION_AUTH_FAILED"
+						? 403
+						: err.code === "IDEMPOTENCY_KEY_REQUIRED" ||
+								err.code === "IDEMPOTENCY_KEY_REUSED"
+							? 400
+							: err.code === "OPERATION_IN_PROGRESS" ||
+									err.code === "UNKNOWN_EXTERNAL_OUTCOME" ||
+									err.code === "MANUAL_REVIEW_REQUIRED" ||
+									err.code === "AD_MUTATION_IN_PROGRESS" ||
+									err.code === "AD_MUTATION_UNKNOWN" ||
+									err.code === "AD_MUTATION_MANUAL_REVIEW" ||
+									err.code === "AUTHORITY_REVOKED_PENDING"
+								? 409
+								: err.code === "PROVIDER_RATE_LIMITED"
+									? 429
+									: err.code === "PROVIDER_TEMPORARILY_UNAVAILABLE"
+										? 503
+										: err.code === "INVALID_STATE" ||
+												err.code === "INVALID_BUDGET" ||
+												err.code === "CURRENCY_MISMATCH"
+											? 400
+											: err.code === "UNSUPPORTED_PLATFORM" ||
+													err.code === "UNSUPPORTED_FEATURE" ||
+													err.code === "UNSUPPORTED_TARGETING" ||
+													err.code === "UNSUPPORTED_CURRENCY" ||
+													err.code === "ADS_ACCESS_REVIEW_REQUIRED" ||
+													err.code === "ADS_SCOPE_MISSING" ||
+													err.code === "ADS_PROVIDER_NOT_CONFIGURED" ||
+													err.code === "ADS_CONNECTION_REQUIRED" ||
+													err.code === "ADS_CONNECTION_EXPIRED" ||
+													err.code === "ADS_CONNECTION_SETUP_INCOMPLETE" ||
+													err.code === "ADS_NO_ACCESSIBLE_ACCOUNTS"
+												? 422
+												: 500;
 		return c.json(
 			{ error: { code: err.code, message: err.message } },
 			status as ContentfulStatusCode,
@@ -349,12 +439,335 @@ function decodeCursor(
 // AD ACCOUNTS
 // =========================================================================
 
+const listAdPlatforms = createRoute({
+	operationId: "listAdPlatforms",
+	method: "get",
+	path: "/platforms",
+	tags: ["Ads"],
+	summary: "List truthful ad platform capabilities",
+	security: [{ Bearer: [] }],
+	responses: {
+		200: {
+			description:
+				"Static implementation capabilities and provider requirements",
+			content: {
+				"application/json": {
+					schema: z.object({ data: z.array(AdPlatformCapabilitiesResponse) }),
+				},
+			},
+		},
+	},
+});
+
+app.openapi(listAdPlatforms, (c) =>
+	c.json({
+		data: getAdPlatformAdapters().map((adapter) => ({
+			platform: adapter.platform,
+			api_version: adapter.capabilities.apiVersion,
+			auth_protocol: adapter.capabilities.authProtocol,
+			requires_dedicated_connection:
+				adapter.capabilities.requiresDedicatedConnection,
+			required_scopes: adapter.capabilities.requiredScopes,
+			operations: adapter.capabilities.operations,
+			objectives: adapter.capabilities.objectives,
+			formats: adapter.capabilities.formats,
+			official_docs: adapter.capabilities.officialDocs,
+		})),
+	}),
+);
+
+const listAdConnections = createRoute({
+	operationId: "listAdConnections",
+	method: "get",
+	path: "/connections",
+	tags: ["Ads"],
+	summary: "List dedicated advertising connections",
+	security: [{ Bearer: [] }],
+	request: { query: ListAdConnectionsParams },
+	responses: {
+		200: {
+			description:
+				"Advertising connections; credential material is never returned",
+			content: {
+				"application/json": {
+					schema: z.object({ data: z.array(AdConnectionResponse) }),
+				},
+			},
+		},
+	},
+});
+
+app.openapi(listAdConnections, async (c) => {
+	const { platform, workspace_id, status } = c.req.valid("query");
+	const conditions = [eq(adConnections.organizationId, c.get("orgId"))];
+	applyWorkspaceScope(c, conditions, adConnections.workspaceId);
+	if (platform) conditions.push(eq(adConnections.platform, platform));
+	if (workspace_id)
+		conditions.push(eq(adConnections.workspaceId, workspace_id));
+	if (status) conditions.push(eq(adConnections.status, status));
+	const connections = await c
+		.get("db")
+		.select()
+		.from(adConnections)
+		.where(and(...conditions))
+		.orderBy(desc(adConnections.createdAt));
+	return c.json({
+		data: connections.map(serializeAdConnection),
+	});
+});
+
+const createAdConnection = createRoute({
+	operationId: "createAdConnection",
+	method: "post",
+	path: "/connections",
+	tags: ["Ads"],
+	summary: "Validate and store a dedicated advertising credential",
+	description:
+		"Manual credential bootstrap for approved provider apps. RelayAPI performs read-only account discovery before encrypting or persisting the credential and never returns secret material.",
+	security: [{ Bearer: [] }],
+	request: {
+		body: {
+			content: { "application/json": { schema: CreateAdConnectionBody } },
+		},
+	},
+	responses: {
+		201: {
+			description: "Validated connection and projected provider ad accounts",
+			content: {
+				"application/json": { schema: AdConnectionMutationResponse },
+			},
+		},
+		400: {
+			description: "Invalid scope, workspace, or expiry",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Credential or workspace is not authorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "The connection already exists",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		422: {
+			description: "Provider setup, approval, or accessible account is missing",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(createAdConnection, async (c) => {
+	const body = c.req.valid("json");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		body.workspace_id,
+		"ad connection",
+	);
+	if (!scope.ok) {
+		markAdMutationNotApplied(c);
+		return scope.response as never;
+	}
+	try {
+		const result = await createValidatedAdConnection(
+			c.env,
+			{
+				organizationId: c.get("orgId"),
+				workspaceId: scope.workspaceId,
+				platform: body.platform,
+				providerPrincipalId: body.provider_principal_id,
+				displayName: body.display_name,
+				accessToken: body.access_token,
+				refreshToken: body.refresh_token,
+				tokenSecret: body.token_secret,
+				accessTokenExpiresAt: body.access_token_expires_at
+					? new Date(body.access_token_expires_at)
+					: undefined,
+				refreshTokenExpiresAt: body.refresh_token_expires_at
+					? new Date(body.refresh_token_expires_at)
+					: undefined,
+				scopes: body.scopes,
+				metadata: body.metadata,
+			},
+			c.get("db"),
+		);
+		return c.json(
+			{
+				connection: serializeAdConnection(result.connection),
+				validated_ad_accounts: result.accounts.length,
+			},
+			201,
+		);
+	} catch (error) {
+		return handleAdError(c, error);
+	}
+});
+
+const rotateAdConnectionCredentials = createRoute({
+	operationId: "rotateAdConnectionCredentials",
+	method: "put",
+	path: "/connections/{id}/credentials",
+	tags: ["Ads"],
+	summary: "Validate and rotate an advertising credential",
+	security: [{ Bearer: [] }],
+	request: {
+		params: IdParam,
+		body: {
+			content: {
+				"application/json": { schema: RotateAdConnectionCredentialsBody },
+			},
+		},
+	},
+	responses: {
+		200: {
+			description:
+				"Rotated connection and refreshed provider account projection",
+			content: {
+				"application/json": { schema: AdConnectionMutationResponse },
+			},
+		},
+		400: {
+			description: "Invalid expiry",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Credential, connection, or workspace is not authorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Concurrent rotation is in progress",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		422: {
+			description: "Provider setup, approval, or credential validation failed",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(rotateAdConnectionCredentials, async (c) => {
+	const connection = await authorizedAdConnection(c, c.req.valid("param").id);
+	if (connection instanceof Response) return connection as never;
+	const body = c.req.valid("json");
+	try {
+		const result = await rotateValidatedAdConnection(
+			c.env,
+			connection,
+			{
+				accessToken: body.access_token,
+				refreshToken: body.refresh_token,
+				tokenSecret: body.token_secret,
+				accessTokenExpiresAt: body.access_token_expires_at
+					? new Date(body.access_token_expires_at)
+					: undefined,
+				refreshTokenExpiresAt: body.refresh_token_expires_at
+					? new Date(body.refresh_token_expires_at)
+					: undefined,
+				scopes: body.scopes,
+				metadata: body.metadata,
+			},
+			c.get("db"),
+		);
+		return c.json(
+			{
+				connection: serializeAdConnection(result.connection),
+				validated_ad_accounts: result.accounts.length,
+			},
+			200,
+		);
+	} catch (error) {
+		return handleAdError(c, error);
+	}
+});
+
+const revokeConnection = createRoute({
+	operationId: "revokeAdConnection",
+	method: "delete",
+	path: "/connections/{id}",
+	tags: ["Ads"],
+	summary: "Revoke and shred an advertising credential",
+	security: [{ Bearer: [] }],
+	request: { params: IdParam },
+	responses: {
+		200: {
+			description: "Revoked connection; secret fields have been cleared",
+			content: { "application/json": { schema: AdConnectionResponse } },
+		},
+		403: {
+			description: "Workspace is not authorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Connection not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(revokeConnection, async (c) => {
+	const connection = await authorizedAdConnection(c, c.req.valid("param").id);
+	if (connection instanceof Response) return connection as never;
+	try {
+		const revoked = await revokeAdConnection(
+			c.get("orgId"),
+			connection.id,
+			c.get("db"),
+		);
+		return c.json(serializeAdConnection(revoked), 200);
+	} catch (error) {
+		return handleAdError(c, error);
+	}
+});
+
+const discoverConnectionAccounts = createRoute({
+	operationId: "discoverAdAccounts",
+	method: "post",
+	path: "/accounts/discover",
+	tags: ["Ads"],
+	summary: "Discover provider ad accounts through a dedicated ad connection",
+	security: [{ Bearer: [] }],
+	request: {
+		body: {
+			content: { "application/json": { schema: DiscoverAdAccountsBody } },
+		},
+	},
+	responses: {
+		200: {
+			description: "Provider accounts discovered and projected locally",
+			content: {
+				"application/json": {
+					schema: z.object({ discovered: z.number().int().nonnegative() }),
+				},
+			},
+		},
+		422: {
+			description:
+				"Connection, scope, approval, or provider setup is incomplete",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(discoverConnectionAccounts, async (c) => {
+	try {
+		const discovered = await discoverAdAccountsForConnection(
+			c.env,
+			c.get("orgId"),
+			c.req.valid("json").ad_connection_id,
+			c.get("workspaceScope"),
+			c.get("db"),
+		);
+		return c.json({ discovered: discovered.length }, 200);
+	} catch (error) {
+		return handleAdError(c, error);
+	}
+});
+
 const listAdAccounts = createRoute({
 	operationId: "listAdAccounts",
 	method: "get",
 	path: "/accounts",
 	tags: ["Ads"],
-	summary: "List ad accounts for a social account",
+	summary: "List dedicated provider ad accounts",
 	security: [{ Bearer: [] }],
 	request: { query: ListAdAccountsParams },
 	responses: {
@@ -421,16 +834,11 @@ app.openapi(listAdAccounts, async (c) => {
 		const db = c.get("db");
 		const conditions = [eq(adAccounts.organizationId, orgId)];
 		applyWorkspaceScope(c, conditions, adAccounts.workspaceId);
-		// Only surface ad accounts that can promote at least one connected
-		// Page/IG. Filtering by a specific social account checks membership in
-		// the boostable set (an ad account may promote several connected pages).
+		// Filtering by a social account remains a Meta boost-identity compatibility
+		// path. Unfiltered listings include every dedicated ad connection.
 		if (social_account_id) {
 			conditions.push(
 				sql`${adAccounts.metadata}->'boostable_social_account_ids' @> ${JSON.stringify(social_account_id)}::jsonb`,
-			);
-		} else {
-			conditions.push(
-				sql`jsonb_array_length(coalesce(${adAccounts.metadata}->'boostable_social_account_ids', '[]'::jsonb)) > 0`,
 			);
 		}
 		if (workspace_id) {
@@ -461,6 +869,7 @@ app.openapi(listAdAccounts, async (c) => {
 					const md = (a.metadata ?? {}) as Record<string, unknown>;
 					return {
 						id: a.id,
+						ad_connection_id: a.adConnectionId,
 						social_account_id: a.socialAccountId,
 						platform: a.platform,
 						platform_ad_account_id: a.platformAdAccountId,
@@ -468,6 +877,16 @@ app.openapi(listAdAccounts, async (c) => {
 						currency: a.currency,
 						timezone: a.timezone,
 						status: a.status,
+						capabilities:
+							(a.capabilities as Record<
+								string,
+								{
+									state: "supported" | "requires_approval" | "unsupported";
+									reason?: string;
+								}
+							> | null) ??
+							getAdPlatformAdapter(a.platform)?.capabilities.operations ??
+							{},
 						boostable_social_account_ids: Array.isArray(
 							md.boostable_social_account_ids,
 						)
@@ -548,6 +967,7 @@ app.openapi(createCampaignRoute, async (c) => {
 				startDate: body.start_date,
 				endDate: body.end_date,
 				specialAdCategories: body.special_ad_categories,
+				providerOptions: body.provider_options,
 				operationKey,
 			},
 			c.get("db"),
@@ -911,6 +1331,9 @@ app.openapi(createAdRoute, async (c) => {
 			body.duration_days,
 			body.start_date,
 			body.end_date,
+			body.provider_options && "campaign" in body.provider_options
+				? body.provider_options.campaign
+				: undefined,
 		].some((value) => value !== undefined);
 		if (ignoredSharedAdSetFields) {
 			// The current provider model reuses the campaign's shared ad set. Do not
@@ -953,6 +1376,7 @@ app.openapi(createAdRoute, async (c) => {
 				durationDays: body.duration_days,
 				startDate: body.start_date,
 				endDate: body.end_date,
+				providerOptions: body.provider_options,
 				operationKey,
 			},
 			c.get("db"),
@@ -1029,6 +1453,7 @@ app.openapi(boostPostRoute, async (c) => {
 						}
 					: undefined,
 				specialAdCategories: body.special_ad_categories,
+				providerOptions: body.provider_options,
 				operationKey,
 			},
 			c.get("db"),
@@ -1210,58 +1635,76 @@ const searchInterests = createRoute({
 
 app.openapi(searchInterests, async (c) => {
 	const orgId = c.get("orgId");
-	const { q, social_account_id } = c.req.valid("query");
+	const { q, ad_account_id, social_account_id } = c.req.valid("query");
 	const db = c.get("db");
 
-	// Find the right adapter from any ad account linked to this social account
-	const adAccountRows = await db
+	const [adAccount] = await db
 		.select()
 		.from(adAccounts)
 		.where(
 			and(
-				eq(adAccounts.socialAccountId, social_account_id),
+				ad_account_id
+					? eq(adAccounts.id, ad_account_id)
+					: eq(adAccounts.socialAccountId, social_account_id ?? ""),
 				eq(adAccounts.organizationId, orgId),
+				eq(adAccounts.status, "active"),
 			),
 		)
 		.limit(1);
-
-	const firstAdAccount = adAccountRows[0];
-	if (!firstAdAccount) {
-		return c.json({ data: [] as z.infer<typeof InterestResponse>[] });
+	if (!adAccount) {
+		return handleAdError(
+			c,
+			new AdPlatformError("NOT_FOUND", "Ad account not found"),
+		);
 	}
-
-	const adapter = getAdPlatformAdapter(firstAdAccount.platform);
-	if (!adapter)
-		return c.json({ data: [] as z.infer<typeof InterestResponse>[] });
-
-	// Get access token from the linked social account
-	const { socialAccounts: saTable } = await import("@relayapi/db");
-	const [sa] = await db
-		.select({
-			id: saTable.id,
-			accessToken: saTable.accessToken,
-			workspaceId: saTable.workspaceId,
-		})
-		.from(saTable)
-		.where(
-			and(eq(saTable.id, social_account_id), eq(saTable.organizationId, orgId)),
-		)
-		.limit(1);
-
-	if (!sa) return c.json({ data: [] as z.infer<typeof InterestResponse>[] });
-
-	const denied = assertWorkspaceScope(c, sa.workspaceId);
+	const denied = assertWorkspaceScope(c, adAccount.workspaceId);
 	if (denied) return denied as never;
 
-	const accessToken = await decryptAccountToken(
-		sa.accessToken,
-		c.env.ENCRYPTION_KEY,
-		sa.id,
-		"access_token",
-	);
-
 	try {
-		const interests = await adapter.searchInterests(accessToken ?? "", q);
+		const adapter = getAdPlatformAdapter(adAccount.platform);
+		if (!adapter) {
+			throw new AdPlatformError(
+				"UNSUPPORTED_PLATFORM",
+				`No adapter for ${adAccount.platform}`,
+			);
+		}
+		requireAdCapability(adapter, "targeting_search");
+		const [connection] = adAccount.adConnectionId
+			? await db
+					.select()
+					.from(adConnections)
+					.where(
+						and(
+							eq(adConnections.id, adAccount.adConnectionId),
+							eq(adConnections.organizationId, orgId),
+						),
+					)
+					.limit(1)
+			: [];
+		const [socialAccount] = adAccount.socialAccountId
+			? await db
+					.select()
+					.from(socialAccounts)
+					.where(
+						and(
+							eq(socialAccounts.id, adAccount.socialAccountId),
+							eq(socialAccounts.organizationId, orgId),
+						),
+					)
+					.limit(1)
+			: [];
+		const credentials = await resolveAdProviderCredentials({
+			platform: adAccount.platform,
+			providerAdAccountId: adAccount.platformAdAccountId,
+			adConnection: connection,
+			legacySocialAccount: socialAccount,
+			env: c.env,
+		});
+		const interests = await adapter.searchInterests(
+			credentials.accessToken,
+			q,
+			credentials,
+		);
 		return c.json({
 			data: interests.map((i) => ({
 				id: i.id,

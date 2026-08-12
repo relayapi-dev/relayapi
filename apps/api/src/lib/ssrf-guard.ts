@@ -1,6 +1,7 @@
 import { fetchWithTimeout } from "./fetch-timeout";
 
 const DNS_LOOKUP_TIMEOUT_MS = 2_500;
+const DNS_RESPONSE_MAX_BYTES = 64 * 1024;
 const DOH_ENDPOINTS = [
 	"https://dns.google/resolve",
 	"https://cloudflare-dns.com/dns-query",
@@ -287,6 +288,44 @@ interface DnsResponse {
 	Answer?: DnsAnswer[];
 }
 
+async function readDnsResponse(response: Response): Promise<DnsResponse> {
+	const declared = response.headers.get("content-length")?.trim();
+	if (declared && /^\d+$/.test(declared)) {
+		const declaredBytes = Number(declared);
+		if (
+			!Number.isSafeInteger(declaredBytes) ||
+			declaredBytes > DNS_RESPONSE_MAX_BYTES
+		) {
+			await response.body?.cancel().catch(() => {});
+			throw new Error("DNS lookup response exceeded the byte limit");
+		}
+	}
+
+	const reader = response.body?.getReader();
+	if (!reader) return {};
+	const decoder = new TextDecoder();
+	let total = 0;
+	let text = "";
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			total += value.byteLength;
+			if (total > DNS_RESPONSE_MAX_BYTES) {
+				await reader
+					.cancel("DNS response exceeded the byte limit")
+					.catch(() => {});
+				throw new Error("DNS lookup response exceeded the byte limit");
+			}
+			text += decoder.decode(value, { stream: true });
+		}
+		text += decoder.decode();
+	} finally {
+		reader.releaseLock();
+	}
+	return JSON.parse(text) as DnsResponse;
+}
+
 async function lookupDnsRecords(
 	endpoint: string,
 	hostname: string,
@@ -307,7 +346,7 @@ async function lookupDnsRecords(
 		throw new Error(`DNS lookup failed with status ${response.status}`);
 	}
 
-	const payload = (await response.json()) as DnsResponse;
+	const payload = await readDnsResponse(response);
 	if (payload.Status !== undefined && payload.Status !== 0) {
 		throw new Error(`DNS lookup returned status ${payload.Status}`);
 	}

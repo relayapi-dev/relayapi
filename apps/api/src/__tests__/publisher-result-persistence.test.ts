@@ -2,11 +2,87 @@ import { describe, expect, it } from "bun:test";
 import { postTargets } from "@relayapi/db";
 import {
 	createPublishResultPersistenceGate,
+	mergeRecordedEffectsIntoResult,
 	PUBLISH_RESULT_PERSIST_CONCURRENCY,
+	persistPublishTaskEffect,
 	persistPublishTaskResult,
 	providerReconcileAt,
 	settleAndPersistPublishTask,
 } from "../services/publisher-runner";
+
+function effectPersistenceDb(options: {
+	targetLocked?: boolean;
+	targetSaved?: boolean;
+	attemptSaved?: boolean;
+	existingEffects?: Array<{
+		name: string;
+		status: "succeeded";
+		provider_id: string;
+	}>;
+}) {
+	const events: string[] = [];
+	const wheres: Record<string, unknown> = {};
+	const sets: Record<string, Record<string, unknown>> = {};
+	const selectChain = {
+		from() {
+			return selectChain;
+		},
+		where(condition: unknown) {
+			wheres.lock = condition;
+			return selectChain;
+		},
+		for() {
+			return selectChain;
+		},
+		async limit() {
+			events.push("lock");
+			return options.targetLocked === false
+				? []
+				: [{ providerEffects: options.existingEffects ?? null }];
+		},
+	};
+	const tx = {
+		select() {
+			return selectChain;
+		},
+		update(table: unknown) {
+			const kind = table === postTargets ? "target" : "attempt";
+			const chain = {
+				set(values: Record<string, unknown>) {
+					sets[kind] = values;
+					return chain;
+				},
+				where(condition: unknown) {
+					wheres[kind] = condition;
+					return chain;
+				},
+				async returning() {
+					events.push(kind);
+					const saved =
+						kind === "target"
+							? options.targetSaved !== false
+							: options.attemptSaved !== false;
+					return saved ? [{ id: `${kind}_1` }] : [];
+				},
+			};
+			return chain;
+		},
+	};
+	const db = {
+		async transaction<T>(work: (transaction: typeof tx) => Promise<T>) {
+			events.push("begin");
+			try {
+				const result = await work(tx);
+				events.push("commit");
+				return result;
+			} catch (error) {
+				events.push("rollback");
+				throw error;
+			}
+		},
+	};
+	return { db, events, wheres, sets };
+}
 
 function sqlReferencesColumn(value: unknown, column: string): boolean {
 	if (!value || typeof value !== "object") return false;
@@ -104,6 +180,148 @@ const successInput = {
 };
 
 describe("publisher result persistence", () => {
+	it("journals an incremental effect under every fence without terminalizing", async () => {
+		const state = effectPersistenceDb({
+			existingEffects: [
+				{
+					name: "thread_item_1",
+					status: "succeeded",
+					provider_id: "provider_1",
+				},
+			],
+		});
+		const effects = await persistPublishTaskEffect(state.db as never, {
+			postId: "post_1",
+			organizationId: "org_1",
+			parentLeaseId: "lease_1",
+			postTargetId: "pt_1",
+			attemptId: "pat_1",
+			publishOperationId: "pubop_1",
+			effect: {
+				name: "thread_item_2",
+				status: "succeeded",
+				provider_id: "provider_2",
+			},
+		});
+
+		expect(effects?.map((effect) => effect.provider_id)).toEqual([
+			"provider_1",
+			"provider_2",
+		]);
+		expect(state.events).toEqual([
+			"begin",
+			"lock",
+			"target",
+			"attempt",
+			"commit",
+		]);
+		expect(state.sets.target).not.toHaveProperty("status");
+		expect(state.sets.target).not.toHaveProperty("deliveryState");
+		expect(state.sets.target).not.toHaveProperty("publishedAt");
+		expect(state.sets.attempt).not.toHaveProperty("state");
+		expect(state.sets.attempt).not.toHaveProperty("completedAt");
+		expect(state.sets.target?.providerEffects).toEqual(effects);
+		expect(state.sets.attempt?.providerEffects).toEqual(effects);
+		for (const condition of Object.values(state.wheres)) {
+			expect(sqlHasParam(condition, "post_1")).toBe(true);
+			expect(sqlHasParam(condition, "org_1")).toBe(true);
+			expect(sqlHasParam(condition, "lease_1")).toBe(true);
+		}
+		for (const column of [
+			"attempt_id",
+			"publish_operation_id",
+			"delivery_state",
+			"request_may_have_been_sent_at",
+			"status",
+		]) {
+			expect(sqlReferencesColumn(state.wheres.target, column)).toBe(true);
+		}
+		for (const column of ["post_target_id", "publish_operation_id", "state"]) {
+			expect(sqlReferencesColumn(state.wheres.attempt, column)).toBe(true);
+		}
+	});
+
+	it("rolls back an effect when the exact attempt fence is lost", async () => {
+		const state = effectPersistenceDb({ attemptSaved: false });
+		await expect(
+			persistPublishTaskEffect(state.db as never, {
+				postId: "post_1",
+				organizationId: "org_1",
+				parentLeaseId: "lease_1",
+				postTargetId: "pt_1",
+				attemptId: "pat_1",
+				publishOperationId: "pubop_1",
+				effect: {
+					name: "campaign_created",
+					status: "succeeded",
+					provider_id: "campaign_1",
+				},
+			}),
+		).rejects.toThrow("Post publish execution lease was lost");
+		expect(state.events.at(-1)).toBe("rollback");
+	});
+
+	it("preserves recorded effects when the publisher's final call fails", () => {
+		const result = mergeRecordedEffectsIntoResult(
+			{
+				success: false,
+				outcome: { disposition: "definitive_rejection" },
+				retry: { disposition: "safe_to_retry" },
+				error: { code: "PLATFORM_ERROR", message: "connection reset" },
+			},
+			[
+				{
+					name: "campaign_created",
+					status: "succeeded",
+					provider_id: "campaign_1",
+				},
+			],
+		);
+		expect(result.provider_outcome).toMatchObject({
+			disposition: "partial",
+			effects: [
+				{
+					name: "campaign_created",
+					status: "succeeded",
+					provider_id: "campaign_1",
+				},
+			],
+		});
+		expect(result.retry).toBeUndefined();
+		expect(result.outcome).toBeUndefined();
+	});
+
+	it("keeps a legacy successful result terminal while attaching its effects", () => {
+		const result = mergeRecordedEffectsIntoResult(
+			{
+				success: true,
+				platform_post_id: "provider-post-1",
+				platform_url: "https://social.example/provider-post-1",
+			},
+			[
+				{
+					name: "post_published",
+					status: "succeeded",
+					provider_id: "provider-post-1",
+				},
+			],
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.provider_outcome).toEqual({
+			disposition: "published",
+			platform_post_id: "provider-post-1",
+			platform_url: "https://social.example/provider-post-1",
+			effects: [
+				{
+					name: "post_published",
+					status: "succeeded",
+					provider_id: "provider-post-1",
+				},
+			],
+		});
+	});
+
 	it("updates target and attempt atomically under attempt and parent fences", async () => {
 		const state = persistenceDb({});
 
@@ -233,6 +451,12 @@ describe("provider reconciliation scheduling", () => {
 			);
 		}
 		expect(providerReconcileAt({ disposition: "failed" }, now)).toBeNull();
+		expect(
+			providerReconcileAt(
+				{ disposition: "failed", provider_state: "draft" },
+				now,
+			),
+		).toBeNull();
 	});
 });
 

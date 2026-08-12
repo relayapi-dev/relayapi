@@ -6,6 +6,7 @@ import {
 import { AwsClient } from "aws4fetch";
 import { and, asc, desc, eq, gt, inArray, or } from "drizzle-orm";
 import { decryptToken } from "../lib/crypto";
+import { readProviderText } from "../lib/provider-response";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import type { Env } from "../types";
 
@@ -535,7 +536,7 @@ export async function probeByosCredential(
 		if (!head.ok) throw new StorageProviderError("probe HEAD", head.status);
 		const get = await client.fetch(url, { method: "GET" });
 		if (!get.ok) throw new StorageProviderError("probe GET", get.status);
-		if ((await get.text()) !== expected) {
+		if ((await readProviderText(get)) !== expected) {
 			throw new StorageConfigurationError(
 				"BYOS probe read did not match the bytes that were written",
 			);
@@ -606,7 +607,7 @@ export async function deleteByosPrefixPage(
 	if (!response.ok) {
 		throw new StorageProviderError("LIST", response.status);
 	}
-	const xml = await response.text();
+	const xml = await readProviderText(response);
 	const keys = [...xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g)].map((match) =>
 		decodeXml(match[1] ?? ""),
 	);

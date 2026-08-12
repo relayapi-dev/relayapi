@@ -581,6 +581,7 @@ app.openapi(listIdeas, async (c) => {
 		orgId,
 		allMediaRows,
 		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
 	);
 
 	return c.json(

@@ -82,6 +82,16 @@ a transaction that rolls back. It also connects with the runtime URL and
 proves that credential cannot create a table in `public`; seeing extension
 names in a provider catalog is not enough.
 
+<Callout type="warn">
+**Current fresh-install release stop:** do not replay the immutable
+`0000_baseline.sql` directly against a virgin PostgreSQL 18 database. Its sealed
+expression-index SQL does not parse on PostgreSQL 18.4. A fresh installation
+must use RelayAPI's protected generation-2 baseline process; if the reviewed
+release bundle cannot provide and verify that process, stop before migration or
+Worker deployment. Existing installations with a valid baseline continue
+through the normal forward-only migration path.
+</Callout>
+
 Create an R2 S3 API token in the Cloudflare dashboard and export its access key
 pair:
 
@@ -133,7 +143,7 @@ This creates:
 
 | File | Purpose |
 | --- | --- |
-| `relayapi.selfhost.json` | Domains, feature flags, immutable resource intent (including the Hyperdrive CA certificate ID), and provisioned resource IDs |
+| `relayapi.selfhost.json` | Domains, feature flags, immutable resource intent (including the Hyperdrive CA certificate ID), optional TikTok verified URL prefixes, and provisioned resource IDs |
 | `relayapi.lock.json` | Exact stable RelayAPI version and source repository |
 | `.github/workflows/deploy-relayapi.yml` | Migration-first production deployment |
 | `.github/workflows/update-relayapi.yml` | Daily stable-release update pull request |
@@ -163,17 +173,116 @@ RelayAPI's Stripe billing and does not impose hosted-plan entitlements.
 Optional integrations are explicit flags during `init`:
 
 ```bash
-bunx @relayapi/self-host init --email --ai --downloader
+bunx @relayapi/self-host init --email --ai --downloader --media-processing
 ```
 
 - `--email` requires `RESEND_API_KEY`.
 - `--ai` enables the Workers AI binding.
 - `--downloader` requires `DOWNLOADER_SERVICE_URL` and
   `DOWNLOADER_SERVICE_KEY`.
+- `--media-processing` provisions Cloudflare Containers and Workflows for
+  automatic compression, provider variants, and custom covers. It is optional;
+  originals remain uploadable and publishable when it is disabled. Docker must
+  be running during deployment. On Apple Silicon, Docker's amd64 emulation must
+  be enabled; the CLI forces `linux/amd64`, the architecture Cloudflare runs.
+
+Media upload sessions themselves are part of the base installation and accept
+direct-to-storage objects up to 200 MiB. Files greater than 64 MiB use 16 MiB
+multipart parts; the Worker-proxy upload endpoint remains capped at 50 MiB.
+Provisioning pins media-bucket browser CORS to the configured dashboard origin,
+permits `PUT`, and exposes `ETag` so multipart completion works without granting
+unrelated origins access. Ready media returns a stable `reference_url` for post
+attachments separately from its potentially expiring read `url`.
+With media processing enabled, ready image/video/audio uploads enqueue
+best-effort normalization. Processing is fail-open: the original stays ready,
+and publishing uses a compatible normalized derivative only when it is ready,
+unexpired, and smaller. See [Media Uploads](/guides/media-uploads) for the
+session and custom-cover flows.
 
 OAuth platform credentials are also optional. Export only the platforms you
 intend to expose, using the names in `.env.example`, then run `deploy` again.
 Configure each provider's callback URL against your API hostname.
+
+### Publisher connector compatibility
+
+The shared database schema now contains all 22 publishing platform values,
+including `slack`. Version-pinned self-host upgrades apply the PostgreSQL enum
+migration before either Worker is deployed, so an older database is ready
+before the Slack route can create an account.
+
+Discord, Slack, and Twilio SMS are tenant-supplied credential connections. They
+reuse the existing `ENCRYPTION_KEY` account-credential store and require no new
+self-host binding or global provider secret:
+
+| Connector | Connection-time verification | Lifecycle |
+|-----------|------------------------------|-----------|
+| Discord | Exact Discord webhook origin/path plus Discord's read-only Get Webhook with Token response | Reconnect after webhook deletion or token rotation |
+| Slack/GovSlack | Exact Slack-issued webhook origin/path; Slack exposes no non-mutating probe | First publish verifies activation/channel policy; incoming webhooks expose no delete or message reconciliation |
+| SMS | Active Twilio account plus an owned SMS-capable default sender | Reconnect after Twilio Auth Token rotation |
+
+Discord forum/media-thread editing is self-host compatible without another
+binding, secret, or database migration. The publisher journals the confirmed
+thread snowflake in the existing target `provider_effects` JSON as a
+`discord_thread_context` effect, and persisted inbox messages retain the same
+exact thread context. If a record is known to be thread-scoped but lacks a
+valid durable thread ID, the edit fails closed with
+`DISCORD_THREAD_CONTEXT_MISSING` before provider I/O. Upgrade through the
+version-pinned self-host release so the publisher and edit routes move together.
+
+New Mastodon connections register an OAuth client dynamically on the validated
+public instance and pin that origin to the encrypted account. The optional
+`MASTODON_CLIENT_ID`/`MASTODON_CLIENT_SECRET` declarations remain only for
+legacy direct-code compatibility; the recommended per-instance start flow does
+not use them. Snapchat still requires an allowlisted
+`SNAPCHAT_CLIENT_ID`/`SNAPCHAT_CLIENT_SECRET`. Telegram continues to require the
+operator's existing `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET`; tenant
+users connect chats through the same managed-bot permission challenge rather
+than submitting those secrets.
+
+Connection-owned provider authority is identical in hosted and self-hosted deployments. Generic account metadata updates cannot overwrite provider origins or identities such as Mastodon/Listmonk `instance_url`, Bluesky `pds_url`/`did`/`auth_mode`, WhatsApp `waba_id`, Beehiiv `publication_id`, Twilio `from_number`/MMS capability, TikTok verified prefixes, or Snapchat's internal Public Profile verification marker. Beehiiv publishing uses the connected publication ID; SMS always uses the connector-verified sender and treats a legacy `target_options.from_number` only as a matching assertion; Listmonk publishing uses the connected canonical public HTTPS base and applies DNS/private-host rejection, redirect denial, a 30-second through-body timeout, and a 512 KiB response cap. Newsletter list/template discovery also checks the account's workspace before provider I/O. These guards reuse the existing Worker, database, DNS, and encryption paths and add no operator secret or binding.
+
+After upgrading, reconnect every Snapchat account created before the Public Profile verification marker was introduced. Such legacy records fail closed with `SNAPCHAT_RECONNECT_REQUIRED`; a metadata edit cannot migrate or forge the provider identity.
+
+LinkedIn publishing likewise always uses the member or organization URN selected by the connector. Legacy `target_options.linkedin.organization_urn` is only a matching assertion and a mismatch is rejected before provider I/O. No self-host setting is required.
+
+TikTok Direct Post can use bounded `FILE_UPLOAD` for videos without additional
+configuration. Photo posts and explicit video `PULL_FROM_URL` require URL
+prefixes that are already verified in the operator's TikTok developer app. Add
+the same non-secret prefixes to `relayapi.selfhost.json` before connecting the
+TikTok account:
+
+```json
+{
+  "publishing": {
+    "tiktokVerifiedUrlPrefixes": [
+      "https://media.example.com/tiktok/"
+    ]
+  }
+}
+```
+
+The CLI validates the prefixes and publishes them to the API Worker as
+`TIKTOK_VERIFIED_URL_PREFIXES`. OAuth snapshots that list into immutable
+account metadata; changing the operator config does not expand an existing
+connection, so reconnect TikTok to adopt the new list. Prefixes are public
+authority configuration, not secrets. They must use HTTPS and contain no
+credentials, IP host, non-default port, query string, or fragment, and each path
+must end in `/`. That slash is an authority boundary: `/media/` does not permit
+`/mediaevil`.
+
+### Advertising provider compatibility
+
+Self-hosted releases ship the same six registered ad adapters and durable provider-first operation fences as the hosted API. Community mode bypasses only RelayAPI's hosted Stripe entitlement check; it never bypasses actor permissions, the dedicated `ad_connections` credential, provider-account scope, revocation, provider approval, or the per-operation capability returned by `GET /v1/ads/platforms`.
+
+The five non-Meta write adapters require no additional Cloudflare binding, but their provider credentials and options remain mandatory:
+
+- Google Ads v25 requires the `adwords` OAuth scope, `GOOGLE_ADS_DEVELOPER_TOKEN`, an authorized customer, Search/RSA options, and the explicit EU political-ad declaration. Manager access can use connection metadata `login_customer_id`.
+- LinkedIn Marketing API requires approved Advertising API access, `rw_ads`, an eligible account/content role, existing content authority, typed targeting, and explicit political intent. Reporting separately needs `r_ads_reporting`.
+- Pinterest Ads v5 requires `ads:read` and `ads:write`; audience features remain production-approval-gated.
+- TikTok Marketing API v1.3 requires an authorized Business advertiser and creative identity. `TIKTOK_ADS_APP_ID` and `TIKTOK_ADS_APP_SECRET` support an operator-run upstream OAuth exchange; a publishing Login Kit token is not an ads credential.
+- X Ads API v12 requires Ads entitlement, OAuth 1.0a `token_secret`, `TWITTER_ADS_CONSUMER_KEY`, `TWITTER_ADS_CONSUMER_SECRET`, and a funding instrument.
+
+The presence of an environment secret does not turn an unsupported or approval-gated operation into a supported one. Use the [advertising capability guide](/guides/advertising-platforms) and runtime response before exposing a write in an operator UI.
 
 ## 4. Inspect and deploy
 
@@ -276,6 +385,7 @@ automatically rolled back after a forward migration.
 | Background work and dead letters | Queues | Publishing, sync, email, and recovery |
 | Realtime coordinator | Durable Objects | WebSocket state |
 | Image/video previews | Images and Media Transformations | Off-request thumbnails |
+| Optional media processor | Container, Workflow, Queue, and DLQ | Private ffmpeg normalization, provider variants, custom covers, and bounded retry/dead-letter handling (`MEDIA_PROCESSOR`, `MEDIA_PROCESSING_WORKFLOW`, `MEDIA_PROCESSING_QUEUE`, `MEDIA_PROCESSING_DLQ`) |
 | Optional generation | Workers AI | AI tools when enabled |
 
 Every resource uses the `relayapi-selfhost-*` prefix. If a unique named resource

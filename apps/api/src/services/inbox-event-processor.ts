@@ -1,17 +1,26 @@
 import {
 	automationRuns,
 	createDb,
+	generateId,
 	inboxConversations,
 	inboxEventEffects,
 	inboxMessages,
+	posts,
+	postTargets,
+	publishAttempts,
 	socialAccounts,
+	socialMutationOperations,
 	webhookEndpoints,
+	whatsappGroups,
 } from "@relayapi/db";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountToken } from "../lib/account-token-crypto";
 import { deriveProtectedContactSubjectLocator } from "../lib/consent-hmac";
+import { encryptToken } from "../lib/crypto";
 import { notifyRealtime } from "../lib/notify-post-update";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
+import { whatsappStatusResult } from "../publishers/whatsapp";
 import type { NormalizedInboxQueueMessage as InboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
 import { matchAndEnrollOrBinding } from "./automations/binding-router";
@@ -23,19 +32,25 @@ import type {
 	InboundEvent,
 	InboundEventKind,
 } from "./automations/trigger-matcher";
-import {
-	conversationAvatarKey,
-	rehostTransientAvatar,
-} from "./avatar-store";
+import { conversationAvatarKey, rehostTransientAvatar } from "./avatar-store";
 import { ensureContactForAuthor } from "./contact-linker";
 import {
 	insertMessage,
 	type UpsertConversationData,
 	upsertConversation,
 } from "./inbox-persistence";
+import { persistTerminalProviderReconciliation } from "./provider-outcome-reconciler";
+import { dispatchPublishOutbox } from "./publish-outbox";
+import { normalizeProviderOutcome } from "./publisher-runner";
+import { fetchTwilioMediaSize } from "./twilio-media-metadata";
 import { deliverWebhook, dispatchWebhookEvent } from "./webhook-delivery";
 import { subscribeYouTubeChannel } from "./webhook-subscription";
-import { fetchTwilioMediaSize } from "./twilio-media-metadata";
+import {
+	persistWhatsAppIdentityAlias,
+	resolveWhatsAppConversationIdentity,
+	type WhatsAppIdentity,
+	whatsappIdentityConversationKey,
+} from "./whatsapp-identity";
 import { fetchWhatsAppMediaMetadata } from "./whatsapp-media-metadata";
 
 type InboxEffect = "automation" | "customer_webhook" | "realtime";
@@ -179,6 +194,7 @@ interface NormalizedInboxEvent {
 	 */
 	is_story_reply?: boolean;
 	is_story_mention?: boolean;
+	is_post_mention?: boolean;
 	is_share_to_dm?: boolean;
 	is_live_comment?: boolean;
 	is_ad_click?: boolean;
@@ -190,6 +206,12 @@ interface NormalizedInboxEvent {
 	 * short-lived, so the dashboard renders it with a graceful fallback.
 	 */
 	story_url?: string;
+	/** WhatsApp group identity. Group conversations are keyed by this provider ID. */
+	whatsapp_group_id?: string;
+	/** Encrypted-at-rest alias material used for phone-optional BSUID delivery. */
+	whatsapp_identity?: WhatsAppIdentity;
+	/** Non-sensitive metadata indicating that a WhatsApp Flow response arrived. */
+	flow_response_metadata?: { name?: string; has_response: boolean };
 	/**
 	 * Structured file payload for inbound media messages (WhatsApp image/video/
 	 * document/audio, Telegram photo/document, Twilio MMS, etc.). Used by the
@@ -289,14 +311,14 @@ async function fetchInstagramProfileFields(
 		);
 
 		if (!profileRes.ok) {
-			const errorText = await profileRes.text().catch(() => "");
+			const errorText = await readProviderText(profileRes).catch(() => "");
 			console.error(
 				`[inbox-processor] Instagram participant profile lookup failed (${profileRes.status}): ${errorText.slice(0, 200)}`,
 			);
 			return null;
 		}
 
-		return (await profileRes.json()) as InstagramProfileResponse;
+		return (await readProviderJson(profileRes)) as InstagramProfileResponse;
 	} finally {
 		clearTimeout(profileTimer);
 	}
@@ -367,14 +389,14 @@ async function fetchFacebookParticipantProfile(
 		);
 
 		if (!profileRes.ok) {
-			const errorText = await profileRes.text().catch(() => "");
+			const errorText = await readProviderText(profileRes).catch(() => "");
 			console.error(
 				`[inbox-processor] Facebook participant profile lookup failed (${profileRes.status}): ${errorText.slice(0, 200)}`,
 			);
 			return null;
 		}
 
-		const profile = (await profileRes.json()) as {
+		const profile = (await readProviderJson(profileRes)) as {
 			name?: string | null;
 			first_name?: string | null;
 			last_name?: string | null;
@@ -454,6 +476,14 @@ export async function processInboxEvent(
 		await processWhatsAppStatuses(message, env, db);
 		return;
 	}
+	if (
+		message.type === "whatsapp_webhook" &&
+		message.event_type.startsWith("group_")
+	) {
+		const db = sharedDb ?? createDb(env.HYPERDRIVE.connectionString);
+		await processWhatsAppGroupUpdates(message, env, db);
+		return;
+	}
 
 	const events = normalizeEvent(message);
 
@@ -468,7 +498,7 @@ export async function processInboxEvent(
 		let conversation: Awaited<ReturnType<typeof upsertConversation>> | null =
 			null;
 		const direction = event.direction ?? "inbound";
-		const conversationPartner = event.participant ?? event.author;
+		let conversationPartner = event.participant ?? event.author;
 		// Look up social account (workspace + token for enrichment)
 		const [sa] = await db
 			.select({
@@ -489,6 +519,38 @@ export async function processInboxEvent(
 		// lookup already carries the lifecycle predicate, so a miss is a terminal
 		// no-op rather than permission to persist against a null workspace.
 		if (!sa) continue;
+		if (event.platform === "whatsapp" && event.whatsapp_identity) {
+			const identityKey = event.whatsapp_group_id
+				? await whatsappIdentityConversationKey(
+						env.ENCRYPTION_KEY,
+						event.organization_id,
+						event.whatsapp_identity.bsuid,
+					)
+				: ((await resolveWhatsAppConversationIdentity(db, env.ENCRYPTION_KEY, {
+						organizationId: event.organization_id,
+						accountId: event.account_id,
+						identity: event.whatsapp_identity,
+					})) ??
+					(await whatsappIdentityConversationKey(
+						env.ENCRYPTION_KEY,
+						event.organization_id,
+						event.whatsapp_identity.bsuid,
+					)));
+			if (event.author) event.author.id = identityKey;
+			if (event.whatsapp_group_id) {
+				event.conversation_id = event.whatsapp_group_id;
+				event.participant = {
+					name: event.whatsapp_group_id,
+					id: event.whatsapp_group_id,
+				};
+			} else {
+				event.conversation_id = identityKey;
+				event.participant = event.author
+					? { ...event.author, id: identityKey }
+					: undefined;
+			}
+			conversationPartner = event.participant ?? event.author;
+		}
 		// `follow` and `ad_click` events don't correspond to a message — they
 		// describe a relationship change or ad engagement. We still route them
 		// through the automation matcher (step 2) but skip inbox persistence.
@@ -516,20 +578,43 @@ export async function processInboxEvent(
 						platform: event.platform as UpsertConversationData["platform"],
 						type: event.type === "comment" ? "comment_thread" : "dm",
 						platformConversationId:
-							event.post_id ||
-							event.conversation_id ||
-							event.platform_event_id,
+							event.post_id || event.conversation_id || event.platform_event_id,
 						participantName: conversationPartner?.name ?? null,
 						participantPlatformId: conversationPartner?.id ?? null,
 						participantAvatar:
 							conversationPartner?.avatar_url ??
 							event.author?.avatar_url ??
 							null,
+						participantMetadata:
+							event.platform === "whatsapp" && event.whatsapp_identity
+								? {
+										whatsappIdentity: {
+											kind: "bsuid",
+											hasPhoneNumber: Boolean(event.whatsapp_identity.waId),
+											hasParentIdentity: Boolean(
+												event.whatsapp_identity.parentBsuid,
+											),
+											hasUsername: Boolean(event.whatsapp_identity.username),
+										},
+										...(event.whatsapp_group_id
+											? { whatsappGroup: { id: event.whatsapp_group_id } }
+											: {}),
+									}
+								: undefined,
 						postPlatformId: event.post_id ?? null,
 					},
 					env.ENCRYPTION_KEY,
 				);
 				if (conversation) {
+					if (event.platform === "whatsapp" && event.whatsapp_identity) {
+						await persistWhatsAppIdentityAlias(db, env.ENCRYPTION_KEY, {
+							organizationId: event.organization_id,
+							workspaceId: sa.workspaceId,
+							accountId: event.account_id,
+							conversationId: event.whatsapp_group_id ? null : conversation.id,
+							identity: event.whatsapp_identity,
+						});
+					}
 					// "First inbound on channel ever" — the binding-router welcome
 					// scope spans the contact's whole history on that channel. When
 					// the conversation is still UNLINKED (no matching contact yet),
@@ -571,15 +656,23 @@ export async function processInboxEvent(
 					// can render "Mentioned you in their story" instead of a blank row.
 					const messageType = event.is_story_mention
 						? "story_mention"
-						: event.is_story_reply
-							? "story_reply"
-							: event.is_share_to_dm
-								? "share"
-								: null;
+						: event.is_post_mention
+							? "post_mention"
+							: event.is_story_reply
+								? "story_reply"
+								: event.is_share_to_dm
+									? "share"
+									: null;
 					const platformData: Record<string, unknown> = {};
 					if (messageType) platformData.message_type = messageType;
 					if (event.story_id) platformData.story_id = event.story_id;
 					if (event.story_url) platformData.story_url = event.story_url;
+					if (event.whatsapp_group_id) {
+						platformData.whatsapp_group_id = event.whatsapp_group_id;
+					}
+					if (event.flow_response_metadata) {
+						platformData.whatsapp_flow = event.flow_response_metadata;
+					}
 
 					await insertMessage(db, {
 						conversationId: conversation.id,
@@ -719,6 +812,8 @@ export async function processInboxEvent(
 						post_id: event.post_id,
 						conversation_id: event.conversation_id,
 						parent_id: event.parent_id,
+						whatsapp_group_id: event.whatsapp_group_id,
+						flow_response_metadata: event.flow_response_metadata,
 						created_at: event.created_at,
 					},
 					{
@@ -826,10 +921,7 @@ async function enrichMetaParticipantProfile(
 				conversation.id,
 				profile.avatarUrl,
 			);
-			const storedAvatarUrl =
-				rehostedAvatarUrl ??
-				profile.avatarUrl ??
-				null;
+			const storedAvatarUrl = rehostedAvatarUrl ?? profile.avatarUrl ?? null;
 
 			if (profile.displayName) {
 				conversationPatch.participantName = profile.displayName;
@@ -969,7 +1061,14 @@ async function dispatchAutomationMatch(
 		const kind = deriveInboundEventKind(event);
 		if (!kind) return;
 
-		const authorId = event.author?.id ?? event.participant?.id ?? null;
+		// Contact channel identifiers are encrypted by ensureContactForAuthor. Keep
+		// the real BSUID inside that encrypted channel so automation replies can use
+		// the provider identifier; inbox/webhook projections continue exposing only
+		// the tenant-keyed conversation alias.
+		const authorId =
+			event.platform === "whatsapp" && event.whatsapp_identity
+				? event.whatsapp_identity.bsuid
+				: (event.author?.id ?? event.participant?.id ?? null);
 		let contactId: string | null = null;
 		if (authorId) {
 			// ensureContactForAuthor returns an existing contact when one matches
@@ -1199,9 +1298,7 @@ async function resumeWaitingRunForInput(
 	if (waitingRuns.length === 0) return false;
 
 	let attachment = event.attachment ?? null;
-	let mediaMetadataPromise:
-		| Promise<NonNullable<typeof attachment>>
-		| undefined;
+	let mediaMetadataPromise: Promise<NonNullable<typeof attachment>> | undefined;
 	const inboundText = event.text ?? "";
 	const interactivePayload = event.interactive_payload ?? null;
 
@@ -1261,7 +1358,8 @@ async function resumeWaitingRunForInput(
 		//
 		//    Both providers need one because neither delivers a size inline:
 		//    WhatsApp sends a media id, Twilio sends only a URL and content type.
-		const needsSizeLookup = attachment != null && attachment.size_bytes === undefined;
+		const needsSizeLookup =
+			attachment != null && attachment.size_bytes === undefined;
 		const lookupMediaSize =
 			needsSizeLookup && event.platform === "whatsapp" && attachment?.id
 				? whatsappMediaContext &&
@@ -1324,7 +1422,7 @@ async function resumeWaitingRunForInput(
 					}
 					return mediaMetadataPromise;
 				}
-				: undefined;
+			: undefined;
 		const outcome = await resumeWaitingRunOnInput(
 			db,
 			waiting.id,
@@ -1505,6 +1603,7 @@ function extractMetaAttachments(
 function derivePreviewText(event: NormalizedInboxEvent): string | undefined {
 	if (event.text && event.text.trim().length > 0) return undefined;
 	if (event.is_story_mention) return "Mentioned you in their story";
+	if (event.is_post_mention) return "Mentioned you in a post or comment";
 	if (event.is_story_reply) return "Replied to your story";
 	if (event.is_share_to_dm) return "Shared a post";
 	const first = event.attachments?.[0];
@@ -1758,7 +1857,7 @@ function normalizeInstagramEvent(
 	}
 
 	// Comment on media
-	if (event_type === "comments") {
+	if (event_type === "comments" || event_type === "mentions") {
 		const value = payload as InstagramCommentValue;
 		if (!value.id) return [];
 		return [
@@ -1776,6 +1875,7 @@ function normalizeInstagramEvent(
 					: undefined,
 				text: value.text,
 				post_id: value.media?.id,
+				is_post_mention: event_type === "mentions",
 				created_at: now,
 				raw: payload,
 			},
@@ -1889,12 +1989,17 @@ interface WhatsAppWebhookValue {
 	messaging_product: string;
 	metadata: { phone_number_id: string };
 	contacts?: Array<{
-		profile: { name: string };
-		wa_id: string;
+		profile: { name?: string; username?: string };
+		wa_id?: string;
+		user_id?: string;
+		parent_user_id?: string;
 	}>;
 	messages?: Array<{
 		id: string;
-		from: string;
+		from?: string;
+		from_user_id?: string;
+		from_parent_user_id?: string;
+		group_id?: string;
 		timestamp: string;
 		type: string;
 		text?: { body: string };
@@ -1927,8 +2032,27 @@ interface WhatsAppWebhookValue {
 		id: string;
 		status: "sent" | "delivered" | "read" | "failed";
 		timestamp: string;
-		recipient_id: string;
+		recipient_id?: string;
+		recipient_user_id?: string;
+		recipient_parent_user_id?: string;
+		group_id?: string;
 		errors?: Array<{ code: number; title: string }>;
+	}>;
+	groups?: Array<{
+		timestamp?: string | number;
+		group_id?: string;
+		request_id?: string;
+		type?: string;
+		subject?: string;
+		description?: string;
+		invite_link?: string;
+		join_approval_mode?: "auto_approve" | "approval_required";
+		group_subject?: { text?: string; update_successful?: boolean };
+		group_description?: { text?: string; update_successful?: boolean };
+		added_participants?: unknown[];
+		removed_participants?: unknown[];
+		errors?: Array<Record<string, unknown>>;
+		[key: string]: unknown;
 	}>;
 }
 
@@ -1973,6 +2097,7 @@ function extractWhatsAppMessageText(msg: WhatsAppMessage): string | undefined {
 function extractWhatsAppInteractivePayload(msg: WhatsAppMessage): {
 	payload?: string;
 	kind?: NormalizedInboxEvent["interactive_kind"];
+	flowMetadata?: NormalizedInboxEvent["flow_response_metadata"];
 } {
 	if (msg.button?.payload) {
 		return {
@@ -2001,7 +2126,7 @@ function extractWhatsAppInteractivePayload(msg: WhatsAppMessage): {
 	if (msg.interactive?.type === "nfm_reply") {
 		const reply = (
 			msg.interactive as {
-				nfm_reply?: { response_json?: unknown };
+				nfm_reply?: { name?: string; response_json?: unknown };
 			}
 		).nfm_reply;
 		return {
@@ -2009,6 +2134,10 @@ function extractWhatsAppInteractivePayload(msg: WhatsAppMessage): {
 				? JSON.stringify(reply.response_json)
 				: undefined,
 			kind: "flow_submit",
+			flowMetadata: {
+				...(reply?.name ? { name: reply.name } : {}),
+				has_response: reply?.response_json !== undefined,
+			},
 		};
 	}
 	return {};
@@ -2054,7 +2183,7 @@ function extractWhatsAppAttachment(
 	}
 }
 
-function normalizeWhatsAppEvent(
+export function normalizeWhatsAppEvent(
 	message: InboxQueueMessage,
 ): NormalizedInboxEvent[] {
 	const value = message.payload as WhatsAppWebhookValue;
@@ -2063,12 +2192,34 @@ function normalizeWhatsAppEvent(
 	if (!value.messages?.length) return events;
 
 	for (const msg of value.messages) {
-		// WhatsApp can batch messages from MULTIPLE senders in one change.value;
-		// contacts[] carries one entry per distinct wa_id. Match THIS message's
-		// sender by `msg.from` rather than blindly using contacts[0], otherwise a
-		// second sender's message is attributed to the first sender's name.
-		const contact = value.contacts?.find((cnt) => cnt.wa_id === msg.from);
+		// WhatsApp can batch multiple phone or BSUID senders. Match the strongest
+		// message-scoped identity and never fall back to contacts[0].
+		const contact = msg.from_user_id
+			? value.contacts?.find(
+					(candidate) => candidate.user_id === msg.from_user_id,
+				)
+			: msg.from
+				? value.contacts?.find((candidate) => candidate.wa_id === msg.from)
+				: undefined;
+		const bsuid = msg.from_user_id ?? contact?.user_id;
+		const waId = msg.from ?? contact?.wa_id;
+		const senderId = bsuid ?? waId;
+		if (!senderId) continue;
 		const interactive = extractWhatsAppInteractivePayload(msg);
+		const identity: WhatsAppIdentity | undefined = bsuid
+			? {
+					bsuid,
+					...((msg.from_parent_user_id ?? contact?.parent_user_id)
+						? {
+								parentBsuid: msg.from_parent_user_id ?? contact?.parent_user_id,
+							}
+						: {}),
+					...(waId ? { waId } : {}),
+					...(contact?.profile?.username
+						? { username: contact.profile.username }
+						: {}),
+				}
+			: undefined;
 		events.push({
 			type: "message",
 			platform: "whatsapp",
@@ -2076,20 +2227,306 @@ function normalizeWhatsAppEvent(
 			organization_id: message.organization_id,
 			platform_event_id: msg.id,
 			author: {
-				name: contact?.profile?.name ?? msg.from,
-				id: msg.from,
+				name:
+					contact?.profile?.name ??
+					contact?.profile?.username ??
+					(bsuid ? undefined : waId) ??
+					"WhatsApp user",
+				id: senderId,
 			},
 			text: extractWhatsAppMessageText(msg),
 			interactive_payload: interactive.payload,
 			interactive_kind: interactive.kind,
+			flow_response_metadata: interactive.flowMetadata,
 			attachment: extractWhatsAppAttachment(msg),
-			conversation_id: msg.from,
+			conversation_id: msg.group_id ?? senderId,
+			whatsapp_group_id: msg.group_id,
+			whatsapp_identity: identity,
 			created_at: new Date(Number(msg.timestamp) * 1000).toISOString(),
 			raw: message.payload,
 		});
 	}
 
 	return events;
+}
+
+function whatsappGroupObservedAt(value: string | number | undefined): Date {
+	const numeric = Number(value);
+	if (Number.isFinite(numeric) && numeric > 0) {
+		return new Date(numeric > 10_000_000_000 ? numeric : numeric * 1_000);
+	}
+	return new Date();
+}
+
+type WhatsAppGroupLifecycle =
+	(typeof whatsappGroups.$inferSelect)["lifecycleStatus"];
+
+/** Monotonic lifecycle transition used by webhook projection and unit tests. */
+export function resolveWhatsAppGroupLifecycleStatus(
+	eventType: string | undefined,
+	hasErrors: boolean,
+	current: WhatsAppGroupLifecycle,
+): WhatsAppGroupLifecycle {
+	if (eventType === "group_create") {
+		if (current === "deleting" || current === "deleted") return current;
+		return hasErrors ? "failed" : "active";
+	}
+	if (eventType === "group_delete") {
+		if (hasErrors) return current === "deleting" ? "active" : current;
+		return "deleted";
+	}
+	if (eventType === "group_suspend") {
+		if (hasErrors) return current;
+		return current === "active" || current === "creating"
+			? "suspended"
+			: current;
+	}
+	if (eventType === "group_suspend_cleared") {
+		if (hasErrors) return current;
+		return current === "suspended" ? "active" : current;
+	}
+	return current;
+}
+
+/**
+ * Project signed Groups API callbacks without retaining participant identities.
+ * Group creation is asynchronous, so request_id links the callback to the
+ * deterministic local row created before the provider boundary.
+ *
+ * Official contract:
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/groups/webhooks
+ */
+async function processWhatsAppGroupUpdates(
+	message: InboxQueueMessage,
+	env: Env,
+	db: ReturnType<typeof createDb>,
+): Promise<void> {
+	const value = message.payload as WhatsAppWebhookValue;
+	if (!value.groups?.length) return;
+	const [account] = await db
+		.select({ id: socialAccounts.id, workspaceId: socialAccounts.workspaceId })
+		.from(socialAccounts)
+		.where(
+			and(
+				eq(socialAccounts.id, message.account_id),
+				eq(socialAccounts.organizationId, message.organization_id),
+				eq(socialAccounts.platform, "whatsapp"),
+				eq(socialAccounts.lifecycleStatus, "active"),
+			),
+		)
+		.limit(1);
+	if (!account) return;
+
+	for (const event of value.groups) {
+		const identityConditions = [
+			...(event.group_id
+				? [eq(whatsappGroups.providerGroupId, event.group_id)]
+				: []),
+			...(event.request_id
+				? [eq(whatsappGroups.providerRequestId, event.request_id)]
+				: []),
+		];
+		let [group] = identityConditions.length
+			? await db
+					.select()
+					.from(whatsappGroups)
+					.where(
+						and(
+							eq(whatsappGroups.organizationId, message.organization_id),
+							eq(whatsappGroups.accountId, message.account_id),
+							or(...identityConditions),
+						),
+					)
+					.limit(1)
+			: [];
+
+		if (!group && event.request_id) {
+			const [operation] = await db
+				.select({ targetId: socialMutationOperations.targetId })
+				.from(socialMutationOperations)
+				.where(
+					and(
+						eq(
+							socialMutationOperations.organizationId,
+							message.organization_id,
+						),
+						eq(socialMutationOperations.accountId, message.account_id),
+						eq(socialMutationOperations.platform, "whatsapp"),
+						eq(socialMutationOperations.targetType, "whatsapp_group"),
+						eq(socialMutationOperations.kind, "group_create"),
+						eq(socialMutationOperations.providerOperationId, event.request_id),
+					),
+				)
+				.limit(1);
+			if (operation) {
+				[group] = await db
+					.select()
+					.from(whatsappGroups)
+					.where(
+						and(
+							eq(whatsappGroups.id, operation.targetId),
+							eq(whatsappGroups.organizationId, message.organization_id),
+							eq(whatsappGroups.accountId, message.account_id),
+						),
+					)
+					.limit(1);
+			}
+		}
+
+		if (
+			!group &&
+			!event.request_id &&
+			event.type === "group_create" &&
+			!event.errors?.length
+		) {
+			const id = generateId("wg_");
+			const observedAt = whatsappGroupObservedAt(event.timestamp);
+			const inviteLinkCiphertext = event.invite_link
+				? await encryptToken(event.invite_link, env.ENCRYPTION_KEY, {
+						recordId: id,
+						field: "whatsapp_group_invite_link",
+					})
+				: null;
+			const [inserted] = await db
+				.insert(whatsappGroups)
+				.values({
+					id,
+					organizationId: message.organization_id,
+					workspaceId: account.workspaceId,
+					accountId: account.id,
+					platform: "whatsapp",
+					providerGroupId: event.group_id ?? null,
+					providerRequestId: event.request_id ?? null,
+					subject: event.subject ?? "WhatsApp group",
+					description: event.description ?? null,
+					joinApprovalMode: event.join_approval_mode ?? null,
+					lifecycleStatus: "active",
+					inviteLinkCiphertext,
+					providerCreatedAt: observedAt,
+					lastSyncedAt: observedAt,
+					createdAt: observedAt,
+					updatedAt: observedAt,
+				})
+				.onConflictDoNothing()
+				.returning();
+			group = inserted;
+		}
+		if (!group) continue;
+
+		const rawObservedAt = whatsappGroupObservedAt(event.timestamp);
+		const observedAt =
+			rawObservedAt < group.createdAt ? group.createdAt : rawObservedAt;
+		const groupFence = and(
+			eq(whatsappGroups.id, group.id),
+			eq(whatsappGroups.organizationId, message.organization_id),
+			eq(whatsappGroups.accountId, message.account_id),
+			or(
+				isNull(whatsappGroups.lastSyncedAt),
+				lte(whatsappGroups.lastSyncedAt, observedAt),
+			),
+		);
+		if (event.type === "group_create") {
+			const failed = Boolean(event.errors?.length);
+			const inviteLinkCiphertext = event.invite_link
+				? await encryptToken(event.invite_link, env.ENCRYPTION_KEY, {
+						recordId: group.id,
+						field: "whatsapp_group_invite_link",
+					})
+				: group.inviteLinkCiphertext;
+			await db
+				.update(whatsappGroups)
+				.set({
+					providerGroupId: event.group_id ?? group.providerGroupId,
+					providerRequestId: event.request_id ?? group.providerRequestId,
+					...(event.subject ? { subject: event.subject } : {}),
+					...(event.description !== undefined
+						? { description: event.description }
+						: {}),
+					joinApprovalMode: event.join_approval_mode ?? group.joinApprovalMode,
+					inviteLinkCiphertext,
+					lifecycleStatus: resolveWhatsAppGroupLifecycleStatus(
+						event.type,
+						failed,
+						group.lifecycleStatus,
+					),
+					providerCreatedAt: failed ? group.providerCreatedAt : observedAt,
+					lastSyncedAt: observedAt,
+					updatedAt: observedAt,
+				})
+				.where(groupFence);
+			continue;
+		}
+
+		if (event.type === "group_delete") {
+			await db
+				.update(whatsappGroups)
+				.set({
+					lifecycleStatus: resolveWhatsAppGroupLifecycleStatus(
+						event.type,
+						Boolean(event.errors?.length),
+						group.lifecycleStatus,
+					),
+					lastSyncedAt: observedAt,
+					updatedAt: observedAt,
+				})
+				.where(groupFence);
+			continue;
+		}
+
+		if (
+			event.type === "group_suspend" ||
+			event.type === "group_suspend_cleared"
+		) {
+			await db
+				.update(whatsappGroups)
+				.set({
+					lifecycleStatus: resolveWhatsAppGroupLifecycleStatus(
+						event.type,
+						Boolean(event.errors?.length),
+						group.lifecycleStatus,
+					),
+					lastSyncedAt: observedAt,
+					updatedAt: observedAt,
+				})
+				.where(groupFence);
+			continue;
+		}
+
+		if (event.type === "group_settings_update") {
+			await db
+				.update(whatsappGroups)
+				.set({
+					...(event.group_subject?.update_successful && event.group_subject.text
+						? { subject: event.group_subject.text }
+						: {}),
+					...(event.group_description?.update_successful &&
+					event.group_description.text !== undefined
+						? { description: event.group_description.text }
+						: {}),
+					lastSyncedAt: observedAt,
+					updatedAt: observedAt,
+				})
+				.where(groupFence);
+			continue;
+		}
+		if (message.event_type !== "group_participants_update") continue;
+
+		const participantDelta =
+			(event.added_participants?.length ?? 0) -
+			(event.removed_participants?.length ?? 0);
+		await db
+			.update(whatsappGroups)
+			.set({
+				...(participantDelta
+					? {
+							participantCount: sql`LEAST(8, GREATEST(0, COALESCE(${whatsappGroups.participantCount}, 0) + ${participantDelta}))`,
+						}
+					: {}),
+				lastSyncedAt: observedAt,
+				updatedAt: observedAt,
+			})
+			.where(groupFence);
+	}
 }
 
 // WhatsApp delivery-status lifecycle ranks. Cloudflare Queues are
@@ -2102,6 +2539,148 @@ const WA_STATUS_RANK: Record<string, number> = {
 	read: 3,
 	failed: 3,
 };
+
+type WhatsAppDeliveryStatus = NonNullable<
+	WhatsAppWebhookValue["statuses"]
+>[number];
+
+function whatsappStatusObservedAt(timestamp: string): Date {
+	const milliseconds = Number(timestamp) * 1000;
+	return Number.isFinite(milliseconds) && milliseconds > 0
+		? new Date(milliseconds)
+		: new Date();
+}
+
+/**
+ * Project a signed WhatsApp delivery callback onto the durable outbound publish
+ * state. `sent` is deliberately nonterminal: it proves WhatsApp accepted the
+ * message but not that the recipient received it. `delivered`/`read` and
+ * `failed` use the same fenced target+attempt+continuation transaction as the
+ * polling reconciler, so a webhook cannot strand a thread or parent post.
+ */
+async function projectWhatsAppOutboundStatus(
+	db: ReturnType<typeof createDb>,
+	message: InboxQueueMessage,
+	status: WhatsAppDeliveryStatus,
+): Promise<boolean> {
+	const [candidate] = await db
+		.select({
+			targetId: postTargets.id,
+			postId: postTargets.postId,
+			organizationId: postTargets.organizationId,
+			attemptId: postTargets.attemptId,
+			publishOperationId: postTargets.publishOperationId,
+			reconcileAttempts: postTargets.reconcileAttempts,
+			providerOperationId: postTargets.providerOperationId,
+			providerEffects: postTargets.providerEffects,
+			threadGroupId: posts.threadGroupId,
+			threadPosition: posts.threadPosition,
+		})
+		.from(postTargets)
+		.innerJoin(
+			posts,
+			and(
+				eq(posts.id, postTargets.postId),
+				eq(posts.organizationId, postTargets.organizationId),
+				eq(posts.scopeKey, postTargets.scopeKey),
+			),
+		)
+		.where(
+			and(
+				eq(postTargets.organizationId, message.organization_id),
+				eq(postTargets.socialAccountId, message.account_id),
+				eq(postTargets.platform, "whatsapp"),
+				eq(postTargets.deliveryState, "unknown"),
+				or(
+					eq(postTargets.providerOperationId, status.id),
+					eq(postTargets.platformPostId, status.id),
+				),
+			),
+		)
+		.limit(1);
+	if (!candidate) return false;
+
+	const providerResult = whatsappStatusResult(status.id, status.status, {
+		code: status.errors?.[0]?.code,
+		message: status.errors?.[0]?.title,
+	});
+	const outcome = normalizeProviderOutcome(providerResult);
+
+	if (status.status === "sent") {
+		await db.transaction(async (tx) => {
+			const [savedTarget] = await tx
+				.update(postTargets)
+				.set({
+					providerDisposition: "accepted",
+					providerOperationId:
+						outcome.provider_operation_id ?? candidate.providerOperationId,
+					providerState: "sent",
+					nextReconcileAt: null,
+					error: null,
+					errorCode: null,
+					errorDetail: null,
+					updatedAt: whatsappStatusObservedAt(status.timestamp),
+				})
+				.where(
+					and(
+						eq(postTargets.id, candidate.targetId),
+						eq(postTargets.postId, candidate.postId),
+						eq(postTargets.organizationId, candidate.organizationId),
+						eq(postTargets.publishOperationId, candidate.publishOperationId),
+						eq(postTargets.deliveryState, "unknown"),
+						or(
+							isNull(postTargets.providerState),
+							inArray(postTargets.providerState, ["accepted", "sent"]),
+						),
+					),
+				)
+				.returning({ id: postTargets.id });
+			if (!savedTarget || !candidate.attemptId) return;
+			await tx
+				.update(publishAttempts)
+				.set({
+					providerPostId: status.id,
+					providerDisposition: "accepted",
+					providerOperationId:
+						outcome.provider_operation_id ?? candidate.providerOperationId,
+					providerState: "sent",
+					error: null,
+				})
+				.where(
+					and(
+						eq(publishAttempts.id, candidate.attemptId),
+						eq(publishAttempts.postTargetId, candidate.targetId),
+						eq(
+							publishAttempts.publishOperationId,
+							candidate.publishOperationId,
+						),
+						eq(publishAttempts.state, "unknown"),
+					),
+				);
+		});
+		return false;
+	}
+
+	if (outcome.disposition !== "delivered" && outcome.disposition !== "failed") {
+		return false;
+	}
+	const terminal = await persistTerminalProviderReconciliation(db, {
+		candidate,
+		attemptNumber: candidate.reconcileAttempts,
+		observedAt: whatsappStatusObservedAt(status.timestamp),
+		platformPostId: status.id,
+		platformUrl: null,
+		providerFields: {
+			providerDisposition: outcome.disposition,
+			providerOperationId:
+				outcome.provider_operation_id ?? candidate.providerOperationId,
+			providerState: outcome.provider_state ?? status.status,
+			providerEffects: outcome.effects ?? candidate.providerEffects,
+		},
+		result: providerResult,
+	});
+	return terminal.continuationQueued;
+}
 
 async function processWhatsAppStatuses(
 	message: InboxQueueMessage,
@@ -2146,6 +2725,11 @@ async function processWhatsAppStatuses(
 	// up the shared inbox queue consumer on WhatsApp broadcast status floods.
 	const statusResults = await Promise.allSettled(
 		value.statuses.map(async (status) => {
+			const continuationQueued = await projectWhatsAppOutboundStatus(
+				db,
+				message,
+				status,
+			);
 			const incomingRank = WA_STATUS_RANK[status.status] ?? 0;
 			// Only apply the update when the incoming status is at least as
 			// advanced as the stored one — a CASE comparison on the stored
@@ -2190,7 +2774,9 @@ async function processWhatsAppStatuses(
 							{
 								message_id: status.id,
 								status: status.status,
-								recipient: status.recipient_id,
+								recipient:
+									status.recipient_user_id ?? status.recipient_id ?? null,
+								group_id: status.group_id ?? null,
 								timestamp: status.timestamp,
 								errors: status.errors,
 							},
@@ -2200,6 +2786,7 @@ async function processWhatsAppStatuses(
 					),
 				);
 			}
+			return continuationQueued;
 		}),
 	);
 	const statusFailures = statusResults.filter(
@@ -2212,6 +2799,13 @@ async function processWhatsAppStatuses(
 			statusFailures.map((failure) => failure.reason),
 			`Failed to persist ${statusFailures.length} WhatsApp delivery status update(s)`,
 		);
+	}
+	if (
+		statusResults.some(
+			(result) => result.status === "fulfilled" && result.value,
+		)
+	) {
+		await dispatchPublishOutbox(env);
 	}
 }
 

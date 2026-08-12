@@ -243,6 +243,9 @@ function createTestApp(
 		c.set("db", createDb(c.env.HYPERDRIVE.connectionString));
 		await next();
 	});
+	// Production always bounds and caches authenticated bodies before usage
+	// middleware derives bulk units from parsedBody.
+	app.use("*", bodyCacheMiddleware);
 	app.use("*", usageTrackingMiddleware);
 	app.get("/v1/posts", (c) => c.json({ ok: true }));
 	app.options("/v1/posts", (c) => c.body(null, 204));

@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	socialAccountSyncState,
@@ -23,7 +24,9 @@ import {
 	deleteConnectedAccountGraph,
 	invalidateAccountCaches,
 } from "../lib/delete-account";
+import { fetchPublicUrl, readResponseJson } from "../lib/fetch-public-url";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
+import { listmonkApiUrl } from "../lib/listmonk-instance";
 import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
 import {
 	encodeTimestampIdCursor,
@@ -31,7 +34,6 @@ import {
 	tryDecodeTimestampIdCursor,
 } from "../lib/pagination-cursor";
 import { assertAllWorkspaceScope } from "../lib/request-access";
-import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
@@ -135,6 +137,10 @@ const getAccount = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -1072,7 +1078,7 @@ app.openapi(getFacebookPages, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				name: string;
@@ -1354,7 +1360,7 @@ app.openapi(getPinterestBoards, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items: Array<{
 				id: string;
 				name: string;
@@ -1539,7 +1545,7 @@ app.openapi(getRedditSubreddits, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: {
 				children: Array<{
 					data: {
@@ -1641,7 +1647,7 @@ app.openapi(getRedditFlairs, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as Array<{
+		const json = (await readProviderJson(res)) as Array<{
 			id: string;
 			text: string;
 			text_color: string;
@@ -1756,7 +1762,7 @@ app.openapi(getGmbLocations, async (c) => {
 		if (!accountsRes.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const accountsJson = (await accountsRes.json()) as {
+		const accountsJson = (await readProviderJson(accountsRes)) as {
 			accounts: Array<{ name: string }>;
 		};
 		const gmbAccount = accountsJson.accounts?.[0];
@@ -1776,7 +1782,7 @@ app.openapi(getGmbLocations, async (c) => {
 		if (!locationsRes.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const locationsJson = (await locationsRes.json()) as {
+		const locationsJson = (await readProviderJson(locationsRes)) as {
 			locations: Array<{
 				name: string;
 				title: string;
@@ -1926,7 +1932,7 @@ app.openapi(getYoutubePlaylists, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items?: Array<{
 				id: string;
 				snippet: {
@@ -2087,6 +2093,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 		);
 
 		if (res.status === 401) {
+			await res.body?.cancel().catch(() => undefined);
 			return c.json(
 				{
 					error: {
@@ -2099,6 +2106,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 		}
 
 		if (res.status === 429) {
+			await res.body?.cancel().catch(() => undefined);
 			return c.json(
 				{
 					error: {
@@ -2112,6 +2120,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 		}
 
 		if (!res.ok) {
+			await res.body?.cancel().catch(() => undefined);
 			return c.json(
 				{
 					error: {
@@ -2123,7 +2132,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = await readResponseJson<{
 			data?: {
 				creator_avatar_url?: string;
 				creator_username?: string;
@@ -2135,7 +2144,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 				max_video_post_duration_sec?: number;
 			};
 			error?: { code?: string; message?: string; log_id?: string };
-		};
+		}>(res, 64 * 1024);
 
 		if (json.error?.code && json.error.code !== "ok") {
 			const logSuffix = json.error.log_id
@@ -2482,6 +2491,10 @@ const getNewsletterLists = createRoute({
 			description: "Bad request",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -2510,6 +2523,10 @@ const getNewsletterTemplates = createRoute({
 			description: "Bad request",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -2534,6 +2551,8 @@ app.openapi(getNewsletterLists, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
 		);
+	const denied = assertWorkspaceScope(c, account.workspaceId);
+	if (denied) return denied as never;
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
 		return c.json(
 			{
@@ -2564,7 +2583,7 @@ app.openapi(getNewsletterLists, async (c) => {
 		if (account.platform === "beehiiv") {
 			// Not applicable for Beehiiv (publication-level, not list-level)
 			lists.push({
-				id: (meta.publication_id as string) ?? account.platformAccountId,
+				id: account.platformAccountId,
 				name: (meta.publication_name as string) ?? "All Subscribers",
 				subscriber_count: null,
 			});
@@ -2576,13 +2595,13 @@ app.openapi(getNewsletterLists, async (c) => {
 				{ headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } },
 			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					lists?: Array<{
 						id: string;
 						name: string;
 						stats?: { member_count?: number };
 					}>;
-				};
+				}>(res, 512 * 1024);
 				for (const l of data.lists ?? [])
 					lists.push({
 						id: l.id,
@@ -2591,15 +2610,16 @@ app.openapi(getNewsletterLists, async (c) => {
 					});
 			}
 		} else if (account.platform === "listmonk") {
-			const url = meta.instance_url as string;
-			if (!url || (await isBlockedUrlWithDns(url)))
-				return c.json({ data: [] }, 200);
-			const res = await fetch(`${url}/api/lists?per_page=100`, {
-				headers: { Authorization: `Basic ${token}` },
-				redirect: "error",
-			});
+			const res = await fetchPublicUrl(
+				listmonkApiUrl(account.platformAccountId, "/api/lists?per_page=100"),
+				{
+					headers: { Authorization: `Basic ${token}` },
+					redirect: "error",
+					timeout: 30_000,
+				},
+			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					data?: {
 						results?: Array<{
 							id: number;
@@ -2607,7 +2627,7 @@ app.openapi(getNewsletterLists, async (c) => {
 							subscriber_count?: number;
 						}>;
 					};
-				};
+				}>(res, 512 * 1024);
 				for (const l of data.data?.results ?? [])
 					lists.push({
 						id: String(l.id),
@@ -2647,6 +2667,8 @@ app.openapi(getNewsletterTemplates, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
 		);
+	const denied = assertWorkspaceScope(c, account.workspaceId);
+	if (denied) return denied as never;
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
 		return c.json(
 			{
@@ -2666,7 +2688,6 @@ app.openapi(getNewsletterTemplates, async (c) => {
 			account.id,
 			"access_token",
 		)) ?? "";
-	const meta = (account.metadata ?? {}) as Record<string, unknown>;
 	const templates: Array<{
 		id: string;
 		name: string;
@@ -2675,17 +2696,21 @@ app.openapi(getNewsletterTemplates, async (c) => {
 
 	try {
 		if (account.platform === "listmonk") {
-			const url = meta.instance_url as string;
-			if (!url || (await isBlockedUrlWithDns(url)))
-				return c.json({ data: [] }, 200);
-			const res = await fetch(`${url}/api/templates?per_page=100`, {
-				headers: { Authorization: `Basic ${token}` },
-				redirect: "error",
-			});
+			const res = await fetchPublicUrl(
+				listmonkApiUrl(
+					account.platformAccountId,
+					"/api/templates?per_page=100",
+				),
+				{
+					headers: { Authorization: `Basic ${token}` },
+					redirect: "error",
+					timeout: 30_000,
+				},
+			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					data?: Array<{ id: number; name: string }>;
-				};
+				}>(res, 512 * 1024);
 				for (const t of data.data ?? [])
 					templates.push({ id: String(t.id), name: t.name, preview_url: null });
 			}
@@ -2697,9 +2722,9 @@ app.openapi(getNewsletterTemplates, async (c) => {
 				{ headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } },
 			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					templates?: Array<{ id: number; name: string; thumbnail?: string }>;
-				};
+				}>(res, 512 * 1024);
 				for (const t of data.templates ?? [])
 					templates.push({
 						id: String(t.id),

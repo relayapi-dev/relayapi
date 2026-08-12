@@ -1,6 +1,7 @@
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
+	ADDITIVE_QUEUE_NAME_SET,
 	CONFIG_FILENAME,
 	DEFAULT_SOURCE_REPOSITORY,
 	LOCK_FILENAME,
@@ -65,6 +66,41 @@ function r2Jurisdiction(value: unknown): "default" | "eu" {
 		throw new Error('cloudflare.r2Jurisdiction must be "default" or "eu"');
 	}
 	return parsed;
+}
+
+function isIpHostname(hostname: string): boolean {
+	const unwrapped =
+		hostname.startsWith("[") && hostname.endsWith("]")
+			? hostname.slice(1, -1)
+			: hostname;
+	if (unwrapped.includes(":")) return true;
+	return /^\d+(?:\.\d+){3}$/u.test(unwrapped);
+}
+
+function tiktokVerifiedUrlPrefix(value: unknown, label: string): string {
+	const raw = string(value, label);
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		throw new Error(`${label} must be an HTTPS URL prefix`);
+	}
+	if (
+		parsed.protocol !== "https:" ||
+		parsed.username ||
+		parsed.password ||
+		(parsed.port && parsed.port !== "443") ||
+		parsed.search ||
+		parsed.hash ||
+		isIpHostname(parsed.hostname) ||
+		!raw.endsWith("/") ||
+		!parsed.pathname.endsWith("/")
+	) {
+		throw new Error(
+			`${label} must use HTTPS, a domain (not an IP address), and a path ending in '/', without credentials, a non-default port, query string, or fragment`,
+		);
+	}
+	return parsed.toString();
 }
 
 const CLOUDFLARE_CERTIFICATE_ID =
@@ -155,10 +191,17 @@ export function validateConfig(value: unknown): SelfHostConfig {
 		const rawResources = object(root.resources, "configuration.resources");
 		const rawQueues = object(rawResources.queues, "resources.queues");
 		const queues = Object.fromEntries(
-			QUEUE_NAMES.map((name) => [
-				name,
-				string(rawQueues[name], `resources.queues.${name}`),
-			]),
+			QUEUE_NAMES.flatMap((name) => {
+				const value = rawQueues[name];
+				// These queues were added after schemaVersion 1 configs had already
+				// persisted Cloudflare resource IDs. Leave only the newly introduced
+				// IDs absent so reconciliation can discover/create and persist them;
+				// every queue that existed in the original v1 contract stays required.
+				if (value === undefined && ADDITIVE_QUEUE_NAME_SET.has(name)) {
+					return [];
+				}
+				return [[name, string(value, `resources.queues.${name}`)]];
+			}),
 		) as NonNullable<SelfHostConfig["resources"]>["queues"];
 		resources = {
 			kvNamespaceId: string(
@@ -178,6 +221,24 @@ export function validateConfig(value: unknown): SelfHostConfig {
 			throw new Error("github.repository must use owner/repository format");
 		}
 		github = { repository };
+	}
+
+	let publishing: SelfHostConfig["publishing"];
+	if (root.publishing !== undefined) {
+		const rawPublishing = object(root.publishing, "configuration.publishing");
+		if (!Array.isArray(rawPublishing.tiktokVerifiedUrlPrefixes)) {
+			throw new Error("publishing.tiktokVerifiedUrlPrefixes must be an array");
+		}
+		const prefixes = rawPublishing.tiktokVerifiedUrlPrefixes.map(
+			(value, index) =>
+				tiktokVerifiedUrlPrefix(
+					value,
+					`publishing.tiktokVerifiedUrlPrefixes[${index}]`,
+				),
+		);
+		publishing = {
+			tiktokVerifiedUrlPrefixes: [...new Set(prefixes)],
+		};
 	}
 
 	return {
@@ -205,7 +266,16 @@ export function validateConfig(value: unknown): SelfHostConfig {
 			email: boolean(features.email, "features.email"),
 			ai: boolean(features.ai, "features.ai"),
 			downloader: boolean(features.downloader, "features.downloader"),
+			...(features.mediaProcessing === undefined
+				? {}
+				: {
+						mediaProcessing: boolean(
+							features.mediaProcessing,
+							"features.mediaProcessing",
+						),
+					}),
 		},
+		...(publishing ? { publishing } : {}),
 		...(github ? { github } : {}),
 		...(resources ? { resources } : {}),
 	};

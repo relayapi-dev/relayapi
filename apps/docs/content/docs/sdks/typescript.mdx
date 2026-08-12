@@ -1,12 +1,12 @@
 ---
 title: TypeScript SDK
-description: Official TypeScript / Node.js client library for RelayAPI. Post to 21 platforms with a few lines of code.
+description: Official TypeScript / Node.js client library for RelayAPI. Post to 22 platforms with a few lines of code.
 icon: Package
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-Official TypeScript SDK for RelayAPI. Fully typed, works in Node.js, Bun, Deno, Cloudflare Workers, and the browser. Post to 21 platforms, manage accounts, upload media, and track analytics.
+Official TypeScript SDK for RelayAPI. This is the canonical, current client maintained with the repository's OpenAPI contract. It is fully typed, works in Node.js, Bun, Deno, Cloudflare Workers, and the browser, and covers the complete generated API surface.
 
 ## Setup
 
@@ -84,34 +84,45 @@ for (const acc of accounts.data) {
 ```typescript
 import { readFile } from 'node:fs/promises';
 
-// Get a presigned upload URL
-const presign = await client.media.getPresignURL({
+const file = await readFile('photo.jpg');
+const session = await client.media.createUploadSession({
   filename: 'photo.jpg',
   content_type: 'image/jpeg',
+  size_bytes: file.byteLength,
 });
 
-// PUT once using every exact header returned with the presign
-const file = await readFile('photo.jpg');
-const upload = await fetch(presign.upload_url, {
+if (session.mode !== 'single' || !session.upload) {
+  throw new Error('Use the multipart flow for files larger than 64 MiB');
+}
+
+const upload = await fetch(session.upload.url, {
   method: 'PUT',
   body: file,
-  headers: presign.upload_headers,
+  headers: session.upload.headers,
 });
 if (!upload.ok) throw new Error(`Media upload failed: ${upload.status}`);
 
-// Confirm the object so the pending upload becomes ready
-const storageKey = decodeURIComponent(new URL(presign.url).pathname.slice(1));
-const confirmed = await client.media.confirm({ storage_key: storageKey });
-if (confirmed.id !== presign.id) throw new Error('Confirmed the wrong media intent');
+const confirmed = await client.media.completeUploadSession(session.id, {
+  parts: [],
+});
+if (!confirmed.reference_url) {
+  throw new Error('Ready media attachment URL is unavailable');
+}
 
-// Posts take a media object with the canonical URL, not the media ID
 const post = await client.posts.create({
   content: 'Check out this photo!',
   targets: ['instagram'],
-  media: [{ url: presign.url, type: 'image' }],
+  media: [{ url: confirmed.reference_url, type: 'image' }],
   scheduled_at: 'now',
 });
 ```
+
+Upload sessions accept direct-to-storage objects up to 200 MiB and switch to
+16 MiB multipart parts above 64 MiB. See [Media Uploads](/guides/media-uploads)
+for multipart retry/resume, automatic normalization, and custom covers. The
+legacy `getPresignURL()` / `confirm()` pair remains available for single-PUT
+clients; the Worker-proxy `upload()` method remains capped at 50 MiB. Persist
+`reference_url` for post attachments; `url` is a read URL and may expire.
 
 ### Cross-Post with Per-Platform Content
 

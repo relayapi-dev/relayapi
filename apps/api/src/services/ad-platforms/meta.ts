@@ -4,7 +4,8 @@
 // Docs: https://developers.facebook.com/docs/marketing-apis
 // ---------------------------------------------------------------------------
 
-import { GRAPH_BASE } from "../../config/api-versions";
+import { API_VERSIONS, GRAPH_BASE } from "../../config/api-versions";
+import { readResponseJson } from "../../lib/fetch-public-url";
 import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import type {
 	AdMetricPoint,
@@ -39,6 +40,7 @@ const GRAPH_API = GRAPH_BASE.facebook;
 // Generous enough for ad-creation calls (campaign/adset/creative/ad) while still
 // failing fast instead of waiting out the platform's own long timeout.
 const META_FETCH_TIMEOUT_MS = 20_000;
+const META_JSON_MAX_BYTES = 2 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,9 +64,11 @@ async function metaFetch<T = unknown>(
 		},
 	);
 
-	const data = (await res.json()) as T & {
-		error?: { message: string; code: number };
-	};
+	const data = await readResponseJson<
+		T & {
+			error?: { message: string; code: number };
+		}
+	>(res, META_JSON_MAX_BYTES);
 
 	if (!res.ok || (data as { error?: unknown }).error) {
 		const err = (data as { error?: { message: string; code: number } }).error;
@@ -362,6 +366,38 @@ async function findCreatedObjectByMarker(
 
 export const metaAdAdapter: AdPlatformAdapter = {
 	platform: "meta",
+	capabilities: {
+		apiVersion: API_VERSIONS.meta_graph,
+		authProtocol: "oauth2",
+		requiresDedicatedConnection: true,
+		requiredScopes: ["ads_management", "ads_read"],
+		operations: {
+			account_discovery: { state: "supported" },
+			external_sync: { state: "supported" },
+			analytics: { state: "supported" },
+			campaign_create: { state: "supported" },
+			ad_create: { state: "supported" },
+			boost: { state: "supported" },
+			mutation: { state: "supported" },
+			targeting_search: { state: "supported" },
+			audience_discovery: { state: "supported" },
+			audience_create: { state: "supported" },
+			audience_upload: { state: "supported" },
+		},
+		objectives: [
+			"awareness",
+			"traffic",
+			"engagement",
+			"leads",
+			"conversions",
+			"video_views",
+		],
+		formats: ["link", "image", "video", "existing_post"],
+		officialDocs: [
+			"https://developers.facebook.com/docs/marketing-apis/",
+			"https://developers.facebook.com/docs/graph-api/changelog/versions/",
+		],
+	},
 	// The pure projection of caller-supplied targeting, with no creation
 	// defaults. Post-mutation verification treats this as a subset of the remote
 	// spec, so it must not assert a geography the caller never asked for —

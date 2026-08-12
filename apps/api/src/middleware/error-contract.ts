@@ -5,7 +5,10 @@ import type {
 	NotFoundHandler,
 } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { readResponseBytes, readResponseJson } from "../lib/fetch-public-url";
 import type { Env, Variables } from "../types";
+
+const ERROR_RESPONSE_MAX_BYTES = 256 * 1024;
 
 type ApiContext = Context<{ Bindings: Env; Variables: Variables }>;
 type ErrorDetails = Array<{
@@ -131,8 +134,16 @@ export const errorContractMiddleware: MiddlewareHandler<{
 	let parsed: unknown;
 	let text = "";
 	try {
-		if (contentType.includes("json")) parsed = await response.clone().json();
-		else text = await response.clone().text();
+		if (contentType.includes("json")) {
+			parsed = await readResponseJson(
+				response.clone(),
+				ERROR_RESPONSE_MAX_BYTES,
+			);
+		} else {
+			text = new TextDecoder().decode(
+				await readResponseBytes(response.clone(), ERROR_RESPONSE_MAX_BYTES),
+			);
+		}
 	} catch {
 		// A broken error body is replaced with the stable public contract below.
 	}

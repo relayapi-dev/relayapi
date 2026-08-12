@@ -1,9 +1,11 @@
 import {
 	accountRevocationJobs,
+	adReportJobs,
 	assertKvPrivacyStoreKey,
 	createDb,
 	externalPosts,
 	media,
+	mediaDerivatives,
 	shortLinkCredentials,
 	shortLinks,
 	socialAccounts,
@@ -32,6 +34,7 @@ import { purgePresignedViewCache } from "../lib/r2-presign";
 import { thumbnailKeyFor, thumbnailStorageTarget } from "../lib/thumbnails";
 import { deleteQueueRescueSubjectPage } from "../queues/queue-rescue";
 import type { Env } from "../types";
+import { deleteExactAdReportArtifacts } from "./ad-report-artifact-cleanup";
 import { externalPreviewStorageKey } from "./external-post-sync/previews";
 import { enqueueShortLinkProviderCleanup } from "./external-subject-cleanup";
 import { stagePhoneRelease } from "./phone-number-operations";
@@ -76,11 +79,19 @@ export const WORKSPACE_ERASURE_SURVIVOR_TABLES = [
  * must update this reviewed ownership inventory and its contract test.
  */
 export const WORKSPACE_PURGE_TABLES = [
+	"ad_report_jobs",
+	"ad_conversion_events",
+	"ad_conversion_rules",
+	"ad_leads",
+	"ad_lead_forms",
+	"ad_advanced_resources",
+	"ad_account_promotable_identities",
 	"ad_audiences",
 	"ad_creation_operations",
 	"ads",
 	"ad_campaigns",
 	"ad_accounts",
+	"ad_connections",
 	"ai_agents",
 	"ai_knowledge_bases",
 	"auto_post_rules",
@@ -93,10 +104,14 @@ export const WORKSPACE_PURGE_TABLES = [
 	"idea_media",
 	"ideas",
 	"idea_groups",
+	"whatsapp_identity_aliases",
 	"inbox_conversations",
 	"contacts",
 	"ref_urls",
 	"landing_pages",
+	"media_derivatives",
+	"media_processing_jobs",
+	"media_upload_sessions",
 	"media",
 	"automations",
 	"segments",
@@ -105,6 +120,8 @@ export const WORKSPACE_PURGE_TABLES = [
 	"principal_workspace_grants",
 	"signatures",
 	"telegram_connection_challenges",
+	"social_mutation_operations",
+	"whatsapp_groups",
 	"social_accounts",
 	"subscription_lists",
 	"tags",
@@ -848,18 +865,89 @@ async function deleteMediaBatch(
 			),
 		),
 		...rows.map(({ storageKey, storageBucketLocator }) =>
-			purgePresignedViewCache(
-				env,
-				storageKey,
-				undefined,
-				storageBucketLocator,
-			),
+			purgePresignedViewCache(env, storageKey, undefined, storageBucketLocator),
 		),
 	]);
 	await db.delete(media).where(
 		inArray(
 			media.id,
 			rows.map(({ id }) => id),
+		),
+	);
+	return rows.length;
+}
+
+async function deleteMediaDerivativesBatch(
+	db: ErasureDb,
+	env: Env,
+	job: WorkspaceJob,
+): Promise<number> {
+	const rows = await db
+		.select({
+			id: mediaDerivatives.id,
+			storageKey: mediaDerivatives.storageKey,
+		})
+		.from(mediaDerivatives)
+		.where(
+			and(
+				eq(mediaDerivatives.organizationId, job.organizationId),
+				eq(mediaDerivatives.workspaceId, job.workspaceId),
+			),
+		)
+		.orderBy(mediaDerivatives.id)
+		.limit(DELETE_BATCH_SIZE);
+	if (rows.length === 0) return 0;
+
+	await env.MEDIA_BUCKET.delete(rows.map(({ storageKey }) => storageKey));
+	await Promise.all(
+		rows.map(({ storageKey }) => purgePresignedViewCache(env, storageKey)),
+	);
+	await db.delete(mediaDerivatives).where(
+		and(
+			eq(mediaDerivatives.organizationId, job.organizationId),
+			eq(mediaDerivatives.workspaceId, job.workspaceId),
+			inArray(
+				mediaDerivatives.id,
+				rows.map(({ id }) => id),
+			),
+		),
+	);
+	return rows.length;
+}
+
+async function deleteAdReportJobsBatch(
+	db: ErasureDb,
+	env: Env,
+	job: WorkspaceJob,
+): Promise<number> {
+	const rows = await db
+		.select({
+			id: adReportJobs.id,
+			organizationId: adReportJobs.organizationId,
+			resultObjectKey: adReportJobs.resultObjectKey,
+		})
+		.from(adReportJobs)
+		.where(
+			and(
+				eq(adReportJobs.organizationId, job.organizationId),
+				eq(adReportJobs.workspaceId, job.workspaceId),
+			),
+		)
+		.orderBy(adReportJobs.id)
+		.limit(DELETE_BATCH_SIZE);
+	if (rows.length === 0) return 0;
+
+	// The private object must disappear before the job deletion cascades its
+	// normalized rows and destroys the only exact object-key projection.
+	await deleteExactAdReportArtifacts(env.AD_REPORT_BUCKET, rows);
+	await db.delete(adReportJobs).where(
+		and(
+			eq(adReportJobs.organizationId, job.organizationId),
+			eq(adReportJobs.workspaceId, job.workspaceId),
+			inArray(
+				adReportJobs.id,
+				rows.map(({ id }) => id),
+			),
 		),
 	);
 	return rows.length;
@@ -1007,6 +1095,35 @@ async function deleteWorkspaceTableBatch(
 	job: WorkspaceJob,
 	table: (typeof WORKSPACE_PURGE_TABLES)[number],
 ): Promise<number> {
+	if (table === "ad_report_jobs") {
+		return deleteAdReportJobsBatch(db, env, job);
+	}
+	if (table === "ad_advanced_resources") {
+		const rows = await db.execute<{ deleted: number }>(sql`
+			WITH candidates AS (
+				SELECT target.ctid
+				FROM public.ad_advanced_resources AS target
+				WHERE target.organization_id = ${job.organizationId}
+				  AND target.workspace_id = ${job.workspaceId}
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM public.ad_advanced_resources AS child
+					WHERE child.parent_id = target.id
+				  )
+				ORDER BY target.ctid
+				LIMIT ${DELETE_BATCH_SIZE}
+				FOR UPDATE OF target SKIP LOCKED
+			)
+			DELETE FROM public.ad_advanced_resources AS target
+			USING candidates
+			WHERE target.ctid = candidates.ctid
+			RETURNING 1 AS deleted
+		`);
+		return rows.length;
+	}
+	if (table === "media_derivatives") {
+		return deleteMediaDerivativesBatch(db, env, job);
+	}
 	if (table === "media") return deleteMediaBatch(db, env, job);
 	if (table === "external_posts") {
 		return deleteExternalPostsBatch(db, env, job);

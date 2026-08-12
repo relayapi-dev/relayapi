@@ -28,6 +28,7 @@ import {
 } from "../lib/thumbnails";
 import type { Env } from "../types";
 import { encryptQueueFailurePayload } from "../queues/failures";
+import { enqueueAutomaticMediaNormalization } from "./media-processing-jobs";
 import {
 	deleteStoredObject,
 	getStoredObject,
@@ -157,6 +158,7 @@ export async function processMediaDeletion(
 		.select({
 			id: media.id,
 			organizationId: media.organizationId,
+			workspaceId: media.workspaceId,
 			storageProvider: media.storageProvider,
 			storageBucketLocator: media.storageBucketLocator,
 			storageRegion: media.storageRegion,
@@ -377,6 +379,7 @@ export async function reconcileMediaUploads(env: Env): Promise<number> {
 		.select({
 			id: media.id,
 			organizationId: media.organizationId,
+			workspaceId: media.workspaceId,
 			storageProvider: media.storageProvider,
 			storageBucketLocator: media.storageBucketLocator,
 			storageRegion: media.storageRegion,
@@ -449,8 +452,17 @@ export async function reconcileMediaUploads(env: Env): Promise<number> {
 						),
 					)
 					.returning({ id: media.id });
-				if (updated.length > 0) {
-					await processThumbnailForMedia(db, env, {
+					if (updated.length > 0) {
+						await enqueueAutomaticMediaNormalization(db, env, {
+							...row,
+							mimeType: validation.mimeType,
+						}).catch((error) => {
+							console.error(
+								"[media-processing] automatic recovery handoff failed",
+								error,
+							);
+						});
+						await processThumbnailForMedia(db, env, {
 						...row,
 						mimeType: validation.mimeType,
 					}).catch((error) => {
@@ -795,6 +807,7 @@ async function handleMediaCreated(
 		.select({
 			id: media.id,
 			organizationId: media.organizationId,
+			workspaceId: media.workspaceId,
 			storageProvider: media.storageProvider,
 			storageBucketLocator: media.storageBucketLocator,
 			storageRegion: media.storageRegion,
@@ -910,6 +923,9 @@ async function handleMediaCreated(
 			return;
 		}
 	}
+	await enqueueAutomaticMediaNormalization(db, env, row).catch((error) => {
+		console.error("[media-processing] automatic event handoff failed", error);
+	});
 	if (
 		row.thumbnailStatus === "generated" ||
 		row.thumbnailStatus === "unsupported" ||

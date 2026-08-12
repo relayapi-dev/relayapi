@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import { GRAPH_BASE } from "../../config/api-versions";
 import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import {
@@ -58,15 +62,19 @@ async function fbFetch<T = unknown>(
 	try {
 		const res = await fetchWithTimeout(url.toString());
 		if (!res.ok) {
-			const errorBody = await res.text();
+			const errorBody = await readProviderText(res);
 			console.error(
 				`[facebook-analytics] API error ${res.status} for ${path}: ${errorBody}`,
 			);
-			let fbError: { message?: string; code?: number; error_subcode?: number } | undefined;
+			let fbError:
+				| { message?: string; code?: number; error_subcode?: number }
+				| undefined;
 			try {
 				const parsed = JSON.parse(errorBody);
 				fbError = parsed?.error;
-			} catch { /* not JSON */ }
+			} catch {
+				/* not JSON */
+			}
 			throw classifyFbError(
 				res.status,
 				fbError?.code,
@@ -74,7 +82,7 @@ async function fbFetch<T = unknown>(
 				fbError?.message ?? `HTTP ${res.status}`,
 			);
 		}
-		return (await res.json()) as T;
+		return (await readProviderJson(res)) as T;
 	} catch (err) {
 		if (err instanceof PlatformAnalyticsError) throw err;
 		console.error(`[facebook-analytics] Network error for ${path}:`, err);
@@ -218,7 +226,9 @@ export const facebookAnalytics: PlatformAnalyticsFetcher = {
 					until: prev.to,
 				},
 			);
-		} catch { /* previous period is best-effort */ }
+		} catch {
+			/* previous period is best-effort */
+		}
 
 		const curImpressions = sumMetric(current, "page_impressions");
 		const curEngagement = sumMetric(current, "page_post_engagements");
@@ -303,11 +313,12 @@ export const facebookAnalytics: PlatformAnalyticsFetcher = {
 					`/${post.id}/insights`,
 					accessToken,
 					{
-						metric:
-							"post_media_view,post_clicks,post_reactions_like_total",
+						metric: "post_media_view,post_clicks,post_reactions_like_total",
 					},
 				);
-			} catch { /* per-post insights are non-critical */ }
+			} catch {
+				/* per-post insights are non-critical */
+			}
 
 			let impressions = 0;
 			let clicks = 0;
@@ -376,9 +387,7 @@ export const facebookAnalytics: PlatformAnalyticsFetcher = {
 		if (!insights?.data) return null;
 
 		// --- Cities ---
-		const cityMetric = insights.data.find(
-			(m) => m.name === "page_fans_city",
-		);
+		const cityMetric = insights.data.find((m) => m.name === "page_fans_city");
 		const cityMap =
 			cityMetric?.values?.[0]?.value &&
 			typeof cityMetric.values[0].value === "object"
@@ -486,28 +495,25 @@ export const facebookAnalytics: PlatformAnalyticsFetcher = {
 
 		if (!impressionsMetric?.values) return [];
 
-		const points: DailyMetricPoint[] = impressionsMetric.values.map(
-			(v, i) => {
-				const impressions =
-					typeof v.value === "number" ? v.value : 0;
-				const engagement =
-					typeof engagementMetric?.values?.[i]?.value === "number"
-						? (engagementMetric.values[i].value as number)
-						: 0;
-				const followers =
-					typeof fansMetric?.values?.[i]?.value === "number"
-						? (fansMetric.values[i].value as number)
-						: 0;
+		const points: DailyMetricPoint[] = impressionsMetric.values.map((v, i) => {
+			const impressions = typeof v.value === "number" ? v.value : 0;
+			const engagement =
+				typeof engagementMetric?.values?.[i]?.value === "number"
+					? (engagementMetric.values[i].value as number)
+					: 0;
+			const followers =
+				typeof fansMetric?.values?.[i]?.value === "number"
+					? (fansMetric.values[i].value as number)
+					: 0;
 
-				return {
-					date: v.end_time.slice(0, 10),
-					impressions,
-					engagement,
-					reach: impressions,
-					followers,
-				};
-			},
-		);
+			return {
+				date: v.end_time.slice(0, 10),
+				impressions,
+				engagement,
+				reach: impressions,
+				followers,
+			};
+		});
 
 		return points;
 	},

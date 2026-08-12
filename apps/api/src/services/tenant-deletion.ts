@@ -30,6 +30,7 @@ import {
 import { and, count, eq, inArray, lte, ne, or, sql } from "drizzle-orm";
 import { buildAccountCacheKeys } from "../lib/delete-account";
 import type { Env } from "../types";
+import { adReportOrganizationPrefix } from "./ad-report-artifact-cleanup";
 import { stageSubscriptionCancellation } from "./billing-outbox";
 import { enqueueShortLinkProviderCleanup } from "./external-subject-cleanup";
 import {
@@ -133,6 +134,14 @@ export const TENANT_RETAINED_TABLES = [
 
 export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "account_revocation_jobs"),
+	tenantPurgeTable("public", "ad_report_rows"),
+	tenantPurgeTable("public", "ad_report_jobs"),
+	tenantPurgeTable("public", "ad_conversion_events"),
+	tenantPurgeTable("public", "ad_conversion_rules"),
+	tenantPurgeTable("public", "ad_leads"),
+	tenantPurgeTable("public", "ad_lead_forms"),
+	tenantPurgeTable("public", "ad_advanced_resources"),
+	tenantPurgeTable("public", "ad_account_promotable_identities"),
 	tenantPurgeTable("public", "ad_mutation_operations"),
 	tenantPurgeTable("public", "ad_audiences"),
 	tenantPurgeTable("public", "ad_creation_operations"),
@@ -140,6 +149,7 @@ export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "ads"),
 	tenantPurgeTable("public", "ad_campaigns"),
 	tenantPurgeTable("public", "ad_accounts"),
+	tenantPurgeTable("public", "ad_connections"),
 	tenantPurgeTable("public", "ai_agents"),
 	tenantPurgeTable("public", "ai_knowledge_chunks"),
 	tenantPurgeTable("public", "ai_knowledge_documents"),
@@ -189,7 +199,10 @@ export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "inbox_conversation_notes"),
 	tenantPurgeTable("public", "inbox_event_effects"),
 	tenantPurgeTable("public", "inbox_messages"),
+	tenantPurgeTable("public", "whatsapp_identity_aliases"),
 	tenantPurgeTable("public", "inbox_conversations"),
+	tenantPurgeTable("public", "social_mutation_operations"),
+	tenantPurgeTable("public", "whatsapp_groups"),
 	tenantPurgeTable("public", "public_growth_events"),
 	tenantPurgeTable("public", "queue_schedules"),
 	tenantPurgeTable("public", "qr_codes"),
@@ -199,6 +212,9 @@ export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "invite_token_workspaces"),
 	tenantPurgeTable("public", "invite_tokens"),
 	tenantPurgeTable("public", "landing_pages"),
+	tenantPurgeTable("public", "media_derivatives"),
+	tenantPurgeTable("public", "media_processing_jobs"),
+	tenantPurgeTable("public", "media_upload_sessions"),
 	tenantPurgeTable("public", "media"),
 	tenantPurgeTable("public", "storage_credentials"),
 	tenantPurgeTable("public", "storage_locations"),
@@ -287,6 +303,7 @@ interface CleanupPayload {
 	thumbnail_prefix_complete?: boolean;
 	organization_logo_prefix_complete?: boolean;
 	queue_rescue_prefix_complete?: boolean;
+	ad_report_prefix_complete?: boolean;
 	byos_prefix_complete?: boolean;
 	byos_location_id?: string | null;
 	byos_credential_version?: number | null;
@@ -1072,6 +1089,7 @@ async function processTenantExternalResources(
 		thumbnailComplete,
 		organizationLogoComplete,
 		queueRescueComplete,
+		adReportComplete,
 		byosPageComplete,
 	] = await Promise.all([
 		payload.media_prefix_complete
@@ -1092,6 +1110,12 @@ async function processTenantExternalResources(
 					env.QUEUE_RESCUE_BUCKET,
 					`queue-rescue/by-organization/${job.organizationId}/`,
 				),
+		payload.ad_report_prefix_complete
+			? Promise.resolve(true)
+			: deleteBucketPrefixPage(
+					env.AD_REPORT_BUCKET,
+					adReportOrganizationPrefix(job.organizationId),
+				),
 		payload.byos_prefix_complete || !byosCleanupLocator
 			? Promise.resolve(true)
 			: deleteByosPrefixPage(db, env, byosCleanupLocator, job.organizationId),
@@ -1106,6 +1130,7 @@ async function processTenantExternalResources(
 	payload.thumbnail_prefix_complete = thumbnailComplete;
 	payload.organization_logo_prefix_complete = organizationLogoComplete;
 	payload.queue_rescue_prefix_complete = queueRescueComplete;
+	payload.ad_report_prefix_complete = adReportComplete;
 	if (byosCleanupLocator && byosPageComplete) {
 		payload.byos_location_id = byosCleanupLocator.locationId;
 		payload.byos_credential_version = byosCleanupLocator.credentialVersion;
@@ -1125,6 +1150,7 @@ async function processTenantExternalResources(
 		thumbnailComplete &&
 		organizationLogoComplete &&
 		queueRescueComplete &&
+		adReportComplete &&
 		byosComplete &&
 		payload.provider_accounts.length === 0;
 	return cleanupComplete
@@ -1239,6 +1265,28 @@ async function deleteTenantTableBatch(
 	organizationId: string,
 	table: (typeof TENANT_PURGE_TABLES)[number],
 ): Promise<number> {
+	if (table.schema === "public" && table.table === "ad_advanced_resources") {
+		const deleted = await db.execute<{ deleted: number }>(sql`
+			WITH candidates AS (
+				SELECT target.ctid
+				FROM public.ad_advanced_resources AS target
+				WHERE target.organization_id = ${organizationId}
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM public.ad_advanced_resources AS child
+					WHERE child.parent_id = target.id
+				  )
+				ORDER BY target.ctid
+				LIMIT ${TENANT_DELETE_BATCH_SIZE}
+				FOR UPDATE OF target SKIP LOCKED
+			)
+			DELETE FROM public.ad_advanced_resources AS target
+			USING candidates
+			WHERE target.ctid = candidates.ctid
+			RETURNING 1 AS deleted
+		`);
+		return deleted.length;
+	}
 	if (table.schema === "public" && table.table === "short_links") {
 		const deleted = await db.transaction(async (tx) => {
 			const candidates = await tx

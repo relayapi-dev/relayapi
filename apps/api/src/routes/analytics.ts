@@ -6,13 +6,15 @@ import {
 	postTargets,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import type { Context } from "hono";
 import { decryptAccountToken } from "../lib/account-token-crypto";
-import {
-	cumulativeSnapshotsToDecay,
-	cumulativeTimelineByDay,
-} from "../lib/analytics-observations";
+import { cumulativeSnapshotsToDecay } from "../lib/analytics-observations";
 import { mapConcurrently } from "../lib/concurrency";
+import {
+	type LegacyAnalyticsScope,
+	legacyAnalyticsConditions,
+} from "../lib/legacy-analytics-scope";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
@@ -60,6 +62,21 @@ const ANALYTICS_OVERVIEW_CACHE_TTL_SECONDS = 300;
 /** Post-level metrics are expensive (N per-media insights calls); cache longer. */
 const ANALYTICS_POSTS_CACHE_TTL_SECONDS = 900; // 15 minutes
 
+const legacyResourceErrorResponses = {
+	400: {
+		description: "Invalid analytics resource or filter",
+		content: { "application/json": { schema: ErrorResponse } },
+	},
+	403: {
+		description: "Workspace access denied",
+		content: { "application/json": { schema: ErrorResponse } },
+	},
+	404: {
+		description: "Analytics resource not found",
+		content: { "application/json": { schema: ErrorResponse } },
+	},
+} as const;
+
 // --- Route definitions ---
 
 const getAnalytics = createRoute({
@@ -79,6 +96,7 @@ const getAnalytics = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		...legacyResourceErrorResponses,
 	},
 });
 
@@ -99,6 +117,7 @@ const getDailyMetrics = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		...legacyResourceErrorResponses,
 	},
 });
 
@@ -119,6 +138,7 @@ const getBestTime = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		...legacyResourceErrorResponses,
 	},
 });
 
@@ -139,6 +159,7 @@ const getContentDecay = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		...legacyResourceErrorResponses,
 	},
 });
 
@@ -159,6 +180,7 @@ const getPostTimeline = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		...legacyResourceErrorResponses,
 	},
 });
 
@@ -181,6 +203,7 @@ const getPostingFrequency = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		...legacyResourceErrorResponses,
 	},
 });
 
@@ -203,6 +226,7 @@ const getYouTubeDailyViews = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		...legacyResourceErrorResponses,
 	},
 });
 
@@ -212,6 +236,81 @@ const getYouTubeDailyViews = createRoute({
 const DEFAULT_TARGETS_LIMIT = 1000;
 /** Hard upper bound a caller can request. */
 const MAX_TARGETS_LIMIT = 5000;
+
+type AnalyticsContext = Context<{
+	Bindings: Env;
+	Variables: Variables;
+}>;
+
+async function requireLegacyAnalyticsAccount(
+	c: AnalyticsContext,
+	accountId: string,
+	requiredPlatform?: string,
+) {
+	const [account] = await c
+		.get("db")
+		.select({
+			id: socialAccounts.id,
+			platform: socialAccounts.platform,
+			workspaceId: socialAccounts.workspaceId,
+		})
+		.from(socialAccounts)
+		.where(
+			and(
+				eq(socialAccounts.id, accountId),
+				eq(socialAccounts.organizationId, c.get("orgId")),
+			),
+		)
+		.limit(1);
+
+	if (!account) {
+		return c.json(
+			{
+				error: {
+					code: "ACCOUNT_NOT_FOUND",
+					message: "Social account not found",
+				},
+			},
+			404,
+		);
+	}
+	const denied = assertWorkspaceScope(c, account.workspaceId);
+	if (denied) return denied;
+	if (requiredPlatform && account.platform !== requiredPlatform) {
+		return c.json(
+			{
+				error: {
+					code: "INVALID_ACCOUNT_PLATFORM",
+					message: `Account must be a ${requiredPlatform} account`,
+				},
+			},
+			400,
+		);
+	}
+	return account;
+}
+
+async function requireLegacyAnalyticsPost(c: AnalyticsContext, postId: string) {
+	const [post] = await c
+		.get("db")
+		.select({ id: posts.id, workspaceId: posts.workspaceId })
+		.from(posts)
+		.where(and(eq(posts.id, postId), eq(posts.organizationId, c.get("orgId"))))
+		.limit(1);
+
+	if (!post) {
+		return c.json(
+			{
+				error: {
+					code: "POST_NOT_FOUND",
+					message: "Post not found",
+				},
+			},
+			404,
+		);
+	}
+	return assertWorkspaceScope(c, post.workspaceId) ?? post;
+}
 
 /**
  * Fetches post targets for an org in a single JOIN query (no N+1).
@@ -225,17 +324,11 @@ const MAX_TARGETS_LIMIT = 5000;
  */
 async function getOrgPostTargetIds(
 	db: ReturnType<typeof createDb>,
-	orgId: string,
-	startDate?: string,
-	endDate?: string,
-	platform?: string,
+	filters: LegacyAnalyticsScope,
 	limit: number = DEFAULT_TARGETS_LIMIT,
 	offset = 0,
 ) {
-	const conditions = [eq(posts.organizationId, orgId)];
-	if (startDate) conditions.push(gte(posts.publishedAt, new Date(startDate)));
-	if (endDate) conditions.push(lte(posts.publishedAt, new Date(endDate)));
-	if (platform) conditions.push(eq(postTargets.platform, platform as never));
+	const conditions = legacyAnalyticsConditions(filters);
 
 	const effectiveLimit = Math.min(Math.max(limit, 1), MAX_TARGETS_LIMIT);
 	const effectiveOffset = Math.max(offset, 0);
@@ -251,7 +344,7 @@ async function getOrgPostTargetIds(
 		.from(postTargets)
 		.innerJoin(posts, eq(postTargets.postId, posts.id))
 		.where(and(...conditions))
-		.orderBy(desc(posts.publishedAt))
+		.orderBy(desc(posts.publishedAt), desc(postTargets.id))
 		.limit(effectiveLimit);
 
 	const targets = await (effectiveOffset > 0
@@ -269,10 +362,7 @@ async function getOrgPostTargetIds(
  */
 async function getOrgAnalyticsOverview(
 	db: ReturnType<typeof createDb>,
-	orgId: string,
-	startDate?: string,
-	endDate?: string,
-	platform?: string,
+	filters: LegacyAnalyticsScope,
 ): Promise<{
 	total_posts: number;
 	total_impressions: number;
@@ -282,13 +372,8 @@ async function getOrgAnalyticsOverview(
 	total_clicks: number;
 	total_views: number;
 }> {
-	const startCond = startDate
-		? sql`AND p.published_at >= ${new Date(startDate)}`
-		: sql``;
-	const endCond = endDate
-		? sql`AND p.published_at <= ${new Date(endDate)}`
-		: sql``;
-	const platformCond = platform ? sql`AND pt.platform = ${platform}` : sql``;
+	const conditions = legacyAnalyticsConditions(filters);
+	const where = and(...conditions);
 
 	const rows = await db.execute<{
 		total_posts: string | number;
@@ -300,31 +385,25 @@ async function getOrgAnalyticsOverview(
 		total_views: string | number | null;
 	}>(sql`
 		WITH latest AS (
-			SELECT DISTINCT ON (pa.post_target_id)
-				pa.post_target_id,
-				pa.impressions,
-				pa.likes,
-				pa.comments,
-				pa.shares,
-				pa.clicks,
-				pa.views
-			FROM post_analytics pa
-			JOIN post_targets pt ON pt.id = pa.post_target_id
-			JOIN posts p ON p.id = pt.post_id
-			WHERE p.organization_id = ${orgId}
-				${startCond}
-				${endCond}
-				${platformCond}
-			ORDER BY pa.post_target_id, pa.collected_at DESC, pa.id DESC
+			SELECT DISTINCT ON (${postAnalytics.postTargetId})
+				${postAnalytics.postTargetId} AS post_target_id,
+				${postAnalytics.impressions} AS impressions,
+				${postAnalytics.likes} AS likes,
+				${postAnalytics.comments} AS comments,
+				${postAnalytics.shares} AS shares,
+				${postAnalytics.clicks} AS clicks,
+				${postAnalytics.views} AS views
+			FROM ${postAnalytics}
+			JOIN ${postTargets} ON ${postTargets.id} = ${postAnalytics.postTargetId}
+			JOIN ${posts} ON ${posts.id} = ${postTargets.postId}
+			WHERE ${where}
+			ORDER BY ${postAnalytics.postTargetId}, ${postAnalytics.collectedAt} DESC, ${postAnalytics.id} DESC
 		),
 		target_count AS (
 			SELECT COUNT(*)::bigint AS n
-			FROM post_targets pt
-			JOIN posts p ON p.id = pt.post_id
-			WHERE p.organization_id = ${orgId}
-				${startCond}
-				${endCond}
-				${platformCond}
+			FROM ${postTargets}
+			JOIN ${posts} ON ${posts.id} = ${postTargets.postId}
+			WHERE ${where}
 		)
 		SELECT
 			(SELECT n FROM target_count) AS total_posts,
@@ -401,38 +480,51 @@ app.openapi(getAnalytics, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
 	const db = c.get("db");
+	if (query.account_id) {
+		const account = await requireLegacyAnalyticsAccount(c, query.account_id);
+		if (account instanceof Response) return account as never;
+	}
+	if (query.post_id) {
+		const post = await requireLegacyAnalyticsPost(c, query.post_id);
+		if (post instanceof Response) return post as never;
+	}
+	const filters: LegacyAnalyticsScope = {
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		workspaceId: query.workspace_id,
+		accountId: query.account_id,
+		postId: query.post_id,
+		platform: query.platform,
+		fromDate: query.from_date ? new Date(query.from_date) : undefined,
+		toDate: query.to_date ? new Date(query.to_date) : undefined,
+	};
 
 	// `data` is bounded by the validated `limit` (1-100, default 20) so a single
 	// response can't explode memory / JSON for very active orgs. `overview` is
 	// computed separately via a SQL aggregate, so totals stay accurate even when
 	// `data` is truncated. We request `limit + 1` to detect overflow precisely.
 	const [targets, overview] = await Promise.all([
-		getOrgPostTargetIds(
-			db,
-			orgId,
-			query.from_date,
-			query.to_date,
-			query.platform,
-			query.limit + 1,
-			query.offset,
-		),
-		getOrgAnalyticsOverview(
-			db,
-			orgId,
-			query.from_date,
-			query.to_date,
-			query.platform,
-		),
+		getOrgPostTargetIds(db, filters, query.limit + 1, query.offset),
+		getOrgAnalyticsOverview(db, filters),
 	]);
 
 	// Trim the overflow sentinel row before serializing.
 	const hasMore = targets.length > query.limit;
 	if (hasMore) targets.length = query.limit;
-
+	const nextOffset = hasMore ? query.offset + query.limit : null;
 	const truncated = hasMore || overview.total_posts > targets.length;
 
 	if (targets.length === 0) {
-		return c.json({ data: [], overview, truncated }, 200);
+		return c.json(
+			{
+				data: [],
+				overview,
+				has_more: hasMore,
+				next_offset: nextOffset,
+				truncated,
+			},
+			200,
+		);
 	}
 
 	// Single batched query for latest analytics per target
@@ -460,50 +552,123 @@ app.openapi(getAnalytics, async (c) => {
 		}
 	}
 
-	return c.json({ data, overview, truncated }, 200);
+	return c.json(
+		{
+			data,
+			overview,
+			has_more: hasMore,
+			next_offset: nextOffset,
+			truncated,
+		},
+		200,
+	);
 });
 
 app.openapi(getDailyMetrics, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
 	const db = c.get("db");
+	if (query.account_id) {
+		const account = await requireLegacyAnalyticsAccount(c, query.account_id);
+		if (account instanceof Response) return account as never;
+	}
 
 	const startDate = query.from_date
 		? new Date(query.from_date)
 		: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 	const endDate = query.to_date ? new Date(query.to_date) : new Date();
+	const conditions = legacyAnalyticsConditions({
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		workspaceId: query.workspace_id,
+		accountId: query.account_id,
+		platform: query.platform,
+		fromDate: startDate,
+		toDate: endDate,
+	});
 
-	// Single JOIN to get posts + targets in date range
-	const rows = await db
-		.select({
-			postId: posts.id,
-			publishedAt: posts.publishedAt,
-			targetId: postTargets.id,
-			platform: postTargets.platform,
-		})
-		.from(posts)
-		.innerJoin(postTargets, eq(postTargets.postId, posts.id))
-		.where(
-			and(
-				eq(posts.organizationId, orgId),
-				gte(posts.publishedAt, startDate),
-				lte(posts.publishedAt, endDate),
-			),
+	// Aggregate latest-per-target observations in PostgreSQL. GROUPING SETS
+	// returns one totals row and one bounded platform-count row per UTC day, so
+	// the Worker never materializes every post target or a giant IN (...) list.
+	const dailyRows = await db.execute<{
+		date: string;
+		platform: string | null;
+		post_count: string | number;
+		impressions: string | number | null;
+		likes: string | number | null;
+		comments: string | number | null;
+		shares: string | number | null;
+		clicks: string | number | null;
+		views: string | number | null;
+	}>(sql`
+		WITH scoped_targets AS (
+			SELECT
+				${postTargets.id} AS post_target_id,
+				${posts.id} AS post_id,
+				${posts.publishedAt} AS published_at,
+				${postTargets.platform} AS platform
+			FROM ${posts}
+			INNER JOIN ${postTargets} ON ${postTargets.postId} = ${posts.id}
+			WHERE ${and(...conditions)}
+				AND ${posts.publishedAt} IS NOT NULL
+		),
+		latest AS (
+			SELECT DISTINCT ON (${postAnalytics.postTargetId})
+				${postAnalytics.postTargetId} AS post_target_id,
+				${postAnalytics.impressions} AS impressions,
+				${postAnalytics.likes} AS likes,
+				${postAnalytics.comments} AS comments,
+				${postAnalytics.shares} AS shares,
+				${postAnalytics.clicks} AS clicks,
+				${postAnalytics.views} AS views
+			FROM ${postAnalytics}
+			INNER JOIN scoped_targets
+				ON scoped_targets.post_target_id = ${postAnalytics.postTargetId}
+			ORDER BY
+				${postAnalytics.postTargetId},
+				${postAnalytics.collectedAt} DESC,
+				${postAnalytics.id} DESC
 		)
-		.orderBy(posts.publishedAt);
+		SELECT
+			to_char(scoped_targets.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+			CASE WHEN GROUPING(scoped_targets.platform) = 1
+				THEN NULL ELSE scoped_targets.platform::text END AS platform,
+			COUNT(DISTINCT scoped_targets.post_id)::integer AS post_count,
+			COALESCE(SUM(latest.impressions), 0) AS impressions,
+			COALESCE(SUM(latest.likes), 0) AS likes,
+			COALESCE(SUM(latest.comments), 0) AS comments,
+			COALESCE(SUM(latest.shares), 0) AS shares,
+			COALESCE(SUM(latest.clicks), 0) AS clicks,
+			COALESCE(SUM(latest.views), 0) AS views
+		FROM scoped_targets
+		LEFT JOIN latest ON latest.post_target_id = scoped_targets.post_target_id
+		GROUP BY GROUPING SETS (
+			(to_char(scoped_targets.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')),
+			(to_char(scoped_targets.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD'), scoped_targets.platform)
+		)
+		ORDER BY date, platform NULLS FIRST
+	`);
 
-	if (rows.length === 0) return c.json({ data: [] }, 200);
-
-	// Batch fetch latest analytics for all targets
-	const targetIds = [...new Set(rows.map((r) => r.targetId))];
-	const analyticsRows = await getLatestAnalyticsForTargets(db, targetIds);
-	const analyticsMap = new Map(analyticsRows.map((a) => [a.postTargetId, a]));
-
-	// Group by date — track unique postIds per date for post_count
-	const dailyMap = new Map<
+	type DailyRow = {
+		date: string;
+		platform: string | null;
+		post_count: string | number;
+		impressions: string | number | null;
+		likes: string | number | null;
+		comments: string | number | null;
+		shares: string | number | null;
+		clicks: string | number | null;
+		views: string | number | null;
+	};
+	const dailyResult = dailyRows as { rows?: DailyRow[] } & ArrayLike<DailyRow>;
+	const rawDailyRows = dailyResult.rows ?? Array.from(dailyResult);
+	const toNumber = (value: string | number | null | undefined) =>
+		value == null ? 0 : typeof value === "number" ? value : Number(value);
+	const byDate = new Map<
 		string,
 		{
-			postIds: Set<string>;
+			date: string;
+			post_count: number;
 			platforms: Record<string, number>;
 			impressions: number;
 			likes: number;
@@ -513,93 +678,80 @@ app.openapi(getDailyMetrics, async (c) => {
 			views: number;
 		}
 	>();
-
-	for (const row of rows) {
-		if (!row.publishedAt) continue;
-		const dateStr = row.publishedAt.toISOString().slice(0, 10);
-
-		let existing = dailyMap.get(dateStr);
-		if (!existing) {
-			existing = {
-				postIds: new Set(),
-				platforms: {},
-				impressions: 0,
-				likes: 0,
-				comments: 0,
-				shares: 0,
-				clicks: 0,
-				views: 0,
-			};
-			dailyMap.set(dateStr, existing);
+	for (const row of rawDailyRows) {
+		const current = byDate.get(row.date) ?? {
+			date: row.date,
+			post_count: 0,
+			platforms: {},
+			impressions: 0,
+			likes: 0,
+			comments: 0,
+			shares: 0,
+			clicks: 0,
+			views: 0,
+		};
+		if (row.platform) {
+			current.platforms[row.platform] = toNumber(row.post_count);
+		} else {
+			current.post_count = toNumber(row.post_count);
+			current.impressions = toNumber(row.impressions);
+			current.likes = toNumber(row.likes);
+			current.comments = toNumber(row.comments);
+			current.shares = toNumber(row.shares);
+			current.clicks = toNumber(row.clicks);
+			current.views = toNumber(row.views);
 		}
-
-		existing.postIds.add(row.postId);
-		existing.platforms[row.platform] =
-			(existing.platforms[row.platform] ?? 0) + 1;
-
-		const analytics = analyticsMap.get(row.targetId);
-		if (analytics) {
-			existing.impressions += analytics.impressions ?? 0;
-			existing.likes += analytics.likes ?? 0;
-			existing.comments += analytics.comments ?? 0;
-			existing.shares += analytics.shares ?? 0;
-			existing.clicks += analytics.clicks ?? 0;
-			existing.views += analytics.views ?? 0;
-		}
+		byDate.set(row.date, current);
 	}
-
-	const data = Array.from(dailyMap.entries()).map(([date, metrics]) => ({
-		date,
-		post_count: metrics.postIds.size,
-		platforms: metrics.platforms,
-		impressions: metrics.impressions,
-		likes: metrics.likes,
-		comments: metrics.comments,
-		shares: metrics.shares,
-		clicks: metrics.clicks,
-		views: metrics.views,
-	}));
+	const data = [...byDate.values()].sort((left, right) =>
+		left.date.localeCompare(right.date),
+	);
 
 	return c.json({ data }, 200);
 });
 
 app.openapi(getBestTime, async (c) => {
 	const orgId = c.get("orgId");
+	const query = c.req.valid("query");
+	if (query.account_id) {
+		const account = await requireLegacyAnalyticsAccount(c, query.account_id);
+		if (account instanceof Response) return account as never;
+	}
 
-	// Route through the shared 6h KV cache instead of duplicating an unbounded
-	// full-history scan on every request. The cached path bounds the scan to a
-	// recent window and persists the write-back via executionCtx.waitUntil.
+	// Route through the shared 6h KV cache. PostgreSQL performs the aggregation
+	// and returns at most 168 weekday/hour buckets, while executionCtx.waitUntil
+	// keeps cache persistence alive after the response is returned.
 	// Response shape (BestTimeSlot[]) is identical; values may be up to 6h stale,
 	// consistent with the slot-finder consumer of the same cache.
-	const data = await getCachedBestTimes(c.env, orgId, c.executionCtx);
+	const bestTimeTo = query.to_date ? new Date(query.to_date) : new Date();
+	const bestTimeFrom = query.from_date
+		? new Date(query.from_date)
+		: new Date(bestTimeTo.getTime() - 366 * 86_400_000);
+	const data = await getCachedBestTimes(
+		c.env,
+		c.get("db"),
+		{
+			organizationId: orgId,
+			workspaceScope: c.get("workspaceScope"),
+			workspaceId: query.workspace_id,
+			accountId: query.account_id,
+			platform: query.platform,
+			fromDate: bestTimeFrom,
+			toDate: bestTimeTo,
+		},
+		c.executionCtx,
+	);
 
 	return c.json({ data }, 200);
 });
 
 // @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(getContentDecay, async (c) => {
-	const orgId = c.get("orgId");
 	const { post_id, days } = c.req.valid("query");
 	const db = c.get("db");
 
-	// Verify post ownership
-	const [post] = await db
-		.select({ id: posts.id })
-		.from(posts)
-		.where(and(eq(posts.id, post_id), eq(posts.organizationId, orgId)))
-		.limit(1);
-
-	if (!post) {
-		return c.json(
-			{
-				post_id,
-				platform: "unknown" as const,
-				data: [],
-				half_life_days: null,
-			},
-			200,
-		);
-	}
+	const post = await requireLegacyAnalyticsPost(c, post_id);
+	if (post instanceof Response) return post as never;
 
 	const [target] = await db
 		.select({
@@ -665,57 +817,114 @@ app.openapi(getContentDecay, async (c) => {
 });
 
 app.openapi(getPostTimeline, async (c) => {
-	const orgId = c.get("orgId");
 	const { post_id, from_date, to_date } = c.req.valid("query");
 	const db = c.get("db");
 
-	const [post] = await db
-		.select({ id: posts.id })
-		.from(posts)
-		.where(and(eq(posts.id, post_id), eq(posts.organizationId, orgId)))
-		.limit(1);
+	const post = await requireLegacyAnalyticsPost(c, post_id);
+	if (post instanceof Response) return post as never;
 
-	if (!post) {
-		return c.json({ post_id, data: [] }, 200);
-	}
+	const endDate = to_date ? new Date(to_date) : new Date();
+	const startDate = from_date
+		? new Date(from_date)
+		: new Date(endDate.getTime() - 366 * 86_400_000);
 
-	// Get all target IDs for this post, then batch-fetch all snapshots
-	const targets = await db
-		.select({ id: postTargets.id })
-		.from(postTargets)
-		.where(eq(postTargets.postId, post_id));
-
-	const targetIds = targets.map((t) => t.id);
-	if (targetIds.length === 0) {
-		return c.json({ post_id, data: [] }, 200);
-	}
-
-	// Single query for all snapshots across all targets. Honor the documented
-	// from_date/to_date window and project only the columns aggregated below
-	// (the (post_target_id, collected_at) index covers this).
-	const snapshotConditions = [inArray(postAnalytics.postTargetId, targetIds)];
-	if (from_date)
-		snapshotConditions.push(
-			gte(postAnalytics.collectedAt, new Date(from_date)),
-		);
-	if (to_date)
-		snapshotConditions.push(lte(postAnalytics.collectedAt, new Date(to_date)));
-
-	const snapshots = await db
-		.select({
-			id: postAnalytics.id,
-			postTargetId: postAnalytics.postTargetId,
-			collectedAt: postAnalytics.collectedAt,
-			impressions: postAnalytics.impressions,
-			likes: postAnalytics.likes,
-			comments: postAnalytics.comments,
-			shares: postAnalytics.shares,
-			clicks: postAnalytics.clicks,
-			views: postAnalytics.views,
-		})
-		.from(postAnalytics)
-		.where(and(...snapshotConditions));
-	const data = cumulativeTimelineByDay(snapshots);
+	// Provider counters are cumulative. Select only the deterministic latest
+	// value per target/day, turn each target into daily deltas with LAG, then use
+	// a cumulative window over the summed deltas. The result is at most one row
+	// per requested day regardless of polling frequency or target count.
+	const timelineRows = await db.execute<{
+		date: string;
+		impressions: string | number | null;
+		likes: string | number | null;
+		comments: string | number | null;
+		shares: string | number | null;
+		clicks: string | number | null;
+		views: string | number | null;
+	}>(sql`
+		WITH daily_latest AS (
+			SELECT DISTINCT ON (
+				${postAnalytics.postTargetId},
+				(${postAnalytics.collectedAt} AT TIME ZONE 'UTC')::date
+			)
+				${postAnalytics.postTargetId} AS post_target_id,
+				(${postAnalytics.collectedAt} AT TIME ZONE 'UTC')::date AS day,
+				COALESCE(${postAnalytics.impressions}, 0)::bigint AS impressions,
+				COALESCE(${postAnalytics.likes}, 0)::bigint AS likes,
+				COALESCE(${postAnalytics.comments}, 0)::bigint AS comments,
+				COALESCE(${postAnalytics.shares}, 0)::bigint AS shares,
+				COALESCE(${postAnalytics.clicks}, 0)::bigint AS clicks,
+				COALESCE(${postAnalytics.views}, 0)::bigint AS views
+			FROM ${postAnalytics}
+			INNER JOIN ${postTargets}
+				ON ${postTargets.id} = ${postAnalytics.postTargetId}
+			WHERE ${postTargets.postId} = ${post_id}
+				AND ${postAnalytics.collectedAt} >= ${startDate}
+				AND ${postAnalytics.collectedAt} <= ${endDate}
+			ORDER BY
+				${postAnalytics.postTargetId},
+				(${postAnalytics.collectedAt} AT TIME ZONE 'UTC')::date,
+				${postAnalytics.collectedAt} DESC,
+				${postAnalytics.id} DESC
+		),
+		deltas AS (
+			SELECT
+				post_target_id,
+				day,
+				impressions - COALESCE(LAG(impressions) OVER target_days, 0) AS impressions,
+				likes - COALESCE(LAG(likes) OVER target_days, 0) AS likes,
+				comments - COALESCE(LAG(comments) OVER target_days, 0) AS comments,
+				shares - COALESCE(LAG(shares) OVER target_days, 0) AS shares,
+				clicks - COALESCE(LAG(clicks) OVER target_days, 0) AS clicks,
+				views - COALESCE(LAG(views) OVER target_days, 0) AS views
+			FROM daily_latest
+			WINDOW target_days AS (PARTITION BY post_target_id ORDER BY day)
+		),
+		daily_deltas AS (
+			SELECT
+				day,
+				SUM(impressions) AS impressions,
+				SUM(likes) AS likes,
+				SUM(comments) AS comments,
+				SUM(shares) AS shares,
+				SUM(clicks) AS clicks,
+				SUM(views) AS views
+			FROM deltas
+			GROUP BY day
+		)
+		SELECT
+			to_char(day, 'YYYY-MM-DD') AS date,
+			SUM(impressions) OVER (ORDER BY day) AS impressions,
+			SUM(likes) OVER (ORDER BY day) AS likes,
+			SUM(comments) OVER (ORDER BY day) AS comments,
+			SUM(shares) OVER (ORDER BY day) AS shares,
+			SUM(clicks) OVER (ORDER BY day) AS clicks,
+			SUM(views) OVER (ORDER BY day) AS views
+		FROM daily_deltas
+		ORDER BY day
+	`);
+	type TimelineRow = {
+		date: string;
+		impressions: string | number | null;
+		likes: string | number | null;
+		comments: string | number | null;
+		shares: string | number | null;
+		clicks: string | number | null;
+		views: string | number | null;
+	};
+	const timelineResult = timelineRows as {
+		rows?: TimelineRow[];
+	} & ArrayLike<TimelineRow>;
+	const toNumber = (value: string | number | null) =>
+		value == null ? 0 : typeof value === "number" ? value : Number(value);
+	const data = (timelineResult.rows ?? Array.from(timelineResult)).map((row) => ({
+		date: row.date,
+		impressions: toNumber(row.impressions),
+		likes: toNumber(row.likes),
+		comments: toNumber(row.comments),
+		shares: toNumber(row.shares),
+		clicks: toNumber(row.clicks),
+		views: toNumber(row.views),
+	}));
 
 	return c.json({ post_id, data }, 200);
 });
@@ -724,20 +933,33 @@ app.openapi(getPostingFrequency, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
 	const db = c.get("db");
+	if (query.account_id) {
+		const account = await requireLegacyAnalyticsAccount(c, query.account_id);
+		if (account instanceof Response) return account as never;
+	}
 
 	// Bucket by ISO week entirely in SQL so the Worker only receives ~one row
 	// per week, never the org's full publish history. Engagement is summed from
 	// the latest snapshot per target (DISTINCT ON ... ORDER BY collected_at DESC),
 	// counting DISTINCT posts per week. Wires up the documented filters.
-	const startCond = query.from_date
-		? sql`AND p.published_at >= ${new Date(query.from_date)}`
-		: sql``;
-	const endCond = query.to_date
-		? sql`AND p.published_at <= ${new Date(query.to_date)}`
-		: sql``;
-	const platformCond = query.platform
-		? sql`AND pt.platform = ${query.platform}`
-		: sql``;
+	const frequencyTo = query.to_date ? new Date(query.to_date) : new Date();
+	const frequencyFrom = query.from_date
+		? new Date(query.from_date)
+		: new Date(frequencyTo.getTime() - 366 * 86_400_000);
+	const frequencyConditions = legacyAnalyticsConditions({
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		workspaceId: query.workspace_id,
+		accountId: query.account_id,
+		platform: query.platform,
+		fromDate: frequencyFrom,
+		toDate: frequencyTo,
+	});
+	frequencyConditions.push(
+		eq(posts.status, "published"),
+		sql`${posts.publishedAt} IS NOT NULL`,
+	);
+	const frequencyWhere = and(...frequencyConditions);
 
 	const weekRows = await db.execute<{
 		post_count: string | number;
@@ -745,35 +967,27 @@ app.openapi(getPostingFrequency, async (c) => {
 		total_impressions: string | number | null;
 	}>(sql`
 		WITH latest AS (
-			SELECT DISTINCT ON (pa.post_target_id)
-				pa.post_target_id,
-				pt.post_id,
-				p.published_at,
-				pa.impressions,
-				pa.likes,
-				pa.comments,
-				pa.shares
-			FROM post_analytics pa
-			JOIN post_targets pt ON pt.id = pa.post_target_id
-			JOIN posts p ON p.id = pt.post_id
-			WHERE p.organization_id = ${orgId}
-				AND p.status = 'published'
-				AND p.published_at IS NOT NULL
-				${startCond}
-				${endCond}
-				${platformCond}
-			ORDER BY pa.post_target_id, pa.collected_at DESC, pa.id DESC
+			SELECT DISTINCT ON (${postAnalytics.postTargetId})
+				${postAnalytics.postTargetId} AS post_target_id,
+				${postTargets.postId} AS post_id,
+				${posts.publishedAt} AS published_at,
+				${postAnalytics.impressions} AS impressions,
+				${postAnalytics.likes} AS likes,
+				${postAnalytics.comments} AS comments,
+				${postAnalytics.shares} AS shares
+			FROM ${postAnalytics}
+			JOIN ${postTargets} ON ${postTargets.id} = ${postAnalytics.postTargetId}
+			JOIN ${posts} ON ${posts.id} = ${postTargets.postId}
+			WHERE ${frequencyWhere}
+			ORDER BY ${postAnalytics.postTargetId}, ${postAnalytics.collectedAt} DESC, ${postAnalytics.id} DESC
 		),
 		posts_in_scope AS (
-			SELECT DISTINCT p.id AS post_id, p.published_at
-			FROM posts p
-			JOIN post_targets pt ON pt.post_id = p.id
-			WHERE p.organization_id = ${orgId}
-				AND p.status = 'published'
-				AND p.published_at IS NOT NULL
-				${startCond}
-				${endCond}
-				${platformCond}
+			SELECT DISTINCT
+				${posts.id} AS post_id,
+				${posts.publishedAt} AS published_at
+			FROM ${posts}
+			JOIN ${postTargets} ON ${postTargets.postId} = ${posts.id}
+			WHERE ${frequencyWhere}
 		),
 		weekly AS (
 			SELECT
@@ -863,44 +1077,88 @@ app.openapi(getYouTubeDailyViews, async (c) => {
 	const orgId = c.get("orgId");
 	const query = c.req.valid("query");
 	const db = c.get("db");
+	const account = await requireLegacyAnalyticsAccount(
+		c,
+		query.account_id,
+		"youtube",
+	);
+	if (account instanceof Response) return account as never;
 
 	const startDate = query.from_date
 		? new Date(query.from_date)
 		: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 	const endDate = query.to_date ? new Date(query.to_date) : new Date();
 
-	// Single JOIN for YouTube targets
-	const targets = await getOrgPostTargetIds(
-		db,
-		orgId,
-		startDate.toISOString(),
-		endDate.toISOString(),
-		"youtube",
-	);
+	const targetConditions = legacyAnalyticsConditions({
+		organizationId: orgId,
+		workspaceScope: c.get("workspaceScope"),
+		accountId: query.account_id,
+		platform: "youtube",
+		fromDate: startDate,
+		toDate: endDate,
+	});
 
-	if (targets.length === 0) return c.json({ data: [] }, 200);
-
-	// Single batch query for all snapshots within date range
-	const targetIds = targets.map((t) => t.id);
-	const snapshots = await db
-		.select({
-			id: postAnalytics.id,
-			postTargetId: postAnalytics.postTargetId,
-			views: postAnalytics.views,
-			collectedAt: postAnalytics.collectedAt,
-		})
-		.from(postAnalytics)
-		.where(
-			and(
-				inArray(postAnalytics.postTargetId, targetIds),
-				gte(postAnalytics.collectedAt, startDate),
-				lte(postAnalytics.collectedAt, endDate),
-			),
-		);
-
-	const data = cumulativeTimelineByDay(snapshots).map((point) => ({
-		date: point.date,
-		views: point.views,
+	// Compute latest-per-target daily deltas and their cumulative total entirely
+	// in SQL. This removes the old silent 1,000-target cap and keeps the Worker
+	// response bounded to at most one row per validated day.
+	const viewRows = await db.execute<{
+		date: string;
+		views: string | number | null;
+	}>(sql`
+		WITH daily_latest AS (
+			SELECT DISTINCT ON (
+				${postAnalytics.postTargetId},
+				(${postAnalytics.collectedAt} AT TIME ZONE 'UTC')::date
+			)
+				${postAnalytics.postTargetId} AS post_target_id,
+				(${postAnalytics.collectedAt} AT TIME ZONE 'UTC')::date AS day,
+				COALESCE(${postAnalytics.views}, 0)::bigint AS views
+			FROM ${postAnalytics}
+			INNER JOIN ${postTargets}
+				ON ${postTargets.id} = ${postAnalytics.postTargetId}
+			INNER JOIN ${posts} ON ${posts.id} = ${postTargets.postId}
+			WHERE ${and(...targetConditions)}
+				AND ${postAnalytics.collectedAt} >= ${startDate}
+				AND ${postAnalytics.collectedAt} <= ${endDate}
+			ORDER BY
+				${postAnalytics.postTargetId},
+				(${postAnalytics.collectedAt} AT TIME ZONE 'UTC')::date,
+				${postAnalytics.collectedAt} DESC,
+				${postAnalytics.id} DESC
+		),
+		deltas AS (
+			SELECT
+				post_target_id,
+				day,
+				views - COALESCE(
+					LAG(views) OVER (PARTITION BY post_target_id ORDER BY day),
+					0
+				) AS views_delta
+			FROM daily_latest
+		),
+		daily_deltas AS (
+			SELECT
+				day,
+				SUM(views_delta) AS views_delta
+			FROM deltas
+			GROUP BY day
+		)
+		SELECT
+			to_char(day, 'YYYY-MM-DD') AS date,
+			SUM(views_delta) OVER (ORDER BY day) AS views
+		FROM daily_deltas
+		ORDER BY day
+	`);
+	type ViewRow = { date: string; views: string | number | null };
+	const viewResult = viewRows as { rows?: ViewRow[] } & ArrayLike<ViewRow>;
+	const data = (viewResult.rows ?? Array.from(viewResult)).map((row) => ({
+		date: row.date,
+		views:
+			row.views == null
+				? 0
+				: typeof row.views === "number"
+					? row.views
+					: Number(row.views),
 		// These provider dimensions are not yet collected in post_analytics.
 		watch_time_minutes: 0,
 		subscribers_gained: 0,

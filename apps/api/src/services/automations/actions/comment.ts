@@ -1,3 +1,4 @@
+import { readProviderText } from "../../../lib/provider-response";
 import { socialAccounts } from "@relayapi/db";
 import { and, eq, isNull } from "drizzle-orm";
 import { GRAPH_BASE } from "../../../config/api-versions";
@@ -192,7 +193,7 @@ function instagramGraphBase(token: string): string {
 async function summarizeErrorResponse(res: Response): Promise<string> {
 	const fallback = `${res.status} ${res.statusText || "request failed"}`.trim();
 	try {
-		const body = await res.text();
+		const body = await readProviderText(res);
 		if (!body) return fallback;
 		return `${fallback} ${body.slice(0, 200)}`.trim();
 	} catch {

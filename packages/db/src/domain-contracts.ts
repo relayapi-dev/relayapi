@@ -17,6 +17,12 @@ export const AD_AUDIENCE_TYPES = [
 	"website",
 	"lookalike",
 ] as const;
+export const AD_ADVANCED_RESOURCE_KINDS = [
+	"messaging_experience",
+	"creative_asset",
+	"catalog",
+	"product_set",
+] as const;
 export const AD_CREATION_OPERATION_KINDS = [
 	"create_campaign",
 	"create_ad",
@@ -28,6 +34,20 @@ export const AD_MUTATION_KINDS = [
 	"cancel_ad",
 	"update_campaign",
 	"cancel_campaign",
+] as const;
+export const AD_PROMOTABLE_IDENTITY_TYPES = [
+	"social_account",
+	"facebook_page",
+	"instagram_account",
+	"linkedin_organization",
+	"pinterest_profile",
+	"tiktok_identity",
+	"x_user",
+] as const;
+export const AD_PROMOTABLE_IDENTITY_STATUSES = [
+	"active",
+	"revoked",
+	"unavailable",
 ] as const;
 export const DURABLE_AUTHORITY_PRINCIPAL_TYPES = [
 	"service",
@@ -184,6 +204,44 @@ export const SOCIAL_PLATFORM_IDS = [
 	"convertkit",
 	"mailchimp",
 	"listmonk",
+	"slack",
+] as const;
+export const MEDIA_DERIVATIVE_KINDS = [
+	"normalized",
+	"provider",
+	"cover",
+	"gif_video",
+] as const;
+export const SOCIAL_MUTATION_TARGET_TYPES = [
+	"post_target",
+	"provider_post",
+	"inbox_message",
+	"comment",
+	"whatsapp_group",
+	"whatsapp_account",
+	"whatsapp_template",
+] as const;
+export const SOCIAL_MUTATION_KINDS = [
+	"post_edit",
+	"message_edit",
+	"read_receipt",
+	"comment_edit",
+	"moderation",
+	"reaction",
+	"group_create",
+	"group_update",
+	"group_delete",
+	"group_join_approve",
+	"group_join_reject",
+	"group_participant_remove",
+	"group_message",
+	"group_pin",
+	"block_users",
+	"unblock_users",
+	"username_set",
+	"username_delete",
+	"template_edit",
+	"template_library_create",
 ] as const;
 export const TOOL_JOB_KINDS = ["download", "transcript"] as const;
 export const WEBHOOK_ATTEMPT_KINDS = ["delivery", "test"] as const;
@@ -226,6 +284,28 @@ export type DomainContract =
 	| ExternallyOwnedDomainContract;
 
 export const DOMAIN_CONTRACTS = [
+	{
+		schemaName: "public",
+		tableName: "ad_advanced_resources",
+		columnName: "kind",
+		classification: "closed",
+		values: AD_ADVANCED_RESOURCE_KINDS,
+		database: {
+			kind: "check",
+			constraintName: "ad_advanced_resources_kind_check",
+		},
+	},
+	{
+		schemaName: "public",
+		tableName: "ad_account_promotable_identities",
+		columnName: "identity_type",
+		classification: "closed",
+		values: AD_PROMOTABLE_IDENTITY_TYPES,
+		database: {
+			kind: "check",
+			constraintName: "ad_account_identities_identity_type_check",
+		},
+	},
 	{
 		schemaName: "public",
 		tableName: "ad_audiences",
@@ -595,6 +675,35 @@ export const DOMAIN_CONTRACTS = [
 			"MIME types are an extensible standards vocabulary; capability-specific allowlists are enforced at the operation boundary.",
 	},
 	{
+		schemaName: "public",
+		tableName: "media_derivatives",
+		columnName: "kind",
+		classification: "closed",
+		values: MEDIA_DERIVATIVE_KINDS,
+		database: {
+			kind: "check",
+			constraintName: "media_derivatives_state_check",
+		},
+	},
+	{
+		schemaName: "public",
+		tableName: "media_derivatives",
+		columnName: "mime_type",
+		classification: "provider_passthrough",
+		provider: "RelayAPI media processor and source object metadata",
+		rationale:
+			"MIME types are an extensible standards vocabulary; processor profiles and publish boundaries enforce their operation-specific allowlists.",
+	},
+	{
+		schemaName: "public",
+		tableName: "media_upload_sessions",
+		columnName: "expected_mime_type",
+		classification: "provider_passthrough",
+		provider: "uploading client and verified source object metadata",
+		rationale:
+			"MIME types are an extensible standards vocabulary; resumable upload admission and completion revalidation enforce the supported allowlist.",
+	},
+	{
 		schemaName: "auth",
 		tableName: "member",
 		columnName: "role",
@@ -689,6 +798,28 @@ export const DOMAIN_CONTRACTS = [
 		database: {
 			kind: "check",
 			constraintName: "ref_urls_destination_type_check",
+		},
+	},
+	{
+		schemaName: "public",
+		tableName: "social_mutation_operations",
+		columnName: "target_type",
+		classification: "closed",
+		values: SOCIAL_MUTATION_TARGET_TYPES,
+		database: {
+			kind: "check",
+			constraintName: "social_mutation_operations_target_check",
+		},
+	},
+	{
+		schemaName: "public",
+		tableName: "social_mutation_operations",
+		columnName: "kind",
+		classification: "closed",
+		values: SOCIAL_MUTATION_KINDS,
+		database: {
+			kind: "check",
+			constraintName: "social_mutation_operations_kind_check",
 		},
 	},
 	{

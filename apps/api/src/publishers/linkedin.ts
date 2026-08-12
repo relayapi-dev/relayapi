@@ -10,15 +10,20 @@ import {
 	getLinkedInRestHeaders,
 	LINKEDIN_API_BASE,
 } from "../lib/linkedin-rest";
+import { readPublisherJson } from "./provider-response";
 import {
 	classifyPublishError,
 	type EngagementAccount,
 	type EngagementActionResult,
+	getSucceededProviderEffect,
+	mergeProviderEffects,
 	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
+	recordProviderEffect,
 } from "./types";
 
 const CHARACTER_LIMIT = 3000;
@@ -137,7 +142,7 @@ async function uploadImage(
 	);
 
 	if (!initRes.ok) {
-		const err = await initRes.json().catch(() => ({}));
+		const err = await readPublisherJson(initRes).catch(() => ({}));
 		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`LinkedIn image upload init failed: ${(err as Record<string, string>).message ?? initRes.statusText}`,
@@ -145,7 +150,7 @@ async function uploadImage(
 		);
 	}
 
-	const initData = (await initRes.json()) as {
+	const initData = (await readPublisherJson(initRes)) as {
 		value: { uploadUrl: string; image: string };
 	};
 	const { uploadUrl, image: imageUrn } = initData.value;
@@ -227,7 +232,7 @@ async function uploadVideo(
 
 	if (!initRes.ok) {
 		void mediaResponse.body?.cancel().catch(() => {});
-		const err = await initRes.json().catch(() => ({}));
+		const err = await readPublisherJson(initRes).catch(() => ({}));
 		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`LinkedIn video upload init failed: ${(err as Record<string, string>).message ?? initRes.statusText}`,
@@ -235,7 +240,7 @@ async function uploadVideo(
 		);
 	}
 
-	const initData = (await initRes.json()) as {
+	const initData = (await readPublisherJson(initRes)) as {
 		value: {
 			video: string;
 			uploadInstructions: Array<{
@@ -331,7 +336,7 @@ async function uploadVideo(
 	);
 
 	if (!finalizeRes.ok) {
-		const err = await finalizeRes.json().catch(() => ({}));
+		const err = await readPublisherJson(finalizeRes).catch(() => ({}));
 		const raw = `HTTP ${finalizeRes.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`LinkedIn video finalize failed: ${(err as Record<string, string>).message ?? finalizeRes.statusText}`,
@@ -380,7 +385,7 @@ async function pollAssetStatus(
 			);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readPublisherJson(res)) as {
 			status: string;
 		};
 
@@ -427,7 +432,7 @@ async function uploadDocument(
 	);
 
 	if (!initRes.ok) {
-		const err = await initRes.json().catch(() => ({}));
+		const err = await readPublisherJson(initRes).catch(() => ({}));
 		const raw = `HTTP ${initRes.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`LinkedIn document upload init failed: ${(err as Record<string, string>).message ?? initRes.statusText}`,
@@ -435,7 +440,7 @@ async function uploadDocument(
 		);
 	}
 
-	const initData = (await initRes.json()) as {
+	const initData = (await readPublisherJson(initRes)) as {
 		value: { uploadUrl: string; document: string };
 	};
 	const { uploadUrl, document: documentUrn } = initData.value;
@@ -506,7 +511,7 @@ async function postFirstComment(
 	);
 
 	if (!res.ok) {
-		const err = await res.json().catch(() => ({}));
+		const err = await readPublisherJson(res).catch(() => ({}));
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`LinkedIn first comment failed: ${(err as Record<string, string>).message ?? res.statusText}`,
@@ -514,7 +519,7 @@ async function postFirstComment(
 		);
 	}
 	const headerId = res.headers.get("x-restli-id") ?? undefined;
-	const data = (await res.json().catch(() => ({}))) as {
+	const data = (await readPublisherJson(res).catch(() => ({}))) as {
 		id?: string;
 		commentUrn?: string;
 	};
@@ -607,8 +612,209 @@ export function escapeLinkedInCommentary(text: string): string {
 	return result.join("");
 }
 
+function linkedinPostUrl(postUrn: string): string {
+	return `https://www.linkedin.com/feed/update/${postUrn}`;
+}
+
+function linkedinPostEffect(
+	effects: readonly ProviderEffect[],
+): ProviderEffect | undefined {
+	return effects.find(
+		(effect) =>
+			effect.name === "post_published" &&
+			effect.status === "succeeded" &&
+			!!effect.provider_id?.trim(),
+	);
+}
+
 export const linkedinPublisher: Publisher = {
 	platform: "linkedin",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		const persistedPostUrn = request.platform_post_id?.trim();
+		const confirmedPostUrn = linkedinPostEffect(
+			request.effects,
+		)?.provider_id?.trim();
+		if (
+			persistedPostUrn &&
+			confirmedPostUrn &&
+			persistedPostUrn !== confirmedPostUrn
+		) {
+			return {
+				success: false,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					platform_post_id: persistedPostUrn,
+					effects: request.effects,
+				},
+				error: {
+					code: "PROVIDER_IDENTITY_MISMATCH",
+					message:
+						"The persisted LinkedIn post URN does not match its durable provider effect.",
+				},
+			};
+		}
+		const postUrn = persistedPostUrn || confirmedPostUrn;
+		if (!postUrn) {
+			return {
+				success: false,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					effects: request.effects,
+				},
+				error: {
+					code: "MISSING_PROVIDER_POST_ID",
+					message:
+						"LinkedIn reconciliation requires the post URN returned by the create request.",
+				},
+			};
+		}
+
+		const platformUrl = linkedinPostUrl(postUrn);
+		// The effect is written only after LinkedIn returned 201 plus x-restli-id.
+		// That durable confirmation is sufficient to finish local recovery and does
+		// not require read scopes (`r_member_social` / `r_organization_social`) that
+		// are distinct from Relay's publishing scopes. Legacy rows without the
+		// confirmation effect fall through to the read-only provider lookup below.
+		if (confirmedPostUrn) {
+			return {
+				success: true,
+				platform_post_id: postUrn,
+				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "published",
+					provider_operation_id: postUrn,
+					platform_post_id: postUrn,
+					platform_url: platformUrl,
+					provider_state: request.provider_state ?? "PUBLISHED",
+					effects: request.effects,
+				},
+			};
+		}
+		try {
+			// LinkedIn Posts API, "Get Posts by URN": GET the URL-encoded share or
+			// UGC-post URN. AUTHOR view exposes PUBLISH_REQUESTED/PUBLISH_FAILED as
+			// well as the terminal PUBLISHED lifecycle without creating new content.
+			// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api#get-posts-by-urn
+			const response = await linkedinFetch(
+				`${LINKEDIN_API_BASE}/rest/posts/${encodeURIComponent(postUrn)}?viewContext=AUTHOR`,
+				{ access_token: request.account.access_token },
+				{ method: "GET" },
+			);
+			if (response.status === 404) {
+				await response.body?.cancel().catch(() => {});
+				return {
+					success: false,
+					platform_post_id: postUrn,
+					platform_url: platformUrl,
+					provider_outcome: {
+						disposition: "failed",
+						provider_operation_id: postUrn,
+						platform_post_id: postUrn,
+						platform_url: platformUrl,
+						provider_state: "NOT_FOUND",
+						effects: request.effects,
+					},
+					error: {
+						code: "LINKEDIN_POST_NOT_FOUND",
+						message:
+							"LinkedIn no longer returns the post created by this publish operation.",
+					},
+				};
+			}
+			if (!response.ok) {
+				throw new PublishError(
+					`LinkedIn post status failed: ${response.statusText}`,
+					{
+						statusCode: response.status,
+						detail: `HTTP ${response.status} ${response.statusText}`,
+					},
+				);
+			}
+
+			const data = (await readPublisherJson(response)) as {
+				id?: string;
+				author?: string;
+				lifecycleState?: string;
+			};
+			if (
+				(data.id && data.id !== postUrn) ||
+				(data.author && data.author !== request.account.platform_account_id)
+			) {
+				throw new PublishError(
+					"LinkedIn returned a post outside the connected publish identity",
+					{ code: "PROVIDER_PROTOCOL_ERROR" },
+				);
+			}
+
+			const providerState = data.lifecycleState?.toUpperCase();
+			const shared = {
+				provider_operation_id: postUrn,
+				platform_post_id: postUrn,
+				platform_url: platformUrl,
+				provider_state: providerState,
+				effects: request.effects,
+			};
+			if (providerState === "PUBLISHED") {
+				return {
+					success: true,
+					platform_post_id: postUrn,
+					platform_url: platformUrl,
+					provider_outcome: { disposition: "published", ...shared },
+				};
+			}
+			if (
+				providerState === "PUBLISH_REQUESTED" ||
+				providerState === "PROCESSING" ||
+				providerState === "DRAFT"
+			) {
+				return {
+					success: true,
+					platform_post_id: postUrn,
+					platform_url: platformUrl,
+					provider_outcome: { disposition: "processing", ...shared },
+				};
+			}
+			if (providerState === "PUBLISH_FAILED") {
+				return {
+					success: false,
+					platform_post_id: postUrn,
+					platform_url: platformUrl,
+					provider_outcome: { disposition: "failed", ...shared },
+					error: {
+						code: "LINKEDIN_PUBLISH_FAILED",
+						message: "LinkedIn failed to publish the accepted post.",
+					},
+				};
+			}
+
+			return {
+				success: false,
+				platform_post_id: postUrn,
+				platform_url: platformUrl,
+				provider_outcome: { disposition: "outcome_unknown", ...shared },
+				error: {
+					code: "PUBLISH_OUTCOME_UNKNOWN",
+					message: `LinkedIn returned an unrecognized post lifecycle: ${providerState ?? "missing"}.`,
+				},
+			};
+		} catch (error) {
+			const result = classifyPublishError(error);
+			return {
+				...result,
+				platform_post_id: postUrn,
+				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "outcome_unknown",
+					provider_operation_id: postUrn,
+					platform_post_id: postUrn,
+					platform_url: platformUrl,
+					provider_state: request.provider_state ?? undefined,
+					effects: request.effects,
+				},
+			};
+		}
+	},
 
 	async repost(
 		account: EngagementAccount,
@@ -638,7 +844,7 @@ export const linkedinPublisher: Publisher = {
 				}),
 			});
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const detail =
 					(err as Record<string, string>).message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
@@ -679,7 +885,7 @@ export const linkedinPublisher: Publisher = {
 				},
 			);
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const detail =
 					(err as Record<string, string>).message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
@@ -688,7 +894,10 @@ export const linkedinPublisher: Publisher = {
 					detail: raw,
 				});
 			}
-			const data = (await res.json()) as { id?: string; commentUrn?: string };
+			const data = (await readPublisherJson(res)) as {
+				id?: string;
+				commentUrn?: string;
+			};
 			return { success: true, platform_post_id: data.commentUrn ?? data.id };
 		} catch (err) {
 			const result = classifyPublishError(err);
@@ -703,11 +912,23 @@ export const linkedinPublisher: Publisher = {
 			};
 			const opts = request.target_options;
 
-			// Determine author URN — use organization_urn from target_options if provided,
-			// otherwise fall back to the platform_account_id (person or org URN)
-			const authorUrn =
-				(opts.organization_urn as string) ??
-				request.account.platform_account_id;
+			// Author identity is selected and role-checked by the connection flow. A
+			// publish payload must not redirect a member/org token to a different URN.
+			const authorUrn = request.account.platform_account_id;
+			if (
+				typeof opts.organization_urn === "string" &&
+				opts.organization_urn.trim() &&
+				opts.organization_urn.trim() !== authorUrn
+			) {
+				return {
+					success: false,
+					error: {
+						code: "ORGANIZATION_URN_MISMATCH",
+						message:
+							"target_options.organization_urn does not match the connected LinkedIn identity.",
+					},
+				};
+			}
 
 			// Resolve content — target_options.content overrides request.content
 			const content = (opts.content as string) ?? request.content ?? "";
@@ -729,6 +950,17 @@ export const linkedinPublisher: Publisher = {
 
 			// Classify and validate media types
 			const mediaCategory = classifyMedia(media);
+			const confirmedEffects: ProviderEffect[] = [];
+			const persistConfirmedEffect = async (
+				effect: ProviderEffect,
+			): Promise<void> => {
+				confirmedEffects.push(effect);
+				await recordProviderEffect(request, effect);
+			};
+			let postUrn = getSucceededProviderEffect(
+				request,
+				"post_published",
+			)?.provider_id;
 
 			// Build the post body
 			const postBody: Record<string, unknown> = {
@@ -749,11 +981,23 @@ export const linkedinPublisher: Publisher = {
 			// instead of silently pretending the option was honored.
 
 			// Handle media content
-			if (mediaCategory === "image") {
+			if (!postUrn && mediaCategory === "image") {
+				const imageMedia = media.filter(
+					(m) => !m.type || m.type === "image" || m.type === "gif",
+				);
 				const imageUrns = await Promise.all(
-					media
-						.filter((m) => !m.type || m.type === "image" || m.type === "gif")
-						.map((m) => uploadImage(auth, authorUrn, m.url)),
+					imageMedia.map(async (item, index) => {
+						const effectName = `media_asset_${index + 1}`;
+						const recorded = getSucceededProviderEffect(request, effectName);
+						if (recorded?.provider_id) return recorded.provider_id;
+						const imageUrn = await uploadImage(auth, authorUrn, item.url);
+						await persistConfirmedEffect({
+							name: effectName,
+							status: "succeeded",
+							provider_id: imageUrn,
+						});
+						return imageUrn;
+					}),
 				);
 
 				if (imageUrns.length === 1) {
@@ -766,33 +1010,48 @@ export const linkedinPublisher: Publisher = {
 							images: imageUrns.map((urn, idx) => ({
 								id: urn,
 								altText:
-									(
-										media.filter(
-											(m) => !m.type || m.type === "image" || m.type === "gif",
-										)[idx] as { alt_text?: string } | undefined
-									)?.alt_text ?? "",
+									(imageMedia[idx] as { alt_text?: string } | undefined)
+										?.alt_text ?? "",
 							})),
 						},
 					};
 				}
-			} else if (mediaCategory === "video") {
+			} else if (!postUrn && mediaCategory === "video") {
 				const videoItem = media.find((m) => m.type === "video");
 				if (videoItem) {
-					const videoUrn = await uploadVideo(auth, authorUrn, videoItem.url);
+					let videoUrn = getSucceededProviderEffect(
+						request,
+						"media_asset_1",
+					)?.provider_id;
+					if (!videoUrn) {
+						videoUrn = await uploadVideo(auth, authorUrn, videoItem.url);
+						await persistConfirmedEffect({
+							name: "media_asset_1",
+							status: "succeeded",
+							provider_id: videoUrn,
+						});
+					}
 					postBody.content = {
 						media: {
 							id: videoUrn,
 						},
 					};
 				}
-			} else if (mediaCategory === "document") {
+			} else if (!postUrn && mediaCategory === "document") {
 				const docItem = media.find((m) => m.type === "document");
 				if (docItem) {
-					const documentUrn = await uploadDocument(
-						auth,
-						authorUrn,
-						docItem.url,
-					);
+					let documentUrn = getSucceededProviderEffect(
+						request,
+						"media_asset_1",
+					)?.provider_id;
+					if (!documentUrn) {
+						documentUrn = await uploadDocument(auth, authorUrn, docItem.url);
+						await persistConfirmedEffect({
+							name: "media_asset_1",
+							status: "succeeded",
+							provider_id: documentUrn,
+						});
+					}
 					const documentTitle = (opts.document_title as string) ?? "Document";
 					postBody.content = {
 						media: {
@@ -805,57 +1064,72 @@ export const linkedinPublisher: Publisher = {
 
 			// LinkedIn Posts API — Create a post
 			// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api#create-a-post
-			const res = await linkedinFetch(`${LINKEDIN_API_BASE}/rest/posts`, auth, {
-				method: "POST",
-				body: JSON.stringify(postBody),
-			});
+			if (!postUrn) {
+				const res = await linkedinFetch(
+					`${LINKEDIN_API_BASE}/rest/posts`,
+					auth,
+					{
+						method: "POST",
+						body: JSON.stringify(postBody),
+					},
+				);
 
-			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
-				const detail =
-					(err as Record<string, string>).message ?? res.statusText;
-				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
-				if (
-					res.status === 401 ||
-					detail.includes("Unauthorized") ||
-					detail.includes("invalid_grant")
-				) {
-					throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+				if (!res.ok) {
+					const err = await readPublisherJson(res).catch(() => ({}));
+					const detail =
+						(err as Record<string, string>).message ?? res.statusText;
+					const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
+					if (
+						res.status === 401 ||
+						detail.includes("Unauthorized") ||
+						detail.includes("invalid_grant")
+					) {
+						throw new PublishError(`TOKEN_EXPIRED: ${detail}`, {
+							statusCode: res.status,
+							detail: raw,
+						});
+					}
+					if (res.status === 429) {
+						throw new PublishError(`RATE_LIMITED: ${detail}`, {
+							statusCode: res.status,
+							detail: raw,
+						});
+					}
+					throw new PublishError(`LinkedIn post creation failed: ${detail}`, {
 						statusCode: res.status,
 						detail: raw,
 					});
 				}
-				if (res.status === 429) {
-					throw new PublishError(`RATE_LIMITED: ${detail}`, {
-						statusCode: res.status,
-						detail: raw,
-					});
+
+				// LinkedIn returns the post URN in the x-restli-id header.
+				postUrn =
+					res.headers.get("x-restli-id") ??
+					res.headers.get("x-linkedin-id") ??
+					undefined;
+
+				if (!postUrn?.trim()) {
+					return {
+						success: false,
+						provider_outcome: {
+							disposition: "outcome_unknown",
+							provider_state: "created_without_post_id",
+							effects: mergeProviderEffects(
+								request.effect_recorder?.effects,
+								confirmedEffects,
+							),
+						},
+						error: {
+							code: "PUBLISH_OUTCOME_UNKNOWN",
+							message:
+								"LinkedIn created the post but did not return the required x-restli-id header.",
+						},
+					};
 				}
-				throw new PublishError(`LinkedIn post creation failed: ${detail}`, {
-					statusCode: res.status,
-					detail: raw,
+				await persistConfirmedEffect({
+					name: "post_published",
+					status: "succeeded",
+					provider_id: postUrn,
 				});
-			}
-
-			// LinkedIn returns the post URN in the x-restli-id header
-			const postUrn =
-				res.headers.get("x-restli-id") ??
-				res.headers.get("x-linkedin-id") ??
-				"";
-
-			if (!postUrn.trim()) {
-				return {
-					success: false,
-					provider_outcome: {
-						disposition: "outcome_unknown",
-						provider_state: "created_without_post_id",
-					},
-					error: {
-						code: "PUBLISH_OUTCOME_UNKNOWN",
-						message:
-							"LinkedIn created the post but did not return the required x-restli-id header.",
-					},
-				};
 			}
 
 			const effects: ProviderEffect[] = [];
@@ -872,7 +1146,15 @@ export const linkedinPublisher: Publisher = {
 			}
 			// Post first comment if requested
 			const firstComment = opts.first_comment as string | undefined;
-			if (firstComment) {
+			const recordedComment = request.effect_recorder?.effects.find(
+				(effect) => effect.name === "first_comment",
+			);
+			if (
+				firstComment &&
+				recordedComment?.status !== "succeeded" &&
+				recordedComment?.status !== "outcome_unknown"
+			) {
+				let commentEffect: ProviderEffect;
 				try {
 					const commentId = await postFirstComment(
 						auth,
@@ -880,15 +1162,18 @@ export const linkedinPublisher: Publisher = {
 						authorUrn,
 						firstComment,
 					);
-					effects.push({
+					commentEffect = {
 						name: "first_comment",
 						status: commentId ? "succeeded" : "outcome_unknown",
 						provider_id: commentId,
-					});
+					};
 				} catch (commentErr) {
-					effects.push({
+					commentEffect = {
 						name: "first_comment",
-						status: "failed",
+						status:
+							commentErr instanceof PublishError && commentErr.statusCode
+								? "failed"
+								: "outcome_unknown",
 						error: {
 							code: "PLATFORM_ERROR",
 							message:
@@ -896,12 +1181,18 @@ export const linkedinPublisher: Publisher = {
 									? commentErr.message
 									: "LinkedIn first comment failed",
 						},
-					});
+					};
 				}
+				await persistConfirmedEffect(commentEffect);
 			}
 
 			// Build the post URL — use raw URN (LinkedIn URLs use unencoded URNs)
-			const platformUrl = `https://www.linkedin.com/feed/update/${postUrn}`;
+			const platformUrl = linkedinPostUrl(postUrn);
+			const providerEffects = mergeProviderEffects(
+				request.effect_recorder?.effects,
+				confirmedEffects,
+				effects,
+			);
 
 			return {
 				success: true,
@@ -912,7 +1203,7 @@ export const linkedinPublisher: Publisher = {
 					platform_post_id: postUrn,
 					platform_url: platformUrl,
 					provider_state: "PUBLISHED",
-					effects,
+					effects: providerEffects,
 				},
 			};
 		} catch (err) {

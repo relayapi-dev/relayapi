@@ -256,7 +256,7 @@ export type ProviderInventorySources = {
 	adAccounts: Array<{
 		id: string;
 		organizationId: string;
-		socialAccountId: string;
+		socialAccountId: string | null;
 		platform: string;
 		platformAdAccountId: string;
 		status: string | null;
@@ -2220,6 +2220,14 @@ async function captureMetaInventory(input: {
 				localId: localAccount.id,
 				reason: "not_visible_to_system_authority",
 			});
+		}
+		if (!localAccount.socialAccountId) {
+			authorityGaps.push({
+				kind: "ads",
+				localId: localAccount.id,
+				reason: "dedicated_ad_connection_requires_inventory_support",
+			});
+			continue;
 		}
 		const social = socialById.get(localAccount.socialAccountId);
 		if (!social) {

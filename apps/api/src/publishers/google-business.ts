@@ -1,3 +1,4 @@
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
 	PublishError,
@@ -153,7 +154,7 @@ export const googleBusinessPublisher: Publisher = {
 				request.account.access_token,
 			);
 			if (!res.ok) {
-				const detail = await res.text();
+				const detail = await readPublisherText(res);
 				throw new PublishError(
 					`Google Business LocalPost lookup failed: ${res.statusText}`,
 					{
@@ -162,7 +163,9 @@ export const googleBusinessPublisher: Publisher = {
 					},
 				);
 			}
-			return googleLocalPostResult((await res.json()) as GoogleLocalPostResult);
+			return googleLocalPostResult(
+				(await readPublisherJson(res)) as GoogleLocalPostResult,
+			);
 		} catch (error) {
 			return classifyPublishError(error);
 		}
@@ -199,7 +202,7 @@ export const googleBusinessPublisher: Publisher = {
 					error: {
 						code: "TOO_MANY_MEDIA",
 						message:
-							"Google Business Profile supports a maximum of 1 image per post.",
+							"Google Business Profile supports a maximum of one photo or video per post.",
 					},
 				};
 			}
@@ -296,17 +299,37 @@ export const googleBusinessPublisher: Publisher = {
 				};
 			}
 
-			// Determine the parent resource name
-			// The platform_account_id is the location resource name: accounts/{id}/locations/{id}
-			// If location_id is provided in target_options, override the location part
+			// Determine the parent resource name. Location selection is connection/account
+			// metadata, never an arbitrary per-post identity override.
 			let parent = locationResourceName;
-			const locationId = opts.location_id as string | undefined;
+			const locationId = request.account.metadata?.default_location_id as
+				| string
+				| undefined;
 			if (locationId) {
 				// Extract account part from platform_account_id
 				const accountMatch = locationResourceName.match(/^(accounts\/[^/]+)/);
 				if (accountMatch?.[1]) {
 					parent = `${accountMatch[1]}/${locationId.startsWith("locations/") ? locationId : `locations/${locationId}`}`;
 				}
+			}
+			if (
+				typeof opts.location_id === "string" &&
+				opts.location_id.trim() &&
+				!new Set([
+					locationResourceName,
+					parent,
+					locationId,
+					locationId?.replace(/^locations\//, ""),
+				]).has(opts.location_id.trim())
+			) {
+				return {
+					success: false,
+					error: {
+						code: "LOCATION_ID_MISMATCH",
+						message:
+							"target_options.location_id does not match the connected account's selected Google Business location.",
+					},
+				};
 			}
 
 			// Create local post
@@ -322,7 +345,7 @@ export const googleBusinessPublisher: Publisher = {
 			);
 
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const detail =
 					(err as { error?: { message?: string } }).error?.message ??
 					res.statusText;
@@ -333,7 +356,9 @@ export const googleBusinessPublisher: Publisher = {
 				);
 			}
 
-			return googleLocalPostResult((await res.json()) as GoogleLocalPostResult);
+			return googleLocalPostResult(
+				(await readPublisherJson(res)) as GoogleLocalPostResult,
+			);
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });
 		}

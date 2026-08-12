@@ -1,33 +1,13 @@
 import { z } from "@hono/zod-openapi";
 import { paginatedResponse } from "./common";
-
-function isHttpOrHttpsUrl(url: string): boolean {
-	try {
-		const parsed = new URL(url);
-		return parsed.protocol === "http:" || parsed.protocol === "https:";
-	} catch {
-		return false;
-	}
-}
+import { PostMediaItem, PublisherTargetOptions } from "./publisher-options";
 
 // --- Thread item in create body ---
 
 const ThreadItem = z.object({
 	content: z.string().min(1).describe("Post content for this thread item"),
 	media: z
-		.array(
-			z.object({
-				url: z
-					.string()
-					.url()
-					.refine(isHttpOrHttpsUrl, "URL must use http or https")
-					.describe("Public URL of the media file"),
-				type: z
-					.enum(["image", "video", "gif", "document"])
-					.optional()
-					.describe("Media type"),
-			}),
-		)
+		.array(PostMediaItem)
 		.optional()
 		.default([])
 		.describe("Media attachments for this item"),
@@ -68,10 +48,9 @@ export const CreateThreadBody = z.object({
 			},
 		)
 		.describe("Publish intent"),
-	target_options: z
-		.record(z.string(), z.record(z.string(), z.any()))
-		.optional()
-		.describe("Per-platform options applied to all items"),
+	target_options: PublisherTargetOptions.optional().describe(
+		"Typed per-platform options applied to all items; account and workspace selector aliases remain supported.",
+	),
 	timezone: z.string().default("UTC").describe("IANA timezone"),
 	workspace_id: z
 		.string()
@@ -90,6 +69,7 @@ const ThreadItemTargetResult = z.object({
 		"scheduled",
 		"publishing",
 		"published",
+		"provider_draft",
 		"failed",
 		"skipped",
 	]),
@@ -102,20 +82,14 @@ const ThreadItemResponse = z.object({
 	id: z.string().describe("Post ID"),
 	position: z.number().describe("Position within thread (0 = root)"),
 	content: z.string().nullable(),
-	media: z
-		.array(
-			z.object({
-				url: z.string(),
-				type: z.string().optional(),
-			}),
-		)
-		.nullable(),
+	media: z.array(PostMediaItem).nullable(),
 	delay_minutes: z.number().describe("Delay before this item in minutes"),
 	status: z.enum([
 		"draft",
 		"scheduled",
 		"publishing",
 		"published",
+		"provider_draft",
 		"failed",
 		"partial",
 	]),
@@ -133,6 +107,7 @@ export const ThreadResponse = z.object({
 		"scheduled",
 		"publishing",
 		"published",
+		"provider_draft",
 		"failed",
 		"partial",
 	]),
@@ -152,6 +127,7 @@ const ThreadListItem = z.object({
 		"scheduled",
 		"publishing",
 		"published",
+		"provider_draft",
 		"failed",
 		"partial",
 	]),
@@ -181,15 +157,7 @@ export const UpdateThreadBody = z.object({
 					.optional()
 					.describe("Existing post ID (omit for new items)"),
 				content: z.string().min(1),
-				media: z
-					.array(
-						z.object({
-							url: z.string().url(),
-							type: z.enum(["image", "video", "gif", "document"]).optional(),
-						}),
-					)
-					.optional()
-					.default([]),
+				media: z.array(PostMediaItem).optional().default([]),
 				delay_minutes: z.number().int().min(0).max(1440).default(0),
 			}),
 		)
@@ -225,6 +193,7 @@ export const ThreadListQuery = z.object({
 			"scheduled",
 			"publishing",
 			"published",
+			"provider_draft",
 			"failed",
 			"partial",
 		])

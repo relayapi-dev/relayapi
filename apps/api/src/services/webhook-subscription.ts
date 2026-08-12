@@ -1,6 +1,8 @@
 import { createDb, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import { readResponseJson } from "../lib/fetch-public-url";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import type { Env } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -32,7 +34,7 @@ export async function subscribeFacebookPage(
 			},
 		);
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return {
 				success: false,
 				error: `Facebook subscribe failed: ${res.status} ${err}`,
@@ -94,7 +96,7 @@ export async function subscribeYouTubeChannel(
 		});
 		// PubSubHubbub returns 202 Accepted for async verification
 		if (!res.ok && res.status !== 202) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return {
 				success: false,
 				error: `PubSubHubbub subscribe failed: ${res.status} ${err}`,
@@ -132,6 +134,13 @@ export async function verifyWhatsAppWebhookSubscription(
 ): Promise<{ success: boolean; error?: string }> {
 	try {
 		const appAccessToken = `${appId}|${appSecret}`;
+		const requiredFields = [
+			"messages",
+			"group_lifecycle_update",
+			"group_participants_update",
+			"group_settings_update",
+			"group_status_update",
+		] as const;
 
 		// Check existing subscriptions
 		const checkRes = await fetch(
@@ -139,17 +148,22 @@ export async function verifyWhatsAppWebhookSubscription(
 		);
 
 		if (checkRes.ok) {
-			const checkJson = (await checkRes.json()) as {
+			const checkJson = (await readProviderJson(checkRes)) as {
 				data: Array<{
 					object: string;
 					callback_url: string;
 					active: boolean;
+					fields?: string[];
 				}>;
 			};
 			const existing = checkJson.data?.find(
 				(s) => s.object === "whatsapp_business_account",
 			);
-			if (existing?.active && existing.callback_url === callbackUrl) {
+			if (
+				existing?.active &&
+				existing.callback_url === callbackUrl &&
+				requiredFields.every((field) => existing.fields?.includes(field))
+			) {
 				console.log(
 					"[webhook-sub] WhatsApp webhook subscription already active",
 				);
@@ -165,13 +179,15 @@ export async function verifyWhatsAppWebhookSubscription(
 				object: "whatsapp_business_account",
 				callback_url: callbackUrl,
 				verify_token: verifyToken,
-				fields: "messages",
+				// Groups API metadata requires all four group webhook fields.
+				// https://developers.facebook.com/documentation/business-messaging/whatsapp/groups/webhooks
+				fields: requiredFields.join(","),
 				access_token: appAccessToken,
 			}).toString(),
 		});
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return {
 				success: false,
 				error: `WhatsApp webhook subscription failed: ${res.status} ${err}`,
@@ -184,6 +200,58 @@ export async function verifyWhatsAppWebhookSubscription(
 		return {
 			success: false,
 			error: `WhatsApp webhook subscription error: ${err instanceof Error ? err.message : String(err)}`,
+		};
+	}
+}
+
+/**
+ * Subscribe the configured Meta app to one WhatsApp Business Account.
+ *
+ * Official Meta collection:
+ * https://www.postman.com/meta/whatsapp-business-platform/request/26gui66/subscribe-to-a-waba
+ * Section "Subscribe to a WABA":
+ * POST https://graph.facebook.com/{{Version}}/{{WABA-ID}}/subscribed_apps
+ * Header: Authorization: Bearer {{User-Access-Token}}
+ */
+export async function subscribeWhatsAppBusinessAccount(
+	wabaId: string,
+	accessToken: string,
+): Promise<{ success: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${GRAPH_BASE.facebook}/${encodeURIComponent(wabaId)}/subscribed_apps`,
+			{
+				method: "POST",
+				headers: { Authorization: `Bearer ${accessToken}` },
+			},
+		);
+		type SubscriptionResponse = {
+			success?: boolean | string;
+			error?: { message?: string; code?: number };
+		};
+		const payload = await readResponseJson<SubscriptionResponse>(
+			response,
+			256 * 1024,
+		).catch((): SubscriptionResponse => ({}));
+		if (
+			!response.ok ||
+			!(payload.success === true || payload.success === "true")
+		) {
+			return {
+				success: false,
+				error:
+					payload.error?.message ??
+					`WhatsApp WABA subscription failed (${response.status})`,
+			};
+		}
+		return { success: true };
+	} catch (error) {
+		return {
+			success: false,
+			error:
+				error instanceof Error
+					? error.message
+					: "WhatsApp WABA subscription failed",
 		};
 	}
 }
@@ -221,14 +289,13 @@ export async function subscribeInstagramAccount(
 					// `messaging_postbacks` delivers get-started, persistent-menu,
 					// ice-breaker, and automation button payloads. `mentions` is
 					// required for story-mention wait nodes and follower-growth flows.
-					subscribed_fields:
-						"comments,messages,messaging_postbacks,mentions",
+					subscribed_fields: "comments,messages,messaging_postbacks,mentions",
 					access_token: accessToken,
 				}).toString(),
 			},
 		);
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return {
 				success: false,
 				error: `Instagram user subscribe failed: ${res.status} ${err}`,
@@ -273,7 +340,7 @@ export async function verifyInstagramWebhookSubscription(
 		);
 
 		if (checkRes.ok) {
-			const checkJson = (await checkRes.json()) as {
+			const checkJson = (await readProviderJson(checkRes)) as {
 				data: Array<{
 					object: string;
 					callback_url: string;
@@ -301,7 +368,7 @@ export async function verifyInstagramWebhookSubscription(
 		});
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return {
 				success: false,
 				error: `Instagram webhook subscription failed: ${res.status} ${err}`,

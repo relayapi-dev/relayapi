@@ -96,6 +96,24 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		requireWorkspacePolicy: true,
 	},
 	{
+		tableName: "media_upload_sessions",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "media",
+	},
+	{
+		tableName: "media_processing_jobs",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "media",
+	},
+	{
+		tableName: "media_derivatives",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "media",
+	},
+	{
 		tableName: "webhook_endpoints",
 		class: "operational_root",
 		requireWorkspacePolicy: true,
@@ -117,6 +135,26 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
 		scopeParent: "inbox_conversations",
+	},
+	{
+		tableName: "social_mutation_operations",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "social_accounts",
+	},
+	{
+		tableName: "whatsapp_groups",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "social_accounts",
+	},
+	{
+		tableName: "whatsapp_identity_aliases",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "social_accounts",
+		notes:
+			"Conversation-linked alias projections cascade with their authoritative conversation; account-level aliases remain account-bound and webhook-recreatable.",
 	},
 	{
 		tableName: "auto_post_rules",
@@ -173,9 +211,60 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		scopeParent: "broadcasts",
 	},
 	{
+		tableName: "ad_connections",
+		class: "operational_root",
+		requireWorkspacePolicy: true,
+		notes:
+			"Dedicated paid-media credentials are independently created and obey the same optional/required workspace policy as publishing accounts.",
+	},
+	{
 		tableName: "ad_accounts",
 		class: "operational_root",
 		requireWorkspacePolicy: true,
+	},
+	{
+		tableName: "ad_account_promotable_identities",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_lead_forms",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_leads",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_conversion_rules",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+		notes: "Future-gated conversion authority remains account-bound.",
+	},
+	{
+		tableName: "ad_conversion_events",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_conversion_rules",
+		notes: "Future-gated encrypted conversion outbox.",
+	},
+	{
+		tableName: "ad_advanced_resources",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_report_jobs",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
 	},
 	{
 		tableName: "ad_campaigns",

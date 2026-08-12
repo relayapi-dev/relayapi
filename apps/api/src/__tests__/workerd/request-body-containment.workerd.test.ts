@@ -6,6 +6,12 @@ import {
 	seedBoundedRequestBody,
 } from "../../lib/bounded-request-body";
 import { ResponseTooLargeError } from "../../lib/fetch-public-url";
+import {
+	bodyCacheMiddleware,
+	MAX_AUTHENTICATED_JSON_BODY_BYTES,
+	MAX_BULK_CSV_MULTIPART_BODY_BYTES,
+	MAX_IDEA_MEDIA_MULTIPART_BODY_BYTES,
+} from "../../middleware/body-cache";
 import inviteRedeemRouter, {
 	INVITE_REDEEM_MAX_BODY_BYTES,
 } from "../../routes/invite-redeem";
@@ -13,7 +19,7 @@ import publicGrowthRouter, {
 	LANDING_CONVERSION_MAX_BODY_BYTES,
 	parseConversionRequest,
 } from "../../routes/public-growth";
-import type { Env } from "../../types";
+import type { Env, Variables } from "../../types";
 
 const conversionUrl =
 	"https://worker.test/l/org_test/org/o/lp_test/page/conversions";
@@ -175,6 +181,175 @@ describe("bounded pre-auth request bodies in workerd", () => {
 
 		expect(await first.json()).toEqual({ id: "first", rawPreserved: true });
 		expect(await second.json()).toEqual({ id: "second", rawPreserved: true });
+	});
+});
+
+describe("authenticated request-body containment in workerd", () => {
+	function createAuthenticatedBodyApp() {
+		const bodyApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+		bodyApp.use("*", bodyCacheMiddleware);
+		bodyApp.all("*", async (c) => {
+			if (c.req.header("content-type") === "application/octet-stream") {
+				return c.json({ rawBodyUsed: c.req.raw.bodyUsed });
+			}
+			if (c.req.header("content-type")?.startsWith("multipart/form-data")) {
+				const formData = await c.req.formData();
+				const file = formData.get("file");
+				return c.json({
+					filename: file instanceof File ? file.name : null,
+					replayed: Array.from(new Uint8Array(await c.req.arrayBuffer())),
+				});
+			}
+			return c.json({
+				parsed: c.get("parsedBody"),
+				replayed: await c.req.text(),
+				rawBodyUsed: c.req.raw.bodyUsed,
+			});
+		});
+		return bodyApp;
+	}
+
+	it("preserves exact JSON bytes for replay across JSON methods and suffixes", async () => {
+		const bodyApp = createAuthenticatedBodyApp();
+		const source = '{  "z": 1, "a": [2, 3] }\n';
+
+		for (const [method, contentType] of [
+			["POST", "application/json; charset=utf-8"],
+			["DELETE", "application/problem+json"],
+		] as const) {
+			const response = await bodyApp.request("https://worker.test/v1/example", {
+				method,
+				headers: { "Content-Type": contentType },
+				body: source,
+			});
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				parsed: { z: 1, a: [2, 3] },
+				replayed: source,
+				rawBodyUsed: true,
+			});
+		}
+	});
+
+	it("accepts a bodyless JSON DELETE without inventing malformed JSON", async () => {
+		const bodyApp = createAuthenticatedBodyApp();
+		const response = await bodyApp.request(
+			"https://worker.test/v1/posts/post_1",
+			{
+				method: "DELETE",
+				headers: { "Content-Type": "application/json" },
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			parsed: null,
+			replayed: "",
+			rawBodyUsed: false,
+		});
+	});
+
+	it("rejects declared and streamed JSON overflow at 4 MiB", async () => {
+		const bodyApp = createAuthenticatedBodyApp();
+		const declared = await bodyApp.request(
+			new Request("https://worker.test/v1/example", {
+				method: "PATCH",
+				headers: {
+					"Content-Type": "application/json",
+					"Content-Length": String(MAX_AUTHENTICATED_JSON_BODY_BYTES + 1),
+				},
+				body: "{}",
+			}),
+		);
+		expect(declared.status).toBe(413);
+		expect(jsonErrorCode(await declared.json())).toBe("PAYLOAD_TOO_LARGE");
+
+		const streamed = await bodyApp.request(
+			new Request("https://worker.test/v1/example", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(
+							new Uint8Array(MAX_AUTHENTICATED_JSON_BODY_BYTES),
+						);
+						controller.enqueue(new Uint8Array(1));
+						controller.close();
+					},
+				}),
+			}),
+		);
+		expect(streamed.status).toBe(413);
+		expect(jsonErrorCode(await streamed.json())).toBe("PAYLOAD_TOO_LARGE");
+	});
+
+	it("rejects compressed authenticated JSON before parsing", async () => {
+		const response = await createAuthenticatedBodyApp().request(
+			"https://worker.test/v1/example",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"Content-Encoding": "gzip",
+				},
+				body: "not-compressed",
+			},
+		);
+		expect(response.status).toBe(415);
+		expect(jsonErrorCode(await response.json())).toBe(
+			"UNSUPPORTED_CONTENT_ENCODING",
+		);
+	});
+
+	it("bounds only the two authenticated multipart envelopes", async () => {
+		const bodyApp = createAuthenticatedBodyApp();
+		const compatibleForm = new FormData();
+		compatibleForm.set("file", new File(["title\nhello"], "posts.csv"));
+		const compatibleRequest = new Request(
+			"https://worker.test/v1/posts/bulk-csv",
+			{ method: "POST", body: compatibleForm },
+		);
+		const expectedBytes = Array.from(
+			new Uint8Array(await compatibleRequest.clone().arrayBuffer()),
+		);
+		const compatibleResponse = await bodyApp.request(compatibleRequest);
+		expect(compatibleResponse.status).toBe(200);
+		expect(await compatibleResponse.json()).toEqual({
+			filename: "posts.csv",
+			replayed: expectedBytes,
+		});
+
+		for (const [path, limit] of [
+			["/v1/posts/bulk-csv", MAX_BULK_CSV_MULTIPART_BODY_BYTES],
+			["/v1/ideas/idea_test/media", MAX_IDEA_MEDIA_MULTIPART_BODY_BYTES],
+		] as const) {
+			const response = await bodyApp.request(
+				new Request(`https://worker.test${path}`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "multipart/form-data; boundary=test",
+						"Content-Length": String(limit + 1),
+					},
+					body: "--test--\r\n",
+				}),
+			);
+			expect(response.status).toBe(413);
+			expect(jsonErrorCode(await response.json())).toBe("PAYLOAD_TOO_LARGE");
+		}
+
+		const rawMedia = await bodyApp.request(
+			new Request("https://worker.test/v1/media/upload", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/octet-stream",
+					"Content-Length": String(MAX_AUTHENTICATED_JSON_BODY_BYTES + 1),
+				},
+				body: "raw",
+			}),
+		);
+		expect(rawMedia.status).toBe(200);
+		const rawPayload = (await rawMedia.json()) as { rawBodyUsed?: unknown };
+		expect(rawPayload.rawBodyUsed).toBe(false);
 	});
 });
 

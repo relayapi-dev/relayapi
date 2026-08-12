@@ -2,6 +2,8 @@
 title: Ads
 ---
 
+The runtime capability snapshot at `GET /v1/ads/platforms` is authoritative for core Meta, Google, LinkedIn, Pinterest, TikTok, and X operations; `GET /v1/ads/accounts/{ad_account_id}/advanced-capabilities` is authoritative for the advanced surface. All six networks have registered adapters and dedicated connection authority, but each exposes a different set of typed writes, reads, analytics, targeting, and audience operations. Durable report jobs are implemented only for TikTok and X, plus approval-gated LinkedIn reporting. Lead inbox ingestion, conversion delivery, forecasts, and keyword planning remain unsupported; lead-form and asset/catalog/messaging routes are capability-gated local projections of existing provider resources. See the [Advertising Platforms guide](/guides/advertising-platforms). Unsupported and provider-approval-gated operations are rejected before provider I/O. Dedicated connection credential fields are write-only, validated with provider account discovery before persistence, and never returned.
+
 ## Endpoints
 
 | Method | Endpoint | Description |
@@ -12,16 +14,39 @@ title: Ads
 | `POST` | [Create standalone ad with custom creative](/api-reference/ads/createAd) | Create standalone ad with custom creative |
 | `POST` | [Create custom audience](/api-reference/ads/createAdAudience) | Create custom audience |
 | `POST` | [Create a campaign](/api-reference/ads/createAdCampaign) | Create a campaign |
+| `POST` | [Validate and store a dedicated advertising credential](/api-reference/ads/createAdConnection) | Validate and store a dedicated advertising credential |
+| `POST` | [Create Ad Conversion Event](/api-reference/ads/createAdConversionEvent) | Create Ad Conversion Event |
+| `POST` | [Create Ad Conversion Rule](/api-reference/ads/createAdConversionRule) | Create Ad Conversion Rule |
+| `POST` | [Create Ad Report](/api-reference/ads/createAdReport) | Create Ad Report |
 | `DELETE` | [Delete audience](/api-reference/ads/deleteAdAudience) | Delete audience |
 | `DELETE` | [Cancel/archive campaign](/api-reference/ads/deleteAdCampaign) | Cancel/archive campaign |
+| `POST` | [Discover provider ad accounts through a dedicated ad connection](/api-reference/ads/discoverAdAccounts) | Discover provider ad accounts through a dedicated ad connection |
+| `POST` | [Forecast Ad Delivery](/api-reference/ads/forecastAdDelivery) | Forecast Ad Delivery |
+| `POST` | [Generate Ad Keyword Ideas](/api-reference/ads/generateAdKeywordIdeas) | Generate Ad Keyword Ideas |
 | `GET` | [Get ad details](/api-reference/ads/getAd) | Get ad details |
 | `GET` | [Get ad analytics with daily breakdown](/api-reference/ads/getAdAnalytics) | Get ad analytics with daily breakdown |
 | `GET` | [Get audience details](/api-reference/ads/getAdAudience) | Get audience details |
 | `GET` | [Get campaign details](/api-reference/ads/getAdCampaign) | Get campaign details |
-| `GET` | [List ad accounts for a social account](/api-reference/ads/listAdAccounts) | List ad accounts for a social account |
+| `GET` | [Get Ad Lead](/api-reference/ads/getAdLead) | Get Ad Lead |
+| `GET` | [Get Ad Report](/api-reference/ads/getAdReport) | Get Ad Report |
+| `GET` | [Get Advanced Ad Account Capabilities](/api-reference/ads/getAdvancedAdAccountCapabilities) | Get Advanced Ad Account Capabilities |
+| `POST` | [Link Ad Catalog](/api-reference/ads/linkAdCatalog) | Link Ad Catalog |
+| `POST` | [Link Ad Creative Asset](/api-reference/ads/linkAdCreativeAsset) | Link Ad Creative Asset |
+| `POST` | [Link Ad Lead Form](/api-reference/ads/linkAdLeadForm) | Link Ad Lead Form |
+| `POST` | [Link Ad Messaging Experience](/api-reference/ads/linkAdMessagingExperience) | Link Ad Messaging Experience |
+| `POST` | [Link Ad Product Set](/api-reference/ads/linkAdProductSet) | Link Ad Product Set |
+| `GET` | [List dedicated provider ad accounts](/api-reference/ads/listAdAccounts) | List dedicated provider ad accounts |
 | `GET` | [List custom audiences](/api-reference/ads/listAdAudiences) | List custom audiences |
 | `GET` | [List campaigns with aggregate metrics](/api-reference/ads/listAdCampaigns) | List campaigns with aggregate metrics |
+| `GET` | [List dedicated advertising connections](/api-reference/ads/listAdConnections) | List dedicated advertising connections |
+| `GET` | [List Ad Lead Forms](/api-reference/ads/listAdLeadForms) | List Ad Lead Forms |
+| `GET` | [List Ad Leads](/api-reference/ads/listAdLeads) | List Ad Leads |
+| `GET` | [List truthful ad platform capabilities](/api-reference/ads/listAdPlatforms) | List truthful ad platform capabilities |
+| `GET` | [List Ad Report Results](/api-reference/ads/listAdReportResults) | List Ad Report Results |
 | `GET` | [List ads](/api-reference/ads/listAds) | List ads |
+| `POST` | [Promote Ad Lead](/api-reference/ads/promoteAdLead) | Promote Ad Lead |
+| `DELETE` | [Revoke and shred an advertising credential](/api-reference/ads/revokeAdConnection) | Revoke and shred an advertising credential |
+| `PUT` | [Validate and rotate an advertising credential](/api-reference/ads/rotateAdConnectionCredentials) | Validate and rotate an advertising credential |
 | `GET` | [Search targeting interests](/api-reference/ads/searchAdInterests) | Search targeting interests |
 | `POST` | [Trigger manual sync for an ad account](/api-reference/ads/syncExternalAds) | Trigger manual sync for an ad account |
 | `PATCH` | [Update ad (name, budget, targeting, pause/resume)](/api-reference/ads/updateAd) | Update ad (name, budget, targeting, pause/resume) |

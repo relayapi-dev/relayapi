@@ -6,7 +6,7 @@ import {
 	QUEUE_NAMES,
 	RESOURCE_NAMES,
 } from "../src/constants.js";
-import type { SelfHostConfig } from "../src/types.js";
+import type { CloudflareResourcePlan, SelfHostConfig } from "../src/types.js";
 
 const originalFetch = globalThis.fetch;
 const hyperdriveCaCertificateId = "11111111-2222-4333-8444-555555555555";
@@ -115,6 +115,70 @@ function installHyperdrivePlanFetch(remoteCaCertificateId: string): void {
 }
 
 describe("Cloudflare provisioning", () => {
+	test("adopts additive queues for a persisted v1 resource map without weakening legacy drift checks", async () => {
+		const legacyConfig = structuredClone(provisionedConfig);
+		if (!legacyConfig.resources) throw new Error("missing resource fixture");
+		delete legacyConfig.resources.queues["media-processing"];
+		delete legacyConfig.resources.queues["media-processing-dlq"];
+		const plan: CloudflareResourcePlan = {
+			kv: { name: RESOURCE_NAMES.kv, id: "kv-id", action: "reuse" },
+			buckets: [],
+			queues: QUEUE_NAMES.map((logicalName) => ({
+				logicalName,
+				name: `relayapi-selfhost-${logicalName}`,
+				id: `id-${RESOURCE_NAMES.hyperdrive}-${logicalName}`,
+				messageRetentionSeconds: QUEUE_MESSAGE_RETENTION_SECONDS,
+				currentMessageRetentionSeconds: QUEUE_MESSAGE_RETENTION_SECONDS,
+				action: "reuse",
+			})),
+			hyperdrive: {
+				name: RESOURCE_NAMES.hyperdrive,
+				id: "hyperdrive-id",
+				currentCaCertificateId: hyperdriveCaCertificateId,
+				caCertificateId: hyperdriveCaCertificateId,
+				caCertificateAction: "retain",
+				action: "reconcile",
+				visibleDrift: [],
+				credentialAction: "reapply_write_only",
+			},
+		};
+		const client = new CloudflareClient(
+			"account-id",
+			"cloudflare-token",
+			"https://cloudflare.test/client/v4",
+		);
+		const internals = client as unknown as Record<string, unknown>;
+		internals.plan = mock(async () => plan);
+		internals.ensureQueueMessageRetention = mock(async () => {});
+		internals.getHyperdrive = mock(async () => hyperdrive());
+		internals.request = mock(async () => hyperdrive());
+		internals.verifyHyperdriveConvergence = mock(async () => {});
+		internals.configureBucketPolicies = mock(async () => {});
+
+		const resolved = await client.apply(legacyConfig, runtimeDatabaseUrl);
+		expect(resolved.queues["media-processing"]).toBe(
+			`id-${RESOURCE_NAMES.hyperdrive}-media-processing`,
+		);
+		expect(resolved.queues["media-processing-dlq"]).toBe(
+			`id-${RESOURCE_NAMES.hyperdrive}-media-processing-dlq`,
+		);
+
+		const additiveDrift = structuredClone(legacyConfig);
+		if (!additiveDrift.resources) throw new Error("missing resource fixture");
+		additiveDrift.resources.queues["media-processing"] = "wrong-id";
+		await expect(
+			client.apply(additiveDrift, runtimeDatabaseUrl),
+		).rejects.toThrow("resource IDs drifted");
+
+		const legacyDrift = structuredClone(legacyConfig);
+		if (!legacyDrift.resources) throw new Error("missing resource fixture");
+		delete (legacyDrift.resources.queues as Record<string, string | undefined>)
+			.publish;
+		await expect(client.apply(legacyDrift, runtimeDatabaseUrl)).rejects.toThrow(
+			"resource IDs drifted",
+		);
+	});
+
 	test("follows every supported resource-list pagination contract", async () => {
 		const calls: string[] = [];
 		globalThis.fetch = Object.assign(
@@ -295,6 +359,9 @@ describe("Cloudflare provisioning", () => {
 				if (method === "PUT" && url.endsWith("/lifecycle")) {
 					return response({});
 				}
+				if (method === "PUT" && url.endsWith("/cors")) {
+					return response({});
+				}
 				if (method === "PUT" && url.includes("/event_notifications/r2/")) {
 					return response({});
 				}
@@ -379,7 +446,7 @@ describe("Cloudflare provisioning", () => {
 		const lifecycleUpdates = calls.filter(
 			(call) => call.method === "PUT" && call.url.endsWith("/lifecycle"),
 		);
-		expect(lifecycleUpdates).toHaveLength(5);
+		expect(lifecycleUpdates).toHaveLength(6);
 		for (const update of lifecycleUpdates) {
 			expect(update.body?.rules).toEqual(
 				expect.arrayContaining([
@@ -397,10 +464,13 @@ describe("Cloudflare provisioning", () => {
 		const expiringUpdates = lifecycleUpdates.filter(
 			(update) =>
 				update.url.includes(RESOURCE_NAMES.buckets.media) ||
-				update.url.includes(RESOURCE_NAMES.buckets.queueRescue),
+				update.url.includes(RESOURCE_NAMES.buckets.queueRescue) ||
+				update.url.includes(RESOURCE_NAMES.buckets.adReports),
 		);
-		expect(expiringUpdates).toHaveLength(2);
-		for (const update of expiringUpdates) {
+		expect(expiringUpdates).toHaveLength(3);
+		for (const update of expiringUpdates.filter(
+			(update) => !update.url.includes(RESOURCE_NAMES.buckets.adReports),
+		)) {
 			expect(update.body?.rules).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
@@ -411,6 +481,38 @@ describe("Cloudflare provisioning", () => {
 				]),
 			);
 		}
+		const adReportLifecycle = expiringUpdates.find((update) =>
+			update.url.includes(RESOURCE_NAMES.buckets.adReports),
+		);
+		expect(adReportLifecycle?.body?.rules).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "relayapi-ad-report-expiry",
+					conditions: { prefix: "" },
+					deleteObjectsTransition: {
+						condition: { type: "Age", maxAge: 691_200 },
+					},
+				}),
+			]),
+		);
+		const [mediaCorsUpdate] = calls.filter(
+			(call) =>
+				call.method === "PUT" &&
+				call.url.endsWith(`/${RESOURCE_NAMES.buckets.media}/cors`),
+		);
+		expect(mediaCorsUpdate?.body).toEqual({
+			rules: [
+				{
+					allowed: {
+						origins: ["https://app.example.com"],
+						methods: ["PUT"],
+						headers: ["Content-Type", "If-None-Match"],
+					},
+					exposeHeaders: ["ETag"],
+					maxAgeSeconds: 3600,
+				},
+			],
+		});
 	});
 
 	test("rejects an existing bucket in the other immutable jurisdiction", async () => {
@@ -841,6 +943,9 @@ describe("Cloudflare provisioning", () => {
 					return response({ rules: [] });
 				}
 				if (method === "PUT" && url.endsWith("/lifecycle")) {
+					return response({});
+				}
+				if (method === "PUT" && url.endsWith("/cors")) {
 					return response({});
 				}
 				if (method === "PUT" && url.includes("/event_notifications/r2/")) {

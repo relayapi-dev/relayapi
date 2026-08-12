@@ -1,3 +1,4 @@
+import { mapConcurrently } from "../lib/concurrency";
 import {
 	awaitResponseWithBodyCompletion,
 	fetchPublicUrl,
@@ -5,6 +6,7 @@ import {
 	readResponseJson,
 } from "../lib/fetch-public-url";
 import { createStreamingMultipartBody } from "../lib/multipart-stream";
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
 	PublishError,
@@ -35,14 +37,60 @@ async function mastodonFetch(
 	token: string,
 	options: RequestInit = {},
 ): Promise<Response> {
-	const url = `${instanceUrl.replace(/\/+$/, "")}${path}`;
-	return fetch(url, {
+	const url = new URL(path, `${instanceUrl.replace(/\/+$/, "")}/`);
+	return fetchPublicUrl(url, {
 		...options,
+		// Never follow a provider redirect while carrying an OAuth bearer token.
+		// fetchPublicUrl also rejects private/reserved destinations after DNS
+		// resolution, which keeps a compromised account record from becoming SSRF.
+		redirect: "error",
+		timeout: 30_000,
 		headers: {
 			Authorization: `Bearer ${token}`,
 			...(options.headers ?? {}),
 		},
 	});
+}
+
+/**
+ * Return the immutable provider origin recorded by the connection flow.
+ * A publish request must never be allowed to choose where its bearer token is
+ * sent. The connector is responsible for discovering and persisting this value.
+ */
+export function resolveMastodonInstanceUrl(
+	metadata: Record<string, unknown> | null | undefined,
+): string {
+	const raw = metadata?.instance_url;
+	if (typeof raw !== "string" || !raw.trim()) {
+		throw new PublishError(
+			"CONTENT_ERROR: This Mastodon account is missing its connected instance URL. Reconnect the account before publishing.",
+			{ code: "MASTODON_RECONNECT_REQUIRED" },
+		);
+	}
+
+	let parsed: URL;
+	try {
+		parsed = new URL(raw.trim());
+	} catch {
+		throw new PublishError(
+			"CONTENT_ERROR: This Mastodon account has an invalid connected instance URL. Reconnect the account before publishing.",
+			{ code: "MASTODON_RECONNECT_REQUIRED" },
+		);
+	}
+	if (
+		parsed.protocol !== "https:" ||
+		parsed.username ||
+		parsed.password ||
+		parsed.search ||
+		parsed.hash ||
+		(parsed.pathname !== "/" && parsed.pathname !== "")
+	) {
+		throw new PublishError(
+			"CONTENT_ERROR: The connected Mastodon instance must be a bare HTTPS origin. Reconnect the account before publishing.",
+			{ code: "MASTODON_RECONNECT_REQUIRED" },
+		);
+	}
+	return parsed.origin;
 }
 
 function isValidMediaLimit(value: unknown): value is number {
@@ -196,7 +244,7 @@ async function uploadMedia(
 	);
 
 	if (!res.ok) {
-		const err = await res.text().catch(() => "");
+		const err = await readPublisherText(res).catch(() => "");
 		const raw = `HTTP ${res.status}\n${err}`;
 		throw new PublishError(
 			`Mastodon media upload failed: ${res.status} ${err}`,
@@ -207,7 +255,10 @@ async function uploadMedia(
 		);
 	}
 
-	const data = (await res.json()) as { id: string; url: string | null };
+	const data = (await readPublisherJson(res)) as {
+		id: string;
+		url: string | null;
+	};
 
 	// 202 Accepted means async processing (video/audio/GIF) — poll until ready
 	// Mastodon API: Get media attachment by ID (poll for processing completion)
@@ -251,13 +302,6 @@ export const mastodonPublisher: Publisher = {
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
 			const token = request.account.access_token;
-			// Instance URL should be stored in account metadata during connect
-			const accountMetadata = ((request.account as Record<string, unknown>)
-				.metadata ?? {}) as Record<string, unknown>;
-			const instanceUrl =
-				(accountMetadata.instance_url as string) ??
-				(request.target_options.instance_url as string) ??
-				"https://mastodon.social";
 			const opts = request.target_options;
 
 			const content = (opts.content as string) ?? request.content ?? "";
@@ -268,8 +312,66 @@ export const mastodonPublisher: Publisher = {
 
 			// Upload media if present (Mastodon limits: 4 images or 1 video/gif)
 			const media =
-				(opts.media as Array<{ url: string; alt?: string; type?: string }>) ??
-				request.media;
+				(opts.media as Array<{
+					url: string;
+					alt_text?: string;
+					type?: string;
+				}>) ?? request.media;
+			const poll = opts.poll as
+				| {
+						options?: string[];
+						expires_in?: number;
+						multiple?: boolean;
+						hide_totals?: boolean;
+				  }
+				| undefined;
+			if (poll) {
+				if (!Array.isArray(poll.options) || poll.options.length < 2) {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_POLL",
+							message: "Mastodon polls require at least two options.",
+						},
+					};
+				}
+				if (poll.options.length > 4) {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_POLL",
+							message: "Mastodon polls support at most four options.",
+						},
+					};
+				}
+				if (media.length > 0) {
+					return {
+						success: false,
+						error: {
+							code: "INVALID_MEDIA_MIX",
+							message: "Mastodon polls cannot be combined with media.",
+						},
+					};
+				}
+			}
+			const hasDocument = media.some((item) => item.type === "document");
+			// Official docs: https://docs.joinmastodon.org/user/posting/
+			// Section "Attachments > Files" lists images, animated GIF, video,
+			// and audio as attachment types; generic document files are not listed.
+			if (hasDocument) {
+				return {
+					success: false,
+					error: {
+						code: "UNSUPPORTED_MEDIA_TYPE",
+						message: "Mastodon does not support generic document attachments.",
+					},
+				};
+			}
+
+			// The destination is connection-owned metadata. In particular, never use
+			// target_options.instance_url here: doing so would disclose the bearer
+			// token to a caller-controlled host.
+			const instanceUrl = resolveMastodonInstanceUrl(request.account.metadata);
 			let mediaIds: string[] | undefined;
 
 			if (media.length > 0) {
@@ -279,22 +381,6 @@ export const mastodonPublisher: Publisher = {
 						(m as { type?: string }).type === "gif",
 				);
 
-				const hasDocument = media.some(
-					(m) => (m as { type?: string }).type === "document",
-				);
-				// Official docs: https://docs.joinmastodon.org/user/posting/
-				// Section "Attachments > Files" lists images, animated GIF, video,
-				// and audio as attachment types; generic document files are not listed.
-				if (hasDocument) {
-					return {
-						success: false,
-						error: {
-							code: "UNSUPPORTED_MEDIA_TYPE",
-							message:
-								"Mastodon does not support generic document attachments.",
-						},
-					};
-				}
 				const mediaLimits = await getMediaLimits(instanceUrl, token);
 
 				// The same official section allows one video or animated GIF per post.
@@ -322,15 +408,13 @@ export const mastodonPublisher: Publisher = {
 					};
 				}
 
-				mediaIds = await Promise.all(
-					media.map((m) =>
-						uploadMedia(
-							instanceUrl,
-							token,
-							m.url,
-							getMediaMaxBytes(m, mediaLimits),
-							(m as { alt?: string }).alt,
-						),
+				mediaIds = await mapConcurrently(media, 2, (m) =>
+					uploadMedia(
+						instanceUrl,
+						token,
+						m.url,
+						getMediaMaxBytes(m, mediaLimits),
+						m.alt_text,
 					),
 				);
 			}
@@ -362,24 +446,13 @@ export const mastodonPublisher: Publisher = {
 
 			// Mastodon API: Poll parameters
 			// Docs: https://docs.joinmastodon.org/methods/statuses/#create
-			const poll = opts.poll as
-				| {
-						options?: string[];
-						expires_in?: number;
-						multiple?: boolean;
-						hide_totals?: boolean;
-				  }
-				| undefined;
-			if (poll?.options && poll.options.length >= 2) {
-				// Polls cannot be combined with media
-				if (!mediaIds || mediaIds.length === 0) {
-					body.poll = {
-						options: poll.options.slice(0, 4),
-						expires_in: poll.expires_in ?? 86400,
-						multiple: poll.multiple ?? false,
-						hide_totals: poll.hide_totals ?? false,
-					};
-				}
+			if (poll) {
+				body.poll = {
+					options: poll.options as string[],
+					expires_in: poll.expires_in ?? 86400,
+					multiple: poll.multiple ?? false,
+					hide_totals: poll.hide_totals ?? false,
+				};
 			}
 
 			// Mastodon 4.5.0+: Quote posts
@@ -399,7 +472,7 @@ export const mastodonPublisher: Publisher = {
 			});
 
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const detail = (err as { error?: string }).error ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 				throw new PublishError(`Mastodon post creation failed: ${detail}`, {
@@ -408,7 +481,7 @@ export const mastodonPublisher: Publisher = {
 				});
 			}
 
-			const result = (await res.json()) as {
+			const result = (await readPublisherJson(res)) as {
 				id: string;
 				url: string;
 				account: { username: string };

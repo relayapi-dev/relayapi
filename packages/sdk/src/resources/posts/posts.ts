@@ -1,19 +1,30 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-import { APIResource } from '../../core/resource';
-import * as LogsAPI from './logs';
-import { LogListParams, LogListResponse, LogRetrieveResponse, Logs } from './logs';
-import * as PostTagsAPI from './tags';
-import { PostTagListParams, PostTagListResponse, PostTags } from './tags';
-import { APIPromise } from '../../core/api-promise';
-import { buildHeaders } from '../../internal/headers';
-import { RequestOptions } from '../../internal/request-options';
-import { path } from '../../internal/utils/path';
+import { APIResource } from "../../core/resource";
+import * as LogsAPI from "./logs";
+import {
+  LogListParams,
+  LogListResponse,
+  LogRetrieveResponse,
+  Logs,
+} from "./logs";
+import * as PostTagsAPI from "./tags";
+import { PostTagListParams, PostTagListResponse, PostTags } from "./tags";
+import { APIPromise } from "../../core/api-promise";
+import { buildHeaders } from "../../internal/headers";
+import { RequestOptions } from "../../internal/request-options";
+import { path } from "../../internal/utils/path";
+import type {
+  PostMediaInput,
+  PublisherTargetOptions,
+} from "./publisher-options";
+
+export type * from "./publisher-options";
 
 function isRequestOptions(
   value: PostUnpublishParams | RequestOptions | undefined,
 ): value is RequestOptions {
-  return !!value && typeof value === 'object' && !('platforms' in value);
+  return !!value && typeof value === "object" && !("platforms" in value);
 }
 
 export class Posts extends APIResource {
@@ -33,8 +44,11 @@ export class Posts extends APIResource {
    * });
    * ```
    */
-  create(body: PostCreateParams, options?: RequestOptions): APIPromise<PostCreateResponse> {
-    return this._client.post('/v1/posts', { body, ...options });
+  create(
+    body: PostCreateParams,
+    options?: RequestOptions,
+  ): APIPromise<PostCreateResponse> {
+    return this._client.post("/v1/posts", { body, ...options });
   }
 
   /**
@@ -45,7 +59,10 @@ export class Posts extends APIResource {
    * const post = await client.posts.retrieve('id');
    * ```
    */
-  retrieve(id: string, options?: RequestOptions): APIPromise<PostRetrieveResponse> {
+  retrieve(
+    id: string,
+    options?: RequestOptions,
+  ): APIPromise<PostRetrieveResponse> {
     return this._client.get(path`/v1/posts/${id}`, options);
   }
 
@@ -77,7 +94,7 @@ export class Posts extends APIResource {
     query: PostListParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<PostTimelineResponse> {
-    return this._client.get('/v1/posts', { query, ...options });
+    return this._client.get("/v1/posts", { query, ...options });
   }
 
   /**
@@ -91,7 +108,7 @@ export class Posts extends APIResource {
   delete(id: string, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/posts/${id}`, {
       ...options,
-      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+      headers: buildHeaders([{ Accept: "*/*" }, options?.headers]),
     });
   }
 
@@ -106,8 +123,11 @@ export class Posts extends APIResource {
    * });
    * ```
    */
-  bulkCreate(body: PostBulkCreateParams, options?: RequestOptions): APIPromise<PostBulkCreateResponse> {
-    return this._client.post('/v1/posts/bulk', { body, ...options });
+  bulkCreate(
+    body: PostBulkCreateParams,
+    options?: RequestOptions,
+  ): APIPromise<PostBulkCreateResponse> {
+    return this._client.post("/v1/posts/bulk", { body, ...options });
   }
 
   /**
@@ -118,7 +138,7 @@ export class Posts extends APIResource {
     query: PostBulkCsvUploadParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<PostBulkCsvUploadResponse> {
-    return this._client.post('/v1/posts/bulk-csv', { body, query, ...options });
+    return this._client.post("/v1/posts/bulk-csv", { body, query, ...options });
   }
 
   /**
@@ -143,10 +163,13 @@ export class Posts extends APIResource {
     body: PostReconcileTargetParams,
     options?: RequestOptions,
   ): APIPromise<PostReconcileTargetResponse> {
-    return this._client.post(path`/v1/posts/${id}/targets/${targetID}/reconcile`, {
-      body,
-      ...options,
-    });
+    return this._client.post(
+      path`/v1/posts/${id}/targets/${targetID}/reconcile`,
+      {
+        body,
+        ...options,
+      },
+    );
   }
 
   /**
@@ -165,14 +188,22 @@ export class Posts extends APIResource {
     options?: RequestOptions,
   ): APIPromise<PostUnpublishResponse> {
     const body = isRequestOptions(bodyOrOptions) ? undefined : bodyOrOptions;
-    const requestOptions = isRequestOptions(bodyOrOptions) ? bodyOrOptions : options;
-    return this._client.post(path`/v1/posts/${id}/unpublish`, { body, ...requestOptions });
+    const requestOptions = isRequestOptions(bodyOrOptions)
+      ? bodyOrOptions
+      : options;
+    return this._client.post(path`/v1/posts/${id}/unpublish`, {
+      body,
+      ...requestOptions,
+    });
   }
 
   /**
    * Get notes for a post.
    */
-  getNotes(id: string, options?: RequestOptions): APIPromise<PostNotesResponse> {
+  getNotes(
+    id: string,
+    options?: RequestOptions,
+  ): APIPromise<PostNotesResponse> {
     return this._client.get(path`/v1/posts/${id}/notes`, options);
   }
 
@@ -184,7 +215,10 @@ export class Posts extends APIResource {
     body: PostUpdateNotesParams,
     options?: RequestOptions,
   ): APIPromise<PostNotesResponse> {
-    return this._client.patch(path`/v1/posts/${id}/notes`, { body, ...options });
+    return this._client.patch(path`/v1/posts/${id}/notes`, {
+      body,
+      ...options,
+    });
   }
 
   /**
@@ -195,13 +229,60 @@ export class Posts extends APIResource {
     body: PostUpdateMetadataParams,
     options?: RequestOptions,
   ): APIPromise<PostUpdateMetadataResponse> {
-    return this._client.post(path`/v1/posts/${id}/update-metadata`, { body, ...options });
+    return this._client.post(path`/v1/posts/${id}/update-metadata`, {
+      body,
+      ...options,
+    });
+  }
+
+  /** Edit explicit targets of an already-published post. */
+  editPublished(
+    id: string,
+    params: PostPublishedEditParams,
+    options?: RequestOptions,
+  ): APIPromise<PostPublishedEditBatchResponse> {
+    const { idempotency_key, ...body } = params;
+    return this._client.post(path`/v1/posts/${id}/edits`, {
+      body,
+      ...options,
+      headers: buildHeaders([
+        { "Idempotency-Key": idempotency_key },
+        options?.headers,
+      ]),
+    });
+  }
+
+  /** Retrieve one durable published-edit operation. */
+  getPublishedEdit(
+    id: string,
+    operationID: string,
+    options?: RequestOptions,
+  ): APIPromise<SocialMutationOperation> {
+    return this._client.get(
+      path`/v1/posts/${id}/edits/${operationID}`,
+      options,
+    );
+  }
+
+  /** List durable edit operations for this post only. */
+  listPublishedEdits(
+    id: string,
+    query: PostPublishedEditListParams | null | undefined = {},
+    options?: RequestOptions,
+  ): APIPromise<PostPublishedEditListResponse> {
+    return this._client.get(path`/v1/posts/${id}/edits`, {
+      query,
+      ...options,
+    });
   }
 
   /**
    * Get recycling configuration for a post.
    */
-  getRecycling(id: string, options?: RequestOptions): APIPromise<RecyclingConfig> {
+  getRecycling(
+    id: string,
+    options?: RequestOptions,
+  ): APIPromise<RecyclingConfig> {
     return this._client.get(path`/v1/posts/${id}/recycling`, options);
   }
 
@@ -213,7 +294,10 @@ export class Posts extends APIResource {
     body: RecyclingInput,
     options?: RequestOptions,
   ): APIPromise<PostSetRecyclingResponse> {
-    return this._client.put(path`/v1/posts/${id}/recycling`, { body, ...options });
+    return this._client.put(path`/v1/posts/${id}/recycling`, {
+      body,
+      ...options,
+    });
   }
 
   /**
@@ -222,7 +306,7 @@ export class Posts extends APIResource {
   deleteRecycling(id: string, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/posts/${id}/recycling`, {
       ...options,
-      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+      headers: buildHeaders([{ Accept: "*/*" }, options?.headers]),
     });
   }
 
@@ -234,7 +318,10 @@ export class Posts extends APIResource {
     query: PostListParams | null | undefined = {},
     options?: RequestOptions,
   ): APIPromise<PostListResponse> {
-    return this._client.get(path`/v1/posts/${id}/recycled-copies`, { query, ...options });
+    return this._client.get(path`/v1/posts/${id}/recycled-copies`, {
+      query,
+      ...options,
+    });
   }
 }
 
@@ -245,7 +332,7 @@ export interface RecyclingConfig {
   id: string;
   enabled: boolean;
   gap: number;
-  gap_freq: 'day' | 'week' | 'month';
+  gap_freq: "day" | "week" | "month";
   start_date: string;
   expire_count: number | null;
   expire_date: string | null;
@@ -258,12 +345,59 @@ export interface RecyclingConfig {
   updated_at: string;
 }
 
+export interface SocialMutationOperation {
+  id: string;
+  target_id: string;
+  account_id: string;
+  platform: string;
+  kind: string;
+  status:
+    | "pending"
+    | "processing"
+    | "request_may_have_been_sent"
+    | "unknown"
+    | "completed"
+    | "failed";
+  provider_operation_id: string | null;
+  provider_post_id: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface PostPublishedEditParams {
+  idempotency_key: string;
+  targets: Array<{
+    target_id: string;
+    content: string;
+    expected_provider_post_id?: string;
+  }>;
+}
+
+export interface PostPublishedEditBatchResponse {
+  data: SocialMutationOperation[];
+  completed: number;
+  failed: number;
+  unknown: number;
+  partial: boolean;
+}
+
+export interface PostPublishedEditListParams {
+  limit?: number;
+}
+
+export interface PostPublishedEditListResponse {
+  data: SocialMutationOperation[];
+}
+
 /**
  * Input for creating or updating a recycling configuration.
  */
 export interface RecyclingInput {
   gap: number;
-  gap_freq: 'day' | 'week' | 'month';
+  gap_freq: "day" | "week" | "month";
   start_date: string;
   enabled?: boolean;
   expire_count?: number;
@@ -271,36 +405,42 @@ export interface RecyclingInput {
   content_variations?: Array<string>;
 }
 
-export type PostTargetPlatform =
-  | 'twitter'
-  | 'instagram'
-  | 'facebook'
-  | 'linkedin'
-  | 'tiktok'
-  | 'youtube'
-  | 'pinterest'
-  | 'reddit'
-  | 'bluesky'
-  | 'threads'
-  | 'telegram'
-  | 'snapchat'
-  | 'googlebusiness'
-  | 'whatsapp'
-  | 'mastodon'
-  | 'discord'
-  | 'sms'
-  | 'beehiiv'
-  | 'convertkit'
-  | 'mailchimp'
-  | 'listmonk';
+/** Canonical runtime list backing the SDK's typed 22-platform publishing union. */
+export const POST_TARGET_PLATFORMS = [
+  "twitter",
+  "instagram",
+  "facebook",
+  "linkedin",
+  "tiktok",
+  "youtube",
+  "pinterest",
+  "reddit",
+  "bluesky",
+  "threads",
+  "telegram",
+  "snapchat",
+  "googlebusiness",
+  "whatsapp",
+  "mastodon",
+  "discord",
+  "sms",
+  "beehiiv",
+  "convertkit",
+  "mailchimp",
+  "listmonk",
+  "slack",
+] as const;
+
+export type PostTargetPlatform = (typeof POST_TARGET_PLATFORMS)[number];
 
 export type PostTargetStatus =
-  | 'draft'
-  | 'scheduled'
-  | 'publishing'
-  | 'published'
-  | 'failed'
-  | 'partial';
+  | "draft"
+  | "scheduled"
+  | "publishing"
+  | "published"
+  | "provider_draft"
+  | "failed"
+  | "partial";
 
 export interface PostMetrics {
   impressions?: number;
@@ -368,7 +508,14 @@ export interface PostCreateResponse {
    */
   published_at: string | null;
 
-  status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+  status:
+    | "draft"
+    | "scheduled"
+    | "publishing"
+    | "published"
+    | "provider_draft"
+    | "failed"
+    | "partial";
 
   /**
    * Per-target results
@@ -379,23 +526,7 @@ export interface PostCreateResponse {
 }
 
 export namespace PostCreateResponse {
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-
-    /**
-     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-     * original expires. Ignored on write.
-     */
-    thumbnail?: string;
-  }
+  export type Media = PostMediaInput;
 
   export interface Targets {
     platform: PostTargetPlatform | null;
@@ -442,7 +573,12 @@ export namespace PostCreateResponse {
       publish_operation_id: string;
 
       /** Durable provider delivery state. */
-      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
+      delivery_state:
+        | "queued"
+        | "in_flight"
+        | "unknown"
+        | "succeeded"
+        | "failed";
     }
 
     export interface Error {
@@ -504,7 +640,14 @@ export interface PostRetrieveResponse {
    */
   published_at: string | null;
 
-  status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+  status:
+    | "draft"
+    | "scheduled"
+    | "publishing"
+    | "published"
+    | "provider_draft"
+    | "failed"
+    | "partial";
 
   /**
    * Per-target results
@@ -514,7 +657,7 @@ export interface PostRetrieveResponse {
   /**
    * Per-target customizations
    */
-  target_options?: { [key: string]: { [key: string]: unknown } } | null;
+  target_options?: PublisherTargetOptions | null;
 
   /**
    * IANA timezone
@@ -525,23 +668,7 @@ export interface PostRetrieveResponse {
 }
 
 export namespace PostRetrieveResponse {
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-
-    /**
-     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-     * original expires. Ignored on write.
-     */
-    thumbnail?: string;
-  }
+  export type Media = PostMediaInput;
 
   export interface Targets {
     platform: PostTargetPlatform | null;
@@ -588,7 +715,12 @@ export namespace PostRetrieveResponse {
       publish_operation_id: string;
 
       /** Durable provider delivery state. */
-      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
+      delivery_state:
+        | "queued"
+        | "in_flight"
+        | "unknown"
+        | "succeeded"
+        | "failed";
     }
 
     export interface Error {
@@ -640,7 +772,14 @@ export interface PostUpdateResponse {
    */
   published_at: string | null;
 
-  status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+  status:
+    | "draft"
+    | "scheduled"
+    | "publishing"
+    | "published"
+    | "provider_draft"
+    | "failed"
+    | "partial";
 
   /**
    * Per-target results
@@ -650,7 +789,7 @@ export interface PostUpdateResponse {
   /**
    * Per-target customizations
    */
-  target_options?: { [key: string]: { [key: string]: unknown } } | null;
+  target_options?: PublisherTargetOptions | null;
 
   /**
    * IANA timezone
@@ -661,23 +800,7 @@ export interface PostUpdateResponse {
 }
 
 export namespace PostUpdateResponse {
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-
-    /**
-     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-     * original expires. Ignored on write.
-     */
-    thumbnail?: string;
-  }
+  export type Media = PostMediaInput;
 
   export interface Targets {
     platform: PostTargetPlatform | null;
@@ -724,7 +847,12 @@ export namespace PostUpdateResponse {
       publish_operation_id: string;
 
       /** Durable provider delivery state. */
-      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
+      delivery_state:
+        | "queued"
+        | "in_flight"
+        | "unknown"
+        | "succeeded"
+        | "failed";
     }
 
     export interface Error {
@@ -791,7 +919,14 @@ export namespace PostListResponse {
      */
     published_at: string | null;
 
-    status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+    status:
+      | "draft"
+      | "scheduled"
+      | "publishing"
+      | "published"
+      | "provider_draft"
+      | "failed"
+      | "partial";
 
     /**
      * Per-target results
@@ -802,23 +937,7 @@ export namespace PostListResponse {
   }
 
   export namespace Data {
-    export interface Media {
-      /**
-       * Public URL of the media file
-       */
-      url: string;
-
-      /**
-       * Media type. Inferred from URL extension if omitted.
-       */
-      type?: 'image' | 'video' | 'gif' | 'document';
-
-      /**
-       * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-       * original expires. Ignored on write.
-       */
-      thumbnail?: string;
-    }
+    export type Media = PostMediaInput;
 
     export interface Targets {
       platform: PostTargetPlatform | null;
@@ -865,7 +984,12 @@ export namespace PostListResponse {
         publish_operation_id: string;
 
         /** Durable provider delivery state. */
-        delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
+        delivery_state:
+          | "queued"
+          | "in_flight"
+          | "unknown"
+          | "succeeded"
+          | "failed";
       }
 
       export interface Error {
@@ -933,7 +1057,14 @@ export namespace PostBulkCreateResponse {
      */
     published_at: string | null;
 
-    status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+    status:
+      | "draft"
+      | "scheduled"
+      | "publishing"
+      | "published"
+      | "provider_draft"
+      | "failed"
+      | "partial";
 
     /**
      * Per-target results
@@ -944,23 +1075,7 @@ export namespace PostBulkCreateResponse {
   }
 
   export namespace Data {
-    export interface Media {
-      /**
-       * Public URL of the media file
-       */
-      url: string;
-
-      /**
-       * Media type. Inferred from URL extension if omitted.
-       */
-      type?: 'image' | 'video' | 'gif' | 'document';
-
-      /**
-       * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-       * original expires. Ignored on write.
-       */
-      thumbnail?: string;
-    }
+    export type Media = PostMediaInput;
 
     export interface Targets {
       platform: PostTargetPlatform | null;
@@ -1007,7 +1122,12 @@ export namespace PostBulkCreateResponse {
         publish_operation_id: string;
 
         /** Durable provider delivery state. */
-        delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
+        delivery_state:
+          | "queued"
+          | "in_flight"
+          | "unknown"
+          | "succeeded"
+          | "failed";
       }
 
       export interface Error {
@@ -1063,7 +1183,14 @@ export interface PostRetryResponse {
    */
   published_at: string | null;
 
-  status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+  status:
+    | "draft"
+    | "scheduled"
+    | "publishing"
+    | "published"
+    | "provider_draft"
+    | "failed"
+    | "partial";
 
   /**
    * Per-target results
@@ -1080,31 +1207,15 @@ export interface PostReconcileTargetResponse {
 
   publish_operation_id: string;
 
-  outcome: 'succeeded' | 'failed';
+  outcome: "succeeded" | "failed";
 
-  post_status: 'publishing' | 'published' | 'failed' | 'partial';
+  post_status: "publishing" | "published" | "failed" | "partial";
 
-  thread_status: 'queued' | 'completed' | 'failed' | 'unknown' | null;
+  thread_status: "queued" | "completed" | "failed" | "unknown" | null;
 }
 
 export namespace PostRetryResponse {
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-
-    /**
-     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-     * original expires. Ignored on write.
-     */
-    thumbnail?: string;
-  }
+  export type Media = PostMediaInput;
 
   export interface Targets {
     platform: PostTargetPlatform | null;
@@ -1151,7 +1262,12 @@ export namespace PostRetryResponse {
       publish_operation_id: string;
 
       /** Durable provider delivery state. */
-      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
+      delivery_state:
+        | "queued"
+        | "in_flight"
+        | "unknown"
+        | "succeeded"
+        | "failed";
     }
 
     export interface Error {
@@ -1198,7 +1314,14 @@ export interface PostUnpublishResponse {
    */
   published_at: string | null;
 
-  status: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+  status:
+    | "draft"
+    | "scheduled"
+    | "publishing"
+    | "published"
+    | "provider_draft"
+    | "failed"
+    | "partial";
 
   /**
    * Per-target results
@@ -1209,23 +1332,7 @@ export interface PostUnpublishResponse {
 }
 
 export namespace PostUnpublishResponse {
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-
-    /**
-     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-     * original expires. Ignored on write.
-     */
-    thumbnail?: string;
-  }
+  export type Media = PostMediaInput;
 
   export interface Targets {
     platform: PostTargetPlatform | null;
@@ -1272,7 +1379,12 @@ export namespace PostUnpublishResponse {
       publish_operation_id: string;
 
       /** Durable provider delivery state. */
-      delivery_state: 'queued' | 'in_flight' | 'unknown' | 'succeeded' | 'failed';
+      delivery_state:
+        | "queued"
+        | "in_flight"
+        | "unknown"
+        | "succeeded"
+        | "failed";
     }
 
     export interface Error {
@@ -1294,7 +1406,7 @@ export interface PostUnpublishParams {
 
 export type PostReconcileTargetParams =
   | {
-      outcome: 'succeeded';
+      outcome: "succeeded";
 
       publish_operation_id: string;
 
@@ -1303,7 +1415,7 @@ export type PostReconcileTargetParams =
       provider_url?: string;
     }
   | {
-      outcome: 'failed';
+      outcome: "failed";
 
       publish_operation_id: string;
 
@@ -1340,7 +1452,7 @@ export interface PostUpdateMetadataParams {
   /**
    * Platform to update metadata on (YouTube only for now)
    */
-  platform: 'youtube';
+  platform: "youtube";
 
   /**
    * Account ID (required when post ID is '_' for direct video ID mode)
@@ -1370,7 +1482,7 @@ export interface PostUpdateMetadataParams {
   /**
    * Video visibility
    */
-  visibility?: 'public' | 'private' | 'unlisted';
+  visibility?: "public" | "private" | "unlisted";
 
   /**
    * YouTube category ID
@@ -1415,7 +1527,7 @@ export namespace PostBulkCsvUploadResponse {
      */
     row: number;
 
-    status: 'success' | 'error' | 'skipped';
+    status: "success" | "error" | "skipped";
 
     /**
      * Created post ID (only on success)
@@ -1498,7 +1610,7 @@ export interface PostCreateParams {
    * Supports platform-specific features such as Twitter polls
    * (`poll.options`, `poll.duration_minutes`), threads, `reply_to`, and `reply_settings`.
    */
-  target_options?: { [key: string]: { [key: string]: unknown } };
+  target_options?: PublisherTargetOptions;
 
   /**
    * IANA timezone for scheduling
@@ -1539,29 +1651,13 @@ export interface PostCreateParams {
 
 export namespace PostCreateParams {
   export interface CrossPostAction {
-    action_type: 'repost' | 'comment' | 'quote';
+    action_type: "repost" | "comment" | "quote";
     target_account_id: string;
     content?: string;
     delay_minutes?: number;
   }
 
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-
-    /**
-     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-     * original expires. Ignored on write.
-     */
-    thumbnail?: string;
-  }
+  export type Media = PostMediaInput;
 }
 
 export interface PostUpdateParams {
@@ -1596,7 +1692,7 @@ export interface PostUpdateParams {
    * Supports platform-specific features such as Twitter polls
    * (`poll.options`, `poll.duration_minutes`), threads, `reply_to`, and `reply_settings`.
    */
-  target_options?: { [key: string]: { [key: string]: unknown } };
+  target_options?: PublisherTargetOptions;
 
   /**
    * Updated targets
@@ -1607,23 +1703,7 @@ export interface PostUpdateParams {
 }
 
 export namespace PostUpdateParams {
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-
-    /**
-     * Read-only. Stable, hyper-optimized preview URL that persists after the full-res
-     * original expires. Ignored on write.
-     */
-    thumbnail?: string;
-  }
+  export type Media = PostMediaInput;
 }
 
 export interface PostListParams {
@@ -1656,7 +1736,14 @@ export interface PostListParams {
   /**
    * Filter by post status
    */
-  status?: 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'partial';
+  status?:
+    | "draft"
+    | "scheduled"
+    | "publishing"
+    | "published"
+    | "provider_draft"
+    | "failed"
+    | "partial";
 
   /**
    * Filter: start date (ISO 8601)
@@ -1677,7 +1764,7 @@ export interface PostListParams {
    * When true and status=published, also return external posts (published natively
    * on platforms) merged by published_at.
    */
-  include_external?: 'true' | 'false';
+  include_external?: "true" | "false";
 }
 
 export interface PostBulkCreateParams {
@@ -1697,7 +1784,7 @@ export namespace PostBulkCreateParams {
  */
 export interface ExternalPost {
   id: string;
-  source: 'external';
+  source: "external";
   platform: PostTargetPlatform;
   social_account_id: string;
   platform_post_id: string;
@@ -1753,6 +1840,11 @@ export declare namespace Posts {
     type PostUpdateNotesParams as PostUpdateNotesParams,
     type PostUpdateMetadataResponse as PostUpdateMetadataResponse,
     type PostUpdateMetadataParams as PostUpdateMetadataParams,
+    type SocialMutationOperation as SocialMutationOperation,
+    type PostPublishedEditParams as PostPublishedEditParams,
+    type PostPublishedEditBatchResponse as PostPublishedEditBatchResponse,
+    type PostPublishedEditListParams as PostPublishedEditListParams,
+    type PostPublishedEditListResponse as PostPublishedEditListResponse,
     type ExternalPost as ExternalPost,
     type PostCreateParams as PostCreateParams,
     type PostUpdateParams as PostUpdateParams,

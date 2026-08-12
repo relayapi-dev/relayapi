@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { DASHBOARD_SESSION_AUTHORITY_HEADER } from "@relayapi/config";
 import {
@@ -748,7 +749,7 @@ app.openapi(requestCode, async (c) => {
 	);
 
 	if (!metaRes.ok) {
-		const err = (await metaRes.json().catch(() => ({}))) as {
+		const err = (await readProviderJson(metaRes).catch(() => ({}))) as {
 			error?: { message?: string };
 		};
 		return c.json(
@@ -898,7 +899,7 @@ app.openapi(verifyCode, async (c) => {
 	);
 
 	if (!verifyRes.ok) {
-		const err = (await verifyRes.json().catch(() => ({}))) as {
+		const err = (await readProviderJson(verifyRes).catch(() => ({}))) as {
 			error?: { message?: string };
 		};
 		return c.json(
@@ -944,7 +945,7 @@ app.openapi(verifyCode, async (c) => {
 			.set({ status: "verified", updatedAt: new Date() })
 			.where(eq(whatsappPhoneNumbers.id, phone_number_id));
 
-		const regErr = (await registerRes.json().catch(() => ({}))) as {
+		const regErr = (await readProviderJson(registerRes).catch(() => ({}))) as {
 			error?: { message?: string };
 		};
 		return c.json(

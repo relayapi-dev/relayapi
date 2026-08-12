@@ -43,6 +43,11 @@ const NEVER_STORES = new Set<string>([
 	"postgres:public.operator_resolution_notes",
 	"postgres:public.external_subject_cleanup_jobs",
 	"postgres:public.tool_jobs",
+	"postgres:public.ad_leads",
+	"postgres:public.media_upload_sessions",
+	"postgres:public.media_derivatives",
+	"postgres:public.ad_report_jobs",
+	"postgres:public.ad_report_rows",
 ]);
 
 export function postgresRetentionHoldTreatment(

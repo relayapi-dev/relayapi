@@ -69,6 +69,7 @@ const ORIGIN_CLASS_BY_MESSAGE_TYPE: Readonly<
 	tool_job: "tools",
 	sync_metrics: "ads",
 	sync_external: "ads",
+	advanced_report: "ads",
 	sync_posts: "sync",
 	generate_external_preview: "sync",
 	sync_automation_binding: "sync",
@@ -186,6 +187,7 @@ function operationId(queue: string, body: unknown): string | undefined {
 		"job_id",
 		"post_id",
 		"ad_id",
+		"report_job_id",
 		"receipt_id",
 	]) {
 		if (typeof value[name] === "string") return value[name];

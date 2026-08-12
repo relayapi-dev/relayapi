@@ -75,6 +75,16 @@ mock.module("../services/inbox-effect-reconciler", () => ({
 mock.module("../services/media-reliability", () => ({
 	reconcileMediaDeletions: counter("reconcileMediaDeletions"),
 	reconcileMediaUploads: counter("reconcileMediaUploads"),
+	retireRejectedMediaUpload: counter("retireRejectedMediaUpload"),
+}));
+mock.module("../services/media-processing-jobs", () => ({
+	reconcileMediaProcessingJobs: counter("reconcileMediaProcessingJobs"),
+	cleanupExpiredMediaDerivatives: counter("cleanupExpiredMediaDerivatives"),
+}));
+mock.module("../services/media-upload-session-cleanup", () => ({
+	cleanupExpiredMediaUploadSessions: counter(
+		"cleanupExpiredMediaUploadSessions",
+	),
 }));
 mock.module("../services/ai-knowledge", () => ({
 	processAiKnowledgeDocuments: counter("processAiKnowledgeDocuments"),
@@ -232,6 +242,18 @@ mock.module("../services/ad-creation-operations", () => ({
 mock.module("../services/ad-mutation-operations", () => ({
 	reconcileAdMutationOperations: counter("reconcileAdMutationOperations"),
 }));
+mock.module("../services/ad-advanced-store", () => ({
+	pruneExpiredAdvancedAdLeads: counter("pruneExpiredAdvancedAdLeads"),
+}));
+mock.module("../services/ad-report-jobs", () => ({
+	recoverAdvancedAdReportJobs: counter("recoverAdvancedAdReportJobs"),
+	retainAdvancedAdReports: counter("retainAdvancedAdReports"),
+}));
+mock.module("../services/social-mutation-projection", () => ({
+	reconcileSocialMutationOperations: counter(
+		"reconcileSocialMutationOperations",
+	),
+}));
 
 const { handleScheduled, rotateScheduledTasks } = await import(
 	"../scheduled/index"
@@ -265,13 +287,17 @@ const EVERY_MINUTE_TASKS = [
 	"processDuePhoneReleases",
 	"reconcileAdCreationOperations",
 	"reconcileAdMutationOperations",
+	"recoverAdvancedAdReportJobs",
 	"reconcileIdempotencyReceipts",
 	"reconcileCustomerWebhookDeliveries",
 	"reconcileInboxEventEffects",
 	"reconcileMediaDeletions",
 	"reconcileMediaUploads",
+	"reconcileMediaProcessingJobs",
+	"cleanupExpiredMediaUploadSessions",
 	"processAiKnowledgeDocuments",
 	"reconcileProviderOutcomes",
+	"reconcileSocialMutationOperations",
 	"processPublicGrowthEvents",
 	"reconcilePostPublishExecutions",
 	"reconcileThreadExecutions",
@@ -383,6 +409,9 @@ describe("handleScheduled cron gating", () => {
 		expect(calls.pruneAutomationEntrypointDailyCounts).toBe(1);
 		expect(calls.retainTimedDomainData).toBe(1);
 		expect(calls.retainFinancialData).toBe(1);
+		expect(calls.retainAdvancedAdReports).toBe(1);
+		expect(calls.pruneExpiredAdvancedAdLeads).toBe(1);
+		expect(calls.cleanupExpiredMediaDerivatives).toBe(1);
 		expect(calls.recoverEmailDispatches ?? 0).toBe(0);
 		expect(calls.cleanupAutomationWebhookReceipts ?? 0).toBe(0);
 		expect(calls.cleanupOneTimeCapabilities ?? 0).toBe(0);

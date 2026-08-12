@@ -16,12 +16,12 @@ export const apis: ApiData[] = [
 		name: "Posting API",
 		heroTitle: "Posting API for Developers",
 		heroDescription:
-			"One REST API to publish content across 21 social, messaging, SMS, and newsletter channels. Post text, images, videos, and more with a single endpoint.",
+			"One REST API to publish content across 22 social, messaging, SMS, and newsletter channels. Post text, images, videos, and more with a single endpoint.",
 		features: [
 			{
 				title: "Multi-Platform Posting",
 				description:
-					"Publish to Twitter/X, Instagram, LinkedIn, TikTok, Bluesky, Mastodon, and 11 more platforms from a single API call. No need to learn each platform's quirks.",
+					"Publish to Twitter/X, Instagram, LinkedIn, TikTok, Bluesky, Mastodon, and 16 more platforms from a single API call. No need to learn each platform's quirks.",
 			},
 			{
 				title: "Content Scheduling",
@@ -61,9 +61,9 @@ export const apis: ApiData[] = [
 		],
 		benefits: [
 			{
-				title: "One Integration, 21 Channels",
+				title: "One Integration, 22 Channels",
 				description:
-					"Each social, messaging, and newsletter channel has its own auth flow, rate limits, and content rules. RelayAPI exposes all 21 through one publishing contract.",
+					"Each social, messaging, and newsletter channel has its own auth flow, rate limits, and content rules. RelayAPI exposes all 22 through one publishing contract.",
 			},
 			{
 				title: "Enterprise-Grade Reliability",
@@ -149,7 +149,7 @@ print(post["id"], post["status"])`,
 			{
 				question: "Which social platforms are supported?",
 				answer:
-					"RelayAPI currently supports 21 publishing channels across social, messaging, SMS, and newsletter categories: Instagram, Facebook, LinkedIn, TikTok, YouTube, Bluesky, Mastodon, Threads, Pinterest, Reddit, Discord, Telegram, WhatsApp Business, Google Business Profile, Snapchat, X/Twitter, SMS, Beehiiv, ConvertKit, Mailchimp, and Listmonk.",
+					"RelayAPI currently supports 22 publishing channels across social, messaging, SMS, and newsletter categories: Instagram, Facebook, LinkedIn, TikTok, YouTube, Bluesky, Mastodon, Threads, Pinterest, Reddit, Discord, Slack, Telegram, WhatsApp Business, Google Business Profile, Snapchat, X/Twitter, SMS, Beehiiv, ConvertKit, Mailchimp, and Listmonk.",
 			},
 			{
 				question: "How far in advance can I schedule posts?",
@@ -159,7 +159,7 @@ print(post["id"], post["status"])`,
 			{
 				question: "What media formats are supported for posts?",
 				answer:
-					"RelayAPI's media upload API accepts the documented image, video, audio, and PDF MIME types up to 50 MiB. Posts attach media objects with an HTTP(S) URL and optional image, video, GIF, or document type. Platforms can impose stricter limits, and RelayAPI does not promise automatic conversion or resizing.",
+					"RelayAPI accepts the documented image, video, audio, and PDF MIME types up to 200 MiB through direct-to-storage resumable sessions; the Worker proxy remains capped at 50 MiB. Asynchronous fail-open processing can produce compatible normalized variants and custom covers, while each platform can still impose stricter limits.",
 			},
 			{
 				question:
@@ -197,7 +197,7 @@ print(post["id"], post["status"])`,
 			{
 				title: "Strict Upload Validation",
 				description:
-					"Reject unsupported MIME types, empty bodies, and files over 50 MiB. Confirmation checks the stored object's actual size and Content-Type.",
+					"Reject unsupported MIME types, empty bodies, and canonical objects over 200 MiB. The portable Worker proxy has a separate 50 MiB ceiling, and completion verifies the stored object's actual size and Content-Type.",
 			},
 			{
 				title: "Durable Upload Intents",
@@ -325,18 +325,18 @@ media = client.media.confirm(storage_key=storage_key)`,
 			{
 				question: "What are the file size limits?",
 				answer:
-					"All media uploads are limited to 50 MiB (52,428,800 bytes). RelayAPI does not currently expose a resumable or chunked media-upload endpoint.",
+					"Canonical media objects are limited to 200 MiB (209,715,200 bytes). Files above 64 MiB use resumable multipart direct-to-storage sessions; the portable raw-body Worker proxy is limited to 50 MiB.",
 			},
 			{
 				question:
 					"Does RelayAPI automatically convert media for each platform?",
 				answer:
-					"No. RelayAPI preserves the full-resolution original and generates a compact preview thumbnail, but it does not promise platform-specific transcoding or resizing. Prepare files for each target platform's limits before publishing.",
+					"RelayAPI queues asynchronous normalization and custom-cover work and uses a smaller compatible ready derivative when one is available. Processing is fail-open: a valid original remains publishable if conversion fails, and provider-specific limits still apply.",
 			},
 			{
 				question: "Why must a pre-signed upload be confirmed?",
 				answer:
-					"Confirmation verifies the object in R2, enforces the 50 MiB and MIME rules, records its actual size, and changes the pending media intent to ready. A PUT without POST /v1/media/confirm is not a completed upload.",
+					"Confirmation verifies the object in storage, enforces the applicable size and MIME rules, records its actual size, and changes the pending media intent to ready. A PUT without completing or confirming its upload session is not a completed upload.",
 			},
 			{
 				question: "How long are uploaded files retained?",

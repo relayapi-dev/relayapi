@@ -16,11 +16,26 @@ function request(
 	platform: "reddit" | "telegram" | "threads" | "tiktok" | "twitter",
 	targetOptions: Record<string, unknown> = {},
 ): PublishRequest {
+	const normalizedTargetOptions =
+		platform === "tiktok"
+			? {
+					privacy_level: "PUBLIC_TO_EVERYONE",
+					allow_comment: false,
+					allow_duet: false,
+					allow_stitch: false,
+					brand_content_toggle: false,
+					brand_organic_toggle: false,
+					content_preview_confirmed: true,
+					express_consent_given: true,
+					source_mode: "pull_from_url",
+					...targetOptions,
+				}
+			: targetOptions;
 	return {
 		operation_id: "publish-test-operation",
 		content: "hello",
 		media: [],
-		target_options: targetOptions,
+		target_options: normalizedTargetOptions,
 		account: {
 			id: "account-test",
 			platform,
@@ -28,8 +43,25 @@ function request(
 			refresh_token: null,
 			platform_account_id: platform === "telegram" ? "12345" : "user-123",
 			username: "relaytest",
+			metadata:
+				platform === "tiktok"
+					? { tiktok_verified_url_prefixes: ["https://media.example/"] }
+					: undefined,
 		},
 	};
+}
+
+function tiktokCreatorInfoResponse(): Response {
+	return Response.json({
+		data: {
+			privacy_level_options: ["PUBLIC_TO_EVERYONE", "SELF_ONLY"],
+			comment_disabled: false,
+			duet_disabled: false,
+			stitch_disabled: false,
+			max_video_post_duration_sec: 600,
+		},
+		error: { code: "ok" },
+	});
 }
 
 describe("publisher rate-limit retry safety", () => {
@@ -174,7 +206,13 @@ describe("publisher rate-limit retry safety", () => {
 			new Response(null, { status: 429 })) as unknown as typeof fetch;
 		const rejectedInit = await tiktokPublisher.publish({
 			...request("tiktok", { privacy_level: "PUBLIC_TO_EVERYONE" }),
-			media: [{ url: "https://media.example/video.mp4", type: "video" }],
+			media: [
+				{
+					url: "https://media.example/video.mp4",
+					type: "video",
+					duration_ms: 1_000,
+				},
+			],
 		});
 		expect(rejectedInit.retry?.disposition).toBe("safe_to_retry");
 
@@ -182,6 +220,9 @@ describe("publisher rate-limit retry safety", () => {
 		globalThis.fetch = (async () => {
 			requests++;
 			if (requests === 1) {
+				return tiktokCreatorInfoResponse();
+			}
+			if (requests === 2) {
 				return Response.json({
 					data: { publish_id: "publish-in-flight" },
 					error: { code: "ok" },
@@ -191,7 +232,13 @@ describe("publisher rate-limit retry safety", () => {
 		}) as unknown as typeof fetch;
 		const ambiguousPoll = await tiktokPublisher.publish({
 			...request("tiktok", { privacy_level: "PUBLIC_TO_EVERYONE" }),
-			media: [{ url: "https://media.example/video.mp4", type: "video" }],
+			media: [
+				{
+					url: "https://media.example/video.mp4",
+					type: "video",
+					duration_ms: 1_000,
+				},
+			],
 		});
 		expect(ambiguousPoll.error?.code).toBe("RATE_LIMITED");
 		expect(ambiguousPoll.retry).toBeUndefined();
@@ -202,6 +249,9 @@ describe("publisher rate-limit retry safety", () => {
 		globalThis.fetch = (async () => {
 			requests++;
 			if (requests === 1) {
+				return tiktokCreatorInfoResponse();
+			}
+			if (requests === 2) {
 				return Response.json({
 					data: { publish_id: "publish-in-flight" },
 					error: { code: "ok" },
@@ -212,7 +262,13 @@ describe("publisher rate-limit retry safety", () => {
 
 		const result = await tiktokPublisher.publish({
 			...request("tiktok", { privacy_level: "PUBLIC_TO_EVERYONE" }),
-			media: [{ url: "https://media.example/video.mp4", type: "video" }],
+			media: [
+				{
+					url: "https://media.example/video.mp4",
+					type: "video",
+					duration_ms: 1_000,
+				},
+			],
 		});
 
 		expect(result.error?.code).toBe("PUBLISH_OUTCOME_UNKNOWN");
@@ -225,6 +281,9 @@ describe("publisher rate-limit retry safety", () => {
 		globalThis.fetch = (async () => {
 			requests++;
 			if (requests === 1) {
+				return tiktokCreatorInfoResponse();
+			}
+			if (requests === 2) {
 				return Response.json({
 					data: { publish_id: "publish-in-flight" },
 					error: { code: "ok" },
@@ -240,7 +299,13 @@ describe("publisher rate-limit retry safety", () => {
 
 		const result = await tiktokPublisher.publish({
 			...request("tiktok", { privacy_level: "PUBLIC_TO_EVERYONE" }),
-			media: [{ url: "https://media.example/video.mp4", type: "video" }],
+			media: [
+				{
+					url: "https://media.example/video.mp4",
+					type: "video",
+					duration_ms: 1_000,
+				},
+			],
 		});
 
 		expect(result.error?.code).toBe("PUBLISH_OUTCOME_UNKNOWN");
@@ -259,7 +324,13 @@ describe("publisher rate-limit retry safety", () => {
 
 		const result = await tiktokPublisher.publish({
 			...request("tiktok", { privacy_level: "PUBLIC_TO_EVERYONE" }),
-			media: [{ url: "https://media.example/video.mp4", type: "video" }],
+			media: [
+				{
+					url: "https://media.example/video.mp4",
+					type: "video",
+					duration_ms: 1_000,
+				},
+			],
 		});
 
 		expect(result.error?.code).toBe("spam_risk_too_many_posts");

@@ -11,32 +11,37 @@ icon: threads
 | Platform key | `threads` |
 | Auth method | OAuth 2.0 (via Instagram/Facebook) |
 | Character limit | 500 |
-| Images per post | 20 (carousel) |
-| Videos per post | 1 |
+| Carousel items | 2–20 mixed images/videos |
 | Image formats | JPEG, PNG |
-| Image max size | 8 MB (auto-compressed) |
+| Image max size | 8 MiB |
 | Video formats | MP4, MOV |
-| Video max size | 100 MB |
+| Video max size | 100 MiB |
 | Video max duration | 5 minutes |
 | Post types | Text, Image, Video, Carousel, Thread sequence |
 | Scheduling | Yes |
 | Analytics | Limited (impressions, likes, comments, shares, views) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
 
 <Callout type="warn">
-Threads has a **500-character limit** — the #1 failure cause when cross-posting from LinkedIn (3,000) or Facebook (63,000). Always use `target_options.threads.content` to provide a shorter version. Threads is connected via **Instagram** — losing Instagram access means losing Threads access. Requires an Instagram **Business or Creator account** with Threads enabled. Threads enforces a **250 API-published posts per 24-hour window** limit. WebP images may fail — use JPEG or PNG for reliability.
+Threads has a **500-character limit** — the #1 failure cause when cross-posting from LinkedIn (3,000) or Facebook (63,000). Always use `target_options.threads.content` to provide a shorter version. Threads is connected via **Instagram** — losing Instagram access means losing Threads access. Requires an Instagram **Business or Creator account** with Threads enabled. Threads enforces a **250 API-published posts per 24-hour window** limit. RelayAPI accepts JPEG and PNG images for Threads; WebP and GIF attachments are rejected by preflight.
+</Callout>
+
+<Callout type="warn">
+Location tags require the `threads_location_tagging` grant. Existing Threads
+connections must be reauthorized before using `location_id`; refreshing an old
+token cannot add a scope that was never granted.
 </Callout>
 
 ## Quick Start
 
 Post to Threads:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -49,20 +54,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-post = client.posts.create(
-    content='Hot take: the best API is the one with the best docs.',
-    targets=['threads'],
-    scheduled_at='now',
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -111,7 +102,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 One of the few platforms that supports text-only posts. Up to 500 characters.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -119,15 +110,6 @@ const post = await client.posts.create({
   targets: ['threads'],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Hot take: the best API is the one with the best docs.',
-    targets=['threads'],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -164,7 +146,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Image Post
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -175,18 +157,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='New office setup!',
-    targets=['threads'],
-    media=[
-        {'url': 'https://cdn.example.com/office.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -233,9 +203,9 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Video Post
 
-Max 1 GB, up to 5 minutes.
+Maximum 100 MiB, up to 5 minutes.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -246,18 +216,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Behind the scenes',
-    targets=['threads'],
-    media=[
-        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -302,11 +260,11 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 </Tab>
 </Tabs>
 
-### Carousel (Up to 10 Images)
+### Carousel (2–20 Mixed Items)
 
-Swipeable image carousel. Mix of images supported.
+Swipeable carousel containing 2–20 images, videos, or a mix of both.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -319,20 +277,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Product launch day!',
-    targets=['threads'],
-    media=[
-        {'url': 'https://cdn.example.com/feature1.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/feature2.jpg', 'type': 'image'},
-        {'url': 'https://cdn.example.com/feature3.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -393,7 +337,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Create a connected sequence of posts. The first item is the root post, and each subsequent item is a reply. Each item can have its own content and media.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -413,27 +357,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['threads'],
-    scheduled_at='now',
-    target_options={
-        'threads': {
-            'thread': [
-                {
-                    'content': "Here's a thread about API design",
-                    'media': [{'url': 'https://cdn.example.com/cover.jpg', 'type': 'image'}],
-                },
-                {'content': '1/ First, REST principles...'},
-                {'content': '2/ Authentication is crucial...'},
-                {'content': '3/ Always version your API! /end'},
-            ],
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -510,9 +433,9 @@ Each item in a thread sequence has its own 500-character limit. The root post is
 
 | Property | Requirement |
 |----------|-------------|
-| Max per post | 10 (carousel) |
-| Formats | JPEG, PNG, WebP, GIF |
-| Max file size | 8 MB (auto-compressed) |
+| Max per post | 20 (subject to 20 total carousel items) |
+| Formats | JPEG, PNG |
+| Max file size | 8 MiB |
 | Recommended | 1080 x 1350 px (4:5 portrait) |
 | Aspect ratios | 4:5, 1:1, 16:9 |
 
@@ -520,11 +443,13 @@ Each item in a thread sequence has its own 500-character limit. The root post is
 
 | Property | Requirement |
 |----------|-------------|
-| Max per post | 1 |
+| Max per post | 20 (subject to 20 total carousel items) |
 | Formats | MP4, MOV |
-| Max file size | 1 GB |
+| Max file size | 100 MiB |
 | Max duration | 5 minutes |
 | Recommended | 1080p, H.264, AAC, 30fps |
+
+Carousels require 2–20 total items and may mix supported images and videos. A single image or video is published as a normal media post rather than a carousel.
 
 ## `target_options` Fields
 
@@ -535,13 +460,35 @@ All fields go inside `target_options.threads` on your post request.
 | `content` | string | Override content for Threads specifically. Use this to provide a version under 500 characters when cross-posting. |
 | `media` | object[] | Override media for Threads specifically |
 | `thread` | object[] | Array of `{content, media?}` for thread sequences. Each item has its own 500-char limit. |
+| `poll` | object | Text-only poll containing 2–4 unique `options`, each 1–25 characters; cannot be combined with a Relay thread sequence |
+| `quote_post_id` | string | Numeric Threads media ID to quote |
+| `location_id` | string | Numeric Meta location ID; requires `threads_location_tagging` |
+| `topic_tag` | string | Topic tag attached to the post |
+| `reply_control` | string | `everyone`, `accounts_you_follow`, or `mentioned_only` |
+| `link_attachment` | URL | Explicit link attachment for a text post |
+
+```typescript
+await client.posts.create({
+  content: 'Which guide should we ship next?',
+  targets: ['threads'],
+  scheduled_at: 'now',
+  target_options: {
+    threads: {
+      poll: { options: ['Media', 'Webhooks', 'Analytics'] },
+      location_id: '123456789012345',
+      reply_control: 'everyone',
+    },
+  },
+});
+```
 
 ## Common Errors
 
 | Error | Cause | Fix |
 |-------|-------|-----|
 | Text must be at most 500 characters | Content exceeds the 500-character limit | Use `target_options.threads.content` to provide a shorter version. |
-| Media download failed (2207052) | URL returns HTML instead of media bytes | Use a direct CDN URL. WebP images may fail — use JPEG or PNG instead. |
+| Unsupported image type | Media is WebP, GIF, or another unsupported image format | Use JPEG or PNG. RelayAPI rejects unsupported Threads media before provider I/O. |
+| Media download failed (2207052) | URL returns HTML instead of media bytes | Use a direct CDN URL that returns the media bytes. |
 | Instagram account restricted (2207050) | Linked Instagram account has policy violations | Resolve any policy violations on the Instagram account first. |
 | Publishing failed | Max retries exhausted | Usually temporary. Wait and retry manually. |
 
@@ -549,7 +496,7 @@ All fields go inside `target_options.threads` on your post request.
 
 - **500-character limit** — the #1 failure cause when cross-posting from platforms with higher limits like LinkedIn (3,000) or Facebook (63,000).
 - **Connected via Instagram** — losing Instagram access means losing Threads access. Requires Instagram Business or Creator account.
-- **WebP images may fail** — use JPEG or PNG for best reliability.
+- **JPEG and PNG only** — RelayAPI rejects channel-neutral GIF and WebP attachments for Threads.
 - **Cannot post new top-level comments** — only replies are supported.
 - **Cannot like or unlike comments** via the API.
 - **Cannot edit posts** after publishing.

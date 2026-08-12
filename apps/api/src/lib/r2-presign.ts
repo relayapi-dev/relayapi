@@ -1,5 +1,11 @@
-import type { Database } from "@relayapi/db";
+import {
+	type Database,
+	media,
+	mediaDerivatives,
+	mediaProcessingJobs,
+} from "@relayapi/db";
 import { AwsClient } from "aws4fetch";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import {
 	headStoredObject,
 	presignStoredObject,
@@ -7,7 +13,10 @@ import {
 } from "../services/storage-locator";
 import type { Env } from "../types";
 import { mediaPublicHost } from "./deployment-mode";
-import { validateStoredMediaObject } from "./media-storage-policy";
+import {
+	AUTOMATIC_MEDIA_PROFILE,
+	validateStoredMediaObject,
+} from "./media-storage-policy";
 import {
 	loadRelayMediaPolicy,
 	type RelayMediaPolicy,
@@ -100,14 +109,14 @@ export interface R2ObjectLocation {
 	region: "default" | "eu";
 }
 
-function mediaBucketLocation(env: Env): R2ObjectLocation {
+export function mediaBucketLocation(env: Env): R2ObjectLocation {
 	return {
 		bucket: env.R2_MEDIA_BUCKET_NAME || RELAY_R2_BUCKET,
 		region: env.R2_MEDIA_BUCKET_JURISDICTION || "default",
 	};
 }
 
-function r2ObjectUrl(
+export function r2ObjectUrl(
 	env: Env,
 	location: R2ObjectLocation,
 	storageKey: string,
@@ -124,6 +133,36 @@ function r2ObjectUrl(
 			? `${env.CF_ACCOUNT_ID}.eu.r2.cloudflarestorage.com`
 			: `${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 	return `https://${host}/${location.bucket}/${encodedKey}`;
+}
+
+/**
+ * Sign one UploadPart request for a multipart upload created through the R2
+ * binding. The upload id and part number are part of the SigV4 canonical query;
+ * callers may renew an expired URL without creating a second upload.
+ */
+export async function presignR2MultipartPartUrl(
+	env: Env,
+	client: AwsClient,
+	storageKey: string,
+	uploadId: string,
+	partNumber: number,
+	expiresIn: number,
+	location: R2ObjectLocation = mediaBucketLocation(env),
+): Promise<string> {
+	if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
+		throw new RangeError("Multipart part number must be between 1 and 10000");
+	}
+	if (!uploadId) throw new Error("Multipart upload id is required");
+
+	const url = new URL(r2ObjectUrl(env, location, storageKey));
+	url.searchParams.set("partNumber", String(partNumber));
+	url.searchParams.set("uploadId", uploadId);
+	url.searchParams.set("X-Amz-Expires", String(expiresIn));
+	const signed = await client.sign(url.toString(), {
+		method: "PUT",
+		aws: { signQuery: true },
+	});
+	return signed.url;
 }
 
 /**
@@ -216,6 +255,174 @@ export class RelayMediaSigningUnavailableError extends Error {
 	}
 }
 
+function relayObjectUrl(env: Env, storageKey: string): string {
+	const encodedKey = storageKey
+		.split("/")
+		.map((segment) => encodeURIComponent(segment))
+		.join("/");
+	return `https://${mediaPublicHost(env)}/${encodedKey}`;
+}
+
+function coverSelectorPolicyError(selector: string): RelayMediaPolicyError {
+	return new RelayMediaPolicyError({
+		url: selector,
+		storageKey: null,
+		reason: "not_ready_or_not_owned",
+	});
+}
+
+/**
+ * Resolve Relay-owned Instagram cover selectors at the last provider boundary.
+ * The fresh URL exists only in this in-memory payload; persisted target options
+ * retain the stable med_/mder_ selector and never a bearer-style presign.
+ */
+async function resolveInstagramCoverSelectors<T>(
+	db: Database,
+	env: Env,
+	value: T,
+	organizationId: string,
+	expiresIn: number,
+	rootWorkspaceId?: string | null,
+): Promise<T> {
+	const now = new Date();
+	const resolve = async (candidate: unknown): Promise<unknown> => {
+		if (Array.isArray(candidate)) {
+			return Promise.all(candidate.map((item) => resolve(item)));
+		}
+		if (!candidate || typeof candidate !== "object") return candidate;
+		const prototype = Object.getPrototypeOf(candidate);
+		if (prototype !== Object.prototype && prototype !== null) return candidate;
+
+		const record = { ...(candidate as Record<string, unknown>) };
+		const coverMediaId =
+			typeof record.cover_media_id === "string" ? record.cover_media_id : null;
+		const coverVariantId =
+			typeof record.cover_variant_id === "string"
+				? record.cover_variant_id
+				: null;
+		if (coverMediaId || coverVariantId) {
+			const selectedCount = [
+				coverMediaId,
+				coverVariantId,
+				typeof record.cover_url === "string" ? record.cover_url : null,
+				record.thumb_offset !== undefined ? "thumb_offset" : null,
+			].filter(Boolean).length;
+			if (selectedCount !== 1) {
+				throw coverSelectorPolicyError(
+					coverMediaId ?? coverVariantId ?? "cover",
+				);
+			}
+
+			if (coverMediaId) {
+				const workspaceCondition =
+					rootWorkspaceId === undefined
+						? undefined
+						: rootWorkspaceId === null
+							? isNull(media.workspaceId)
+							: or(
+									isNull(media.workspaceId),
+									eq(media.workspaceId, rootWorkspaceId),
+								);
+				const [source] = await db
+					.select({ storageKey: media.storageKey, mimeType: media.mimeType })
+					.from(media)
+					.where(
+						and(
+							eq(media.id, coverMediaId),
+							eq(media.organizationId, organizationId),
+							workspaceCondition,
+							eq(media.status, "ready"),
+							isNull(media.deletionRequestedAt),
+							isNull(media.originalDeletedAt),
+							isNotNull(media.url),
+						),
+					)
+					.limit(1);
+				if (!source?.mimeType.startsWith("image/")) {
+					throw coverSelectorPolicyError(coverMediaId);
+				}
+				record.cover_url = relayObjectUrl(env, source.storageKey);
+				delete record.cover_media_id;
+			}
+
+			if (coverVariantId) {
+				const workspaceCondition =
+					rootWorkspaceId === undefined
+						? undefined
+						: rootWorkspaceId === null
+							? isNull(media.workspaceId)
+							: or(
+									isNull(media.workspaceId),
+									eq(media.workspaceId, rootWorkspaceId),
+								);
+				const [variant] = await db
+					.select({
+						storageKey: mediaDerivatives.storageKey,
+						mimeType: mediaDerivatives.mimeType,
+						size: mediaDerivatives.size,
+					})
+					.from(mediaDerivatives)
+					.innerJoin(
+						media,
+						and(
+							eq(media.id, mediaDerivatives.mediaId),
+							eq(media.organizationId, mediaDerivatives.organizationId),
+						),
+					)
+					.where(
+						and(
+							eq(mediaDerivatives.id, coverVariantId),
+							eq(mediaDerivatives.organizationId, organizationId),
+							workspaceCondition,
+							eq(mediaDerivatives.kind, "cover"),
+							eq(mediaDerivatives.status, "ready"),
+							gt(mediaDerivatives.deleteAfter, now),
+							eq(media.status, "ready"),
+							isNull(media.deletionRequestedAt),
+						),
+					)
+					.limit(1);
+				if (!variant?.mimeType.startsWith("image/")) {
+					throw coverSelectorPolicyError(coverVariantId);
+				}
+				const object = await env.MEDIA_BUCKET.head(variant.storageKey);
+				const validated = object
+					? validateStoredMediaObject({
+							size: object.size,
+							httpMetadata: object.httpMetadata,
+						})
+					: null;
+				if (
+					!validated?.ok ||
+					validated.size !== variant.size ||
+					validated.mimeType !== variant.mimeType
+				) {
+					throw coverSelectorPolicyError(coverVariantId);
+				}
+				const client = getCachedR2Client(env);
+				if (!client) throw new RelayMediaSigningUnavailableError();
+				record.cover_url = await presignViewUrlWithCache(
+					env,
+					client,
+					variant.storageKey,
+					expiresIn,
+					mediaBucketLocation(env),
+				);
+				delete record.cover_variant_id;
+			}
+		}
+
+		const entries = await Promise.all(
+			Object.entries(record).map(
+				async ([key, item]) => [key, await resolve(item)] as const,
+			),
+		);
+		return Object.fromEntries(entries);
+	};
+
+	return (await resolve(value)) as T;
+}
+
 async function presignRelayMediaValue<T>(
 	db: Database,
 	env: Env,
@@ -236,6 +443,7 @@ async function presignRelayMediaValue<T>(
 	const violation = policy.violationFor(value);
 	if (violation && rejectInvalid) throw new RelayMediaPolicyError(violation);
 	if (policy.references.length === 0) return value;
+	const sourceEtags = new Map<string, string>();
 	if (rejectInvalid) {
 		const referencesByKey = new Map(
 			policy.references.flatMap((reference) =>
@@ -260,8 +468,7 @@ async function presignRelayMediaValue<T>(
 							storageBucketLocator: expected.storageBucketLocator,
 							storageRegion: expected.storageRegion,
 							storageLocationId: expected.storageLocationId,
-							storageCredentialVersion:
-								expected.storageCredentialVersion,
+							storageCredentialVersion: expected.storageCredentialVersion,
 							storageKey,
 						});
 						const object = await headStoredObject(db, env, locator);
@@ -272,6 +479,7 @@ async function presignRelayMediaValue<T>(
 								reason: "not_ready_or_not_owned",
 							});
 						}
+						if (object.etag) sourceEtags.set(storageKey, object.etag);
 						const actual = validateStoredMediaObject({
 							size: object.size,
 							httpMetadata: {
@@ -300,14 +508,84 @@ async function presignRelayMediaValue<T>(
 		}
 	}
 
-	const client = getCachedR2Client(env);
-	const hasReadyR2Reference = policy.references.some((reference) => {
-		if (!reference.storageKey) return false;
-		return (
-			policy.readyMediaByStorageKey.get(reference.storageKey)
-				?.storageProvider === "r2"
+	const preferredDerivativeByStorageKey = new Map<
+		string,
+		{ storageKey: string; mimeType: string; size: number }
+	>();
+	if (rejectInvalid && policy.readyMediaByStorageKey.size > 0) {
+		const sourceById = new Map(
+			[...policy.readyMediaByStorageKey.values()].map((row) => [row.id, row]),
 		);
-	});
+		const derivatives = await db
+			.select({
+				mediaId: mediaDerivatives.mediaId,
+				storageKey: mediaDerivatives.storageKey,
+				mimeType: mediaDerivatives.mimeType,
+				size: mediaDerivatives.size,
+				sourceEtag: mediaProcessingJobs.sourceEtag,
+			})
+			.from(mediaDerivatives)
+			.innerJoin(
+				mediaProcessingJobs,
+				eq(mediaProcessingJobs.id, mediaDerivatives.processingJobId),
+			)
+			.where(
+				and(
+					eq(mediaDerivatives.organizationId, organizationId),
+					inArray(mediaDerivatives.mediaId, [...sourceById.keys()]),
+					eq(mediaDerivatives.kind, "normalized"),
+					eq(mediaDerivatives.profile, AUTOMATIC_MEDIA_PROFILE),
+					eq(mediaDerivatives.status, "ready"),
+					gt(mediaDerivatives.deleteAfter, new Date()),
+					eq(mediaProcessingJobs.status, "completed"),
+				),
+			)
+			.orderBy(desc(mediaDerivatives.readyAt));
+
+		for (const derivative of derivatives) {
+			const source = sourceById.get(derivative.mediaId);
+			if (!source || preferredDerivativeByStorageKey.has(source.storageKey)) {
+				continue;
+			}
+			const sourceCategory = source.mimeType.split("/", 1)[0];
+			const derivativeCategory = derivative.mimeType.split("/", 1)[0];
+			if (
+				source.mimeType === "image/gif" ||
+				sourceCategory !== derivativeCategory ||
+				!sourceEtags.get(source.storageKey) ||
+				sourceEtags.get(source.storageKey) !== derivative.sourceEtag ||
+				derivative.size >= source.size
+			) {
+				continue;
+			}
+			const object = await env.MEDIA_BUCKET.head(derivative.storageKey);
+			const actual = object
+				? validateStoredMediaObject({
+						size: object.size,
+						httpMetadata: object.httpMetadata,
+					})
+				: null;
+			if (
+				!actual?.ok ||
+				actual.size !== derivative.size ||
+				actual.mimeType !== derivative.mimeType
+			) {
+				continue;
+			}
+			preferredDerivativeByStorageKey.set(source.storageKey, derivative);
+		}
+	}
+
+	const client = getCachedR2Client(env);
+	const hasReadyR2Reference =
+		preferredDerivativeByStorageKey.size > 0 ||
+		policy.references.some((reference) => {
+			if (!reference.storageKey) return false;
+			return (
+				policy.readyMediaByStorageKey.get(reference.storageKey)
+					?.storageProvider === "r2"
+			);
+		});
 	if (!client && rejectInvalid && hasReadyR2Reference) {
 		throw new RelayMediaSigningUnavailableError();
 	}
@@ -318,6 +596,20 @@ async function presignRelayMediaValue<T>(
 		if (!result) {
 			const row = policy.readyMediaByStorageKey.get(storageKey);
 			if (!row) return Promise.resolve(storageKey);
+			const derivative = preferredDerivativeByStorageKey.get(storageKey);
+			if (derivative) {
+				result = client
+					? presignViewUrlWithCache(
+							env,
+							client,
+							derivative.storageKey,
+							expiresIn,
+							mediaBucketLocation(env),
+						)
+					: Promise.resolve(relayObjectUrl(env, derivative.storageKey));
+				presignedByKey.set(storageKey, result);
+				return result;
+			}
 			const locator = storageLocatorForMedia({
 				organizationId,
 				storageProvider: row.storageProvider,
@@ -329,13 +621,7 @@ async function presignRelayMediaValue<T>(
 			});
 			result =
 				locator.provider === "byos"
-					? presignStoredObject(
-							db,
-							env,
-							locator,
-							"GET",
-							expiresIn,
-						)
+					? presignStoredObject(db, env, locator, "GET", expiresIn)
 					: client
 						? // Sign against the bucket the row was actually written to,
 							// not this deployment's default — they differ on self-host.
@@ -343,9 +629,7 @@ async function presignRelayMediaValue<T>(
 								bucket: locator.bucket,
 								region: locator.region,
 							})
-						: Promise.resolve(
-								`https://${mediaPublicHost(env)}/${storageKey}`,
-							);
+						: Promise.resolve(`https://${mediaPublicHost(env)}/${storageKey}`);
 			presignedByKey.set(storageKey, result);
 		}
 		return result;
@@ -414,11 +698,20 @@ export async function resolveRelayMediaForPublish<T>(
 	value: T,
 	organizationId: string,
 	expiresIn: number = 3600,
+	rootWorkspaceId?: string | null,
 ): Promise<T> {
-	return presignRelayMediaValue(
+	const withResolvedCovers = await resolveInstagramCoverSelectors(
 		db,
 		env,
 		value,
+		organizationId,
+		expiresIn,
+		rootWorkspaceId,
+	);
+	return presignRelayMediaValue(
+		db,
+		env,
+		withResolvedCovers,
 		expiresIn,
 		organizationId,
 		true,

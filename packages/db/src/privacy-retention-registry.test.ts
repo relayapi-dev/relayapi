@@ -234,8 +234,8 @@ test("external coverage names every durable store class and physical R2 mapping"
 		EXTERNAL_PRIVACY_RETENTION_STORES,
 		(store) => store.kind,
 	);
-	expect(byKind.get("r2")).toHaveLength(7);
-	expect(byKind.get("queue")).toHaveLength(19);
+	expect(byKind.get("r2")).toHaveLength(8);
+	expect(byKind.get("queue")).toHaveLength(21);
 	for (const queue of byKind.get("queue") ?? []) {
 		expect(queue.retention).toContain("24 hours");
 	}
