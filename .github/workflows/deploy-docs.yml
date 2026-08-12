@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   test:
-    name: Typecheck Docs
+    name: Typecheck + Test Docs
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -59,6 +59,10 @@ jobs:
 
       - name: Typecheck apps/docs
         run: bun run tsc --noEmit
+        working-directory: apps/docs
+
+      - name: Test apps/docs
+        run: bun test
         working-directory: apps/docs
 
   deploy:
@@ -181,9 +185,19 @@ jobs:
           set -euo pipefail
           EXPECTED_WORKER_VERSION_ID="${{ steps.deployed_worker.outputs.version_id }}" \
             bun ../../scripts/verify-cloudflare-worker-deployment.ts docs
+          homepage="$RUNNER_TEMP/relayapi-docs-home.html"
           curl --fail-with-body --silent --show-error --location \
             --retry 5 --retry-delay 3 --retry-all-errors --max-time 20 \
-            https://docs.relayapi.dev/ >/dev/null
+            --output "$homepage" \
+            https://docs.relayapi.dev/
+          if grep -Eq '__name\(' "$homepage" && \
+             ! grep -Eq '(function|const|let|var)[[:space:]]+__name|__name[[:space:]]*=' "$homepage"; then
+            echo "::error::Docs HTML calls an undefined __name helper"
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --location \
+            --retry 5 --retry-delay 3 --retry-all-errors --max-time 20 \
+            https://docs.relayapi.dev/api-reference/accounts/listAccounts >/dev/null
           bun ../../scripts/verify-production-edge.ts docs
         working-directory: apps/docs
         env:
