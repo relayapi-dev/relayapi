@@ -42,6 +42,7 @@ jobs:
         run: |
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 2 --retry-all-errors \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}" \
             --output "/tmp/${archive}"
           echo "${ACTIONLINT_SHA256}  /tmp/${archive}" | sha256sum --check
