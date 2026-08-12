@@ -1152,6 +1152,14 @@ describe("production Cloudflare configuration policy", () => {
 		expect(workflow).toContain(
 			"bun scripts/check-live-baseline-generation.ts --allow-initial-generation-bootstrap",
 		);
+		const baselineGuard = workflow.slice(
+			workflow.indexOf("  baseline-generation-guard:"),
+			workflow.indexOf("  test:"),
+		);
+		expectInOrder(baselineGuard, [
+			"run: bun install --frozen-lockfile",
+			"bun scripts/check-live-baseline-generation.ts --allow-initial-generation-bootstrap",
+		]);
 		expect(workflow).toContain(
 			"needs.baseline-generation-guard.outputs.automatic_deploy_allowed == 'true'",
 		);
