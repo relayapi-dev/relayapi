@@ -118,6 +118,7 @@ jobs:
             echo "::error::Generated API reference cache entry exceeds the 4 MiB budget"
             exit 1
           fi
+        working-directory: apps/docs
 
       - name: Validate Docs deploy bundle
         run: bun run deploy:dry-run
