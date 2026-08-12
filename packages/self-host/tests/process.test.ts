@@ -24,15 +24,16 @@ describe("runCaptured", () => {
 	});
 
 	it("round-trips JSON large enough to span many writes", async () => {
+		const itemCount = 5000;
 		const payload = {
-			items: Array.from({ length: 5000 }, (_, index) => ({
+			items: Array.from({ length: itemCount }, (_, index) => ({
 				id: `version_${index}`,
 				annotations: { "workers/tag": `tag-${index}` },
 			})),
 		};
 		const output = await runCaptured(process.execPath, [
 			"-e",
-			`process.stdout.write(JSON.stringify(${JSON.stringify(payload)}))`,
+			`const items = Array.from({ length: ${itemCount} }, (_, index) => ({ id: \`version_\${index}\`, annotations: { "workers/tag": \`tag-\${index}\` } })); process.stdout.write(JSON.stringify({ items }))`,
 		]);
 
 		expect(() => JSON.parse(output)).not.toThrow();

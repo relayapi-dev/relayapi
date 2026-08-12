@@ -35,6 +35,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: cd packages/db && bun run tsc --noEmit
       - run: cd packages/auth && bun run tsc --noEmit
+      - name: Build TypeScript SDK for app source imported by API contract tests
+        working-directory: packages/sdk
+        run: bun run build
       - name: Verify generated API Worker types
         working-directory: apps/api
         run: bun run types:check

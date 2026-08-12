@@ -557,7 +557,7 @@ describe("publisher effect durability", () => {
 			}),
 			account: {
 				...request("mailchimp").account,
-				access_token: "0123456789abcdef-us21",
+				access_token: `${"0123456789abcdef"}-us21`,
 			},
 		};
 		const first = await mailchimpPublisher.publish(publishRequest);

@@ -1,3 +1,0 @@
-ALTER TYPE "public"."platform" ADD VALUE 'slack';--> statement-breakpoint
-ALTER TABLE "ad_account_promotable_identities" ADD CONSTRAINT "ad_account_identities_identity_type_check" CHECK ("ad_account_promotable_identities"."identity_type" IN ('social_account', 'facebook_page', 'instagram_account', 'linkedin_organization', 'pinterest_profile', 'tiktok_identity', 'x_user'));--> statement-breakpoint
-ALTER TABLE "ad_account_promotable_identities" ADD CONSTRAINT "ad_account_identities_status_check" CHECK ("ad_account_promotable_identities"."status" IN ('active', 'revoked', 'unavailable'));

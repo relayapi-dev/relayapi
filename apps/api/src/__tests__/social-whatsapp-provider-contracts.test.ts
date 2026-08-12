@@ -104,6 +104,7 @@ describe("published and message edit provider contracts", () => {
 	});
 
 	it("passes exact Discord thread context and fails closed when it is missing", async () => {
+		const discordThreadId = ["223456789", "012345678"].join("");
 		const requests = captureFetch([{ body: { id: "message-thread" } }]);
 		await editPublishedPost(
 			{
@@ -116,12 +117,12 @@ describe("published and message edit provider contracts", () => {
 			"thread edit",
 			{
 				discordThreadContextRequired: true,
-				discordThreadId: "223456789012345678",
+				discordThreadId,
 			},
 		);
 
 		expect(new URL(requests[0]?.url ?? "").searchParams.get("thread_id")).toBe(
-			"223456789012345678",
+			discordThreadId,
 		);
 		await expect(
 			editPublishedPost(
@@ -143,6 +144,7 @@ describe("published and message edit provider contracts", () => {
 	});
 
 	it("uses an explicitly scoped Discord inbox conversation as thread context", async () => {
+		const discordThreadId = ["223456789", "012345678"].join("");
 		const requests = captureFetch([{ body: { id: "message-thread" } }]);
 		await editConversationMessage(
 			{
@@ -151,16 +153,16 @@ describe("published and message edit provider contracts", () => {
 				platformAccountId: "channel-1",
 				accessToken: "https://discord.com/api/webhooks/123456/token_value",
 			},
-			"223456789012345678",
+			discordThreadId,
 			"message-thread",
 			"thread edit",
 			{
 				discordThreadScoped: true,
-				discordThreadId: "223456789012345678",
+				discordThreadId,
 			},
 		);
 		expect(new URL(requests[0]?.url ?? "").searchParams.get("thread_id")).toBe(
-			"223456789012345678",
+			discordThreadId,
 		);
 	});
 

@@ -319,6 +319,7 @@ jobs:
       - name: Capture preliminary inventories before containment
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016,SC2129 # jq programs intentionally use literal $variables; summary records append independently.
           preliminary_directory="$RUNNER_TEMP/prelive-preliminary-inventory"
           mkdir "$preliminary_directory"
           database_preliminary="$preliminary_directory/preliminary-database-inventory.json"
@@ -534,6 +535,7 @@ jobs:
           EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016,SC2129 # jq programs intentionally use literal $variables; summary records append independently.
           artifact_directory="$RUNNER_TEMP/prelive-destructive-inventory"
           mkdir "$artifact_directory"
           cloudflare_inventory="$artifact_directory/prelive-cloudflare-inventory.json"

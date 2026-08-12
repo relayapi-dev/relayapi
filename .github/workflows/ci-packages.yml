@@ -81,7 +81,9 @@ jobs:
           bun-version: "1.3.14"
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        # This job exercises the packed MCP package only. Root lifecycle scripts
+        # include optional native tooling that does not support the Node 18 floor.
+        run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Build, pack, install, and execute MCP on Node 18
         working-directory: packages/mcp

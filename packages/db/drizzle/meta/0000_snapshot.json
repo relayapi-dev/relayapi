@@ -1,5 +1,5 @@
 {
-  "id": "bd5a0720-4f9b-54b6-87be-012928c0e764",
+  "id": "afb0c019-e855-555e-b44b-2906fd049aa1",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -378,6 +378,267 @@
       },
       "isRLSEnabled": false
     },
+    "public.ad_account_promotable_identities": {
+      "name": "ad_account_promotable_identities",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "ad_account_id": {
+          "name": "ad_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "social_account_id": {
+          "name": "social_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_identity_id": {
+          "name": "provider_identity_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "identity_type": {
+          "name": "identity_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "capabilities": {
+          "name": "capabilities",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ad_account_identities_provider_uniq": {
+          "name": "ad_account_identities_provider_uniq",
+          "columns": [
+            {
+              "expression": "ad_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "identity_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_identity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_account_identities_social_idx": {
+          "name": "ad_account_identities_social_idx",
+          "columns": [
+            {
+              "expression": "social_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_account_identities_account_idx": {
+          "name": "ad_account_identities_account_idx",
+          "columns": [
+            {
+              "expression": "ad_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_account_promotable_identities_organization_id_organization_id_fk": {
+          "name": "ad_account_promotable_identities_organization_id_organization_id_fk",
+          "tableFrom": "ad_account_promotable_identities",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_account_promotable_identities_workspace_id_workspaces_id_fk": {
+          "name": "ad_account_promotable_identities_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_account_promotable_identities",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_account_promotable_identities_social_account_id_social_accounts_id_fk": {
+          "name": "ad_account_promotable_identities_social_account_id_social_accounts_id_fk",
+          "tableFrom": "ad_account_promotable_identities",
+          "tableTo": "social_accounts",
+          "columnsFrom": [
+            "social_account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "ad_account_identities_workspace_org_fk": {
+          "name": "ad_account_identities_workspace_org_fk",
+          "tableFrom": "ad_account_promotable_identities",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_account_identities_account_org_scope_fk": {
+          "name": "ad_account_identities_account_org_scope_fk",
+          "tableFrom": "ad_account_promotable_identities",
+          "tableTo": "ad_accounts",
+          "columnsFrom": [
+            "ad_account_id",
+            "organization_id",
+            "scope_key"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_account_identities_social_account_org_scope_fk": {
+          "name": "ad_account_identities_social_account_org_scope_fk",
+          "tableFrom": "ad_account_promotable_identities",
+          "tableTo": "social_accounts",
+          "columnsFrom": [
+            "social_account_id",
+            "organization_id",
+            "scope_key"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ad_account_identities_identity_type_check": {
+          "name": "ad_account_identities_identity_type_check",
+          "value": "\"ad_account_promotable_identities\".\"identity_type\" IN ('social_account', 'facebook_page', 'instagram_account', 'linkedin_organization', 'pinterest_profile', 'tiktok_identity', 'x_user')"
+        },
+        "ad_account_identities_status_check": {
+          "name": "ad_account_identities_status_check",
+          "value": "\"ad_account_promotable_identities\".\"status\" IN ('active', 'revoked', 'unavailable')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.ad_accounts": {
       "name": "ad_accounts",
       "schema": "",
@@ -410,11 +671,17 @@
             "type": "stored"
           }
         },
+        "ad_connection_id": {
+          "name": "ad_connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "social_account_id": {
           "name": "social_account_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "platform": {
           "name": "platform",
@@ -453,6 +720,18 @@
           "primaryKey": false,
           "notNull": false,
           "default": "'active'"
+        },
+        "capabilities": {
+          "name": "capabilities",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "capabilities_checked_at": {
+          "name": "capabilities_checked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "metadata": {
           "name": "metadata",
@@ -599,6 +878,21 @@
           "method": "btree",
           "with": {}
         },
+        "ad_accounts_connection_idx": {
+          "name": "ad_accounts_connection_idx",
+          "columns": [
+            {
+              "expression": "ad_connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ad_accounts_status_idx": {
           "name": "ad_accounts_status_idx",
           "columns": [
@@ -713,6 +1007,25 @@
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
+        },
+        "ad_accounts_connection_org_scope_platform_fk": {
+          "name": "ad_accounts_connection_org_scope_platform_fk",
+          "tableFrom": "ad_accounts",
+          "tableTo": "ad_connections",
+          "columnsFrom": [
+            "ad_connection_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -747,6 +1060,10 @@
       },
       "policies": {},
       "checkConstraints": {
+        "ad_accounts_authority_check": {
+          "name": "ad_accounts_authority_check",
+          "value": "\"ad_accounts\".\"ad_connection_id\" IS NOT NULL OR \"ad_accounts\".\"social_account_id\" IS NOT NULL"
+        },
         "ad_accounts_sync_counters_check": {
           "name": "ad_accounts_sync_counters_check",
           "value": "\"ad_accounts\".\"sync_generation\" >= 0 AND \"ad_accounts\".\"sync_attempts\" >= 0"
@@ -762,6 +1079,304 @@
         "ad_accounts_currency_check": {
           "name": "ad_accounts_currency_check",
           "value": "\"ad_accounts\".\"currency\" IS NULL OR \"ad_accounts\".\"currency\" ~ '^[A-Z]{3}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ad_advanced_resources": {
+      "name": "ad_advanced_resources",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "ad_account_id": {
+          "name": "ad_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "ad_platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_resource_id": {
+          "name": "provider_resource_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parent_id": {
+          "name": "parent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parent_resource_class": {
+          "name": "parent_resource_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "CASE WHEN parent_id IS NULL THEN NULL ELSE 'catalog' END",
+            "type": "stored"
+          }
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'linked'"
+        },
+        "configuration": {
+          "name": "configuration",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ad_advanced_resources_provider_uniq": {
+          "name": "ad_advanced_resources_provider_uniq",
+          "columns": [
+            {
+              "expression": "ad_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_resource_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"ad_advanced_resources\".\"provider_resource_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_advanced_resources_account_kind_idx": {
+          "name": "ad_advanced_resources_account_kind_idx",
+          "columns": [
+            {
+              "expression": "ad_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_advanced_resources_organization_id_organization_id_fk": {
+          "name": "ad_advanced_resources_organization_id_organization_id_fk",
+          "tableFrom": "ad_advanced_resources",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_advanced_resources_workspace_id_workspaces_id_fk": {
+          "name": "ad_advanced_resources_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_advanced_resources",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_advanced_resources_workspace_org_fk": {
+          "name": "ad_advanced_resources_workspace_org_fk",
+          "tableFrom": "ad_advanced_resources",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_advanced_resources_account_org_scope_platform_fk": {
+          "name": "ad_advanced_resources_account_org_scope_platform_fk",
+          "tableFrom": "ad_advanced_resources",
+          "tableTo": "ad_accounts",
+          "columnsFrom": [
+            "ad_account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_advanced_resources_parent_org_scope_account_platform_kind_fk": {
+          "name": "ad_advanced_resources_parent_org_scope_account_platform_kind_fk",
+          "tableFrom": "ad_advanced_resources",
+          "tableTo": "ad_advanced_resources",
+          "columnsFrom": [
+            "parent_id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform",
+            "parent_resource_class"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform",
+            "kind"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ad_advanced_resources_id_org_scope_account_platform_uniq": {
+          "name": "ad_advanced_resources_id_org_scope_account_platform_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform"
+          ]
+        },
+        "ad_advanced_resources_parent_target_uniq": {
+          "name": "ad_advanced_resources_parent_target_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform",
+            "kind"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ad_advanced_resources_kind_check": {
+          "name": "ad_advanced_resources_kind_check",
+          "value": "\"ad_advanced_resources\".\"kind\" IN (E'messaging_experience', E'creative_asset', E'catalog', E'product_set')"
+        },
+        "ad_advanced_resources_status_check": {
+          "name": "ad_advanced_resources_status_check",
+          "value": "\"ad_advanced_resources\".\"status\" IN ('linked', 'unavailable', 'archived')"
+        },
+        "ad_advanced_resources_parent_check": {
+          "name": "ad_advanced_resources_parent_check",
+          "value": "(\"ad_advanced_resources\".\"kind\" = 'product_set') = (\"ad_advanced_resources\".\"parent_id\" IS NOT NULL)"
+        },
+        "ad_advanced_resources_configuration_check": {
+          "name": "ad_advanced_resources_configuration_check",
+          "value": "jsonb_typeof(\"ad_advanced_resources\".\"configuration\") = 'object'"
         }
       },
       "isRLSEnabled": false
@@ -1535,6 +2150,850 @@
       },
       "isRLSEnabled": false
     },
+    "public.ad_connections": {
+      "name": "ad_connections",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "platform": {
+          "name": "platform",
+          "type": "ad_platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_principal_id": {
+          "name": "provider_principal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "access_token": {
+          "name": "access_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refresh_token": {
+          "name": "refresh_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "token_secret": {
+          "name": "token_secret",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "access_token_expires_at": {
+          "name": "access_token_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refresh_token_expires_at": {
+          "name": "refresh_token_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scopes": {
+          "name": "scopes",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
+        "status": {
+          "name": "status",
+          "type": "ad_connection_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "credential_version": {
+          "name": "credential_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refresh_lease_expires_at": {
+          "name": "refresh_lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_refresh_attempt_at": {
+          "name": "last_refresh_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ad_connections_principal_scope_uniq": {
+          "name": "ad_connections_principal_scope_uniq",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scope_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "platform",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_principal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_connections_org_status_idx": {
+          "name": "ad_connections_org_status_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_connections_refresh_due_idx": {
+          "name": "ad_connections_refresh_due_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "access_token_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "refresh_lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_connections_organization_id_organization_id_fk": {
+          "name": "ad_connections_organization_id_organization_id_fk",
+          "tableFrom": "ad_connections",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_connections_workspace_id_workspaces_id_fk": {
+          "name": "ad_connections_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_connections",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_connections_workspace_org_fk": {
+          "name": "ad_connections_workspace_org_fk",
+          "tableFrom": "ad_connections",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ad_connections_id_org_uniq": {
+          "name": "ad_connections_id_org_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id"
+          ]
+        },
+        "ad_connections_id_org_scope_uniq": {
+          "name": "ad_connections_id_org_scope_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ]
+        },
+        "ad_connections_id_org_scope_platform_uniq": {
+          "name": "ad_connections_id_org_scope_platform_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ad_connections_credential_version_check": {
+          "name": "ad_connections_credential_version_check",
+          "value": "\"ad_connections\".\"credential_version\" > 0"
+        },
+        "ad_connections_revocation_state_check": {
+          "name": "ad_connections_revocation_state_check",
+          "value": "(\"ad_connections\".\"status\" = 'revoked' AND \"ad_connections\".\"revoked_at\" IS NOT NULL)\n\t\t\t\tOR (\"ad_connections\".\"status\" <> 'revoked' AND \"ad_connections\".\"revoked_at\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ad_conversion_events": {
+      "name": "ad_conversion_events",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "ad_account_id": {
+          "name": "ad_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "ad_platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversion_rule_id": {
+          "name": "conversion_rule_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation_key_hash": {
+          "name": "operation_key_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_hash": {
+          "name": "request_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload_ciphertext": {
+          "name": "payload_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "provider_event_id": {
+          "name": "provider_event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "request_may_have_been_sent_at": {
+          "name": "request_may_have_been_sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ad_conversion_events_rule_active_uniq": {
+          "name": "ad_conversion_events_rule_active_uniq",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "conversion_rule_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"ad_conversion_events\".\"status\" IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_conversion_events_due_idx": {
+          "name": "ad_conversion_events_due_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_conversion_events_organization_id_organization_id_fk": {
+          "name": "ad_conversion_events_organization_id_organization_id_fk",
+          "tableFrom": "ad_conversion_events",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_conversion_events_workspace_id_workspaces_id_fk": {
+          "name": "ad_conversion_events_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_conversion_events",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_conversion_events_workspace_org_fk": {
+          "name": "ad_conversion_events_workspace_org_fk",
+          "tableFrom": "ad_conversion_events",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_conversion_events_rule_org_scope_account_platform_fk": {
+          "name": "ad_conversion_events_rule_org_scope_account_platform_fk",
+          "tableFrom": "ad_conversion_events",
+          "tableTo": "ad_conversion_rules",
+          "columnsFrom": [
+            "conversion_rule_id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ad_conversion_events_org_rule_operation_uniq": {
+          "name": "ad_conversion_events_org_rule_operation_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "organization_id",
+            "conversion_rule_id",
+            "operation_key_hash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ad_conversion_events_status_check": {
+          "name": "ad_conversion_events_status_check",
+          "value": "\"ad_conversion_events\".\"status\" IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'completed', 'failed', 'cancelled')"
+        },
+        "ad_conversion_events_hash_check": {
+          "name": "ad_conversion_events_hash_check",
+          "value": "\"ad_conversion_events\".\"operation_key_hash\" ~ '^[0-9a-f]{64}$'\n\t\t\t\tAND \"ad_conversion_events\".\"request_hash\" ~ '^[0-9a-f]{64}$'"
+        },
+        "ad_conversion_events_ciphertext_check": {
+          "name": "ad_conversion_events_ciphertext_check",
+          "value": "\"ad_conversion_events\".\"payload_ciphertext\" IS NULL OR \"ad_conversion_events\".\"payload_ciphertext\" LIKE 'enc:v2:%'"
+        },
+        "ad_conversion_events_payload_lifecycle_check": {
+          "name": "ad_conversion_events_payload_lifecycle_check",
+          "value": "\"ad_conversion_events\".\"status\" IN ('completed', 'failed', 'cancelled')\n\t\t\t\tOR \"ad_conversion_events\".\"payload_ciphertext\" IS NOT NULL"
+        },
+        "ad_conversion_events_counters_check": {
+          "name": "ad_conversion_events_counters_check",
+          "value": "\"ad_conversion_events\".\"attempts\" >= 0 AND \"ad_conversion_events\".\"lease_token\" >= 0"
+        },
+        "ad_conversion_events_lease_check": {
+          "name": "ad_conversion_events_lease_check",
+          "value": "(\"ad_conversion_events\".\"status\" IN ('processing', 'request_may_have_been_sent')) = (\"ad_conversion_events\".\"lease_expires_at\" IS NOT NULL)"
+        },
+        "ad_conversion_events_request_boundary_check": {
+          "name": "ad_conversion_events_request_boundary_check",
+          "value": "\"ad_conversion_events\".\"status\" <> 'request_may_have_been_sent'\n\t\t\t\tOR \"ad_conversion_events\".\"request_may_have_been_sent_at\" IS NOT NULL"
+        },
+        "ad_conversion_events_completion_check": {
+          "name": "ad_conversion_events_completion_check",
+          "value": "(\"ad_conversion_events\".\"status\" IN ('completed', 'failed', 'cancelled')) = (\"ad_conversion_events\".\"completed_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ad_conversion_rules": {
+      "name": "ad_conversion_rules",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "ad_account_id": {
+          "name": "ad_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "ad_platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_name": {
+          "name": "event_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_destination_id": {
+          "name": "provider_destination_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "configuration": {
+          "name": "configuration",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ad_conversion_rules_account_enabled_idx": {
+          "name": "ad_conversion_rules_account_enabled_idx",
+          "columns": [
+            {
+              "expression": "ad_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "enabled",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_conversion_rules_organization_id_organization_id_fk": {
+          "name": "ad_conversion_rules_organization_id_organization_id_fk",
+          "tableFrom": "ad_conversion_rules",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_conversion_rules_workspace_id_workspaces_id_fk": {
+          "name": "ad_conversion_rules_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_conversion_rules",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_conversion_rules_workspace_org_fk": {
+          "name": "ad_conversion_rules_workspace_org_fk",
+          "tableFrom": "ad_conversion_rules",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_conversion_rules_account_org_scope_platform_fk": {
+          "name": "ad_conversion_rules_account_org_scope_platform_fk",
+          "tableFrom": "ad_conversion_rules",
+          "tableTo": "ad_accounts",
+          "columnsFrom": [
+            "ad_account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ad_conversion_rules_id_org_scope_account_platform_uniq": {
+          "name": "ad_conversion_rules_id_org_scope_account_platform_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ad_conversion_rules_configuration_check": {
+          "name": "ad_conversion_rules_configuration_check",
+          "value": "jsonb_typeof(\"ad_conversion_rules\".\"configuration\") = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.ad_creation_operations": {
       "name": "ad_creation_operations",
       "schema": "",
@@ -2080,6 +3539,507 @@
         "ad_creation_operations_timestamp_order_check": {
           "name": "ad_creation_operations_timestamp_order_check",
           "value": "\"ad_creation_operations\".\"authority_admitted_at\" <= \"ad_creation_operations\".\"created_at\"\n\t\t\t\tAND \"ad_creation_operations\".\"updated_at\" >= \"ad_creation_operations\".\"created_at\"\n\t\t\t\tAND (\"ad_creation_operations\".\"authority_revoked_at\" IS NULL OR \"ad_creation_operations\".\"authority_revoked_at\" >= \"ad_creation_operations\".\"authority_admitted_at\")\n\t\t\t\tAND (\"ad_creation_operations\".\"request_may_have_been_sent_at\" IS NULL OR \"ad_creation_operations\".\"request_may_have_been_sent_at\" >= \"ad_creation_operations\".\"created_at\")\n\t\t\t\tAND (\"ad_creation_operations\".\"completed_at\" IS NULL OR \"ad_creation_operations\".\"completed_at\" >= \"ad_creation_operations\".\"created_at\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ad_lead_forms": {
+      "name": "ad_lead_forms",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "ad_account_id": {
+          "name": "ad_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "ad_platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_form_id": {
+          "name": "provider_form_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unknown'"
+        },
+        "configuration": {
+          "name": "configuration",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ad_lead_forms_account_created_idx": {
+          "name": "ad_lead_forms_account_created_idx",
+          "columns": [
+            {
+              "expression": "ad_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_lead_forms_organization_id_organization_id_fk": {
+          "name": "ad_lead_forms_organization_id_organization_id_fk",
+          "tableFrom": "ad_lead_forms",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_lead_forms_workspace_id_workspaces_id_fk": {
+          "name": "ad_lead_forms_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_lead_forms",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_lead_forms_workspace_org_fk": {
+          "name": "ad_lead_forms_workspace_org_fk",
+          "tableFrom": "ad_lead_forms",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_lead_forms_account_org_scope_platform_fk": {
+          "name": "ad_lead_forms_account_org_scope_platform_fk",
+          "tableFrom": "ad_lead_forms",
+          "tableTo": "ad_accounts",
+          "columnsFrom": [
+            "ad_account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ad_lead_forms_id_org_scope_account_platform_uniq": {
+          "name": "ad_lead_forms_id_org_scope_account_platform_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform"
+          ]
+        },
+        "ad_lead_forms_org_account_provider_uniq": {
+          "name": "ad_lead_forms_org_account_provider_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "organization_id",
+            "ad_account_id",
+            "provider_form_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ad_lead_forms_status_check": {
+          "name": "ad_lead_forms_status_check",
+          "value": "\"ad_lead_forms\".\"status\" IN ('draft', 'active', 'archived', 'unknown')"
+        },
+        "ad_lead_forms_configuration_check": {
+          "name": "ad_lead_forms_configuration_check",
+          "value": "jsonb_typeof(\"ad_lead_forms\".\"configuration\") = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ad_leads": {
+      "name": "ad_leads",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "ad_account_id": {
+          "name": "ad_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "ad_platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lead_form_id": {
+          "name": "lead_form_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_lead_id": {
+          "name": "provider_lead_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'new'"
+        },
+        "payload_ciphertext": {
+          "name": "payload_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contact_id": {
+          "name": "contact_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_created_at": {
+          "name": "provider_created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ad_leads_account_created_idx": {
+          "name": "ad_leads_account_created_idx",
+          "columns": [
+            {
+              "expression": "ad_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_leads_expiry_idx": {
+          "name": "ad_leads_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_leads_organization_id_organization_id_fk": {
+          "name": "ad_leads_organization_id_organization_id_fk",
+          "tableFrom": "ad_leads",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_leads_workspace_id_workspaces_id_fk": {
+          "name": "ad_leads_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_leads",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_leads_workspace_org_fk": {
+          "name": "ad_leads_workspace_org_fk",
+          "tableFrom": "ad_leads",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_leads_account_org_scope_platform_fk": {
+          "name": "ad_leads_account_org_scope_platform_fk",
+          "tableFrom": "ad_leads",
+          "tableTo": "ad_accounts",
+          "columnsFrom": [
+            "ad_account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_leads_form_org_scope_account_platform_fk": {
+          "name": "ad_leads_form_org_scope_account_platform_fk",
+          "tableFrom": "ad_leads",
+          "tableTo": "ad_lead_forms",
+          "columnsFrom": [
+            "lead_form_id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "ad_account_id",
+            "platform"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_leads_contact_org_scope_fk": {
+          "name": "ad_leads_contact_org_scope_fk",
+          "tableFrom": "ad_leads",
+          "tableTo": "contacts",
+          "columnsFrom": [
+            "contact_id",
+            "organization_id",
+            "scope_key"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ad_leads_org_account_provider_uniq": {
+          "name": "ad_leads_org_account_provider_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "organization_id",
+            "ad_account_id",
+            "provider_lead_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ad_leads_status_check": {
+          "name": "ad_leads_status_check",
+          "value": "\"ad_leads\".\"status\" IN ('new', 'promoted', 'dismissed')"
+        },
+        "ad_leads_ciphertext_check": {
+          "name": "ad_leads_ciphertext_check",
+          "value": "\"ad_leads\".\"payload_ciphertext\" LIKE 'enc:v2:%'"
+        },
+        "ad_leads_retention_check": {
+          "name": "ad_leads_retention_check",
+          "value": "\"ad_leads\".\"expires_at\" > \"ad_leads\".\"created_at\"\n\t\t\t\tAND \"ad_leads\".\"expires_at\" <= \"ad_leads\".\"created_at\" + interval '30 days'"
+        },
+        "ad_leads_promotion_check": {
+          "name": "ad_leads_promotion_check",
+          "value": "(\"ad_leads\".\"status\" = 'promoted') = (\"ad_leads\".\"contact_id\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
@@ -2736,6 +4696,432 @@
         "ad_mutation_operations_timestamp_check": {
           "name": "ad_mutation_operations_timestamp_check",
           "value": "\"ad_mutation_operations\".\"authority_admitted_at\" <= \"ad_mutation_operations\".\"created_at\"\n\t\t\t\tAND \"ad_mutation_operations\".\"updated_at\" >= \"ad_mutation_operations\".\"created_at\"\n\t\t\t\tAND (\"ad_mutation_operations\".\"authority_revoked_at\" IS NULL OR \"ad_mutation_operations\".\"authority_revoked_at\" >= \"ad_mutation_operations\".\"authority_admitted_at\")\n\t\t\t\tAND (\"ad_mutation_operations\".\"request_may_have_been_sent_at\" IS NULL OR \"ad_mutation_operations\".\"request_may_have_been_sent_at\" >= \"ad_mutation_operations\".\"created_at\")\n\t\t\t\tAND (\"ad_mutation_operations\".\"provider_confirmed_at\" IS NULL OR \"ad_mutation_operations\".\"provider_confirmed_at\" >= \"ad_mutation_operations\".\"created_at\")\n\t\t\t\tAND (\"ad_mutation_operations\".\"completed_at\" IS NULL OR \"ad_mutation_operations\".\"completed_at\" >= \"ad_mutation_operations\".\"created_at\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ad_report_jobs": {
+      "name": "ad_report_jobs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "ad_account_id": {
+          "name": "ad_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "ad_platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation_key_hash": {
+          "name": "operation_key_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_hash": {
+          "name": "request_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_payload": {
+          "name": "request_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "provider_job_id": {
+          "name": "provider_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "result_object_key": {
+          "name": "result_object_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "row_count": {
+          "name": "row_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "result_expires_at": {
+          "name": "result_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "request_may_have_been_sent_at": {
+          "name": "request_may_have_been_sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ad_report_jobs_due_idx": {
+          "name": "ad_report_jobs_due_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_report_jobs_result_expiry_idx": {
+          "name": "ad_report_jobs_result_expiry_idx",
+          "columns": [
+            {
+              "expression": "result_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ad_report_jobs_terminal_retention_idx": {
+          "name": "ad_report_jobs_terminal_retention_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ad_report_jobs_organization_id_organization_id_fk": {
+          "name": "ad_report_jobs_organization_id_organization_id_fk",
+          "tableFrom": "ad_report_jobs",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "ad_report_jobs_workspace_id_workspaces_id_fk": {
+          "name": "ad_report_jobs_workspace_id_workspaces_id_fk",
+          "tableFrom": "ad_report_jobs",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "ad_report_jobs_workspace_org_fk": {
+          "name": "ad_report_jobs_workspace_org_fk",
+          "tableFrom": "ad_report_jobs",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ad_report_jobs_account_org_scope_platform_fk": {
+          "name": "ad_report_jobs_account_org_scope_platform_fk",
+          "tableFrom": "ad_report_jobs",
+          "tableTo": "ad_accounts",
+          "columnsFrom": [
+            "ad_account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ad_report_jobs_id_org_uniq": {
+          "name": "ad_report_jobs_id_org_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id"
+          ]
+        },
+        "ad_report_jobs_org_operation_uniq": {
+          "name": "ad_report_jobs_org_operation_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "organization_id",
+            "operation_key_hash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ad_report_jobs_status_check": {
+          "name": "ad_report_jobs_status_check",
+          "value": "\"ad_report_jobs\".\"status\" IN ('pending', 'submitting', 'provider_pending', 'downloading', 'completed', 'failed', 'unknown', 'cancelled')"
+        },
+        "ad_report_jobs_hash_check": {
+          "name": "ad_report_jobs_hash_check",
+          "value": "\"ad_report_jobs\".\"operation_key_hash\" ~ '^[0-9a-f]{64}$'\n\t\t\t\tAND \"ad_report_jobs\".\"request_hash\" ~ '^[0-9a-f]{64}$'"
+        },
+        "ad_report_jobs_request_check": {
+          "name": "ad_report_jobs_request_check",
+          "value": "jsonb_typeof(\"ad_report_jobs\".\"request_payload\") = 'object'"
+        },
+        "ad_report_jobs_counters_check": {
+          "name": "ad_report_jobs_counters_check",
+          "value": "\"ad_report_jobs\".\"attempts\" >= 0\n\t\t\t\tAND \"ad_report_jobs\".\"lease_token\" >= 0\n\t\t\t\tAND (\"ad_report_jobs\".\"row_count\" IS NULL OR \"ad_report_jobs\".\"row_count\" >= 0)"
+        },
+        "ad_report_jobs_request_boundary_check": {
+          "name": "ad_report_jobs_request_boundary_check",
+          "value": "\"ad_report_jobs\".\"status\" <> 'submitting'\n\t\t\t\tOR \"ad_report_jobs\".\"request_may_have_been_sent_at\" IS NOT NULL"
+        },
+        "ad_report_jobs_completion_check": {
+          "name": "ad_report_jobs_completion_check",
+          "value": "(\"ad_report_jobs\".\"status\" IN ('completed', 'failed', 'cancelled')) = (\"ad_report_jobs\".\"completed_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ad_report_rows": {
+      "name": "ad_report_rows",
+      "schema": "",
+      "columns": {
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "report_job_id": {
+          "name": "report_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "row_number": {
+          "name": "row_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimensions": {
+          "name": "dimensions",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "metrics": {
+          "name": "metrics",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ad_report_rows_job_org_fk": {
+          "name": "ad_report_rows_job_org_fk",
+          "tableFrom": "ad_report_rows",
+          "tableTo": "ad_report_jobs",
+          "columnsFrom": [
+            "report_job_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "ad_report_rows_report_job_id_row_number_pk": {
+          "name": "ad_report_rows_report_job_id_row_number_pk",
+          "columns": [
+            "report_job_id",
+            "row_number"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ad_report_rows_number_check": {
+          "name": "ad_report_rows_number_check",
+          "value": "\"ad_report_rows\".\"row_number\" > 0"
+        },
+        "ad_report_rows_payload_check": {
+          "name": "ad_report_rows_payload_check",
+          "value": "jsonb_typeof(\"ad_report_rows\".\"dimensions\") = 'object'\n\t\t\t\tAND jsonb_typeof(\"ad_report_rows\".\"metrics\") = 'object'"
         }
       },
       "isRLSEnabled": false
@@ -19925,6 +22311,31 @@
           "notNull": false,
           "default": false
         },
+        "edit_revision": {
+          "name": "edit_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "edited_at": {
+          "name": "edited_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_read_at": {
+          "name": "provider_read_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "content_redacted_at": {
           "name": "content_redacted_at",
           "type": "timestamp with time zone",
@@ -19933,6 +22344,13 @@
         },
         "created_at": {
           "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
@@ -20135,6 +22553,10 @@
         "inbox_messages_content_redaction_check": {
           "name": "inbox_messages_content_redaction_check",
           "value": "\"inbox_messages\".\"content_redacted_at\" IS NULL\n\t\t\t\tOR \"inbox_messages\".\"content_redacted_at\" >= \"inbox_messages\".\"created_at\""
+        },
+        "inbox_messages_edit_state_check": {
+          "name": "inbox_messages_edit_state_check",
+          "value": "\"inbox_messages\".\"edit_revision\" >= 0\n\t\t\t\tAND (\"inbox_messages\".\"edited_at\" IS NULL OR (\"inbox_messages\".\"edit_revision\" > 0 AND \"inbox_messages\".\"edited_at\" >= \"inbox_messages\".\"created_at\"))\n\t\t\t\tAND (\"inbox_messages\".\"provider_read_at\" IS NULL OR \"inbox_messages\".\"provider_read_at\" >= \"inbox_messages\".\"created_at\")\n\t\t\t\tAND (\"inbox_messages\".\"deleted_at\" IS NULL OR \"inbox_messages\".\"deleted_at\" >= \"inbox_messages\".\"created_at\")\n\t\t\t\tAND \"inbox_messages\".\"updated_at\" >= \"inbox_messages\".\"created_at\""
         }
       },
       "isRLSEnabled": false
@@ -21723,6 +24145,933 @@
         "media_thumbnail_projection_check": {
           "name": "media_thumbnail_projection_check",
           "value": "(\"media\".\"thumbnail_status\" <> 'generated'\n\t\t\t\t\tOR (\"media\".\"thumbnail_key\" IS NOT NULL\n\t\t\t\t\t\tAND \"media\".\"thumbnail_url\" IS NOT NULL))\n\t\t\t\tAND (\"media\".\"thumbnail_url\" IS NULL\n\t\t\t\t\tOR \"media\".\"thumbnail_status\" = 'generated')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.media_derivatives": {
+      "name": "media_derivatives",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "media_id": {
+          "name": "media_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "processing_job_id": {
+          "name": "processing_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "profile": {
+          "name": "profile",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "options_hash": {
+          "name": "options_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "storage_key": {
+          "name": "storage_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "size": {
+          "name": "size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "width": {
+          "name": "width",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "height": {
+          "name": "height",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration": {
+          "name": "duration",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checksum_sha256": {
+          "name": "checksum_sha256",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'processing'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "ready_at": {
+          "name": "ready_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "delete_after": {
+          "name": "delete_after",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "media_derivatives_profile_uniq": {
+          "name": "media_derivatives_profile_uniq",
+          "columns": [
+            {
+              "expression": "media_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "profile",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "options_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "media_derivatives_storage_key_uniq": {
+          "name": "media_derivatives_storage_key_uniq",
+          "columns": [
+            {
+              "expression": "storage_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "media_derivatives_cleanup_idx": {
+          "name": "media_derivatives_cleanup_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "delete_after",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "media_derivatives_organization_id_organization_id_fk": {
+          "name": "media_derivatives_organization_id_organization_id_fk",
+          "tableFrom": "media_derivatives",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_derivatives_workspace_id_workspaces_id_fk": {
+          "name": "media_derivatives_workspace_id_workspaces_id_fk",
+          "tableFrom": "media_derivatives",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "media_derivatives_workspace_org_fk": {
+          "name": "media_derivatives_workspace_org_fk",
+          "tableFrom": "media_derivatives",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "media_derivatives_media_org_scope_fk": {
+          "name": "media_derivatives_media_org_scope_fk",
+          "tableFrom": "media_derivatives",
+          "tableTo": "media",
+          "columnsFrom": [
+            "media_id",
+            "organization_id",
+            "scope_key"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_derivatives_processing_job_org_scope_media_fk": {
+          "name": "media_derivatives_processing_job_org_scope_media_fk",
+          "tableFrom": "media_derivatives",
+          "tableTo": "media_processing_jobs",
+          "columnsFrom": [
+            "processing_job_id",
+            "organization_id",
+            "scope_key",
+            "media_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "media_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "media_derivatives_state_check": {
+          "name": "media_derivatives_state_check",
+          "value": "\"media_derivatives\".\"kind\" IN (E'normalized', E'provider', E'cover', E'gif_video')\n\t\t\t\tAND \"media_derivatives\".\"status\" IN ('processing', 'ready', 'failed', 'deleting')"
+        },
+        "media_derivatives_numeric_check": {
+          "name": "media_derivatives_numeric_check",
+          "value": "\"media_derivatives\".\"size\" >= 0\n\t\t\t\tAND (\"media_derivatives\".\"width\" IS NULL OR \"media_derivatives\".\"width\" > 0)\n\t\t\t\tAND (\"media_derivatives\".\"height\" IS NULL OR \"media_derivatives\".\"height\" > 0)\n\t\t\t\tAND (\"media_derivatives\".\"duration\" IS NULL OR \"media_derivatives\".\"duration\" >= 0)"
+        },
+        "media_derivatives_checksum_check": {
+          "name": "media_derivatives_checksum_check",
+          "value": "\"media_derivatives\".\"checksum_sha256\" ~ '^[0-9a-f]{64}$'"
+        },
+        "media_derivatives_ready_check": {
+          "name": "media_derivatives_ready_check",
+          "value": "(\"media_derivatives\".\"status\" = 'ready') = (\"media_derivatives\".\"ready_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.media_processing_jobs": {
+      "name": "media_processing_jobs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "media_id": {
+          "name": "media_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "profile": {
+          "name": "profile",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "options": {
+          "name": "options",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "options_hash": {
+          "name": "options_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_etag": {
+          "name": "source_etag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "processor_version": {
+          "name": "processor_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "workflow_id": {
+          "name": "workflow_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "media_processing_jobs_request_uniq": {
+          "name": "media_processing_jobs_request_uniq",
+          "columns": [
+            {
+              "expression": "media_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "operation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "profile",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "options_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_etag",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "processor_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "media_processing_jobs_due_idx": {
+          "name": "media_processing_jobs_due_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "media_processing_jobs_organization_id_organization_id_fk": {
+          "name": "media_processing_jobs_organization_id_organization_id_fk",
+          "tableFrom": "media_processing_jobs",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_processing_jobs_workspace_id_workspaces_id_fk": {
+          "name": "media_processing_jobs_workspace_id_workspaces_id_fk",
+          "tableFrom": "media_processing_jobs",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "media_processing_jobs_workspace_org_fk": {
+          "name": "media_processing_jobs_workspace_org_fk",
+          "tableFrom": "media_processing_jobs",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "media_processing_jobs_media_org_scope_fk": {
+          "name": "media_processing_jobs_media_org_scope_fk",
+          "tableFrom": "media_processing_jobs",
+          "tableTo": "media",
+          "columnsFrom": [
+            "media_id",
+            "organization_id",
+            "scope_key"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "media_processing_jobs_id_org_scope_media_uniq": {
+          "name": "media_processing_jobs_id_org_scope_media_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "media_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "media_processing_jobs_state_check": {
+          "name": "media_processing_jobs_state_check",
+          "value": "\"media_processing_jobs\".\"operation\" IN ('normalize', 'provider_variant', 'cover')\n\t\t\t\tAND \"media_processing_jobs\".\"status\" IN ('pending', 'processing', 'completed', 'failed', 'manual_review')"
+        },
+        "media_processing_jobs_counter_check": {
+          "name": "media_processing_jobs_counter_check",
+          "value": "\"media_processing_jobs\".\"attempts\" >= 0 AND \"media_processing_jobs\".\"lease_token\" >= 0"
+        },
+        "media_processing_jobs_lease_check": {
+          "name": "media_processing_jobs_lease_check",
+          "value": "(\"media_processing_jobs\".\"status\" = 'processing' AND \"media_processing_jobs\".\"lease_expires_at\" IS NOT NULL)\n\t\t\t\tOR (\"media_processing_jobs\".\"status\" <> 'processing' AND \"media_processing_jobs\".\"lease_expires_at\" IS NULL)"
+        },
+        "media_processing_jobs_completion_check": {
+          "name": "media_processing_jobs_completion_check",
+          "value": "(\"media_processing_jobs\".\"status\" = 'completed') = (\"media_processing_jobs\".\"completed_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.media_upload_sessions": {
+      "name": "media_upload_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "media_id": {
+          "name": "media_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expected_size": {
+          "name": "expected_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expected_mime_type": {
+          "name": "expected_mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "part_size": {
+          "name": "part_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "part_count": {
+          "name": "part_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "multipart_upload_id_ciphertext": {
+          "name": "multipart_upload_id_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'created'"
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "media_upload_sessions_media_uniq": {
+          "name": "media_upload_sessions_media_uniq",
+          "columns": [
+            {
+              "expression": "media_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "media_upload_sessions_org_status_idx": {
+          "name": "media_upload_sessions_org_status_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "media_upload_sessions_expiry_idx": {
+          "name": "media_upload_sessions_expiry_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "media_upload_sessions_organization_id_organization_id_fk": {
+          "name": "media_upload_sessions_organization_id_organization_id_fk",
+          "tableFrom": "media_upload_sessions",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "media_upload_sessions_workspace_id_workspaces_id_fk": {
+          "name": "media_upload_sessions_workspace_id_workspaces_id_fk",
+          "tableFrom": "media_upload_sessions",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "media_upload_sessions_workspace_org_fk": {
+          "name": "media_upload_sessions_workspace_org_fk",
+          "tableFrom": "media_upload_sessions",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "media_upload_sessions_media_org_scope_fk": {
+          "name": "media_upload_sessions_media_org_scope_fk",
+          "tableFrom": "media_upload_sessions",
+          "tableTo": "media",
+          "columnsFrom": [
+            "media_id",
+            "organization_id",
+            "scope_key"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "media_upload_sessions_mode_check": {
+          "name": "media_upload_sessions_mode_check",
+          "value": "\"media_upload_sessions\".\"mode\" IN ('single', 'multipart')"
+        },
+        "media_upload_sessions_status_check": {
+          "name": "media_upload_sessions_status_check",
+          "value": "\"media_upload_sessions\".\"status\" IN ('created', 'uploading', 'completing', 'completed', 'aborting', 'aborted', 'failed', 'expired')"
+        },
+        "media_upload_sessions_size_check": {
+          "name": "media_upload_sessions_size_check",
+          "value": "\"media_upload_sessions\".\"expected_size\" > 0 AND \"media_upload_sessions\".\"expected_size\" <= 209715200"
+        },
+        "media_upload_sessions_multipart_shape_check": {
+          "name": "media_upload_sessions_multipart_shape_check",
+          "value": "(\"media_upload_sessions\".\"mode\" = 'single'\n\t\t\t\t\tAND \"media_upload_sessions\".\"part_size\" IS NULL\n\t\t\t\t\tAND \"media_upload_sessions\".\"part_count\" IS NULL\n\t\t\t\t\tAND \"media_upload_sessions\".\"multipart_upload_id_ciphertext\" IS NULL)\n\t\t\t\tOR (\"media_upload_sessions\".\"mode\" = 'multipart'\n\t\t\t\t\tAND \"media_upload_sessions\".\"part_size\" >= 5242880\n\t\t\t\t\tAND \"media_upload_sessions\".\"part_count\" > 1\n\t\t\t\t\tAND (\n\t\t\t\t\t\t(\"media_upload_sessions\".\"status\" IN ('created', 'uploading', 'completing', 'aborting')\n\t\t\t\t\t\t\tAND \"media_upload_sessions\".\"multipart_upload_id_ciphertext\" LIKE 'enc:v2:%')\n\t\t\t\t\t\tOR (\"media_upload_sessions\".\"status\" IN ('completed', 'aborted', 'expired')\n\t\t\t\t\t\t\tAND \"media_upload_sessions\".\"multipart_upload_id_ciphertext\" IS NULL)\n\t\t\t\t\t\tOR \"media_upload_sessions\".\"status\" = 'failed'\n\t\t\t\t\t))"
+        },
+        "media_upload_sessions_completion_check": {
+          "name": "media_upload_sessions_completion_check",
+          "value": "(\"media_upload_sessions\".\"status\" = 'completed') = (\"media_upload_sessions\".\"completed_at\" IS NOT NULL)"
+        },
+        "media_upload_sessions_lease_check": {
+          "name": "media_upload_sessions_lease_check",
+          "value": "\"media_upload_sessions\".\"lease_token\" >= 0\n\t\t\t\tAND (\"media_upload_sessions\".\"status\" IN ('completing', 'aborting')) = (\"media_upload_sessions\".\"lease_expires_at\" IS NOT NULL)"
+        },
+        "media_upload_sessions_timestamp_check": {
+          "name": "media_upload_sessions_timestamp_check",
+          "value": "\"media_upload_sessions\".\"expires_at\" > \"media_upload_sessions\".\"created_at\"\n\t\t\t\tAND \"media_upload_sessions\".\"updated_at\" >= \"media_upload_sessions\".\"created_at\"\n\t\t\t\tAND (\"media_upload_sessions\".\"completed_at\" IS NULL OR \"media_upload_sessions\".\"completed_at\" >= \"media_upload_sessions\".\"created_at\")"
         }
       },
       "isRLSEnabled": false
@@ -24230,6 +27579,32 @@
           "primaryKey": false,
           "notNull": false
         },
+        "confirmed_content": {
+          "name": "confirmed_content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "edit_revision": {
+          "name": "edit_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_edited_at": {
+          "name": "last_edited_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "platform_post_id_history": {
+          "name": "platform_post_id_history",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
         "platform_url": {
           "name": "platform_url",
           "type": "text",
@@ -24501,7 +27876,7 @@
         },
         "post_targets_delivery_projection_check": {
           "name": "post_targets_delivery_projection_check",
-          "value": "(\"post_targets\".\"delivery_state\" = 'queued')\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'in_flight'\n\t\t\t\t\tAND \"post_targets\".\"status\" = 'publishing'\n\t\t\t\t\tAND \"post_targets\".\"attempt_id\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"claimed_at\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"lease_expires_at\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"request_may_have_been_sent_at\" IS NULL)\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'unknown'\n\t\t\t\t\tAND \"post_targets\".\"status\" = 'publishing'\n\t\t\t\t\tAND \"post_targets\".\"attempt_id\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"claimed_at\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"request_may_have_been_sent_at\" IS NOT NULL)\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'succeeded'\n\t\t\t\t\tAND \"post_targets\".\"status\" = 'published'\n\t\t\t\t\tAND \"post_targets\".\"published_at\" IS NOT NULL)\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'failed' AND \"post_targets\".\"status\" = 'failed')"
+          "value": "(\"post_targets\".\"delivery_state\" = 'queued')\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'in_flight'\n\t\t\t\t\tAND \"post_targets\".\"status\" = 'publishing'\n\t\t\t\t\tAND \"post_targets\".\"attempt_id\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"claimed_at\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"lease_expires_at\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"request_may_have_been_sent_at\" IS NULL)\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'unknown'\n\t\t\t\t\tAND \"post_targets\".\"status\" = 'publishing'\n\t\t\t\t\tAND \"post_targets\".\"attempt_id\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"claimed_at\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"request_may_have_been_sent_at\" IS NOT NULL)\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'succeeded'\n\t\t\t\t\tAND (\n\t\t\t\t\t\t(\"post_targets\".\"status\" = 'published' AND \"post_targets\".\"published_at\" IS NOT NULL)\n\t\t\t\t\t\tOR (\"post_targets\".\"status\"::text = 'provider_draft'\n\t\t\t\t\t\t\tAND \"post_targets\".\"provider_disposition\" = 'provider_draft'\n\t\t\t\t\t\t\tAND \"post_targets\".\"published_at\" IS NULL)\n\t\t\t\t\t))\n\t\t\t\tOR (\"post_targets\".\"delivery_state\" = 'failed' AND \"post_targets\".\"status\" = 'failed')"
         },
         "post_targets_lease_order_check": {
           "name": "post_targets_lease_order_check",
@@ -24509,11 +27884,19 @@
         },
         "post_targets_reconcile_attempts_nonnegative_check": {
           "name": "post_targets_reconcile_attempts_nonnegative_check",
-          "value": "\"post_targets\".\"reconcile_attempts\" >= 0"
+          "value": "\"post_targets\".\"reconcile_attempts\" >= 0 AND \"post_targets\".\"edit_revision\" >= 0"
+        },
+        "post_targets_edit_projection_check": {
+          "name": "post_targets_edit_projection_check",
+          "value": "(\"post_targets\".\"last_edited_at\" IS NULL AND \"post_targets\".\"edit_revision\" = 0)\n\t\t\t\tOR (\"post_targets\".\"last_edited_at\" IS NOT NULL\n\t\t\t\t\tAND \"post_targets\".\"edit_revision\" > 0\n\t\t\t\t\tAND \"post_targets\".\"last_edited_at\" <= \"post_targets\".\"updated_at\")"
+        },
+        "post_targets_platform_id_history_check": {
+          "name": "post_targets_platform_id_history_check",
+          "value": "jsonb_typeof(\"post_targets\".\"platform_post_id_history\") = 'array'"
         },
         "post_targets_provider_disposition_check": {
           "name": "post_targets_provider_disposition_check",
-          "value": "\"post_targets\".\"provider_disposition\" IS NULL OR \"post_targets\".\"provider_disposition\" IN ('published', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')"
+          "value": "\"post_targets\".\"provider_disposition\" IS NULL OR \"post_targets\".\"provider_disposition\" IN ('published', 'provider_draft', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')"
         }
       },
       "isRLSEnabled": false
@@ -26141,7 +29524,7 @@
         },
         "publish_attempts_provider_disposition_check": {
           "name": "publish_attempts_provider_disposition_check",
-          "value": "\"publish_attempts\".\"provider_disposition\" IS NULL OR \"publish_attempts\".\"provider_disposition\" IN ('published', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')"
+          "value": "\"publish_attempts\".\"provider_disposition\" IS NULL OR \"publish_attempts\".\"provider_disposition\" IN ('published', 'provider_draft', 'sent', 'delivered', 'scheduled', 'accepted', 'processing', 'pending_review', 'awaiting_user_action', 'partial', 'failed', 'outcome_unknown')"
         }
       },
       "isRLSEnabled": false
@@ -29680,6 +33063,364 @@
         "social_accounts_disconnect_timestamps_check": {
           "name": "social_accounts_disconnect_timestamps_check",
           "value": "(\"social_accounts\".\"lifecycle_status\" = 'active' AND \"social_accounts\".\"disconnected_at\" IS NULL)\n\t\t\t\tOR (\"social_accounts\".\"lifecycle_status\" = 'disconnecting' AND \"social_accounts\".\"disconnect_requested_at\" IS NOT NULL AND \"social_accounts\".\"disconnected_at\" IS NULL)\n\t\t\t\tOR (\"social_accounts\".\"lifecycle_status\" = 'disconnected' AND \"social_accounts\".\"disconnect_requested_at\" IS NOT NULL AND \"social_accounts\".\"disconnected_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.social_mutation_operations": {
+      "name": "social_mutation_operations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation_key_hash": {
+          "name": "operation_key_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_hash": {
+          "name": "request_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_payload": {
+          "name": "request_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'provider'"
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "request_may_have_been_sent_at": {
+          "name": "request_may_have_been_sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_confirmed_at": {
+          "name": "provider_confirmed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_operation_id": {
+          "name": "provider_operation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_result": {
+          "name": "provider_result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "social_mutation_operations_org_key_uniq": {
+          "name": "social_mutation_operations_org_key_uniq",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "operation_key_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "social_mutation_operations_target_active_uniq": {
+          "name": "social_mutation_operations_target_active_uniq",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"social_mutation_operations\".\"status\" IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "social_mutation_operations_due_idx": {
+          "name": "social_mutation_operations_due_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "social_mutation_operations_organization_id_organization_id_fk": {
+          "name": "social_mutation_operations_organization_id_organization_id_fk",
+          "tableFrom": "social_mutation_operations",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "social_mutation_operations_workspace_id_workspaces_id_fk": {
+          "name": "social_mutation_operations_workspace_id_workspaces_id_fk",
+          "tableFrom": "social_mutation_operations",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "social_mutation_operations_workspace_org_fk": {
+          "name": "social_mutation_operations_workspace_org_fk",
+          "tableFrom": "social_mutation_operations",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "social_mutation_operations_account_org_scope_platform_fk": {
+          "name": "social_mutation_operations_account_org_scope_platform_fk",
+          "tableFrom": "social_mutation_operations",
+          "tableTo": "social_accounts",
+          "columnsFrom": [
+            "account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "social_mutation_operations_target_check": {
+          "name": "social_mutation_operations_target_check",
+          "value": "\"social_mutation_operations\".\"target_type\" IN (E'post_target', E'provider_post', E'inbox_message', E'comment', E'whatsapp_group', E'whatsapp_account', E'whatsapp_template')"
+        },
+        "social_mutation_operations_kind_check": {
+          "name": "social_mutation_operations_kind_check",
+          "value": "\"social_mutation_operations\".\"kind\" IN (E'post_edit', E'message_edit', E'read_receipt', E'comment_edit', E'moderation', E'reaction', E'group_create', E'group_update', E'group_delete', E'group_join_approve', E'group_join_reject', E'group_participant_remove', E'group_message', E'group_pin', E'block_users', E'unblock_users', E'username_set', E'username_delete', E'template_edit', E'template_library_create')"
+        },
+        "social_mutation_operations_status_check": {
+          "name": "social_mutation_operations_status_check",
+          "value": "\"social_mutation_operations\".\"status\" IN ('pending', 'processing', 'request_may_have_been_sent', 'unknown', 'completed', 'failed')"
+        },
+        "social_mutation_operations_phase_check": {
+          "name": "social_mutation_operations_phase_check",
+          "value": "\"social_mutation_operations\".\"phase\" IN ('provider', 'projection', 'completed')"
+        },
+        "social_mutation_operations_counter_check": {
+          "name": "social_mutation_operations_counter_check",
+          "value": "\"social_mutation_operations\".\"attempts\" >= 0 AND \"social_mutation_operations\".\"lease_token\" >= 0"
+        },
+        "social_mutation_operations_lease_check": {
+          "name": "social_mutation_operations_lease_check",
+          "value": "(\"social_mutation_operations\".\"status\" IN ('processing', 'request_may_have_been_sent') AND \"social_mutation_operations\".\"lease_expires_at\" IS NOT NULL)\n\t\t\t\tOR (\"social_mutation_operations\".\"status\" NOT IN ('processing', 'request_may_have_been_sent') AND \"social_mutation_operations\".\"lease_expires_at\" IS NULL)"
+        },
+        "social_mutation_operations_boundary_check": {
+          "name": "social_mutation_operations_boundary_check",
+          "value": "\"social_mutation_operations\".\"status\" <> 'request_may_have_been_sent' OR \"social_mutation_operations\".\"request_may_have_been_sent_at\" IS NOT NULL"
+        },
+        "social_mutation_operations_completion_check": {
+          "name": "social_mutation_operations_completion_check",
+          "value": "(\"social_mutation_operations\".\"status\" = 'completed'\n\t\t\t\t\tAND \"social_mutation_operations\".\"phase\" = 'completed'\n\t\t\t\t\tAND \"social_mutation_operations\".\"provider_confirmed_at\" IS NOT NULL\n\t\t\t\t\tAND \"social_mutation_operations\".\"completed_at\" IS NOT NULL)\n\t\t\t\tOR (\"social_mutation_operations\".\"status\" <> 'completed'\n\t\t\t\t\tAND \"social_mutation_operations\".\"phase\" <> 'completed'\n\t\t\t\t\tAND \"social_mutation_operations\".\"completed_at\" IS NULL)"
         }
       },
       "isRLSEnabled": false
@@ -34399,6 +38140,554 @@
       },
       "isRLSEnabled": false
     },
+    "public.whatsapp_groups": {
+      "name": "whatsapp_groups",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'whatsapp'"
+        },
+        "provider_group_id": {
+          "name": "provider_group_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "join_approval_mode": {
+          "name": "join_approval_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lifecycle_status": {
+          "name": "lifecycle_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'creating'"
+        },
+        "provider_request_id": {
+          "name": "provider_request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "invite_link_ciphertext": {
+          "name": "invite_link_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "participant_count": {
+          "name": "participant_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_created_at": {
+          "name": "provider_created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_synced_at": {
+          "name": "last_synced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "whatsapp_groups_account_provider_uniq": {
+          "name": "whatsapp_groups_account_provider_uniq",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_group_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"whatsapp_groups\".\"provider_group_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "whatsapp_groups_org_status_idx": {
+          "name": "whatsapp_groups_org_status_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lifecycle_status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "whatsapp_groups_provider_request_idx": {
+          "name": "whatsapp_groups_provider_request_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"whatsapp_groups\".\"provider_request_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "whatsapp_groups_organization_id_organization_id_fk": {
+          "name": "whatsapp_groups_organization_id_organization_id_fk",
+          "tableFrom": "whatsapp_groups",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "whatsapp_groups_workspace_id_workspaces_id_fk": {
+          "name": "whatsapp_groups_workspace_id_workspaces_id_fk",
+          "tableFrom": "whatsapp_groups",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "whatsapp_groups_workspace_org_fk": {
+          "name": "whatsapp_groups_workspace_org_fk",
+          "tableFrom": "whatsapp_groups",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "whatsapp_groups_account_org_scope_platform_fk": {
+          "name": "whatsapp_groups_account_org_scope_platform_fk",
+          "tableFrom": "whatsapp_groups",
+          "tableTo": "social_accounts",
+          "columnsFrom": [
+            "account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "whatsapp_groups_platform_check": {
+          "name": "whatsapp_groups_platform_check",
+          "value": "\"whatsapp_groups\".\"platform\" = 'whatsapp'"
+        },
+        "whatsapp_groups_status_check": {
+          "name": "whatsapp_groups_status_check",
+          "value": "\"whatsapp_groups\".\"lifecycle_status\" IN ('creating', 'active', 'suspended', 'deleting', 'deleted', 'failed')"
+        },
+        "whatsapp_groups_join_approval_check": {
+          "name": "whatsapp_groups_join_approval_check",
+          "value": "\"whatsapp_groups\".\"join_approval_mode\" IS NULL OR \"whatsapp_groups\".\"join_approval_mode\" IN ('approval_required', 'auto_approve')"
+        },
+        "whatsapp_groups_participant_count_check": {
+          "name": "whatsapp_groups_participant_count_check",
+          "value": "\"whatsapp_groups\".\"participant_count\" IS NULL OR \"whatsapp_groups\".\"participant_count\" BETWEEN 0 AND 8"
+        },
+        "whatsapp_groups_provider_identity_check": {
+          "name": "whatsapp_groups_provider_identity_check",
+          "value": "\"whatsapp_groups\".\"lifecycle_status\" IN ('creating', 'failed')\n\t\t\t\tOR \"whatsapp_groups\".\"provider_group_id\" IS NOT NULL"
+        },
+        "whatsapp_groups_timestamp_check": {
+          "name": "whatsapp_groups_timestamp_check",
+          "value": "\"whatsapp_groups\".\"updated_at\" >= \"whatsapp_groups\".\"created_at\"\n\t\t\t\tAND (\"whatsapp_groups\".\"last_synced_at\" IS NULL OR \"whatsapp_groups\".\"last_synced_at\" >= \"whatsapp_groups\".\"created_at\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.whatsapp_identity_aliases": {
+      "name": "whatsapp_identity_aliases",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "CASE WHEN \"workspace_id\" IS NULL THEN 'org' ELSE 'ws/' || \"workspace_id\" END",
+            "type": "stored"
+          }
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'whatsapp'"
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "bsuid_hash": {
+          "name": "bsuid_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bsuid_ciphertext": {
+          "name": "bsuid_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parent_bsuid_hash": {
+          "name": "parent_bsuid_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parent_bsuid_ciphertext": {
+          "name": "parent_bsuid_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wa_id_hash": {
+          "name": "wa_id_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wa_id_ciphertext": {
+          "name": "wa_id_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "username_ciphertext": {
+          "name": "username_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "whatsapp_identity_aliases_account_bsuid_uniq": {
+          "name": "whatsapp_identity_aliases_account_bsuid_uniq",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "bsuid_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "whatsapp_identity_aliases_wa_id_idx": {
+          "name": "whatsapp_identity_aliases_wa_id_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "wa_id_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "whatsapp_identity_aliases_organization_id_organization_id_fk": {
+          "name": "whatsapp_identity_aliases_organization_id_organization_id_fk",
+          "tableFrom": "whatsapp_identity_aliases",
+          "tableTo": "organization",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "whatsapp_identity_aliases_workspace_id_workspaces_id_fk": {
+          "name": "whatsapp_identity_aliases_workspace_id_workspaces_id_fk",
+          "tableFrom": "whatsapp_identity_aliases",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "whatsapp_identity_aliases_workspace_org_fk": {
+          "name": "whatsapp_identity_aliases_workspace_org_fk",
+          "tableFrom": "whatsapp_identity_aliases",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "whatsapp_identity_aliases_account_org_scope_platform_fk": {
+          "name": "whatsapp_identity_aliases_account_org_scope_platform_fk",
+          "tableFrom": "whatsapp_identity_aliases",
+          "tableTo": "social_accounts",
+          "columnsFrom": [
+            "account_id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key",
+            "platform"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "whatsapp_identity_aliases_conversation_org_scope_fk": {
+          "name": "whatsapp_identity_aliases_conversation_org_scope_fk",
+          "tableFrom": "whatsapp_identity_aliases",
+          "tableTo": "inbox_conversations",
+          "columnsFrom": [
+            "conversation_id",
+            "organization_id",
+            "scope_key"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id",
+            "scope_key"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "whatsapp_identity_aliases_hash_check": {
+          "name": "whatsapp_identity_aliases_hash_check",
+          "value": "\"whatsapp_identity_aliases\".\"platform\" = 'whatsapp'\n\t\t\t\tAND \"whatsapp_identity_aliases\".\"bsuid_hash\" ~ '^[0-9a-f]{64}$'\n\t\t\t\tAND (\"whatsapp_identity_aliases\".\"parent_bsuid_hash\" IS NULL OR \"whatsapp_identity_aliases\".\"parent_bsuid_hash\" ~ '^[0-9a-f]{64}$')\n\t\t\t\tAND (\"whatsapp_identity_aliases\".\"wa_id_hash\" IS NULL OR \"whatsapp_identity_aliases\".\"wa_id_hash\" ~ '^[0-9a-f]{64}$')"
+        },
+        "whatsapp_identity_aliases_ciphertext_check": {
+          "name": "whatsapp_identity_aliases_ciphertext_check",
+          "value": "\"whatsapp_identity_aliases\".\"bsuid_ciphertext\" LIKE 'enc:v2:%'\n\t\t\t\tAND (\"whatsapp_identity_aliases\".\"parent_bsuid_ciphertext\" IS NULL OR \"whatsapp_identity_aliases\".\"parent_bsuid_ciphertext\" LIKE 'enc:v2:%')\n\t\t\t\tAND (\"whatsapp_identity_aliases\".\"wa_id_ciphertext\" IS NULL OR \"whatsapp_identity_aliases\".\"wa_id_ciphertext\" LIKE 'enc:v2:%')\n\t\t\t\tAND (\"whatsapp_identity_aliases\".\"username_ciphertext\" IS NULL OR \"whatsapp_identity_aliases\".\"username_ciphertext\" LIKE 'enc:v2:%')"
+        },
+        "whatsapp_identity_aliases_pair_check": {
+          "name": "whatsapp_identity_aliases_pair_check",
+          "value": "(\"whatsapp_identity_aliases\".\"parent_bsuid_hash\" IS NULL) = (\"whatsapp_identity_aliases\".\"parent_bsuid_ciphertext\" IS NULL)\n\t\t\t\tAND (\"whatsapp_identity_aliases\".\"wa_id_hash\" IS NULL) = (\"whatsapp_identity_aliases\".\"wa_id_ciphertext\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.whatsapp_phone_billing_attempts": {
       "name": "whatsapp_phone_billing_attempts",
       "schema": "",
@@ -36649,6 +40938,17 @@
     }
   },
   "enums": {
+    "public.ad_connection_status": {
+      "name": "ad_connection_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "active",
+        "expired",
+        "revoked",
+        "error"
+      ]
+    },
     "public.ad_objective": {
       "name": "ad_objective",
       "schema": "public",
@@ -36842,7 +41142,8 @@
         "beehiiv",
         "convertkit",
         "mailchimp",
-        "listmonk"
+        "listmonk",
+        "slack"
       ]
     },
     "public.post_status": {
@@ -36853,6 +41154,7 @@
         "scheduled",
         "publishing",
         "published",
+        "provider_draft",
         "failed",
         "partial"
       ]

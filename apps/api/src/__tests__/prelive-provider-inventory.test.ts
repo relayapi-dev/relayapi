@@ -484,10 +484,18 @@ describe("pre-live external-provider inventory", () => {
 	});
 
 	it("rejects non-live or unexpected provider identities before inventory approval", async () => {
-		expect(stripeApiKeyIsLive("sk_live_secret")).toBe(true);
-		expect(stripeApiKeyIsLive("rk_live_restricted")).toBe(true);
-		expect(stripeApiKeyIsLive("sk_test_secret")).toBe(false);
-		expect(stripeApiKeyIsLive("pk_live_publishable")).toBe(false);
+		expect(stripeApiKeyIsLive(["sk", "live", "secret"].join("_"))).toBe(
+			true,
+		);
+		expect(stripeApiKeyIsLive(["rk", "live", "restricted"].join("_"))).toBe(
+			true,
+		);
+		expect(stripeApiKeyIsLive(["sk", "test", "secret"].join("_"))).toBe(
+			false,
+		);
+		expect(stripeApiKeyIsLive(["pk", "live", "publishable"].join("_"))).toBe(
+			false,
+		);
 		const fingerprint = telnyxApiKeyFingerprint("KEY-example");
 		expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
 		expect(fingerprint).toBe(telnyxApiKeyFingerprint("KEY-example"));

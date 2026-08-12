@@ -39,3 +39,69 @@ regexes = [
 paths = [
 	'''(^|/)apps/api/src/__tests__/__mocks__/env\.ts$''',
 ]
+
+[[allowlists]]
+description = "Synthetic database URLs limited to test, workflow, scaffold, and reference fixtures"
+targetRules = ["credentialed-database-url"]
+condition = "AND"
+regexTarget = "line"
+regexes = [
+	'''(?i)postgres(?:ql)?://(?:\$\{config\.username\}|[a-z0-9_-]+):(?:\$\{config\.password\}|[^@\s]+)@(?:\$\{config\.host\}|localhost|127\.0\.0\.1|db\.example\.com)(?::(?:\$\{config\.port\}|[0-9]+))?(?:[/?"'\s]|$)''',
+]
+paths = [
+	'''(^|/)\.agents/skills/cloudflare/references/secrets-store/patterns\.md$''',
+	'''(^|/)\.github/workflows/(?:ci-db-migrations|deploy-api|deploy-app|prelive-baseline-cutover|prelive-generation-1-stamp)\.yml$''',
+	'''(^|/)apps/(?:api|app)/src/__tests__/.*\.test\.ts$''',
+	'''(^|/)packages/self-host/(?:src/scaffold\.ts|tests/.*\.test\.ts)$''',
+	'''(^|/)scripts/prelive-baseline-cutover-workflow\.test\.ts$''',
+]
+
+[[allowlists]]
+description = "Credential anti-pattern examples intentionally exercised by Cloudflare skill safety tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = [
+	'''sk[_-]live[_-]abc123''',
+]
+paths = [
+	'''(^|/)\.agents/skills/(?:cloudflare/references/bindings/patterns|workers-best-practices/references/rules)\.md$''',
+	'''(^|/)scripts/cloudflare-skill-safety\.test\.ts$''',
+]
+
+[[allowlists]]
+description = "Templated database URL built from runtime secret bindings in Cloudflare reference guidance"
+targetRules = ["credentialed-database-url"]
+condition = "AND"
+regexTarget = "line"
+regexes = [
+	'''const dbUrl = `postgres://\$\{config\.username\}:\$\{config\.password\}@\$\{config\.host\}:\$\{config\.port\}`;''',
+]
+paths = [
+	'''(^|/)\.agents/skills/cloudflare/references/secrets-store/patterns\.md$''',
+]
+
+[[allowlists]]
+description = "Public Worker routing metadata that is not authentication material"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = [
+	'''R2_(?:EVENT_ACCOUNT_ID|THUMBNAIL_BUCKET_(?:NAME|JURISDICTION))''',
+]
+paths = [
+	'''(^|/)apps/api/wrangler\.jsonc$''',
+]
+
+[[allowlists]]
+description = "Deterministic test digest and PostgreSQL advisory lock identifiers"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = [
+	'''(?:TOKEN_HASH|pg_advisory_xact_lock\(hashtext\('relayapi:prelive-generation-2-reset'\)\))''',
+]
+paths = [
+	'''(^|/)packages/auth/src/bearer-invite-signup\.test\.ts$''',
+	'''(^|/)packages/db/scripts/prelive-reset\.ts$''',
+]

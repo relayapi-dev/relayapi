@@ -58,6 +58,7 @@ jobs:
       - name: Publish OpenClaw skill
         env:
           BUMP: ${{ inputs.bump || 'patch' }}
+          CLAWHUB_DISABLE_TELEMETRY: "1"
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
           # ClawHub derives a new skill's slug and display name from its folder.
@@ -79,8 +80,6 @@ jobs:
           fi
 
           clawhub --no-input sync "${ARGS[@]}"
-        env:
-          CLAWHUB_DISABLE_TELEMETRY: "1"
 
   validate-claude-plugin:
     runs-on: ubuntu-latest

@@ -45,7 +45,7 @@ The webhook URL contains its authentication token. Treat the whole URL like a pa
 curl -X POST https://api.relayapi.dev/v1/posts \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: discord-announcement-20260809" \
+  -H "Idempotency-Key: example-idempotency-key" \
   -d '{
     "content": "Deployment completed.",
     "targets": ["acc_discord_example"],

@@ -47,7 +47,7 @@ The verified number and its reported MMS capability are stored as connection-own
 curl -X POST https://api.relayapi.dev/v1/posts \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: sms-order-12345" \
+  -H "Idempotency-Key: example-idempotency-key" \
   -d '{
     "content": "Order 12345 has shipped.",
     "targets": ["acc_sms_example"],

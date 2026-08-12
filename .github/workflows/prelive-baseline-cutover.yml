@@ -178,6 +178,7 @@ jobs:
           EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2129 # GITHUB_ENV entries are intentionally emitted as independent records.
           run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${INVENTORY_RUN_ID}")"
           printf '%s' "$run_json" | jq -e \
             --arg source_sha "$REVIEWED_COMMIT_SHA" '
@@ -705,6 +706,7 @@ jobs:
           GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.generation_1_stamp_commit_sha }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2129 # GITHUB_ENV entries are intentionally emitted as independent records.
           base_sha="$(jq -er '.transition.baseCommitSha' packages/db/baseline-generation.json)"
           ledger_manifest="$RUNNER_TEMP/generation-1-migration-manifest.json"
           git show "$base_sha:packages/db/drizzle/migration-manifest.json" > "$ledger_manifest"

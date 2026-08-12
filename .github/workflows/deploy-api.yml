@@ -96,6 +96,10 @@ jobs:
         run: bun run tsc --noEmit
         working-directory: packages/auth
 
+      - name: Build TypeScript SDK for app source imported by API contract tests
+        run: bun run build
+        working-directory: packages/sdk
+
       - name: Typecheck apps/api
         run: bun run tsc --noEmit
         working-directory: apps/api

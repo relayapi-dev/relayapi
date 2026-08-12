@@ -1,1 +1,0 @@
-ALTER TABLE "ad_account_promotable_identities" ADD CONSTRAINT "ad_account_identities_social_account_org_scope_fk" FOREIGN KEY ("social_account_id","organization_id","scope_key") REFERENCES "public"."social_accounts"("id","organization_id","scope_key") ON DELETE no action ON UPDATE no action;

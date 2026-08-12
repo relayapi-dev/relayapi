@@ -973,20 +973,30 @@ describe("HTTP endpoint performance", () => {
 		expect(avg).toBeLessThan(10);
 	});
 
-	it("GET /openapi.json (spec generation)", async () => {
+	it("GET /openapi.json (one generation followed by cached delivery)", async () => {
 		const times: number[] = [];
 		const iterations = 10;
 		const { default: appModule } = await import("../app");
+		const executionContext = {
+			waitUntil: () => {},
+			passThroughOnException: () => {},
+		} as unknown as ExecutionContext;
+
+		const coldStart = performance.now();
+		const coldResponse = await appModule.fetch(
+			new Request("http://localhost/openapi.json"),
+			env,
+			executionContext,
+		);
+		const coldDuration = performance.now() - coldStart;
+		expect(coldResponse.status).toBe(200);
 
 		for (let i = 0; i < iterations; i++) {
 			const start = performance.now();
 			const res = await appModule.fetch(
 				new Request("http://localhost/openapi.json"),
 				env,
-				{
-					waitUntil: () => {},
-					passThroughOnException: () => {},
-				} as unknown as ExecutionContext,
+				executionContext,
 			);
 			times.push(performance.now() - start);
 			expect(res.status).toBe(200);
@@ -995,9 +1005,10 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  GET /openapi.json: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
+			`  GET /openapi.json: ${coldDuration.toFixed(3)}ms generation | ${avg.toFixed(3)}ms cached avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
-		expect(avg).toBeLessThan(50);
+		expect(coldDuration).toBeLessThan(1000);
+		expect(avg).toBeLessThan(5);
 	});
 });
 
