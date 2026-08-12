@@ -1,4 +1,4 @@
-export const CLI_VERSION = "0.1.0"; // x-release-please-version
+export const CLI_VERSION = "0.2.0"; // x-release-please-version
 export const CONFIG_FILENAME = "relayapi.selfhost.json";
 export const LOCK_FILENAME = "relayapi.lock.json";
 export const DEFAULT_SOURCE_REPOSITORY = "relayapi-dev/relayapi";
