@@ -8,7 +8,6 @@ const UNRESOLVED_RAW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export interface RawInboxQueueMessage {
 	type: "raw_platform_webhook";
 	receipt_id: string;
-	received_at: string;
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -96,7 +95,6 @@ export async function acceptInboundWebhook(
 	await env.INBOX_QUEUE.send({
 		type: "raw_platform_webhook",
 		receipt_id: durableReceiptId,
-		received_at: new Date().toISOString(),
 	} satisfies RawInboxQueueMessage);
 	await db
 		.update(inboundWebhookEvents)

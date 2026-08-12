@@ -27,6 +27,7 @@ const deletePost = {
         label: 'Post ID',
         type: 'string' as const,
         required: true,
+        dynamic: 'post_options.id.display_name',
         helpText: 'The ID of the post to delete (e.g. post_abc123).',
       },
     ],

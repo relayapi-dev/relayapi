@@ -1,8 +1,11 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	auditBaselinePolicyBoundary,
+	findContractOnlyOperations,
 	findDestructiveExpandOperations,
+	findProceduralDynamicSql,
 	type MigrationPolicy as Policy,
 } from "./migration-policy-contract";
 
@@ -10,23 +13,17 @@ type Journal = {
 	entries: Array<{ idx: number; tag: string }>;
 };
 
-const migrationDirectory = fileURLToPath(
-	new URL("../drizzle", import.meta.url),
-);
+const migrationDirectory = process.env.RELAYAPI_VERIFY_MIGRATION_DIRECTORY
+	? resolve(process.env.RELAYAPI_VERIFY_MIGRATION_DIRECTORY)
+	: fileURLToPath(new URL("../drizzle", import.meta.url));
 const policy = JSON.parse(
-	readFileSync(
-		new URL("../drizzle/migration-policy.json", import.meta.url),
-		"utf8",
-	),
+	readFileSync(join(migrationDirectory, "migration-policy.json"), "utf8"),
 ) as Policy;
 const journal = JSON.parse(
-	readFileSync(
-		new URL("../drizzle/meta/_journal.json", import.meta.url),
-		"utf8",
-	),
+	readFileSync(join(migrationDirectory, "meta", "_journal.json"), "utf8"),
 ) as Journal;
 
-if (policy.schemaVersion !== 1) {
+if (policy.schemaVersion !== 2) {
 	throw new Error("Unsupported migration-policy schema version");
 }
 
@@ -53,7 +50,12 @@ for (const tag of journalTags) {
 		failures.push(`${tag} must have a non-empty migration summary`);
 	}
 
-	const source = readFileSync(`${migrationDirectory}/${filename}`, "utf8");
+	const source = readFileSync(join(migrationDirectory, filename), "utf8");
+	if (entry.phase !== "baseline") {
+		for (const finding of findProceduralDynamicSql(source)) {
+			failures.push(`${tag} contains ${finding}`);
+		}
+	}
 	if (entry.phase === "expand") {
 		for (const label of findDestructiveExpandOperations(source)) {
 			failures.push(`${tag} is marked expand but contains ${label}`);
@@ -66,6 +68,14 @@ for (const tag of journalTags) {
 	) {
 		failures.push(
 			`${tag} is a contract migration but lacks the relayapi:contract-after-compatible-release marker`,
+		);
+	}
+	if (
+		entry.phase === "contract" &&
+		findContractOnlyOperations(source).length === 0
+	) {
+		failures.push(
+			`${tag} is marked contract but contains no classified contract-only SQL operation`,
 		);
 	}
 }

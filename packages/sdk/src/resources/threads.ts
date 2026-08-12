@@ -1,6 +1,7 @@
 import { APIResource } from '../core/resource';
 import { APIPromise } from '../core/api-promise';
 import { RequestOptions } from '../internal/request-options';
+import type { PostMediaInput, PublisherTargetOptions } from './posts/publisher-options';
 
 export class Threads extends APIResource {
   /**
@@ -58,7 +59,7 @@ export interface ThreadCreateParams {
   /**
    * Per-platform options applied to all items.
    */
-  target_options?: Record<string, Record<string, unknown>>;
+  target_options?: PublisherTargetOptions;
 
   /**
    * IANA timezone.
@@ -83,7 +84,7 @@ export namespace ThreadCreateParams {
     /**
      * Media attachments for this item.
      */
-    media?: Array<{ url: string; type?: 'image' | 'video' | 'gif' | 'document' }>;
+    media?: Array<PostMediaInput>;
 
     /**
      * Minutes to wait after the previous item is published before publishing this
@@ -108,7 +109,7 @@ export namespace ThreadResponse {
     id: string;
     position: number;
     content: string | null;
-    media: Array<{ url: string; type?: string }> | null;
+    media: Array<PostMediaInput> | null;
     delay_minutes: number;
     status: string;
     targets: Record<string, Item.Target>;

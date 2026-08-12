@@ -13,22 +13,44 @@ export const isRunningInBrowser = () => {
   );
 };
 
-type DetectedPlatform = 'deno' | 'node' | 'edge' | 'unknown';
+type DetectedPlatform = 'cloudflare' | 'deno' | 'node' | 'edge' | 'unknown';
+
+type RuntimeEnvironment = {
+  deno?: any;
+  edgeRuntime?: unknown;
+  navigator?: { userAgent?: string };
+  process?: any;
+};
+
+function getRuntimeEnvironment(): RuntimeEnvironment {
+  return {
+    deno: typeof Deno === 'undefined' ? undefined : Deno,
+    edgeRuntime: typeof EdgeRuntime === 'undefined' ? undefined : EdgeRuntime,
+    navigator: typeof navigator === 'undefined' ? undefined : navigator,
+    process:
+      typeof (globalThis as any).process === 'undefined' ? undefined : (globalThis as any).process,
+  };
+}
 
 /**
  * Note this does not detect 'browser'; for that, use getBrowserInfo().
  */
-function getDetectedPlatform(): DetectedPlatform {
-  if (typeof Deno !== 'undefined' && Deno.build != null) {
+function getDetectedPlatform(environment: RuntimeEnvironment): DetectedPlatform {
+  if (environment.deno?.build != null) {
     return 'deno';
   }
-  if (typeof EdgeRuntime !== 'undefined') {
+  if (environment.edgeRuntime !== undefined) {
     return 'edge';
   }
+  // Cloudflare Workers can expose a Node-compatible `process` global. Detect
+  // the runtime's stable user agent before checking for Node so nodejs_compat
+  // does not cause Workers requests to be reported as Node.js.
+  if (environment.navigator?.userAgent === 'Cloudflare-Workers') {
+    return 'cloudflare';
+  }
   if (
-    Object.prototype.toString.call(
-      typeof (globalThis as any).process !== 'undefined' ? (globalThis as any).process : 0,
-    ) === '[object process]'
+    Object.prototype.toString.call(environment.process === undefined ? 0 : environment.process) ===
+    '[object process]'
   ) {
     return 'node';
   }
@@ -57,27 +79,43 @@ type PlatformProperties = {
   'X-Stainless-Runtime': 'node' | 'deno' | 'edge' | `browser:${Browser}` | 'unknown';
   'X-Stainless-Runtime-Version': string;
 };
-const getPlatformProperties = (): PlatformProperties => {
-  const detectedPlatform = getDetectedPlatform();
+export const getPlatformProperties = (
+  environment: RuntimeEnvironment = getRuntimeEnvironment(),
+): PlatformProperties => {
+  const detectedPlatform = getDetectedPlatform(environment);
   if (detectedPlatform === 'deno') {
     return {
       'X-Stainless-Lang': 'js',
       'X-Stainless-Package-Version': VERSION,
-      'X-Stainless-OS': normalizePlatform(Deno.build.os),
-      'X-Stainless-Arch': normalizeArch(Deno.build.arch),
+      'X-Stainless-OS': normalizePlatform(environment.deno.build.os),
+      'X-Stainless-Arch': normalizeArch(environment.deno.build.arch),
       'X-Stainless-Runtime': 'deno',
       'X-Stainless-Runtime-Version':
-        typeof Deno.version === 'string' ? Deno.version : Deno.version?.deno ?? 'unknown',
+        typeof environment.deno.version === 'string' ?
+          environment.deno.version
+        : environment.deno.version?.deno ?? 'unknown',
     };
   }
-  if (typeof EdgeRuntime !== 'undefined') {
+  if (detectedPlatform === 'edge') {
     return {
       'X-Stainless-Lang': 'js',
       'X-Stainless-Package-Version': VERSION,
       'X-Stainless-OS': 'Unknown',
-      'X-Stainless-Arch': `other:${EdgeRuntime}`,
+      'X-Stainless-Arch': `other:${String(environment.edgeRuntime)}`,
       'X-Stainless-Runtime': 'edge',
-      'X-Stainless-Runtime-Version': (globalThis as any).process.version,
+      'X-Stainless-Runtime-Version': environment.process?.version ?? 'unknown',
+    };
+  }
+  if (detectedPlatform === 'cloudflare') {
+    return {
+      'X-Stainless-Lang': 'js',
+      'X-Stainless-Package-Version': VERSION,
+      'X-Stainless-OS': 'Unknown',
+      'X-Stainless-Arch': 'unknown',
+      'X-Stainless-Runtime': 'edge',
+      // Cloudflare deliberately exposes a stable product user agent without a
+      // runtime version. Do not substitute the Node compatibility version.
+      'X-Stainless-Runtime-Version': 'unknown',
     };
   }
   // Check if Node.js
@@ -85,14 +123,14 @@ const getPlatformProperties = (): PlatformProperties => {
     return {
       'X-Stainless-Lang': 'js',
       'X-Stainless-Package-Version': VERSION,
-      'X-Stainless-OS': normalizePlatform((globalThis as any).process.platform ?? 'unknown'),
-      'X-Stainless-Arch': normalizeArch((globalThis as any).process.arch ?? 'unknown'),
+      'X-Stainless-OS': normalizePlatform(environment.process.platform ?? 'unknown'),
+      'X-Stainless-Arch': normalizeArch(environment.process.arch ?? 'unknown'),
       'X-Stainless-Runtime': 'node',
-      'X-Stainless-Runtime-Version': (globalThis as any).process.version ?? 'unknown',
+      'X-Stainless-Runtime-Version': environment.process.version ?? 'unknown',
     };
   }
 
-  const browserInfo = getBrowserInfo();
+  const browserInfo = getBrowserInfo(environment.navigator?.userAgent);
   if (browserInfo) {
     return {
       'X-Stainless-Lang': 'js',
@@ -104,7 +142,6 @@ const getPlatformProperties = (): PlatformProperties => {
     };
   }
 
-  // TODO add support for Cloudflare workers, etc.
   return {
     'X-Stainless-Lang': 'js',
     'X-Stainless-Package-Version': VERSION,
@@ -123,8 +160,10 @@ type BrowserInfo = {
 declare const navigator: { userAgent: string } | undefined;
 
 // Note: modified from https://github.com/JS-DevTools/host-environment/blob/b1ab79ecde37db5d6e163c050e54fe7d287d7c92/src/isomorphic.browser.ts
-function getBrowserInfo(): BrowserInfo | null {
-  if (typeof navigator === 'undefined' || !navigator) {
+function getBrowserInfo(
+  userAgent = typeof navigator === 'undefined' ? undefined : navigator?.userAgent,
+): BrowserInfo | null {
+  if (!userAgent) {
     return null;
   }
 
@@ -140,7 +179,7 @@ function getBrowserInfo(): BrowserInfo | null {
 
   // Find the FIRST matching browser
   for (const { key, pattern } of browserPatterns) {
-    const match = pattern.exec(navigator.userAgent);
+    const match = pattern.exec(userAgent);
     if (match) {
       const major = match[1] || 0;
       const minor = match[2] || 0;

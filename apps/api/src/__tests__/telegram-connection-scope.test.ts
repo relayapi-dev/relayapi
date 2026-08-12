@@ -14,6 +14,9 @@ describe("Telegram connection scope durability", () => {
 			table.columns.find((column) => column.name === "initial_workspace_scope")
 				?.notNull,
 		).toBe(true);
+		expect(
+			table.columns.some((column) => column.name === "authority_session_id"),
+		).toBe(true);
 		expect(table.columns.some((column) => column.name === "workspace_id")).toBe(
 			true,
 		);
@@ -54,6 +57,17 @@ describe("Telegram connection scope durability", () => {
 		);
 		expect(source).toContain("challenge.initialWorkspaceScope");
 		expect(source).toContain("challenge.apiKeyId");
+		expect(source).toContain(
+			"authoritySessionId: challenge.authoritySessionId",
+		);
+		const route = await Bun.file(
+			`${repoRoot}apps/api/src/routes/connect.ts`,
+		).text();
+		const telegramAdmission = route.slice(
+			route.indexOf("app.openapi(initTelegram"),
+			route.indexOf("app.openapi(pollTelegram"),
+		);
+		expect(telegramAdmission).toContain("connectionAuthoritySessionId(c)");
 	});
 
 	it("removes expired challenges in bounded ordered batches on maintenance cron", async () => {

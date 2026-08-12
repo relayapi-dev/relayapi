@@ -1,6 +1,6 @@
 ---
 title: Nodes
-description: The 10 node kinds an automation graph can contain — content, input capture, logic, actions, HTTP, and flow control.
+description: The 12 node kinds an automation graph can contain — content, waits, live checks, logic, actions, HTTP, and flow control.
 icon: Box
 ---
 
@@ -10,7 +10,7 @@ A node is a single step in the graph. Every node has:
 
 ```
 key           string — unique within the graph; referenced by edges
-kind          string — one of the 10 kinds below
+kind          string — one of the 12 kinds below
 title         optional display title
 canvas_x/y    canvas coordinates (builder-only, not used at runtime)
 config        kind-specific JSON
@@ -30,7 +30,7 @@ Edges connect one output port on a source node to one input port on a target nod
 
 There is no `label` field. Resolution is exact-match: after a handler returns `{ result: "advance", via_port: "next" }`, the runner looks for the edge where `from_node == current && from_port == "next"`. If none, the run exits with `completed` — missing edges are not an error, they are an intentional end of a branch.
 
-## The 10 node kinds
+## The 12 node kinds
 
 ### 1. `message`
 
@@ -42,9 +42,10 @@ Composite message built from ordered **blocks**, optional branch **buttons**, an
 |---|---|---|
 | input | `in` | always |
 | output | `next` | always |
+| output | `error` | delivery or recipient resolution failed |
 | output | `button.<id>` | one per `type: "branch"` button across all blocks |
 | output | `quick_reply.<id>` | one per entry in `config.quick_replies` |
-| output | `no_response` | iff `wait_for_reply=true` and `no_response_timeout_min` is set |
+| output | `no_response` | when `no_response_timeout_min` is set on a waiting message |
 
 **Config**
 
@@ -54,11 +55,11 @@ Composite message built from ordered **blocks**, optional branch **buttons**, an
   "quick_replies": [ { "id": "qr_1", "label": "Help", "icon": "❓" } ],
   "wait_for_reply": true,
   "no_response_timeout_min": 60,
-  "typing_indicator_delay_sec": 1
+  "typing_indicator_seconds": 1
 }
 ```
 
-`wait_for_reply` is auto-true when the message has any branch button or quick reply; it can be toggled explicitly otherwise.
+Branch buttons and quick replies make the node wait implicitly and resume through their derived ports. Set `wait_for_reply: true` on a non-interactive message to resume through `next` when the next ordinary text or attachment reply arrives. `no_response_timeout_min` is optional; when set, its scheduler path uses `no_response`.
 
 **Block types** (inside `config.blocks`)
 
@@ -96,7 +97,7 @@ Composite message built from ordered **blocks**, optional branch **buttons**, an
 | File | ✗ | ✓ | ✓ | ✓ |
 | `delay` block | ✓ | ✓ | ✓ | ✓ |
 
-Unsupported features inline-warn in the composer and are skipped silently at send time — they don't block save.
+Unsupported features inline-warn in the composer and are skipped at send time. If nothing can be delivered, or a provider send fails, the node exits through `error` instead of advancing or parking on an input wait.
 
 **Example**
 
@@ -110,7 +111,7 @@ Unsupported features inline-warn in the composer and are skipped silently at sen
       {
         "id": "b1",
         "type": "text",
-        "text": "Hi {{contact.first_name}}! What size?",
+        "text": "Hi {{contact.name}}! What size?",
         "buttons": [
           { "id": "btn_large", "type": "branch", "label": "Large" },
           { "id": "btn_small", "type": "branch", "label": "Small" }
@@ -126,7 +127,7 @@ Unsupported features inline-warn in the composer and are skipped silently at sen
 
 ### 2. `input`
 
-Prompt the contact and capture their reply into `run.context` or a contact custom field.
+Wait for the next ordinary inbound DM and capture the validated value into the run context. Put a `message` node before it when you need a prompt. Persist the captured value with a later `contact_field_set` or `field_set` action.
 
 **Ports**
 
@@ -142,22 +143,22 @@ Prompt the contact and capture their reply into `run.context` or a contact custo
 
 ```json
 {
-  "prompt": "What's your email?",
-  "retry_prompt": "That didn't look like an email — try again.",
+  "field": "email",
   "input_type": "text | email | phone | number | choice | file",
-  "save_to_field": "email",           // custom field slug, optional
-  "save_to_context": "email",         // context key, optional
-  "max_attempts": 2,
+  "max_retries": 2,
   "timeout_min": 60,
+  "skip_allowed": false,
   "choices": [                        // for input_type=choice
-    { "value": "small", "label": "Small" },
-    { "value": "large", "label": "Large" }
+    { "value": "small", "label": "Small", "match": ["s"] },
+    { "value": "large", "label": "Large", "match": ["l"] }
   ],
-  "min": 1, "max": 100,               // for input_type=number
-  "accepted_mime_types": ["image/*"], // for input_type=file
+  "validation": { "min": 1, "max": 100, "pattern": "^[A-Z]{3}$" },
+  "accepted_mime_types": ["image/jpeg"],
   "max_size_mb": 16
 }
 ```
+
+Despite the legacy field name, `max_retries` is the maximum **total number of attempts** (default `1`), not the number of extra retries. For example, `max_retries: 2` re-prompts after the first invalid reply and routes the second invalid reply through `invalid`. Choice values, labels, and aliases must be unambiguous when compared case-insensitively. File size limits apply only when the inbound provider supplies size metadata.
 
 ### 3. `delay`
 
@@ -168,12 +169,25 @@ Pause the run for a fixed duration. The run status flips to `waiting`; a schedul
 **Config**
 
 ```json
-{ "duration": { "value": 1, "unit": "days" } }
+{ "seconds": 0, "minutes": 30, "hours": 1, "days": 0 }
 ```
 
-Units: `minutes`, `hours`, `days`.
+### 4. `wait_event`
 
-### 4. `condition`
+Pause until the same contact produces one of the configured compatible events. The run stores `waiting_for = inbound_event`; the inbox pipeline resumes it through `received`, and an optional durable timeout job takes the `timeout` branch.
+
+**Ports**: `in` → `received` / `timeout` / `error`
+
+```json
+{
+  "event_kinds": ["story_mention"],
+  "timeout_min": 10080
+}
+```
+
+Supported event kinds are `dm_received`, `comment_created`, `story_reply`, `story_mention`, `live_comment`, `share_to_dm`, and `ad_click`. The API rejects channel/event combinations the provider cannot emit; `share_to_dm`, for example, is Instagram-only.
+
+### 5. `condition`
 
 Branch on a predicate expression evaluated against contact fields, tags, segments, and run context.
 
@@ -183,18 +197,18 @@ Branch on a predicate expression evaluated against contact fields, tags, segment
 
 ```json
 {
-  "if": {
+  "predicates": {
     "all": [
       { "field": "contact.tags", "op": "contains", "value": "vip" },
-      { "field": "context.order_total", "op": "gte", "value": 100 }
+      { "field": "state.order_total", "op": "gte", "value": 100 }
     ]
   }
 }
 ```
 
-Expression shape supports `all`, `any`, and `none` groups. `field` paths: `contact.<field>`, `contact.custom_fields.<slug>`, `contact.tags`, `context.<key>`, `run.<field>`.
+Expression shape supports `all`, `any`, and `none` groups. Useful paths include `contact.<field>`, `fields.<custom-field-slug>`, `tags`, and `state.<run-context-key>`.
 
-### 5. `randomizer`
+### 6. `randomizer`
 
 Weighted random branch — useful for A/B splits.
 
@@ -211,9 +225,9 @@ Weighted random branch — useful for A/B splits.
 }
 ```
 
-The runner caches the chosen variant in `run.context` so the same contact always resolves the same variant on re-entry.
+The runner caches the chosen variant in `run.context`, so repeated visits to the node within the same run stay on the same branch. A later, separate enrollment makes a new weighted choice.
 
-### 6. `action_group`
+### 7. `action_group`
 
 Ordered bundle of side-effect actions with per-action error handling. Replaces the old one-atomic-node-per-action pattern.
 
@@ -242,19 +256,23 @@ Ordered bundle of side-effect actions with per-action error handling. Replaces t
 
 | Group | Types |
 |---|---|
-| Contact data | `tag_add`, `tag_remove`, `field_set`, `field_clear`, `segment_add`, `segment_remove` |
+| Contact data | `tag_add`, `tag_remove`, `field_set`, `field_clear`, `contact_field_set` |
+| Segments | `segment_add`, `segment_remove` |
 | Subscriptions | `subscribe_list`, `unsubscribe_list`, `opt_in_channel`, `opt_out_channel` |
-| Conversation | `assign_conversation`, `unassign_conversation`, `conversation_open`, `conversation_close`, `conversation_snooze` |
-| External | `webhook_out` (fire-and-forget), `notify_admin`, `log_conversion_event` |
+| Conversation | `assign_conversation`, `unassign_conversation`, `conversation_open`, `conversation_close`, `conversation_snooze`, `reply_to_comment` |
+| External | `webhook_out`, `notify_admin` |
 | Automation controls | `pause_automations_for_contact`, `resume_automations_for_contact` |
 | Destructive | `delete_contact` |
-| v1.1 stub | `change_main_menu` (visible in UI, disabled until platform sync ships) |
+| Conversion | `log_conversion_event` |
+| Messenger profile | `change_main_menu` (Facebook only) |
 
 Every action has `on_error: "abort" | "continue"` (default `"abort"`). If an action with `abort` fails, the group stops and exits via `error`. Actions marked `continue` log their failure in the step-run payload and the group keeps going.
 
-### 7. `http_request`
+`log_conversion_event` writes an idempotent durable conversion row and emits an internal `conversion_event`, so another automation can react to it. `contact_field_set` persists the built-in `name`, `email`, or `phone` field. Opt-in/out actions write the canonical consent ledger; an opt-out suppresses later sends.
 
-Call an external HTTP endpoint. Response is stored in `run.context[save_to_key]` for downstream nodes.
+### 8. `http_request`
+
+Call an external public HTTP endpoint. Sensitive URL parts, headers, and body are moved into encrypted write-only storage when the graph is saved. The response is stored in `run.context[response_key]` for downstream conditions.
 
 **Ports**: `in` → `success` (2xx) / `error` (4xx, 5xx, network, timeout)
 
@@ -265,14 +283,15 @@ Call an external HTTP endpoint. Response is stored in `run.context[save_to_key]`
   "method": "POST",
   "url": "https://crm.example.com/api/enrich",
   "headers": { "X-API-Key": "abc" },
-  "body": { "email": "{{contact.email}}" },
-  "timeout_sec": 15,
-  "save_to_context": "crm_response",
-  "extract": { "crm_tier": "$.customer.tier" }
+  "body": "{\"email\":\"{{contact.email}}\"}",
+  "timeout_ms": 15000,
+  "response_key": "crm_response"
 }
 ```
 
-### 8. `start_automation`
+The runtime caps timeout at 30 seconds, request body at 256 KiB, response body at 512 KiB, and rejects private/internal destinations. Network failures and non-2xx responses take `error`; a 2xx response takes `success`.
+
+### 9. `start_automation`
 
 Enroll the current contact in another flow. The current flow continues via `next` (fire-and-forget — the called flow runs independently).
 
@@ -281,10 +300,26 @@ Enroll the current contact in another flow. The current flow continues via `next
 **Config**
 
 ```json
-{ "automation_id": "auto_abc123", "context_overrides": { "source": "upsell_branch" } }
+{
+  "target_automation_id": "aut_abc123",
+  "entrypoint_id": "aep_optional",
+  "pass_context": true
+}
 ```
 
-### 9. `goto`
+The target must be active and use the same channel and exact workspace scope as the source. A flow cannot target itself. `entrypoint_id` is optional run attribution; it does not change the target graph's root node. The triggering social account is always preserved for correct multi-account delivery; `pass_context` controls whether the rest of the current run context is copied.
+
+### 10. `social_profile_check`
+
+Instagram-only live relationship check. It queries `is_user_follow_business` for the contact on the exact triggering account and never substitutes cached or synthetic follow state.
+
+**Ports**: `in` → `follows` / `not_follows` / `error`
+
+```json
+{ "field": "is_user_follow_business" }
+```
+
+### 11. `goto`
 
 Jump to another node in the same graph. Useful for loops (re-ask) and shared tails.
 
@@ -296,9 +331,9 @@ Jump to another node in the same graph. Useful for loops (re-ask) and shared tai
 { "target_node_key": "ask_email" }
 ```
 
-The graph validator forbids cycles that don't include at least one `goto` or `input` node — loops must contain a pause point to avoid infinite runs. The runtime also enforces a hard cap of 200 node visits per execution-loop iteration (exits as `failed` with `exit_reason = "infinite_loop_cap"`).
+The graph validator forbids cycles without an `input`, `delay`, or `wait_event` pause point. A `goto` alone is not a pause. The runtime also enforces a hard visit cap as defense in depth.
 
-### 10. `end`
+### 12. `end`
 
 Terminate the run. Optional — running out of outgoing edges also ends the run naturally. Use `end` when you want an explicit `exit_reason` other than `completed`.
 
@@ -307,12 +342,12 @@ Terminate the run. Optional — running out of outgoing edges also ends the run 
 **Config**
 
 ```json
-{ "exit_reason": "completed" }
+{ "reason": "completed" }
 ```
 
 ## Root node constraints
 
-The graph's `root_node_key` must point at one of: `message`, `action_group`, `condition`, `http_request`, `start_automation`, or `end`. `input`, `delay`, and `goto` all require a predecessor and cannot be the entry point.
+The graph's `root_node_key` must point at one of: `message`, `action_group`, `condition`, `http_request`, `start_automation`, `social_profile_check`, or `end`. `input`, `delay`, `wait_event`, `randomizer`, and `goto` require a predecessor and cannot be the entry point.
 
 ## Adding a node kind
 

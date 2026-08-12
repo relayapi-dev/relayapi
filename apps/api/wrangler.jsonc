@@ -2,13 +2,23 @@
 	"$schema": "../../node_modules/wrangler/config-schema.json",
 	"name": "relayapi",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-03-13",
+	"compatibility_date": "2026-07-18",
 	// Route same-zone global fetches through Cloudflare's public front door so
 	// they cannot bypass Worker routes or zone security controls by reaching the
 	// origin directly. This also prevents the same-zone origin bypass.
 	// Docs: https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public
 	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+	// Wrangler route configuration is authoritative. Keep the existing API
+	// hostname alongside the dedicated public-link hostname so a deploy cannot
+	// remove api.relayapi.dev while adding go.relayapi.dev.
+	// Docs: https://developers.cloudflare.com/workers/configuration/routing/custom-domains/
+	"routes": [
+		{ "pattern": "api.relayapi.dev", "custom_domain": true },
+		{ "pattern": "go.relayapi.dev", "custom_domain": true }
+	],
 	"vars": {
+		// Must advance atomically with the sealed database baseline generation.
+		"BASELINE_GENERATION": "1",
 		// Emit Server-Timing headers + structured per-request timing logs (lib/perf.ts).
 		// Disabled by default in production now that the performance audit is complete —
 		// the always-on Server-Timing header leaked internal middleware names/timings and
@@ -18,7 +28,25 @@
 		"PERF_LOGS": "0",
 		// Non-secret source identity used to reject spoofed/misrouted R2 events.
 		"R2_EVENT_ACCOUNT_ID": "3496f40fcd55a91da50ded8abea2cf7a",
-		"R2_MEDIA_BUCKET_NAME": "relayapi-media"
+		"R2_MEDIA_BUCKET_NAME": "relayapi-media",
+		"R2_MEDIA_BUCKET_JURISDICTION": "default",
+		// Durable object rows pin thumbnail location independently from originals.
+		"R2_THUMBNAIL_BUCKET_NAME": "relayapi-media-thumbnails",
+		"R2_THUMBNAIL_BUCKET_JURISDICTION": "default",
+		"AI_EMBEDDING_PROVIDER": "openai",
+		"AI_EMBEDDING_MODEL": "text-embedding-3-small",
+		"AI_INFERENCE_PROVIDER": "workers_ai",
+		"AI_INFERENCE_MODEL": "@cf/zai-org/glm-4.7-flash",
+		// Comma/newline-separated TikTok developer-console URL Prefix properties.
+		// Keep empty until the exact HTTPS domain/path has been verified by TikTok;
+		// unverified remote photos fail closed and videos use FILE_UPLOAD.
+		"TIKTOK_VERIFIED_URL_PREFIXES": "",
+		// Public redirects/pages use a separate origin. API_BASE_URL remains the
+		// callback/API origin and is intentionally unchanged.
+		"PUBLIC_LINK_BASE_URL": "https://go.relayapi.dev",
+		// Account-action and invitation links rendered by the API are restricted
+		// to this origin at the private service-binding boundary.
+		"APP_BASE_URL": "https://relayapi.dev"
 	},
 	// Minify the bundle — without this the worker ships ~8 MB unminified JS,
 	// which inflates cold-start parse time.
@@ -38,8 +66,8 @@
 			"invocation_logs": true
 		},
 		"traces": {
-			"enabled": false,
-			"persist": false,
+			"enabled": true,
+			"persist": true,
 			"head_sampling_rate": 0.01
 		}
 	},
@@ -51,6 +79,10 @@
 			{
 				"name": "REALTIME",
 				"class_name": "RealtimeDO"
+			},
+			{
+				"name": "MEDIA_PROCESSOR",
+				"class_name": "MediaProcessorContainer"
 			}
 		]
 	},
@@ -58,6 +90,34 @@
 		{
 			"tag": "v1",
 			"new_sqlite_classes": ["RealtimeDO"]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": ["MediaProcessorContainer"]
+		}
+	],
+	// Durable media orchestration. Workflow steps are retryable and all provider-
+	// visible outputs use deterministic R2 keys, so a replay cannot duplicate a
+	// derivative. Docs: https://developers.cloudflare.com/workflows/build/workers-api/
+	"workflows": [
+		{
+			"binding": "MEDIA_PROCESSING_WORKFLOW",
+			"name": "relayapi-media-processing",
+			"class_name": "MediaProcessingWorkflow",
+			"limits": { "steps": 20 }
+		}
+	],
+	// ffmpeg/libvips run outside the 128 MB Worker isolate. Source and result
+	// bodies stream between R2, this internal container, and R2 again.
+	// Docs: https://developers.cloudflare.com/containers/get-started/wrangler/
+	"containers": [
+		{
+			"name": "relayapi-media-processor",
+			"class_name": "MediaProcessorContainer",
+			"image": "./media-processor/Dockerfile",
+			"image_build_context": "./media-processor",
+			"instance_type": "standard-1",
+			"max_instances": 4
 		}
 	],
 	"kv_namespaces": [
@@ -66,6 +126,10 @@
 			"id": "c4e14913be2b41628ef71ae12561f7e8"
 		}
 	],
+	// Hosted buckets use Cloudflare's default/global placement. The cutover
+	// provisions that immutable choice; Wrangler's jurisdiction field is only
+	// emitted for restricted jurisdictions such as `eu`.
+	// Docs: https://developers.cloudflare.com/r2/reference/data-location/
 	"r2_buckets": [
 		{
 			"binding": "MEDIA_BUCKET",
@@ -90,6 +154,13 @@
 			// scoped objects are also removed immediately by organization deletion.
 			"binding": "QUEUE_RESCUE_BUCKET",
 			"bucket_name": "relayapi-queue-rescue-ledger"
+		},
+		{
+			// Private, short-lived provider report artifacts. No public development URL
+			// or custom domain is configured; normalized rows are served from Postgres.
+			// Docs: https://developers.cloudflare.com/r2/api/workers/workers-api-reference/
+			"binding": "AD_REPORT_BUCKET",
+			"bucket_name": "relayapi-ad-reports"
 		}
 	],
 	// Resize/encode tiny image thumbnails directly from R2 bytes (no public URL needed).
@@ -113,9 +184,8 @@
 			"*/1 * * * *",
 			"*/5 * * * *",
 			"*/30 * * * *",
-			"0 0 1 * *",
 			"0 9 * * *",
-			"0 9 * * 1"
+			"0 9 * * MON"
 		]
 	},
 	"ratelimits": [
@@ -132,6 +202,22 @@
 			"namespace_id": "1002",
 			"simple": {
 				"limit": 1000,
+				"period": 60
+			}
+		},
+		{
+			"name": "FREE_KEY_BURST_LIMITER",
+			"namespace_id": "1003",
+			"simple": {
+				"limit": 50,
+				"period": 60
+			}
+		},
+		{
+			"name": "PRO_KEY_BURST_LIMITER",
+			"namespace_id": "1004",
+			"simple": {
+				"limit": 500,
 				"period": 60
 			}
 		}
@@ -169,6 +255,10 @@
 			{
 				"binding": "CUSTOMER_WEBHOOK_QUEUE",
 				"queue": "relayapi-customer-webhooks"
+			},
+			{
+				"binding": "MEDIA_PROCESSING_QUEUE",
+				"queue": "relayapi-media-processing"
 			},
 			{
 				"binding": "QUEUE_RESCUE_QUEUE",
@@ -214,6 +304,7 @@
 			{
 				"queue": "relayapi-tools",
 				"max_batch_size": 5,
+				"max_batch_timeout": 1,
 				"max_retries": 3,
 				"max_concurrency": 3,
 				"dead_letter_queue": "relayapi-tools-dlq"
@@ -238,6 +329,14 @@
 				"max_retries": 5,
 				"max_concurrency": 5,
 				"dead_letter_queue": "relayapi-customer-webhooks-dlq"
+			},
+			{
+				"queue": "relayapi-media-processing",
+				"max_batch_size": 2,
+				"max_batch_timeout": 2,
+				"max_retries": 3,
+				"max_concurrency": 2,
+				"dead_letter_queue": "relayapi-media-processing-dlq"
 			},
 			{
 				"queue": "relayapi-media-cleanup-dlq",
@@ -303,10 +402,17 @@
 				"dead_letter_queue": "relayapi-queue-rescue"
 			},
 			{
+				"queue": "relayapi-media-processing-dlq",
+				"max_batch_size": 10,
+				"max_retries": 3,
+				"max_concurrency": 1,
+				"dead_letter_queue": "relayapi-queue-rescue"
+			},
+			{
 				"queue": "relayapi-queue-rescue",
 				"max_batch_size": 10,
 				"max_batch_timeout": 5,
-				"max_retries": 100,
+				"max_retries": 40,
 				"max_concurrency": 2
 			}
 		]

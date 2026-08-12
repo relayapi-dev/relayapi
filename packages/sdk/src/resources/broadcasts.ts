@@ -6,6 +6,10 @@ import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
 import { path } from '../internal/utils/path';
 
+/**
+ * Broadcast mutations commit PostgreSQL-owned intent on the request path.
+ * `send` and `schedule` leave provider delivery to the cron-driven processor.
+ */
 export class Broadcasts extends APIResource {
   /**
    * Create a broadcast draft
@@ -159,7 +163,7 @@ export interface BroadcastRecipientResponse {
 
   contact_id: string | null;
 
-  contact_identifier: string;
+  contact_identifier: string | null;
 
   status: 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled';
 

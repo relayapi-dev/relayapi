@@ -26,6 +26,7 @@ import {
 	type SQL,
 	sql,
 } from "drizzle-orm";
+import { deriveProtectedContactSubjectLocator } from "../lib/consent-hmac";
 import {
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
@@ -39,6 +40,8 @@ import { findMatchingContact } from "./contact-linker";
 
 type Conversation = typeof inboxConversations.$inferSelect;
 type Message = typeof inboxMessages.$inferSelect;
+
+export const INBOX_CONTENT_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 
 export interface UpsertConversationData {
 	organizationId: string;
@@ -56,7 +59,7 @@ export interface UpsertConversationData {
 	participantMetadata?: Record<string, unknown> | null;
 	lastMessageText?: string | null;
 	lastMessageAt?: Date | null;
-	lastMessageDirection?: string | null;
+	lastMessageDirection?: Conversation["lastMessageDirection"];
 }
 
 export interface InsertMessageData {
@@ -67,7 +70,7 @@ export interface InsertMessageData {
 	authorPlatformId?: string | null;
 	authorAvatarUrl?: string | null;
 	text?: string | null;
-	direction: string;
+	direction: Message["direction"];
 	attachments?: unknown[] | null;
 	sentimentScore?: number | null;
 	classification?: string | null;
@@ -123,6 +126,7 @@ export interface ConversationUpdates {
 export async function upsertConversation(
 	db: Database,
 	data: UpsertConversationData,
+	subjectLocatorKeyConfig: string,
 ): Promise<Conversation> {
 	const now = new Date();
 
@@ -141,6 +145,7 @@ export async function upsertConversation(
 			participantName: data.participantName ?? null,
 			participantPlatformId: data.participantPlatformId ?? null,
 			participantAvatar: data.participantAvatar ?? null,
+			participantMetadata: data.participantMetadata ?? {},
 			lastMessageText: data.lastMessageText ?? null,
 			lastMessageAt: data.lastMessageAt ?? now,
 			lastMessageDirection: data.lastMessageDirection ?? "inbound",
@@ -165,6 +170,15 @@ export async function upsertConversation(
 				// the only path allowed to overwrite these with a real name/avatar.
 				participantName: sql`COALESCE(${inboxConversations.participantName}, ${data.participantName ?? null})`,
 				participantAvatar: sql`COALESCE(${inboxConversations.participantAvatar}, ${data.participantAvatar ?? null})`,
+				...(data.participantMetadata
+					? {
+							participantMetadata: sql`COALESCE(${inboxConversations.participantMetadata}, '{}'::jsonb) || ${data.participantMetadata}`,
+						}
+					: {}),
+				status: "open",
+				closedAt: null,
+				contentExpiresAt: null,
+				contentRedactedAt: null,
 				updatedAt: sql`${now.toISOString()}`,
 			},
 		})
@@ -176,8 +190,11 @@ export async function upsertConversation(
 	}
 	const conversation = row;
 
-	// Auto-link to contact if no contact is already linked
-	if (!conversation.contactId) {
+	// Auto-link to contact if no contact is already linked. Every successful link
+	// writes the retained-key HMAC locator in the same UPDATE, so a later
+	// contact-FK SET NULL cannot make subject erasure undiscoverable.
+	let linkedContactId = conversation.contactId;
+	if (!linkedContactId) {
 		try {
 			const match = await findMatchingContact(
 				db,
@@ -186,19 +203,36 @@ export async function upsertConversation(
 				data.participantPlatformId ?? null,
 				data.participantName ?? null,
 				data.participantMetadata ?? null,
+				subjectLocatorKeyConfig,
 			);
 
 			// Auto-link for high-confidence matches (not name suggestions)
 			if (match && match.confidence !== "name_suggestion") {
-				await db
-					.update(inboxConversations)
-					.set({ contactId: match.contactId })
-					.where(eq(inboxConversations.id, conversation.id));
-				conversation.contactId = match.contactId;
+				linkedContactId = match.contactId;
 			}
 		} catch {
 			// Don't fail the upsert if contact linking fails
 		}
+	}
+	if (linkedContactId) {
+		const locator = await deriveProtectedContactSubjectLocator(
+			subjectLocatorKeyConfig,
+			data.organizationId,
+			linkedContactId,
+		);
+		await db
+			.update(inboxConversations)
+			.set({ contactId: linkedContactId, ...locator })
+			.where(
+				and(
+					eq(inboxConversations.id, conversation.id),
+					eq(inboxConversations.organizationId, data.organizationId),
+				),
+			);
+		conversation.contactId = linkedContactId;
+		conversation.contactSubjectLocator = locator.contactSubjectLocator;
+		conversation.contactSubjectIdentityKeyFingerprint =
+			locator.contactSubjectIdentityKeyFingerprint;
 	}
 
 	return conversation;
@@ -350,6 +384,10 @@ export async function insertMessage(
 					data.direction === "inbound"
 						? sql`${inboxConversations.unreadCount} + CASE WHEN ${isNewer} THEN 1 ELSE 0 END`
 						: inboxConversations.unreadCount,
+				status: "open",
+				closedAt: null,
+				contentExpiresAt: null,
+				contentRedactedAt: null,
 				updatedAt: insertedAt,
 			})
 			.where(
@@ -709,6 +747,16 @@ export async function updateConversation(
 
 	if (updates.status !== undefined) {
 		setClause.status = updates.status;
+		if (updates.status === "archived") {
+			const closedAt = new Date();
+			setClause.closedAt = closedAt;
+			setClause.contentExpiresAt = new Date(
+				closedAt.getTime() + INBOX_CONTENT_RETENTION_MS,
+			);
+		} else {
+			setClause.closedAt = null;
+			setClause.contentExpiresAt = null;
+		}
 	}
 	if (updates.labels !== undefined) {
 		setClause.labels = updates.labels;

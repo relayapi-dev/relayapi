@@ -141,7 +141,6 @@ export async function seedLocalDevelopment(): Promise<void> {
 				organizationId,
 				status: "cancelled",
 				aiEnabled: false,
-				dailyToolLimit: 2,
 			})
 			.onConflictDoNothing({
 				target: organizationSubscriptions.organizationId,

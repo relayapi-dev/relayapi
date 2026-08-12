@@ -28,7 +28,8 @@ describe("publish outbox Queue handoff", () => {
 
 	it("turns the durable delay into Queue metadata without leaking it", () => {
 		const message = publishQueueMessage({
-			operationId: "operation_1",
+			id: "outbox_1",
+			organizationId: "org_1",
 			payload: {
 				type: "publish_thread",
 				position: 2,
@@ -38,15 +39,16 @@ describe("publish outbox Queue handoff", () => {
 
 		expect(message.delaySeconds).toBe(91);
 		expect(message.body).toEqual({
-			type: "publish_thread",
-			position: 2,
-			operation_id: "operation_1",
+			type: "publish_outbox",
+			outbox_id: "outbox_1",
+			org_id: "org_1",
 		});
 	});
 
 	it("caps delayed thread delivery at the Queue 24-hour limit", () => {
 		const message = publishQueueMessage({
-			operationId: "operation_2",
+			id: "outbox_2",
+			organizationId: "org_1",
 			payload: { _queue_delay_seconds: 100_000 },
 		});
 
@@ -80,12 +82,14 @@ describe("publish outbox Queue handoff", () => {
 		});
 		expect(
 			publishQueueMessage({
-				operationId: row.operationId,
+				id: "outbox_notification_1",
+				organizationId: "org_1",
 				payload: row.payload,
 			}).body,
 		).toEqual({
-			...(row.payload as Record<string, unknown>),
-			operation_id: row.operationId,
+			type: "publish_outbox",
+			outbox_id: "outbox_notification_1",
+			org_id: "org_1",
 		});
 	});
 

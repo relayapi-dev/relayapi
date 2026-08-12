@@ -1,0 +1,12 @@
+{
+	"schemaVersion": 1,
+	"generation": 1,
+	"lifecycle": "sealed",
+	"baseline": {
+		"tag": "0000_baseline",
+		"folderMillis": 1783987200000
+	},
+	"transition": {
+		"kind": "initial-baseline"
+	}
+}

@@ -19,7 +19,6 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
@@ -41,11 +40,17 @@ import {
 	extractByPath,
 	receiveAutomationWebhook,
 } from "../services/automations/webhook-receiver";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
-const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)}`;
+const TEST_ENCRYPTION_KEY = `test=${"11".repeat(32)},identity=${"12".repeat(32)}`;
 
 const db = CONN
 	? createDb(CONN)
@@ -58,7 +63,7 @@ let socialAccountId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "matcher-test-org",
 		slug: `matcher-test-${orgId.slice(-8)}`,
@@ -103,8 +108,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 async function makeAutomation(name = "auto") {
@@ -139,11 +144,11 @@ async function makeAutomation(name = "auto") {
 async function makeContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "matcher-test-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -419,7 +424,7 @@ describe("simulate (dry-run walker)", () => {
 		expect(result.steps.length).toBe(5);
 	});
 
-	it("pauses on wait_input for message nodes that expect replies", async () => {
+	it("pauses on wait_input for message nodes with a resumable reply timeout", async () => {
 		const graph: Graph = {
 			schema_version: 1,
 			root_node_key: "msg",
@@ -427,7 +432,7 @@ describe("simulate (dry-run walker)", () => {
 				{
 					key: "msg",
 					kind: "message",
-					config: { wait_for_reply: true },
+					config: { wait_for_reply: true, no_response_timeout_min: 60 },
 					ports: [{ key: "in", direction: "input" }],
 				},
 			],
@@ -438,6 +443,130 @@ describe("simulate (dry-run walker)", () => {
 		if (!step0) throw new Error("expected a step");
 		expect(step0.outcome).toBe("wait_input");
 		expect(result.exit_reason).toBe("wait_input");
+	});
+
+	it("keeps simulator parity for plain reply waits without a timeout", async () => {
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "msg",
+			nodes: [
+				{
+					key: "msg",
+					kind: "message",
+					config: {
+						blocks: [{ id: "text", type: "text", text: "Reply" }],
+						wait_for_reply: true,
+					},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		const result = await simulate({ graph });
+		expect(result.steps[0]?.outcome).toBe("wait_input");
+		expect(result.exit_reason).toBe("wait_input");
+	});
+
+	it("recognizes gallery branch buttons as interactive waits", async () => {
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "gallery",
+			nodes: [
+				{
+					key: "gallery",
+					kind: "message",
+					config: {
+						blocks: [
+							{
+								id: "gallery-block",
+								type: "gallery",
+								cards: [
+									{
+										id: "card",
+										type: "card",
+										title: "Choose",
+										buttons: [{ id: "yes", type: "branch", label: "Yes" }],
+									},
+								],
+							},
+						],
+					},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		const result = await simulate({ graph });
+		expect(result.steps[0]?.outcome).toBe("wait_input");
+	});
+
+	it("uses channel capabilities when deciding whether quick replies can wait", async () => {
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "message",
+			nodes: [
+				{
+					key: "message",
+					kind: "message",
+					config: {
+						blocks: [{ id: "text", type: "text", text: "Choose" }],
+						quick_replies: [{ id: "yes", label: "Yes" }],
+					},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		expect((await simulate({ graph, channel: "instagram" })).exit_reason).toBe(
+			"wait_input",
+		);
+		expect((await simulate({ graph, channel: "whatsapp" })).exit_reason).toBe(
+			"no_outgoing_edge",
+		);
+	});
+
+	it("reports delay waits instead of walking through them", async () => {
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "delay",
+			nodes: [
+				{
+					key: "delay",
+					kind: "delay",
+					config: { minutes: 5 },
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		const result = await simulate({ graph });
+		expect(result.steps[0]?.outcome).toBe("wait_delay");
+		expect(result.exit_reason).toBe("wait_delay");
+	});
+
+	it("evaluates condition contact fields from test_context", async () => {
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "condition",
+			nodes: [
+				{
+					key: "condition",
+					kind: "condition",
+					config: {
+						predicates: {
+							all: [{ field: "contact.name", op: "eq", value: "Alice" }],
+						},
+					},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		const result = await simulate({
+			graph,
+			testContext: { contact: { name: "Alice" } },
+		});
+		expect(result.steps[0]?.exited_via_port_key).toBe("true");
 	});
 
 	it("action_group honours branchChoices to take the `error` port (§B12)", async () => {
@@ -540,6 +669,73 @@ describe("matchAndEnroll", () => {
 		}
 	});
 
+	it("returns the existing run when a durable occurrence is replayed", async () => {
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("durable-occurrence-replay");
+		const ct = await makeContact();
+		const [ep] = await db
+			.insert(automationEntrypoints)
+			.values({
+				organizationId: orgId,
+				automationId: auto.id,
+				channel: "telegram",
+				kind: "dm_received",
+				status: "active",
+				socialAccountId,
+				config: {},
+				specificity: 10,
+				allowReentry: false,
+			})
+			.returning();
+		if (!ep) throw new Error("expected entrypoint");
+
+		const triggerOccurrenceId = `occ_${generateId("receipt_")}`;
+		const event: InboundEvent = {
+			kind: "dm_received",
+			channel: "telegram",
+			organizationId: orgId,
+			socialAccountId,
+			contactId: ct.id,
+			conversationId: null,
+			text: "durable occurrence",
+			triggerOccurrenceId,
+		};
+		const first = await matchAndEnroll(
+			db,
+			event,
+			{},
+			{
+				pinnedEntrypointId: ep.id,
+			},
+		);
+		expect(first.matched).toBe(true);
+		if (!first.matched) throw new Error("expected initial match");
+
+		// A receipt reconciler can retry after acceptance even if an operator
+		// pauses the source in the meantime. The committed occurrence is still a
+		// success and must not be reclassified as a policy block.
+		await db
+			.update(automationEntrypoints)
+			.set({ status: "paused" })
+			.where(eq(automationEntrypoints.id, ep.id));
+		const replay = await matchAndEnroll(
+			db,
+			event,
+			{},
+			{
+				pinnedEntrypointId: ep.id,
+			},
+		);
+		expect(replay).toEqual(first);
+
+		const runs = await db
+			.select({ id: automationRuns.id })
+			.from(automationRuns)
+			.where(eq(automationRuns.triggerOccurrenceId, triggerOccurrenceId));
+		expect(runs).toHaveLength(1);
+	});
+
 	it("returns no_candidates when no entrypoint matches", async () => {
 		if (!dbAvailable) return;
 		const ct = await makeContact();
@@ -604,6 +800,89 @@ describe("matchAndEnroll", () => {
 		if (result.matched) expect(result.automationId).toBe(autoKeyword.id);
 	});
 
+	it("excludes a higher-ranked entrypoint from another workspace", async () => {
+		if (!dbAvailable) return;
+
+		const [otherWorkspace] = await db
+			.insert(workspaces)
+			.values({
+				organizationId: orgId,
+				name: `matcher-other-${generateId("ws_")}`,
+			})
+			.returning();
+		if (!otherWorkspace) throw new Error("other workspace insert failed");
+
+		const graph: Graph = {
+			schema_version: 1,
+			root_node_key: "stop",
+			nodes: [
+				{
+					key: "stop",
+					kind: "end",
+					config: {},
+					ports: [{ key: "in", direction: "input" }],
+				},
+			],
+			edges: [],
+		};
+		const [wrongScopeAutomation] = await db
+			.insert(automations)
+			.values({
+				organizationId: orgId,
+				workspaceId: otherWorkspace.id,
+				name: "wrong-scope-high-priority",
+				channel: "telegram",
+				status: "active",
+				graph: graph as never,
+			})
+			.returning();
+		if (!wrongScopeAutomation) throw new Error("automation insert failed");
+
+		const correctAutomation = await makeAutomation("correct-scope");
+		const contact = await makeContact();
+		const keyword = `scope-${generateId("probe_")}`;
+		await db.insert(automationEntrypoints).values([
+			{
+				organizationId: orgId,
+				automationId: wrongScopeAutomation.id,
+				channel: "telegram",
+				kind: "dm_received",
+				status: "active",
+				socialAccountId: null,
+				config: { keywords: [keyword], match_mode: "exact" },
+				specificity: 100,
+			},
+			{
+				organizationId: orgId,
+				automationId: correctAutomation.id,
+				channel: "telegram",
+				kind: "dm_received",
+				status: "active",
+				socialAccountId,
+				config: { keywords: [keyword], match_mode: "exact" },
+				specificity: 30,
+			},
+		]);
+
+		const result = await matchAndEnroll(
+			db,
+			{
+				kind: "dm_received",
+				channel: "telegram",
+				organizationId: orgId,
+				socialAccountId,
+				contactId: contact.id,
+				conversationId: null,
+				text: keyword,
+			},
+			{},
+		);
+		expect(result.matched).toBe(true);
+		if (result.matched) {
+			expect(result.automationId).toBe(correctAutomation.id);
+		}
+	});
+
 	it("blocks enrollment when the contact has a global pause", async () => {
 		if (!dbAvailable) return;
 
@@ -637,6 +916,57 @@ describe("matchAndEnroll", () => {
 			text: "anything",
 		};
 		const result = await matchAndEnroll(db, event, {});
+		expect(result.matched).toBe(false);
+		if (!result.matched) expect(result.reason).toBe("paused");
+	});
+
+	it("reports an automation-specific pause as paused", async () => {
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("automation-pause-check");
+		const ct = await makeContact();
+		const [pauseAccount] = await db
+			.insert(socialAccounts)
+			.values({
+				organizationId: orgId,
+				workspaceId,
+				platform: "telegram",
+				platformAccountId: `tg_pause_${generateId("acc_")}`,
+				displayName: "Pause Test TG Bot",
+			})
+			.returning();
+		if (!pauseAccount) throw new Error("pause account insert failed");
+		await db.insert(automationEntrypoints).values({
+			organizationId: orgId,
+			automationId: auto.id,
+			channel: "telegram",
+			kind: "dm_received",
+			status: "active",
+			socialAccountId: pauseAccount.id,
+			config: {},
+			specificity: 0,
+		});
+		await db.insert(automationContactControls).values({
+			organizationId: orgId,
+			contactId: ct.id,
+			automationId: auto.id,
+			pauseReason: "manual_pause",
+			pausedUntil: null,
+		});
+
+		const result = await matchAndEnroll(
+			db,
+			{
+				kind: "dm_received",
+				channel: "telegram",
+				organizationId: orgId,
+				socialAccountId: pauseAccount.id,
+				contactId: ct.id,
+				conversationId: null,
+				text: "anything",
+			},
+			{},
+		);
 		expect(result.matched).toBe(false);
 		if (!result.matched) expect(result.reason).toBe("paused");
 	});
@@ -758,13 +1088,21 @@ describe("routeBinding", () => {
 		const ct = await makeContact();
 
 		// Manually insert a prior run for this contact+automation.
+		const startedAt = new Date(Date.now() - 2 * 60_000);
+		const completedAt = new Date(Date.now() - 60_000);
 		await db.insert(automationRuns).values({
 			automationId: auto.id,
 			organizationId: orgId,
 			contactId: ct.id,
 			status: "completed",
-			completedAt: new Date(Date.now() - 60_000),
+			exitReason: "completed",
+			startedAt,
+			completedAt,
 		});
+		await db
+			.update(automations)
+			.set({ totalEnrolled: 1, totalCompleted: 1 })
+			.where(eq(automations.id, auto.id));
 
 		// Also insert a welcome binding — we should NOT fall through to it.
 		await db.insert(automationBindings).values({
@@ -896,6 +1234,70 @@ describe("receiveAutomationWebhook", () => {
 			{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 		);
 		expect(replay.status).toBe("duplicate");
+	});
+
+	it("applies webhook filters and re-entry policy before enrollment", async () => {
+		if (!dbAvailable) return;
+
+		const auto = await makeAutomation("webhook-policy");
+		const ct = await makeContact();
+		const slug = `slug-${generateId("").slice(-10)}`;
+		const secret = "webhook-policy-secret";
+		const entrypointId = generateId("aep_");
+		await db.insert(automationEntrypoints).values({
+			id: entrypointId,
+			organizationId: orgId,
+			automationId: auto.id,
+			channel: "telegram",
+			kind: "webhook_inbound",
+			status: "active",
+			socialAccountId: null,
+			config: {
+				webhook_slug: slug,
+				webhook_secret: await encryptToken(secret, TEST_ENCRYPTION_KEY, {
+					recordId: entrypointId,
+					field: "webhook_secret",
+				}),
+				contact_lookup: { by: "contact_id", field_path: "$.contact_id" },
+			},
+			filters: {
+				all: [{ field: "contact.tags", op: "contains", value: "vip" }],
+			},
+			allowReentry: false,
+			specificity: 30,
+		});
+
+		const timestamp = Math.floor(Date.now() / 1000).toString();
+		const invoke = async (attempt: number) => {
+			const body = JSON.stringify({ contact_id: ct.id, attempt });
+			const signature = await hmacHex(secret, `${timestamp}.${body}`);
+			return receiveAutomationWebhook(
+				db,
+				{
+					slug,
+					rawBody: body,
+					signatureHeader: `sha256=${signature}`,
+					timestampHeader: timestamp,
+				},
+				{ ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
+			);
+		};
+
+		const filtered = await invoke(1);
+		expect(filtered).toEqual({
+			status: "enrollment_blocked",
+			reason: "all_filtered",
+		});
+
+		await db
+			.update(contacts)
+			.set({ tags: ["vip"] })
+			.where(eq(contacts.id, ct.id));
+		expect((await invoke(2)).status).toBe("ok");
+		expect(await invoke(3)).toEqual({
+			status: "enrollment_blocked",
+			reason: "reentry_blocked",
+		});
 	});
 
 	it("rejects a bad signature", async () => {
@@ -1046,6 +1448,8 @@ describe("processScheduledJobs", () => {
 
 		// Queue a resume_run job that is due.
 		await db.insert(automationScheduledJobs).values({
+			organizationId: run.organizationId,
+			scopeKey: run.scopeKey,
 			runId: run.id,
 			jobType: "resume_run",
 			automationId: auto.id,
@@ -1087,12 +1491,15 @@ describe("processScheduledJobs", () => {
 		const [stuck] = await db
 			.insert(automationScheduledJobs)
 			.values({
+				organizationId: run.organizationId,
+				scopeKey: run.scopeKey,
 				runId: run.id,
 				jobType: "resume_run",
 				automationId: auto.id,
 				runAt: new Date(Date.now() - 20 * 60_000), // 20 min ago
 				status: "processing",
 				claimedAt: new Date(Date.now() - 10 * 60_000), // claimed 10 min ago
+				leaseExpiresAt: new Date(Date.now() - 5 * 60_000),
 			})
 			.returning();
 		if (!stuck) throw new Error("stuck job insert failed");

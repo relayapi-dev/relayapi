@@ -14,7 +14,8 @@
  *
  * Intentionally NOT synced (they're published with npm, which doesn't understand
  * the `catalog:` protocol — see CLAUDE.md):
- *   - packages/sdk, packages/mcp
+ *   - apps/cli
+ *   - packages/self-host, packages/sdk, packages/mcp
  *   - packages/integrations/*
  * `workspace:*` links, `catalog:` / `catalog:<name>` refs, and non-plain-semver
  * specs (git/url/"*"/"latest") are left untouched.
@@ -62,7 +63,12 @@ const DEP_BLOCKS = [
 // Packages published with `npm publish` keep literal versions — the `catalog:`
 // protocol is only understood by Bun/pnpm. Everything else under the workspace
 // globs is catalog-eligible. Matches the convention documented in CLAUDE.md.
-const EXCLUDED_DIRS = new Set(["packages/sdk", "packages/mcp"]);
+const EXCLUDED_DIRS = new Set([
+	"apps/cli",
+	"packages/self-host",
+	"packages/sdk",
+	"packages/mcp",
+]);
 const EXCLUDED_PREFIXES = ["packages/integrations/"];
 
 function isExcluded(relDir: string): boolean {
@@ -146,7 +152,8 @@ for (const relFile of [...pkgFiles].sort()) {
 		const deps = pkg[block] as DepBlock | undefined;
 		if (!deps) continue;
 		for (const [dep, spec] of Object.entries(deps)) {
-			if (spec.startsWith("catalog:") || spec.startsWith("workspace:")) continue;
+			if (spec.startsWith("catalog:") || spec.startsWith("workspace:"))
+				continue;
 			if (!isPlainSemver(spec)) continue;
 
 			conversions.push({
@@ -181,7 +188,9 @@ const additions: CatalogAddition[] = [...wanted.entries()]
 	.sort((a, b) => a.dep.localeCompare(b.dep));
 
 if (conversions.length === 0) {
-	console.log("Every catalog-eligible package already uses `catalog:`. Nothing to do.");
+	console.log(
+		"Every catalog-eligible package already uses `catalog:`. Nothing to do.",
+	);
 	process.exit(0);
 }
 
@@ -195,11 +204,15 @@ if (additions.length > 0) {
 console.log(`Packages converted to \`catalog:\` (${conversions.length}):\n`);
 const dw = Math.max(...conversions.map((c) => `${c.relDir} ${c.block}`.length));
 for (const c of conversions) {
-	console.log(`  ${`${c.relDir} ${c.block}`.padEnd(dw)}  ${c.dep}  (${c.from})`);
+	console.log(
+		`  ${`${c.relDir} ${c.block}`.padEnd(dw)}  ${c.dep}  (${c.from})`,
+	);
 }
 
 if (conflicts.length > 0) {
-	console.warn(`\nVersion conflicts kept at the catalog value (${conflicts.length}):`);
+	console.warn(
+		`\nVersion conflicts kept at the catalog value (${conflicts.length}):`,
+	);
 	for (const c of conflicts) console.warn(`  ! ${c}`);
 }
 

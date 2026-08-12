@@ -1,3 +1,4 @@
+import { readProviderText } from "../lib/provider-response";
 import { XMLParser } from "fast-xml-parser";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
@@ -28,7 +29,7 @@ export async function parseFeed(url: string): Promise<FeedItem[]> {
 	});
 	if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
 
-	const parsed = xmlParser.parse(await response.text());
+	const parsed = xmlParser.parse(await readProviderText(response));
 	const rssItems = parsed?.rss?.channel?.item;
 	if (rssItems) {
 		return rssItems.map(parseRssItem).sort(byDateDesc);
@@ -111,17 +112,153 @@ function extractImageUrl(item: Record<string, unknown>): string | null {
 	return media?.["@_url"] || null;
 }
 
+const MAX_HTML_TAG_LENGTH = 4_096;
+const MAX_HTML_ENTITY_LENGTH = 32;
+
+function isHtmlTagStart(character: string | undefined): boolean {
+	if (!character) return false;
+	const code = character.charCodeAt(0);
+	return (
+		(code >= 65 && code <= 90) ||
+		(code >= 97 && code <= 122) ||
+		character === "/" ||
+		character === "!" ||
+		character === "?"
+	);
+}
+
+function findHtmlTagEnd(value: string, start: number): number | null {
+	let quote: '"' | "'" | null = null;
+	const limit = Math.min(value.length, start + MAX_HTML_TAG_LENGTH);
+	for (let index = start + 1; index < limit; index += 1) {
+		const character = value[index];
+		if (quote) {
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			continue;
+		}
+		if (character === ">") return index;
+	}
+	return null;
+}
+
+function parseNumericEntity(body: string): string | null {
+	if (!body.startsWith("#")) return null;
+	const hexadecimal = body[1]?.toLowerCase() === "x";
+	const digits = body.slice(hexadecimal ? 2 : 1);
+	if (!digits || digits.length > 8) return null;
+	for (const character of digits) {
+		const code = character.charCodeAt(0);
+		const valid = hexadecimal
+			? (code >= 48 && code <= 57) ||
+				(code >= 65 && code <= 70) ||
+				(code >= 97 && code <= 102)
+			: code >= 48 && code <= 57;
+		if (!valid) return null;
+	}
+	const codePoint = Number.parseInt(digits, hexadecimal ? 16 : 10);
+	if (
+		!Number.isSafeInteger(codePoint) ||
+		codePoint <= 0 ||
+		codePoint > 0x10ffff ||
+		(codePoint >= 0xd800 && codePoint <= 0xdfff)
+	) {
+		return null;
+	}
+	if (codePoint === 60) return "‹";
+	if (codePoint === 62) return "›";
+	if (codePoint === 160) return " ";
+	if (codePoint < 32 || codePoint === 127) return " ";
+	return String.fromCodePoint(codePoint);
+}
+
+function decodeHtmlEntityOnce(
+	value: string,
+	start: number,
+): { decoded: string; end: number } | null {
+	const limit = Math.min(value.length, start + MAX_HTML_ENTITY_LENGTH);
+	let end = start + 1;
+	while (end < limit && value[end] !== ";") end += 1;
+	if (end >= limit || value[end] !== ";") return null;
+
+	const body = value.slice(start + 1, end);
+	const named = body.toLowerCase();
+	const decoded =
+		named === "amp"
+			? "&"
+			: named === "quot"
+				? '"'
+				: named === "apos" || named === "#39"
+					? "'"
+					: named === "nbsp"
+						? " "
+						: named === "lt"
+							? "‹"
+							: named === "gt"
+								? "›"
+								: parseNumericEntity(body);
+	return decoded === null ? null : { decoded, end };
+}
+
+/**
+ * Convert untrusted feed markup to plain text in one bounded pass.
+ *
+ * ASCII angle brackets never survive the conversion, so malformed or encoded
+ * markup cannot become active HTML if a downstream client mishandles this
+ * already-plain value. Entities are decoded at most once to avoid turning a
+ * double-encoded tag into markup.
+ */
+export function htmlToSafePlainText(html: string): string {
+	const output: string[] = [];
+	let pendingSpace = false;
+	const append = (value: string) => {
+		for (const character of value) {
+			if (/\s/u.test(character)) {
+				pendingSpace = output.length > 0;
+				continue;
+			}
+			if (pendingSpace) output.push(" ");
+			pendingSpace = false;
+			output.push(character);
+		}
+	};
+
+	for (let index = 0; index < html.length; index += 1) {
+		const character = html[index];
+		if (character === "<") {
+			if (isHtmlTagStart(html[index + 1])) {
+				const end = findHtmlTagEnd(html, index);
+				if (end !== null) {
+					pendingSpace = output.length > 0;
+					index = end;
+					continue;
+				}
+			}
+			append("‹");
+			continue;
+		}
+		if (character === ">") {
+			append("›");
+			continue;
+		}
+		if (character === "&") {
+			const entity = decodeHtmlEntityOnce(html, index);
+			if (entity) {
+				append(entity.decoded);
+				index = entity.end;
+				continue;
+			}
+		}
+		append(character ?? "");
+	}
+	return output.join("");
+}
+
 function stripHtml(html: string): string {
-	return html
-		.replace(/<[^>]*>/g, "")
-		.replace(/&amp;/g, "&")
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/&nbsp;/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	return htmlToSafePlainText(html);
 }
 
 function parseDate(value: string | undefined): Date | null {

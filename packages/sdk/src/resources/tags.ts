@@ -13,7 +13,7 @@ export class Tags extends APIResource {
   }
 
   /**
-   * Update a tag
+   * Update a tag. Returns 404 if it is removed before the write commits.
    */
   update(
     id: string,
@@ -34,7 +34,7 @@ export class Tags extends APIResource {
   }
 
   /**
-   * Delete a tag
+   * Delete a tag. Returns 404 if another request removes it first.
    */
   delete(id: string, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/tags/${id}`, {

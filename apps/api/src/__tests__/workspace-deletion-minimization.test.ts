@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	ideaTags,
 	workspaceErasureJobs,
 	workspaceErasureSteps,
 	workspaces,
@@ -12,7 +13,10 @@ import {
 	WorkspaceErasureRequestBody,
 	WorkspaceLifecycleBody,
 } from "../schemas/workspaces";
-import { WORKSPACE_PURGE_TABLES } from "../services/workspace-erasure";
+import {
+	WORKSPACE_ERASURE_SURVIVOR_TABLES,
+	WORKSPACE_PURGE_TABLES,
+} from "../services/workspace-erasure";
 
 const repoRoot = new URL("../../../../", import.meta.url).pathname;
 
@@ -77,6 +81,10 @@ describe("workspace lifecycle and erasure", () => {
 		const configured = new Map<string, number>(
 			WORKSPACE_PURGE_TABLES.map((table, index) => [table, index]),
 		);
+		const consentAuthorityExceptions = new Set([
+			"contact_consent_events",
+			"contact_consent_states",
+		]);
 		const tables = Object.values(schema).flatMap((value) => {
 			if (!is(value, PgTable)) return [];
 			const table = getTableConfig(value);
@@ -88,13 +96,26 @@ describe("workspace lifecycle and erasure", () => {
 			"workspace_erasure_jobs",
 			"workspace_erasure_steps",
 			"workspace_tombstones",
+			...WORKSPACE_ERASURE_SURVIVOR_TABLES,
+		]);
+		expect(WORKSPACE_ERASURE_SURVIVOR_TABLES).toEqual([
+			"external_subject_cleanup_jobs",
 		]);
 		expect([...configured.keys()].sort()).toEqual(
 			tables
 				.map(({ name }) => name)
-				.filter((name) => !excluded.has(name))
+				.filter(
+					(name) =>
+						!excluded.has(name) && !consentAuthorityExceptions.has(name),
+				)
 				.sort(),
 		);
+		expect(
+			tables
+				.map(({ name }) => name)
+				.filter((name) => consentAuthorityExceptions.has(name))
+				.sort(),
+		).toEqual([...consentAuthorityExceptions].sort());
 
 		for (const { name, table } of tables) {
 			for (const foreignKey of table.foreignKeys) {
@@ -112,6 +133,42 @@ describe("workspace lifecycle and erasure", () => {
 				}
 			}
 		}
+	});
+
+	it("minimizes consent evidence while preserving the denied send veto", async () => {
+		expect(WORKSPACE_PURGE_TABLES).not.toContain("contact_consent_states");
+		expect(WORKSPACE_PURGE_TABLES).not.toContain("contact_consent_events");
+		const source = await Bun.file(
+			`${repoRoot}apps/api/src/services/workspace-erasure.ts`,
+		).text();
+		const consentPhase = source.slice(
+			source.indexOf("async function minimizeWorkspaceConsentAuthority"),
+			source.indexOf("async function processWorkspacePurge"),
+		);
+		expect(consentPhase).toContain("public.contact_consent_states");
+		expect(consentPhase).toContain("public.contact_consent_events");
+		expect(consentPhase).toContain("state.status = 'granted'");
+		expect(consentPhase).toContain("state.status = 'denied'");
+		expect(consentPhase).toContain("SET contact_id = NULL");
+		expect(consentPhase).toContain("identifier_masked = NULL");
+		expect(consentPhase).toContain("evidence = NULL");
+	});
+
+	it("lets authoritative ideas cascade their projected tag associations", () => {
+		expect(WORKSPACE_PURGE_TABLES).not.toContain("idea_tags");
+		const table = getTableConfig(ideaTags);
+		expect(table.columns.map((column) => column.name)).not.toContain(
+			"workspace_id",
+		);
+		expect(
+			table.foreignKeys.some((foreignKey) => {
+				const reference = foreignKey.reference();
+				return (
+					reference.name === "idea_tags_idea_org_scope_fk" &&
+					foreignKey.onDelete === "cascade"
+				);
+			}),
+		).toBe(true);
 	});
 
 	it("purges pending Telegram challenges directly before social accounts", async () => {

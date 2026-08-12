@@ -183,10 +183,14 @@ describe("high-risk schema flow guards", () => {
 			const start = source.indexOf(startMarker);
 			const end = source.indexOf(endMarker, start);
 			const handler = source.slice(start, end);
-			expect(handler.indexOf("resolveInboxTarget(")).toBeGreaterThan(-1);
-			expect(handler.indexOf("fetch(")).toBeGreaterThan(
-				handler.indexOf("resolveInboxTarget("),
-			);
+			const targetResolution = handler.indexOf("resolveInboxTarget(");
+			const providerCalls = [
+				handler.indexOf("trackedProviderFetch("),
+				handler.indexOf("await fetch("),
+			].filter((index) => index >= 0);
+			expect(targetResolution).toBeGreaterThan(-1);
+			expect(providerCalls.length).toBeGreaterThan(0);
+			expect(Math.min(...providerCalls)).toBeGreaterThan(targetResolution);
 		}
 	});
 
@@ -207,7 +211,9 @@ describe("high-risk schema flow guards", () => {
 		expect(entrypoints).toContain(
 			"account.workspaceId !== automation.workspaceId",
 		);
-		expect(bindings).toContain("const result = await db.transaction");
+		expect(bindings).toContain(
+			"const authority = await withCredentialMutationAuthority",
+		);
 		expect(bindings).toContain('.for("update")');
 		expect(bindings).toContain("account.platform !== automation.channel");
 		expect(receiver).toContain(
@@ -241,7 +247,9 @@ describe("high-risk schema flow guards", () => {
 		expect(routes).not.toContain("date_trunc('milliseconds'");
 		expect(runner).toContain("eq(posts.revision, post.revision)");
 		expect(threadRunner).toContain("eq(posts.revision, post.revision)");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: source guard intentionally matches a literal SQL template expression.
 		expect(runner).toContain("revision: sql`${posts.revision} + 1`");
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: source guard intentionally matches a literal SQL template expression.
 		expect(threadRunner).toContain("revision: sql`${posts.revision} + 1`");
 		for (const source of [routes, runner, threadRunner, ...otherPostWriters]) {
 			expect(source.match(/\.update\(posts\)/g)?.length ?? 0).toBe(
@@ -281,7 +289,7 @@ describe("high-risk schema flow guards", () => {
 			"segmentResult.segment.workspaceId !== contact.workspaceId",
 		);
 		expect(linker).toContain("const sameAccountWorkspace");
-		expect(linker).toContain("contacts.emailCanonical");
+		expect(linker).toContain("contacts.emailHash");
 	});
 
 	it("serializes free-organization creation across the auth hook boundary", async () => {

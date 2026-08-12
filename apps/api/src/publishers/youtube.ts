@@ -5,12 +5,18 @@ import {
 	parseContentLength,
 	readResponseBytes,
 } from "../lib/fetch-public-url";
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
+	getSucceededProviderEffect,
+	mergeProviderEffects,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	type ReconcileRequest,
+	recordProviderEffect,
 } from "./types";
 
 const YOUTUBE_API = "https://www.googleapis.com/youtube/v3";
@@ -256,9 +262,19 @@ async function uploadVideo(
 		rawSourceEtag && !rawSourceEtag.startsWith("W/") ? rawSourceEtag : null;
 
 	// Build the metadata body
+	const sanitizedTitle = metadata.title
+		.replace(/[<>]/g, "")
+		.trim()
+		.slice(0, 100);
+	if (!sanitizedTitle) {
+		void mediaResponse.body?.cancel().catch(() => {});
+		throw new Error(
+			"CONTENT_ERROR: YouTube requires a non-empty title after removing unsupported characters.",
+		);
+	}
 	const snippet: Record<string, unknown> = {
 		// YouTube rejects titles containing < and > characters
-		title: metadata.title.replace(/[<>]/g, "").slice(0, 100),
+		title: sanitizedTitle,
 		// YouTube limits description to 5,000 bytes (not characters)
 		// Docs: https://developers.google.com/youtube/v3/docs/videos#resource
 		description: truncateToBytes(
@@ -321,7 +337,7 @@ async function uploadVideo(
 
 	if (!initRes.ok) {
 		void mediaResponse.body?.cancel().catch(() => {});
-		const err = await initRes.json().catch(() => ({}));
+		const err = await readPublisherJson(initRes).catch(() => ({}));
 		const errBody = JSON.stringify(err);
 		const raw = `HTTP ${initRes.status}\n${errBody}`;
 		const detail =
@@ -362,7 +378,7 @@ async function uploadVideo(
 	// resumable 5xx, query the session before sending only the uncommitted suffix.
 	// Never replay the whole body to an existing session based on an assumption.
 	// https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
-	let uploadData: { id: string } | undefined;
+	let uploadData: { id?: string } | undefined;
 	const maxRetries = 3;
 	const resumableStatuses = new Set([500, 502, 503, 504]);
 	let resumeOffset = 0;
@@ -376,7 +392,7 @@ async function uploadVideo(
 		return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 0;
 	};
 	const throwUploadFailure = async (response: Response): Promise<never> => {
-		const err = await response.json().catch(() => ({}));
+		const err = await readPublisherJson(response).catch(() => ({}));
 		const raw = `HTTP ${response.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
@@ -471,7 +487,9 @@ async function uploadVideo(
 				}
 
 				if (statusResponse.ok) {
-					uploadData = (await statusResponse.json()) as { id: string };
+					uploadData = (await readPublisherJson(statusResponse)) as {
+						id: string;
+					};
 					break;
 				}
 				if (statusResponse.status === 308) {
@@ -533,7 +551,7 @@ async function uploadVideo(
 			if (completionOutcome.status === "rejected") {
 				throw completionOutcome.reason;
 			}
-			uploadData = (await uploadRes.json()) as { id: string };
+			uploadData = (await readPublisherJson(uploadRes)) as { id?: string };
 			break;
 		}
 
@@ -578,8 +596,15 @@ async function uploadVideo(
 	if (!uploadData) {
 		throw new Error("YouTube video upload failed after retries");
 	}
+	const videoId = uploadData.id?.trim();
+	if (!videoId) {
+		throw new PublishError(
+			"YouTube accepted the upload but did not return a video ID; the remote outcome requires reconciliation.",
+			{ code: "PUBLISH_OUTCOME_UNKNOWN" },
+		);
+	}
 
-	return uploadData.id;
+	return videoId;
 }
 
 /**
@@ -610,7 +635,7 @@ async function setThumbnail(
 	);
 
 	if (!res.ok) {
-		const err = await res.json().catch(() => ({}));
+		const err = await readPublisherJson(res).catch(() => ({}));
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
@@ -657,7 +682,7 @@ async function postFirstComment(
 	});
 
 	if (!res.ok) {
-		const err = await res.json().catch(() => ({}));
+		const err = await readPublisherJson(res).catch(() => ({}));
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		const detail =
 			(err as { error?: { message?: string } }).error?.message ??
@@ -668,7 +693,7 @@ async function postFirstComment(
 		});
 	}
 
-	const data = (await res.json()) as {
+	const data = (await readPublisherJson(res)) as {
 		id: string;
 		snippet?: { topLevelComment?: { id?: string } };
 	};
@@ -685,7 +710,7 @@ export async function addToPlaylist(
 	auth: YouTubeAuth,
 	playlistId: string,
 	videoId: string,
-): Promise<void> {
+): Promise<string> {
 	const res = await fetch(`${YOUTUBE_API}/playlistItems?part=snippet`, {
 		method: "POST",
 		headers: {
@@ -700,15 +725,153 @@ export async function addToPlaylist(
 		}),
 	});
 	if (!res.ok) {
-		const text = await res.text().catch(() => "");
-		console.warn(
-			`Failed to add video ${videoId} to playlist ${playlistId}: ${res.status} ${text}`,
+		const text = await readPublisherText(res).catch(() => "");
+		throw new PublishError(
+			`Failed to add video ${videoId} to playlist ${playlistId}`,
+			{ statusCode: res.status, detail: text },
 		);
 	}
+	const data = (await readPublisherJson(res)) as { id?: string };
+	if (!data.id) {
+		throw new Error("YouTube playlist item response did not include an ID");
+	}
+	return data.id;
+}
+
+interface YouTubeVideoState {
+	id?: string;
+	processingDetails?: {
+		processingStatus?: string;
+		processingFailureReason?: string;
+	};
+	status?: {
+		uploadStatus?: string;
+		failureReason?: string;
+		rejectionReason?: string;
+		privacyStatus?: string;
+		publishAt?: string;
+	};
+}
+
+function youtubeVideoStateResult(
+	video: YouTubeVideoState,
+	effects: ProviderEffect[] = [],
+): PublishResult {
+	const videoId = video.id?.trim();
+	if (!videoId) {
+		return {
+			success: false,
+			provider_outcome: {
+				disposition: "outcome_unknown",
+				provider_state: "video_not_found",
+				effects,
+			},
+			error: {
+				code: "PUBLISH_OUTCOME_UNKNOWN",
+				message:
+					"YouTube did not return the uploaded video during reconciliation.",
+			},
+		};
+	}
+	const processing = video.processingDetails?.processingStatus?.toLowerCase();
+	const upload = video.status?.uploadStatus?.toLowerCase();
+	const providerState =
+		[upload, processing].filter(Boolean).join(":") || "unknown";
+	const shared = {
+		provider_operation_id: videoId,
+		platform_post_id: videoId,
+		platform_url: `https://www.youtube.com/watch?v=${videoId}`,
+		provider_state: providerState,
+		effects,
+	};
+	if (
+		processing === "failed" ||
+		processing === "terminated" ||
+		upload === "failed" ||
+		upload === "rejected" ||
+		upload === "deleted"
+	) {
+		const reason =
+			video.processingDetails?.processingFailureReason ??
+			video.status?.failureReason ??
+			video.status?.rejectionReason ??
+			providerState;
+		return {
+			success: false,
+			platform_post_id: videoId,
+			provider_outcome: { disposition: "failed", ...shared },
+			error: {
+				code: "CONTENT_ERROR",
+				message: `YouTube processing failed: ${reason}`,
+			},
+		};
+	}
+	if (processing === "succeeded" || upload === "processed") {
+		const publishAt = video.status?.publishAt;
+		const scheduled =
+			video.status?.privacyStatus === "private" &&
+			Boolean(publishAt && Date.parse(publishAt) > Date.now());
+		return {
+			success: true,
+			platform_post_id: videoId,
+			platform_url: shared.platform_url,
+			provider_outcome: scheduled
+				? {
+						disposition: "scheduled",
+						...shared,
+						next_reconcile_at: publishAt,
+					}
+				: { disposition: "published", ...shared },
+		};
+	}
+	return {
+		success: true,
+		platform_post_id: videoId,
+		platform_url: shared.platform_url,
+		provider_outcome: { disposition: "processing", ...shared },
+	};
 }
 
 export const youtubePublisher: Publisher = {
 	platform: "youtube",
+
+	async reconcile(request: ReconcileRequest): Promise<PublishResult> {
+		try {
+			const videoId =
+				request.platform_post_id ??
+				request.provider_operation_id ??
+				request.effects.find(
+					(effect) =>
+						effect.name === "video_upload" && effect.status === "succeeded",
+				)?.provider_id;
+			if (!videoId) {
+				throw new Error(
+					"CONTENT_ERROR: YouTube reconciliation requires a video ID.",
+				);
+			}
+			// Official docs: https://developers.google.com/youtube/v3/docs/videos/list
+			// `part=processingDetails,status` returns the upload/processing lifecycle.
+			const response = await fetch(
+				`${YOUTUBE_API}/videos?part=processingDetails%2Cstatus&id=${encodeURIComponent(videoId)}`,
+				{
+					headers: { Authorization: `Bearer ${request.account.access_token}` },
+				},
+			);
+			if (!response.ok) {
+				const body = await readPublisherText(response);
+				throw new PublishError(
+					`YouTube status lookup failed (${response.status})`,
+					{ statusCode: response.status, detail: body },
+				);
+			}
+			const data = (await readPublisherJson(response)) as {
+				items?: YouTubeVideoState[];
+			};
+			return youtubeVideoStateResult(data.items?.[0] ?? {}, request.effects);
+		} catch (err) {
+			return classifyPublishError(err);
+		}
+	},
 
 	async publish(request: PublishRequest): Promise<PublishResult> {
 		try {
@@ -747,6 +910,20 @@ export const youtubePublisher: Publisher = {
 				};
 			}
 
+			const unsupportedItems = media.filter(
+				(item) => item.type !== "video" && item.type !== "image",
+			);
+			if (unsupportedItems.length > 0) {
+				return {
+					success: false,
+					error: {
+						code: "UNSUPPORTED_MEDIA_TYPE",
+						message:
+							"YouTube accepts exactly one typed video and at most one typed image thumbnail; untyped, GIF, and document attachments are not accepted.",
+					},
+				};
+			}
+
 			const imageItems = media.filter((m) => m.type === "image");
 			if (imageItems.length > 1) {
 				// Official docs: https://developers.google.com/youtube/v3/docs/thumbnails/set
@@ -766,10 +943,9 @@ export const youtubePublisher: Publisher = {
 			const description = (opts.content as string) ?? request.content ?? "";
 
 			// Resolve title — falls back to first line of content
-			const title =
-				(opts.title as string) ??
-				description.split("\n")[0]?.slice(0, 100) ??
-				"Untitled";
+			const requestedTitle = (opts.title as string | undefined)?.trim();
+			const derivedTitle = description.split("\n")[0]?.trim().slice(0, 100);
+			const title = requestedTitle || derivedTitle || "Untitled";
 
 			// Resolve options
 			const visibility = (opts.visibility as string) ?? "public";
@@ -785,53 +961,133 @@ export const youtubePublisher: Publisher = {
 			// For scheduled posts, upload as private with publishAt
 			const effectivePrivacy = publishAt ? "private" : visibility;
 
-			// Upload the video
-			const videoId = await uploadVideo(auth, videoItem.url, {
-				title,
-				description,
-				tags,
-				categoryId,
-				privacyStatus: effectivePrivacy,
-				madeForKids,
-				containsSyntheticMedia,
-				publishAt,
-				notifySubscribers,
-			});
+			let effects = mergeProviderEffects(request.effect_recorder?.effects);
+			const recordEffect = async (effect: ProviderEffect): Promise<void> => {
+				await recordProviderEffect(request, effect);
+				effects = mergeProviderEffects(effects, [effect]);
+			};
+
+			// The uploaded video is already a provider-side resource. Journal its ID
+			// before any optional follow-up mutation so a Worker stop can reconcile or
+			// resume without uploading the same video again.
+			const confirmedUpload = getSucceededProviderEffect(
+				request,
+				"video_upload",
+			);
+			const videoId =
+				confirmedUpload?.provider_id ??
+				(await uploadVideo(auth, videoItem.url, {
+					title,
+					description,
+					tags,
+					categoryId,
+					privacyStatus: effectivePrivacy,
+					madeForKids,
+					containsSyntheticMedia,
+					publishAt,
+					notifySubscribers,
+				}));
+			if (!confirmedUpload) {
+				await recordEffect({
+					name: "video_upload",
+					status: "succeeded",
+					provider_id: videoId,
+				});
+			}
 
 			// Set custom thumbnail if provided in media item
 			const thumbnailItem = imageItems[0];
 			if (thumbnailItem) {
-				try {
-					await setThumbnail(auth, videoId, thumbnailItem.url);
-				} catch {
-					// Thumbnail failure should not fail the entire publish
-					// Shorts do not support custom thumbnails via API
-				}
+				if (getSucceededProviderEffect(request, "thumbnail")) {
+					// The exact operation already confirmed this follow-up.
+				} else
+					try {
+						await setThumbnail(auth, videoId, thumbnailItem.url);
+						await recordEffect({
+							name: "thumbnail",
+							status: "succeeded",
+							provider_id: videoId,
+						});
+					} catch (error) {
+						await recordEffect({
+							name: "thumbnail",
+							status: "failed",
+							error: {
+								code: "PLATFORM_ERROR",
+								message:
+									error instanceof Error
+										? error.message
+										: "Thumbnail upload failed",
+							},
+						});
+					}
 			}
 
 			// Post first comment if requested
 			const firstComment = opts.first_comment as string | undefined;
 			if (firstComment) {
-				try {
-					await postFirstComment(
-						auth,
-						videoId,
-						request.account.platform_account_id,
-						firstComment,
-					);
-				} catch {
-					// First comment failure should not fail the entire publish
-				}
+				if (getSucceededProviderEffect(request, "first_comment")) {
+					// The exact operation already confirmed this follow-up.
+				} else
+					try {
+						const commentId = await postFirstComment(
+							auth,
+							videoId,
+							request.account.platform_account_id,
+							firstComment,
+						);
+						await recordEffect({
+							name: "first_comment",
+							status: "succeeded",
+							provider_id: commentId,
+						});
+					} catch (error) {
+						await recordEffect({
+							name: "first_comment",
+							status: "failed",
+							error: {
+								code: "PLATFORM_ERROR",
+								message:
+									error instanceof Error
+										? error.message
+										: "Comment creation failed",
+							},
+						});
+					}
 			}
 
 			// Add to playlist if requested
-			const playlistId = opts.playlist_id as string | undefined;
+			const playlistId =
+				(opts.playlist_id as string | undefined) ??
+				(request.account.metadata?.default_playlist_id as string | undefined);
 			if (playlistId) {
-				try {
-					await addToPlaylist(auth, playlistId, videoId);
-				} catch {
-					// Playlist failure should not fail the entire publish
-				}
+				if (getSucceededProviderEffect(request, "playlist_item")) {
+					// The exact operation already confirmed this follow-up.
+				} else
+					try {
+						const playlistItemId = await addToPlaylist(
+							auth,
+							playlistId,
+							videoId,
+						);
+						await recordEffect({
+							name: "playlist_item",
+							status: "succeeded",
+							provider_id: playlistItemId,
+						});
+					} catch (error) {
+						await recordEffect({
+							name: "playlist_item",
+							status: "failed",
+							error: {
+								code: "PLATFORM_ERROR",
+								message:
+									error instanceof Error
+										? error.message
+										: "Playlist insertion failed",
+							},
+						});
+					}
 			}
 
 			const platformUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -840,6 +1096,14 @@ export const youtubePublisher: Publisher = {
 				success: true,
 				platform_post_id: videoId,
 				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "processing",
+					provider_operation_id: videoId,
+					platform_post_id: videoId,
+					platform_url: platformUrl,
+					provider_state: "uploaded:processing",
+					effects,
+				},
 			};
 		} catch (err) {
 			return classifyPublishError(err, { safeToRetryRateLimit: true });

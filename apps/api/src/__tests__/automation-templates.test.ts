@@ -5,6 +5,13 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+	isEntrypointKindSupportedOnChannel,
+	validateEntrypointConfig,
+} from "../schemas/automation-entrypoints";
+import { AutomationCreateSchema } from "../schemas/automations";
+import { evaluateFilterGroup } from "../services/automations/filter-eval";
+import { applyMergeTags } from "../services/automations/merge-tags";
+import {
 	buildGraphFromTemplate,
 	listTemplateKinds,
 	type TemplateKind,
@@ -91,9 +98,6 @@ const FIXTURES: Record<TemplateKind, FixtureConfig> = {
 		dm_message: {
 			blocks: [{ id: "b1", type: "text", text: "Thanks for following!" }],
 		},
-		max_sends_per_day: 50,
-		cooldown_between_sends_ms: 2000,
-		skip_if_already_messaged: true,
 	},
 };
 
@@ -132,11 +136,19 @@ describe("buildGraphFromTemplate", () => {
 			});
 			expect(typeof result.name).toBe("string");
 			expect(Array.isArray(result.entrypoints)).toBe(true);
-			const validation = validateGraph(result.graph);
+			const validation = validateGraph(result.graph, "instagram");
 			if (!validation.valid) {
 				console.error(`template ${kind} validation errors:`, validation.errors);
 			}
 			expect(validation.valid).toBe(true);
+			for (const entrypoint of result.entrypoints) {
+				expect(
+					isEntrypointKindSupportedOnChannel(entrypoint.kind, "instagram"),
+				).toBe(true);
+				expect(
+					validateEntrypointConfig(entrypoint.kind, entrypoint.config).success,
+				).toBe(true);
+			}
 		});
 	}
 
@@ -167,7 +179,7 @@ describe("buildGraphFromTemplate", () => {
 				channel: "instagram",
 				config: FIXTURES[kind],
 			});
-			const validation = validateGraph(result.graph);
+			const validation = validateGraph(result.graph, "instagram");
 			expect(validation.canonicalGraph.nodes.length).toBeGreaterThan(0);
 			for (const node of validation.canonicalGraph.nodes) {
 				expect(Array.isArray(node.ports)).toBe(true);
@@ -206,7 +218,7 @@ describe("buildGraphFromTemplate", () => {
 			channel: "instagram",
 			config: FIXTURES.comment_to_dm,
 		});
-		const validation = validateGraph(built.graph);
+		const validation = validateGraph(built.graph, "instagram");
 		// This is what the route INSERTs into automations.graph.
 		const persisted = validation.canonicalGraph;
 		expect(persisted.nodes.length).toBeGreaterThan(0);
@@ -264,11 +276,10 @@ describe("buildGraphFromTemplate", () => {
 			config: FIXTURES.follower_growth,
 		});
 		expect(result.graph.root_node_key).toBe("public_reply");
-		expect(result.graph.nodes.some((n) => n.kind === "end")).toBe(false);
 		expect(result.graph.edges).toContainEqual({
 			from_node: "public_reply",
 			from_port: "next",
-			to_node: "rules",
+			to_node: "check_tags",
 			to_port: "in",
 		});
 	});
@@ -283,6 +294,82 @@ describe("buildGraphFromTemplate", () => {
 		expect(result.graph.edges).toHaveLength(0);
 		expect(result.graph.root_node_key).toBeNull();
 		expect(result.entrypoints).toHaveLength(0);
+	});
+
+	it("default preset greetings use the persisted contact name field", () => {
+		for (const kind of ["welcome_flow", "faq_bot"] as const) {
+			const result = buildGraphFromTemplate({
+				kind,
+				channel: "instagram",
+				config: {},
+			});
+			const firstMessage = result.graph.nodes.find(
+				(node) => node.kind === "message",
+			);
+			const blocks = (
+				firstMessage?.config as { blocks?: unknown[] } | undefined
+			)?.blocks as Array<{ type?: string; text?: string }> | undefined;
+			const text = blocks?.find((block) => block.type === "text")?.text;
+			expect(text).toContain("{{contact.name}}");
+			expect(
+				applyMergeTags(text ?? "", {
+					contact: { name: "Alice" },
+					state: {},
+				}),
+			).toContain("Alice");
+		}
+	});
+
+	it("resolves run context through context and state merge-tag aliases", () => {
+		const mergeContext = {
+			contact: { name: "Alice" },
+			state: { email: "alice@example.com", fields: { tier: "vip" } },
+		};
+		expect(applyMergeTags("{{context.email}}", mergeContext)).toBe(
+			"alice@example.com",
+		);
+		expect(applyMergeTags("{{state.fields.tier}}", mergeContext)).toBe("vip");
+	});
+
+	it("FAQ reply block ids stay unique when labels repeat", () => {
+		const result = buildGraphFromTemplate({
+			kind: "faq_bot",
+			channel: "instagram",
+			config: {
+				keywords: [
+					{ label: "same", keyword: "one", reply: "First" },
+					{ label: "same", keyword: "two", reply: "Second" },
+				],
+			},
+		});
+		const ids = result.graph.nodes.flatMap((node) => {
+			const blocks = (node.config as { blocks?: unknown[] } | undefined)
+				?.blocks as Array<{ id?: string }> | undefined;
+			return blocks?.flatMap((block) => (block.id ? [block.id] : [])) ?? [];
+		});
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+
+	it("FAQ keyword branches are intentionally case-insensitive", () => {
+		const result = buildGraphFromTemplate({
+			kind: "faq_bot",
+			channel: "instagram",
+			config: {
+				keywords: [{ label: "hours", keyword: "hours", reply: "We're open." }],
+			},
+		});
+		const condition = result.graph.nodes.find(
+			(node) => node.kind === "condition",
+		);
+		const predicates = condition?.config.predicates as
+			| Parameters<typeof evaluateFilterGroup>[0]
+			| undefined;
+		expect(predicates).toBeDefined();
+		expect(
+			evaluateFilterGroup(predicates ?? {}, {
+				state: { faq_question: "WHAT ARE YOUR HOURS?" },
+			}),
+		).toBe(true);
 	});
 
 	it("comment_to_dm emits a comment_created entrypoint bound to the provided account", () => {
@@ -304,35 +391,88 @@ describe("buildGraphFromTemplate", () => {
 		expect(epConfig.keyword_filter).toBeUndefined();
 	});
 
-	it("follow_to_dm emits a follow entrypoint", () => {
+	it("follow_to_dm starts on the first inbound DM and verifies the follow relationship", () => {
 		const result = buildGraphFromTemplate({
 			kind: "follow_to_dm",
 			channel: "instagram",
-			config: FIXTURES.follow_to_dm,
+			config: {
+				...FIXTURES.follow_to_dm,
+				daily_cap: 50,
+				cooldown_hours: 24,
+			},
 		});
 		expect(result.entrypoints).toHaveLength(1);
 		const ep = result.entrypoints[0];
 		if (!ep) throw new Error("expected an entrypoint");
-		expect(ep.kind).toBe("follow");
+		expect(ep.kind).toBe("dm_received");
+		expect(ep.config).toEqual({ first_message_only: true });
+		expect(ep.allowReentry).toBe(false);
+		expect(ep.reentryCooldownMin).toBe(24 * 60);
+		expect(ep.dailyCap).toBe(50);
+		expect(result.graph.root_node_key).toBe("check_follow");
+		expect(
+			result.graph.nodes.find((node) => node.key === "check_follow")?.kind,
+		).toBe("social_profile_check");
 	});
 
-	it("follow_to_dm does NOT persist rate-limit fields on the entrypoint config", () => {
-		// The template input accepts max_sends_per_day / cooldown_between_sends_ms
-		// / skip_if_already_messaged, but the follow-entrypoint matcher doesn't
-		// read them yet (deferred to v1.1). They must not appear on the emitted
-		// entrypoint.config or operators will think they're enforced.
-		const result = buildGraphFromTemplate({
-			kind: "follow_to_dm",
+	it("follow_to_dm rejects retired throttling fields at the public request schema", () => {
+		for (const field of [
+			"max_sends_per_day",
+			"cooldown_between_sends_ms",
+			"skip_if_already_messaged",
+		]) {
+			const parsed = AutomationCreateSchema.safeParse({
+				name: "Follower welcome",
+				channel: "instagram",
+				template: {
+					kind: "follow_to_dm",
+					config: { social_account_id: "acc_123", [field]: true },
+				},
+			});
+			expect(parsed.success).toBe(false);
+			if (parsed.success) throw new Error("expected validation to fail");
+			expect(
+				parsed.error.issues.some(
+					(issue) =>
+						issue.path.join(".") === "template.config" &&
+						issue.message.includes(field),
+				),
+			).toBe(true);
+		}
+	});
+
+	it("accepts enforced follow_to_dm admission controls at the public request schema", () => {
+		const parsed = AutomationCreateSchema.safeParse({
+			name: "Follower welcome",
 			channel: "instagram",
-			config: FIXTURES.follow_to_dm,
+			template: {
+				kind: "follow_to_dm",
+				config: {
+					social_account_id: "acc_123",
+					daily_cap: 100,
+					cooldown_hours: 12,
+				},
+			},
 		});
-		const ep = result.entrypoints[0];
-		if (!ep) throw new Error("expected an entrypoint");
-		const cfg = (ep.config ?? {}) as Record<string, unknown>;
-		expect(cfg.max_sends_per_day).toBeUndefined();
-		expect(cfg.cooldown_between_sends_ms).toBeUndefined();
-		expect(cfg.skip_if_already_messaged).toBeUndefined();
-		// Only the social account scope should be carried through.
-		expect(ep.socialAccountId).toBe("acc_123");
+		expect(parsed.success).toBe(true);
+	});
+
+	it("caps preset daily admission limits at the entrypoint maximum", () => {
+		for (const kind of [
+			"comment_to_dm",
+			"story_leads",
+			"follower_growth",
+			"follow_to_dm",
+		] as const) {
+			const parsed = AutomationCreateSchema.safeParse({
+				name: "Bounded preset",
+				channel: "instagram",
+				template: {
+					kind,
+					config: { daily_cap: 1_000_001 },
+				},
+			});
+			expect(parsed.success).toBe(false);
+		}
 	});
 });

@@ -1,8 +1,8 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-import { APIResource } from '../../core/resource';
-import { APIPromise } from '../../core/api-promise';
-import { RequestOptions } from '../../internal/request-options';
+import { APIResource } from "../../core/resource";
+import { APIPromise } from "../../core/api-promise";
+import { RequestOptions } from "../../internal/request-options";
 
 export class Whatsapp extends APIResource {
   /**
@@ -12,7 +12,10 @@ export class Whatsapp extends APIResource {
     body: WhatsappCompleteEmbeddedSignupParams,
     options?: RequestOptions,
   ): APIPromise<WhatsappCompleteEmbeddedSignupResponse> {
-    return this._client.post('/v1/connect/whatsapp/embedded-signup', { body, ...options });
+    return this._client.post("/v1/connect/whatsapp/embedded-signup", {
+      body,
+      ...options,
+    });
   }
 
   /**
@@ -22,14 +25,19 @@ export class Whatsapp extends APIResource {
     body: WhatsappConnectViaCredentialsParams,
     options?: RequestOptions,
   ): APIPromise<WhatsappConnectViaCredentialsResponse> {
-    return this._client.post('/v1/connect/whatsapp/credentials', { body, ...options });
+    return this._client.post("/v1/connect/whatsapp/credentials", {
+      body,
+      ...options,
+    });
   }
 
   /**
    * Get WhatsApp Embedded Signup SDK config
    */
-  getSDKConfig(options?: RequestOptions): APIPromise<WhatsappGetSDKConfigResponse> {
-    return this._client.get('/v1/connect/whatsapp/sdk-config', options);
+  getSDKConfig(
+    options?: RequestOptions,
+  ): APIPromise<WhatsappGetSDKConfigResponse> {
+    return this._client.get("/v1/connect/whatsapp/sdk-config", options);
   }
 }
 
@@ -53,23 +61,28 @@ export namespace WhatsappCompleteEmbeddedSignupResponse {
     metadata: { [key: string]: unknown } | null;
 
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "bluesky"
+      | "threads"
+      | "telegram"
+      | "snapchat"
+      | "googlebusiness"
+      | "whatsapp"
+      | "mastodon"
+      | "discord"
+      | "sms"
+      | "beehiiv"
+      | "convertkit"
+      | "mailchimp"
+      | "listmonk"
+      | "slack";
 
     platform_account_id: string;
 
@@ -99,23 +112,28 @@ export namespace WhatsappConnectViaCredentialsResponse {
     metadata: { [key: string]: unknown } | null;
 
     platform:
-      | 'twitter'
-      | 'instagram'
-      | 'facebook'
-      | 'linkedin'
-      | 'tiktok'
-      | 'youtube'
-      | 'pinterest'
-      | 'reddit'
-      | 'bluesky'
-      | 'threads'
-      | 'telegram'
-      | 'snapchat'
-      | 'googlebusiness'
-      | 'whatsapp'
-      | 'mastodon'
-      | 'discord'
-      | 'sms';
+      | "twitter"
+      | "instagram"
+      | "facebook"
+      | "linkedin"
+      | "tiktok"
+      | "youtube"
+      | "pinterest"
+      | "reddit"
+      | "bluesky"
+      | "threads"
+      | "telegram"
+      | "snapchat"
+      | "googlebusiness"
+      | "whatsapp"
+      | "mastodon"
+      | "discord"
+      | "sms"
+      | "beehiiv"
+      | "convertkit"
+      | "mailchimp"
+      | "listmonk"
+      | "slack";
 
     platform_account_id: string;
 
@@ -142,6 +160,12 @@ export interface WhatsappCompleteEmbeddedSignupParams {
    * Code from WhatsApp embedded signup flow
    */
   code: string;
+
+  /** WABA selected by the Embedded Signup completion event. */
+  waba_id?: string;
+
+  /** Phone number selected by the Embedded Signup completion event. */
+  phone_number_id?: string;
 
   /**
    * Workspace for the connected account. Required only when Require Workspace ID

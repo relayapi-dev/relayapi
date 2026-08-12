@@ -12,9 +12,10 @@
  * lockfile and every workspace that uses `catalog:` pick up the new versions.
  *
  * Intentionally NOT touched (they don't use the catalog):
+ *   - apps/cli, packages/self-host      → published via `npm publish`
  *   - packages/sdk, packages/mcp        → published via `npm publish`
  *   - packages/integrations/*           → installed/built/pushed via npm
- *   - root devDependencies (@biomejs/biome), patched deps
+ *   - root devDependencies (@biomejs/biome), overrides
  * The `catalog:` protocol is only understood by Bun/pnpm, so those packages keep
  * literal versions and are upgraded manually (e.g. `bun update --latest <pkg>`).
  *
@@ -33,6 +34,7 @@
  */
 
 import { join } from "node:path";
+import { npmRegistryPackageUrl } from "./upgrade-catalog-helpers";
 
 const ROOT = join(import.meta.dir, "..");
 const ROOT_PKG = join(ROOT, "package.json");
@@ -94,8 +96,7 @@ function isUpgradeable(range: string): boolean {
 }
 
 async function fetchLatest(name: string, tag: string): Promise<string | null> {
-	// Scoped names need the slash encoded: @scope/pkg -> @scope%2Fpkg
-	const url = `https://registry.npmjs.org/${name.replace("/", "%2F")}`;
+	const url = npmRegistryPackageUrl(name);
 	try {
 		const res = await fetch(url, {
 			headers: { accept: "application/vnd.npm.install-v1+json" },

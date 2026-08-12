@@ -1,6 +1,6 @@
 ---
 title: Google Business API
-description: Schedule and automate Google Business Profile posts with RelayAPI — standard posts, events, offers, photos, and call-to-action buttons.
+description: Schedule and automate Google Business Profile posts with RelayAPI — standard posts, events, offers, photos, videos, and call-to-action buttons.
 icon: googlebusiness
 ---
 
@@ -12,29 +12,31 @@ icon: googlebusiness
 | Auth method | OAuth 2.0 |
 | Text limit | 1,500 characters |
 | Images per post | 1 |
-| Videos per post | Not supported |
+| Videos per post | 1 |
 | Image formats | JPEG, PNG |
-| Image max size | 5 MB |
+| Image max size | 5 MiB |
+| Video formats | MP4 |
+| Video max size | 75 MiB |
 | Post types | Standard, Event, Offer |
 | Call to action | Yes (Learn More, Book, Order, Shop, Sign Up, Call) |
 | Scheduling | Yes |
 | Analytics | Yes (views, clicks) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
 
 <Callout type="warn">
-Google Business Profile posts are limited to **1 photo per post** — no videos, no multi-image galleries. Event and Offer posts require a **schedule** with start and end dates. Posts do not have a direct public URL — they appear on Google Search and Maps. The API uses the **My Business API v4**, which requires the account to be verified on Google Business Profile.
+Google Business Profile posts accept **one media item per post: either one photo or one video**. Multi-media galleries are not supported. Event and Offer posts require a **schedule** with start and end dates. Posts do not have a direct public URL — they appear on Google Search and Maps. The API uses the **My Business API v4**, which requires the account to be verified on Google Business Profile.
 </Callout>
 
 ## Quick Start
 
 Create a standard post on Google Business Profile:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -47,20 +49,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-post = client.posts.create(
-    content='We just launched our new spring menu! Come visit us today.',
-    targets=['googlebusiness'],
-    scheduled_at='now',
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -109,7 +97,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 A simple update with text and an optional photo.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -117,15 +105,6 @@ const post = await client.posts.create({
   targets: ['googlebusiness'],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='We just launched our new spring menu!',
-    targets=['googlebusiness'],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -162,7 +141,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Standard Post with Photo
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -173,18 +152,6 @@ const post = await client.posts.create({
   ],
   scheduled_at: 'now',
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Check out our renovated dining area!',
-    targets=['googlebusiness'],
-    media=[
-        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -234,7 +201,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Add a button linking to your website, booking page, or online shop.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -250,23 +217,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content="Book your table for Valentine's Day!",
-    targets=['googlebusiness'],
-    scheduled_at='now',
-    target_options={
-        'googlebusiness': {
-            'call_to_action': {
-                'type': 'BOOK',
-                'url': 'https://example.com/book',
-            },
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -329,7 +279,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Promote a specific event with a title and schedule. Requires `topic_type: "EVENT"` and an `event` object with a schedule.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -351,29 +301,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Join us for live music every Friday night!',
-    targets=['googlebusiness'],
-    scheduled_at='now',
-    target_options={
-        'googlebusiness': {
-            'topic_type': 'EVENT',
-            'event': {
-                'title': 'Friday Night Live Music',
-                'schedule': {
-                    'startDate': {'year': 2026, 'month': 4, 'day': 3},
-                    'startTime': {'hours': 19, 'minutes': 0},
-                    'endDate': {'year': 2026, 'month': 4, 'day': 3},
-                    'endTime': {'hours': 23, 'minutes': 0},
-                },
-            },
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -454,7 +381,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Promote a discount or deal with optional coupon code and redemption URL.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -479,32 +406,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='20% off all drinks this weekend!',
-    targets=['googlebusiness'],
-    scheduled_at='now',
-    target_options={
-        'googlebusiness': {
-            'topic_type': 'OFFER',
-            'event': {
-                'title': 'Weekend Happy Hour',
-                'schedule': {
-                    'startDate': {'year': 2026, 'month': 4, 'day': 4},
-                    'endDate': {'year': 2026, 'month': 4, 'day': 5},
-                },
-            },
-            'offer': {
-                'couponCode': 'HAPPY20',
-                'redeemOnlineUrl': 'https://example.com/redeem',
-                'termsConditions': 'Valid in-store only. Cannot be combined with other offers.',
-            },
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -598,14 +499,16 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 |----------|-------------|
 | Max per post | 1 |
 | Formats | JPEG, PNG |
-| Max file size | 5 MB |
+| Max file size | 5 MiB |
 | Recommended | 1200 x 900 px (4:3 landscape) |
 
 ### Videos
 
 | Property | Requirement |
 |----------|-------------|
-| Support | Not supported via localPosts API |
+| Max per post | 1 |
+| Formats | MP4 |
+| Max file size | 75 MiB |
 
 ## `target_options` Fields
 
@@ -627,15 +530,14 @@ All fields go inside `target_options.googlebusiness` on your post request.
 | Error | Cause | Fix |
 |-------|-------|-----|
 | Content too long | Text exceeds 1,500 characters | Shorten the content. Use `target_options.googlebusiness.content` for a shorter version. |
-| Too many media | More than 1 image was attached | Remove extras. Google Business allows only 1 image per post. |
-| Video not supported | A video was attached | Remove the video. Google Business localPosts API does not support video uploads. |
+| Too many media | More than 1 media item was attached | Remove extras. Google Business accepts one photo or one video per post. |
+| Unsupported video | The video is not MP4 or exceeds 75 MiB | Supply one public MP4 URL within the RelayAPI limit. |
 | Event required | EVENT or OFFER type without an event schedule | Add an `event` object with a `schedule` containing start and end dates. |
 | Invalid CTA type | Unrecognized call_to_action type | Use one of: `LEARN_MORE`, `BOOK`, `ORDER`, `SHOP`, `SIGN_UP`, `CALL`. |
 
 ## Known Quirks
 
-- **No video support** — the localPosts API only supports photos, not videos.
-- **1 image per post** — no multi-image galleries or carousels.
+- **One media item per post** — use either one photo or one video; galleries and carousels are not supported.
 - **No direct public URL** — posts appear on Google Search and Maps but don't have a standalone page URL.
 - **EVENT and OFFER posts require a schedule** — you must provide start and end dates.
 - **CALL action type** uses the location's phone number — no URL is needed.

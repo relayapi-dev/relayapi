@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -62,9 +66,17 @@ function normalizeLocationId(platformAccountId: string): string {
 	return `locations/${platformAccountId}`;
 }
 
-function parseDateStr(dateStr: string): { year: number; month: number; day: number } {
+function parseDateStr(dateStr: string): {
+	year: number;
+	month: number;
+	day: number;
+} {
 	const d = new Date(`${dateStr}T00:00:00Z`);
-	return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+	return {
+		year: d.getUTCFullYear(),
+		month: d.getUTCMonth() + 1,
+		day: d.getUTCDate(),
+	};
 }
 
 interface GBPDate {
@@ -113,14 +125,16 @@ async function fetchMetrics(
 	const url = buildFetchUrl(locationId, dateRange);
 
 	try {
-		const res = await fetchWithTimeout(url, { headers: authHeaders(accessToken) });
+		const res = await fetchWithTimeout(url, {
+			headers: authHeaders(accessToken),
+		});
 		if (!res.ok) {
 			console.error(
-				`[google-business-analytics] API error ${res.status}: ${await res.text()}`,
+				`[google-business-analytics] API error ${res.status}: ${await readProviderText(res)}`,
 			);
 			return null;
 		}
-		return (await res.json()) as GBPMultiDailyResponse;
+		return (await readProviderJson(res)) as GBPMultiDailyResponse;
 	} catch (err) {
 		console.error("[google-business-analytics] Fetch error:", err);
 		return null;
@@ -164,10 +178,18 @@ export const googleBusinessAnalytics: PlatformAnalyticsFetcher = {
 		const curEngagement = sumMetricFromTimeSeries(current, ENGAGEMENT_METRICS);
 		const curCallClicks = sumMetricFromTimeSeries(current, ["CALL_CLICKS"]);
 		const curWebClicks = sumMetricFromTimeSeries(current, ["WEBSITE_CLICKS"]);
-		const curDirections = sumMetricFromTimeSeries(current, ["BUSINESS_DIRECTION_REQUESTS"]);
+		const curDirections = sumMetricFromTimeSeries(current, [
+			"BUSINESS_DIRECTION_REQUESTS",
+		]);
 
-		const prevImpressions = sumMetricFromTimeSeries(previous, IMPRESSION_METRICS);
-		const prevEngagement = sumMetricFromTimeSeries(previous, ENGAGEMENT_METRICS);
+		const prevImpressions = sumMetricFromTimeSeries(
+			previous,
+			IMPRESSION_METRICS,
+		);
+		const prevEngagement = sumMetricFromTimeSeries(
+			previous,
+			ENGAGEMENT_METRICS,
+		);
 
 		const engagementRate =
 			curImpressions > 0
@@ -227,17 +249,27 @@ export const googleBusinessAnalytics: PlatformAnalyticsFetcher = {
 
 		if (!data?.multiDailyMetricTimeSeries) return [];
 
-		const dailyMap = new Map<string, { impressions: number; engagement: number }>();
+		const dailyMap = new Map<
+			string,
+			{ impressions: number; engagement: number }
+		>();
 
 		for (const ts of data.multiDailyMetricTimeSeries) {
-			const isImpression = (IMPRESSION_METRICS as readonly string[]).includes(ts.dailyMetric);
-			const isEngagement = (ENGAGEMENT_METRICS as readonly string[]).includes(ts.dailyMetric);
+			const isImpression = (IMPRESSION_METRICS as readonly string[]).includes(
+				ts.dailyMetric,
+			);
+			const isEngagement = (ENGAGEMENT_METRICS as readonly string[]).includes(
+				ts.dailyMetric,
+			);
 
 			for (const dv of ts.timeSeries?.datedValues ?? []) {
 				const date = dateToString(dv.date);
 				const value = Number.parseInt(dv.value ?? "0", 10) || 0;
 
-				const existing = dailyMap.get(date) || { impressions: 0, engagement: 0 };
+				const existing = dailyMap.get(date) || {
+					impressions: 0,
+					engagement: 0,
+				};
 				if (isImpression) existing.impressions += value;
 				if (isEngagement) existing.engagement += value;
 				dailyMap.set(date, existing);

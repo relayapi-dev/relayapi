@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createRelayClient } from "./client";
-import { loadConfig } from "./config";
-import { createServer } from "./server";
+import { createRelayClient } from "./client.js";
+import { loadConfig } from "./config.js";
+import { loadHttpConfig, startHttpServer } from "./http.js";
+import { createServer } from "./server.js";
 
 /**
  * Entry point for the RelayAPI MCP server.
  *
  * Transports:
  *   - stdio (default) — for Claude Desktop and local MCP-compatible clients.
- *   - http            — NOT YET IMPLEMENTED. See the README for the planned
- *                       Streamable-HTTP transport.
+ *   - http            — stateless Streamable HTTP for remote MCP clients.
  *
  * Env:
  *   RELAYAPI_KEY       — required, rlay_live_* / rlay_test_*
@@ -18,25 +18,35 @@ import { createServer } from "./server";
  */
 async function main(): Promise<void> {
 	const transportArg = process.argv[2] ?? "stdio";
-
-	if (transportArg === "http") {
+	if (transportArg !== "stdio" && transportArg !== "http") {
 		console.error(
-			"http transport is not yet implemented. Use stdio for now, or open an issue if you need Streamable-HTTP support.",
+			`Unknown transport '${transportArg}'. Expected 'stdio' or 'http'.`,
 		);
-		process.exit(2);
-	}
-
-	if (transportArg !== "stdio") {
-		console.error(`Unknown transport '${transportArg}'. Expected 'stdio'.`);
 		process.exit(2);
 	}
 
 	const config = loadConfig();
 	const client = createRelayClient(config);
-	// Loose cast: the MCP server only uses the automations surface, which the
-	// SDK instance provides at runtime; a nominal type mismatch on the SDK's
-	// richer generics is not worth propagating through the tool registrations.
-	const server = createServer(client as unknown as Parameters<typeof createServer>[0]);
+	if (transportArg === "http") {
+		const httpConfig = loadHttpConfig();
+		const httpServer = await startHttpServer(client, httpConfig);
+		process.stderr.write(
+			`relayapi-mcp-server ready at http://${httpConfig.host}:${httpConfig.port}${httpConfig.path}\n`,
+		);
+		const shutdown = () => {
+			httpServer.close((error) => {
+				if (error) {
+					console.error("Failed to stop MCP HTTP server:", error.message);
+					process.exitCode = 1;
+				}
+			});
+		};
+		process.once("SIGINT", shutdown);
+		process.once("SIGTERM", shutdown);
+		return;
+	}
+
+	const server = createServer(client);
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);

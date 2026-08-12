@@ -16,49 +16,89 @@ on:
       - "packages/mcp/**"
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   release-please:
+    if: ${{ github.ref == 'refs/heads/main' && github.ref_protected }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs['packages/mcp--release_created'] }}
       version: ${{ steps.release.outputs['packages/mcp--version'] }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: packages/mcp/release-please-config.json
+          manifest-file: packages/mcp/.release-please-manifest.json
 
-  publish:
+  runtime-floor:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          persist-credentials: false
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "18.20.8"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build SDK (required as a workspace:* dependency)
-        working-directory: packages/sdk
-        run: npx tsc -p tsconfig.build.json
-
-      - name: Build MCP server
+      - name: Build, pack, install, and execute MCP on Node 18
         working-directory: packages/mcp
-        run: npx tsc -p tsconfig.build.json
+        run: bun run test:package
+
+  publish:
+    needs: [release-please, runtime-floor]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.12.0"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build SDK
+        working-directory: packages/sdk
+        run: bun run build
+
+      - name: Verify MCP server
+        working-directory: packages/mcp
+        run: |
+          bun run typecheck
+          bun test
+          bun run test:package
 
       - name: Publish to npm
         working-directory: packages/mcp
-        run: npm publish --access public
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

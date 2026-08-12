@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import { GRAPH_BASE } from "../../config/api-versions";
 import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import type {
@@ -93,11 +97,11 @@ async function threadsFetch<T = unknown>(
 		const res = await fetchWithTimeout(url);
 		if (!res.ok) {
 			console.error(
-				`[threads-analytics] API error ${res.status} for ${path}: ${await res.text()}`,
+				`[threads-analytics] API error ${res.status} for ${path}: ${await readProviderText(res)}`,
 			);
 			return null;
 		}
-		return (await res.json()) as T;
+		return (await readProviderJson(res)) as T;
 	} catch (err) {
 		console.error(`[threads-analytics] Fetch failed for ${path}:`, err);
 		return null;
@@ -125,7 +129,13 @@ async function fetchInsightsSums(
 	userId: string,
 	accessToken: string,
 	dateRange: DateRange,
-): Promise<{ views: number; likes: number; replies: number; reposts: number; quotes: number }> {
+): Promise<{
+	views: number;
+	likes: number;
+	replies: number;
+	reposts: number;
+	quotes: number;
+}> {
 	const since = toUnix(dateRange.from);
 	const until = toUnix(dateRange.to);
 
@@ -168,12 +178,18 @@ export const threadsAnalytics: PlatformAnalyticsFetcher = {
 		const followersCount = getMetricTotal(items, "followers_count");
 
 		const engagement = likes + replies + reposts + quotes;
-		const engagementRate = views > 0 ? Math.round((engagement / views) * 10000) / 100 : null;
+		const engagementRate =
+			views > 0 ? Math.round((engagement / views) * 10000) / 100 : null;
 
 		const prev = previousPeriod(dateRange);
-		const prevSums = await fetchInsightsSums(platformAccountId, accessToken, prev);
+		const prevSums = await fetchInsightsSums(
+			platformAccountId,
+			accessToken,
+			prev,
+		);
 		const prevViews = prevSums.views;
-		const prevEngagement = prevSums.likes + prevSums.replies + prevSums.reposts + prevSums.quotes;
+		const prevEngagement =
+			prevSums.likes + prevSums.replies + prevSums.reposts + prevSums.quotes;
 
 		return {
 			followers: followersCount || null,
@@ -228,8 +244,10 @@ export const threadsAnalytics: PlatformAnalyticsFetcher = {
 				const postReposts = getMetricTotal(metrics, "reposts");
 				const postQuotes = getMetricTotal(metrics, "quotes");
 
-				const totalEngagement = postLikes + postReplies + postReposts + postQuotes;
-				const engagementRate = postViews > 0 ? (totalEngagement / postViews) * 100 : 0;
+				const totalEngagement =
+					postLikes + postReplies + postReposts + postQuotes;
+				const engagementRate =
+					postViews > 0 ? (totalEngagement / postViews) * 100 : 0;
 
 				results.push({
 					platform_post_id: post.id,
@@ -279,7 +297,10 @@ export const threadsAnalytics: PlatformAnalyticsFetcher = {
 			const cityResults =
 				cityData?.data?.[0]?.total_value?.breakdowns?.[0]?.results ?? [];
 			const topCities = cityResults
-				.map((r) => ({ name: r.dimension_values?.[0] ?? "Unknown", count: r.value ?? 0 }))
+				.map((r) => ({
+					name: r.dimension_values?.[0] ?? "Unknown",
+					count: r.value ?? 0,
+				}))
 				.sort((a, b) => b.count - a.count)
 				.slice(0, 20);
 
@@ -296,7 +317,10 @@ export const threadsAnalytics: PlatformAnalyticsFetcher = {
 
 			const ageGenderResults =
 				ageGenderData?.data?.[0]?.total_value?.breakdowns?.[0]?.results ?? [];
-			const ageGenderMap: Record<string, { male: number; female: number; other: number }> = {};
+			const ageGenderMap: Record<
+				string,
+				{ male: number; female: number; other: number }
+			> = {};
 
 			for (const r of ageGenderResults) {
 				const ageRange = r.dimension_values?.[0] ?? "unknown";
@@ -318,7 +342,9 @@ export const threadsAnalytics: PlatformAnalyticsFetcher = {
 
 			const ageGender = Object.entries(ageGenderMap)
 				.map(([age_range, counts]) => ({ age_range, ...counts }))
-				.sort((a, b) => b.male + b.female + b.other - (a.male + a.female + a.other))
+				.sort(
+					(a, b) => b.male + b.female + b.other - (a.male + a.female + a.other),
+				)
 				.slice(0, 20);
 
 			return {
@@ -355,7 +381,10 @@ export const threadsAnalytics: PlatformAnalyticsFetcher = {
 			const repostsMetric = items.find((m) => m.name === "reposts");
 			const quotesMetric = items.find((m) => m.name === "quotes");
 
-			const dateMap: Record<string, { impressions: number; engagement: number }> = {};
+			const dateMap: Record<
+				string,
+				{ impressions: number; engagement: number }
+			> = {};
 
 			for (const v of viewsMetric?.values ?? []) {
 				const date = v.end_time?.slice(0, 10) ?? "";
@@ -364,7 +393,12 @@ export const threadsAnalytics: PlatformAnalyticsFetcher = {
 				dateMap[date].impressions = v.value ?? 0;
 			}
 
-			const engagementMetrics = [likesMetric, repliesMetric, repostsMetric, quotesMetric];
+			const engagementMetrics = [
+				likesMetric,
+				repliesMetric,
+				repostsMetric,
+				quotesMetric,
+			];
 			for (const metric of engagementMetrics) {
 				for (const v of metric?.values ?? []) {
 					const date = v.end_time?.slice(0, 10) ?? "";

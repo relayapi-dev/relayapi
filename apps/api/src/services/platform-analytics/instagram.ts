@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -71,13 +75,13 @@ async function igFetch<T = unknown>(
 	try {
 		const res = await fetchWithTimeout(url);
 		if (!res.ok) {
-			const body = await res.text();
+			const body = await readProviderText(res);
 			console.error(
 				`[instagram-analytics] API error ${res.status} for ${path}: ${body}`,
 			);
 			return null;
 		}
-		return (await res.json()) as T;
+		return (await readProviderJson(res)) as T;
 	} catch (err) {
 		console.error(`[instagram-analytics] Fetch failed for ${path}:`, err);
 		return null;
@@ -206,20 +210,23 @@ export function createInstagramAnalytics(
 					]);
 
 				const reach = sumMetric(timeSeriesData?.data ?? [], "reach");
-				const totalInteractions = getTotalValue(totalValueData?.data ?? [], "total_interactions");
-				const accountsEngaged = getTotalValue(totalValueData?.data ?? [], "accounts_engaged");
+				const totalInteractions = getTotalValue(
+					totalValueData?.data ?? [],
+					"total_interactions",
+				);
+				const accountsEngaged = getTotalValue(
+					totalValueData?.data ?? [],
+					"accounts_engaged",
+				);
 				const followsAndUnfollows = getTotalValue(
 					totalValueData?.data ?? [],
 					"follows_and_unfollows",
 				);
 
-				const followers: number | null =
-					profileData?.followers_count ?? null;
+				const followers: number | null = profileData?.followers_count ?? null;
 
 				const reachChange =
-					prev.reach > 0
-						? ((reach - prev.reach) / prev.reach) * 100
-						: null;
+					prev.reach > 0 ? ((reach - prev.reach) / prev.reach) * 100 : null;
 				const engagementChange =
 					prev.totalInteractions > 0
 						? ((totalInteractions - prev.totalInteractions) /
@@ -277,9 +284,7 @@ export function createInstagramAnalytics(
 				const fromTs = toUnix(dateRange.from);
 				const untilTs = toUnix(dateRange.to) + 86400; // include entire "to" day
 				const mediaItems = allItems.filter((item) => {
-					const ts = Math.floor(
-						new Date(item.timestamp ?? 0).getTime() / 1000,
-					);
+					const ts = Math.floor(new Date(item.timestamp ?? 0).getTime() / 1000);
 					return ts >= fromTs && ts < untilTs;
 				});
 
@@ -306,8 +311,7 @@ export function createInstagramAnalytics(
 							const getValue = (name: string): number => {
 								const m = metrics.find((x) => x.name === name);
 								// Media insights return a single value, not an array
-								if (m?.values?.[0]?.value != null)
-									return m.values[0].value;
+								if (m?.values?.[0]?.value != null) return m.values[0].value;
 								if (typeof m?.total_value?.value === "number")
 									return m.total_value.value;
 								return 0;
@@ -321,14 +325,11 @@ export function createInstagramAnalytics(
 							const totalInteractions = getValue("total_interactions");
 
 							const engagementRate =
-								postReach > 0
-									? (totalInteractions / postReach) * 100
-									: 0;
+								postReach > 0 ? (totalInteractions / postReach) * 100 : 0;
 
 							// Use thumbnail_url for video types, otherwise media_url
 							const isVideo =
-								item.media_type === "VIDEO" ||
-								item.media_type === "REELS";
+								item.media_type === "VIDEO" || item.media_type === "REELS";
 							const mediaUrl = isVideo
 								? (item.thumbnail_url ?? item.media_url ?? null)
 								: (item.media_url ?? null);
@@ -356,10 +357,7 @@ export function createInstagramAnalytics(
 
 				return results;
 			} catch (err) {
-				console.error(
-					"[instagram-analytics] getPostMetrics failed:",
-					err,
-				);
+				console.error("[instagram-analytics] getPostMetrics failed:", err);
 				return [];
 			}
 		},
@@ -410,8 +408,7 @@ export function createInstagramAnalytics(
 					postReach > 0 ? (totalInteractions / postReach) * 100 : 0;
 
 				const isVideo =
-					mediaData.media_type === "VIDEO" ||
-					mediaData.media_type === "REELS";
+					mediaData.media_type === "VIDEO" || mediaData.media_type === "REELS";
 				const mediaUrl = isVideo
 					? (mediaData.thumbnail_url ?? mediaData.media_url ?? null)
 					: (mediaData.media_url ?? null);
@@ -450,37 +447,34 @@ export function createInstagramAnalytics(
 		): Promise<PlatformAudienceDemographics | null> {
 			try {
 				// Fetch all three breakdowns in parallel
-				const [cityData, countryData, ageGenderData] =
-					await Promise.all([
-						igFetch<IGDemographicsResponse>(
-							graphHost,
-							accessToken,
-							`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=city`,
-						),
-						igFetch<IGDemographicsResponse>(
-							graphHost,
-							accessToken,
-							`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=country`,
-						),
-						igFetch<IGDemographicsResponse>(
-							graphHost,
-							accessToken,
-							`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=age,gender`,
-						),
-					]);
+				const [cityData, countryData, ageGenderData] = await Promise.all([
+					igFetch<IGDemographicsResponse>(
+						graphHost,
+						accessToken,
+						`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=city`,
+					),
+					igFetch<IGDemographicsResponse>(
+						graphHost,
+						accessToken,
+						`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=country`,
+					),
+					igFetch<IGDemographicsResponse>(
+						graphHost,
+						accessToken,
+						`/${platformAccountId}/insights?metric=follower_demographics&period=lifetime&metric_type=total_value&breakdown=age,gender`,
+					),
+				]);
 
 				// --- Cities ---
 				const cityBreakdown: Record<string, number> =
-					cityData?.data?.[0]?.total_value?.breakdowns?.[0]
-						?.results?.reduce(
-							(acc: Record<string, number>, r: IGBreakdownResult) => {
-								const name =
-									r.dimension_values?.[0] ?? "Unknown";
-								acc[name] = r.value ?? 0;
-								return acc;
-							},
-							{},
-						) ?? {};
+					cityData?.data?.[0]?.total_value?.breakdowns?.[0]?.results?.reduce(
+						(acc: Record<string, number>, r: IGBreakdownResult) => {
+							const name = r.dimension_values?.[0] ?? "Unknown";
+							acc[name] = r.value ?? 0;
+							return acc;
+						},
+						{},
+					) ?? {};
 
 				const topCities = Object.entries(cityBreakdown)
 					.map(([name, count]) => ({ name, count }))
@@ -489,16 +483,14 @@ export function createInstagramAnalytics(
 
 				// --- Countries ---
 				const countryBreakdown: Record<string, number> =
-					countryData?.data?.[0]?.total_value?.breakdowns?.[0]
-						?.results?.reduce(
-							(acc: Record<string, number>, r: IGBreakdownResult) => {
-								const code =
-									r.dimension_values?.[0] ?? "XX";
-								acc[code] = r.value ?? 0;
-								return acc;
-							},
-							{},
-						) ?? {};
+					countryData?.data?.[0]?.total_value?.breakdowns?.[0]?.results?.reduce(
+						(acc: Record<string, number>, r: IGBreakdownResult) => {
+							const code = r.dimension_values?.[0] ?? "XX";
+							acc[code] = r.value ?? 0;
+							return acc;
+						},
+						{},
+					) ?? {};
 
 				const topCountries = Object.entries(countryBreakdown)
 					.map(([code, count]) => ({ code, name: code, count }))
@@ -512,15 +504,12 @@ export function createInstagramAnalytics(
 				> = {};
 
 				const ageGenderResults =
-					ageGenderData?.data?.[0]?.total_value?.breakdowns?.[0]
-						?.results ?? [];
+					ageGenderData?.data?.[0]?.total_value?.breakdowns?.[0]?.results ?? [];
 
 				for (const r of ageGenderResults) {
 					// dimension_values: ["age_range", "gender"] e.g. ["25-34", "M"]
 					const ageRange = r.dimension_values?.[0] ?? "unknown";
-					const gender = (
-						r.dimension_values?.[1] ?? ""
-					).toUpperCase();
+					const gender = (r.dimension_values?.[1] ?? "").toUpperCase();
 					const value: number = r.value ?? 0;
 
 					if (!ageGenderMap[ageRange]) {
@@ -547,10 +536,7 @@ export function createInstagramAnalytics(
 					}))
 					.sort(
 						(a, b) =>
-							b.male +
-							b.female +
-							b.other -
-							(a.male + a.female + a.other),
+							b.male + b.female + b.other - (a.male + a.female + a.other),
 					)
 					.slice(0, 20);
 
@@ -560,10 +546,7 @@ export function createInstagramAnalytics(
 					age_gender: ageGender,
 				};
 			} catch (err) {
-				console.error(
-					"[instagram-analytics] getAudience failed:",
-					err,
-				);
+				console.error("[instagram-analytics] getAudience failed:", err);
 				return null;
 			}
 		},
@@ -604,10 +587,7 @@ export function createInstagramAnalytics(
 					engagementData?.data ?? [],
 					"total_interactions",
 				);
-				const totalReach = reachValues.reduce(
-					(s, v) => s + (v.value ?? 0),
-					0,
-				);
+				const totalReach = reachValues.reduce((s, v) => s + (v.value ?? 0), 0);
 
 				return reachValues
 					.map((v) => {
@@ -617,9 +597,7 @@ export function createInstagramAnalytics(
 						// Distribute total engagement proportionally by daily reach
 						const dailyEngagement =
 							totalReach > 0
-								? Math.round(
-										totalEngagement * (dailyReach / totalReach),
-									)
+								? Math.round(totalEngagement * (dailyReach / totalReach))
 								: 0;
 						return {
 							date,
@@ -632,10 +610,7 @@ export function createInstagramAnalytics(
 					.filter((p): p is DailyMetricPoint => p !== null)
 					.sort((a, b) => a.date.localeCompare(b.date));
 			} catch (err) {
-				console.error(
-					"[instagram-analytics] getDailyMetrics failed:",
-					err,
-				);
+				console.error("[instagram-analytics] getDailyMetrics failed:", err);
 				return [];
 			}
 		},

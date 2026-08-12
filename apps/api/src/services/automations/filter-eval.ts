@@ -7,6 +7,7 @@ interface Predicate {
 	field: string;
 	op: string;
 	value?: unknown;
+	case_sensitive?: boolean;
 }
 
 export interface FilterGroup {
@@ -58,19 +59,35 @@ function evalPredicate(
 			if (actual === pred.value) return false;
 			return !looseNumericEquals(actual, pred.value);
 		case "contains":
-			if (Array.isArray(actual))
-				return actual.includes(pred.value as never);
-			return typeof actual === "string" && actual.includes(String(pred.value));
+			if (Array.isArray(actual)) return actual.includes(pred.value as never);
+			return (
+				typeof actual === "string" &&
+				normalizeText(actual, pred).includes(
+					normalizeText(String(pred.value), pred),
+				)
+			);
 		case "not_contains":
-			if (Array.isArray(actual))
-				return !actual.includes(pred.value as never);
-			return typeof actual === "string" && !actual.includes(String(pred.value));
+			if (Array.isArray(actual)) return !actual.includes(pred.value as never);
+			return (
+				typeof actual === "string" &&
+				!normalizeText(actual, pred).includes(
+					normalizeText(String(pred.value), pred),
+				)
+			);
 		case "starts_with":
 			return (
-				typeof actual === "string" && actual.startsWith(String(pred.value))
+				typeof actual === "string" &&
+				normalizeText(actual, pred).startsWith(
+					normalizeText(String(pred.value), pred),
+				)
 			);
 		case "ends_with":
-			return typeof actual === "string" && actual.endsWith(String(pred.value));
+			return (
+				typeof actual === "string" &&
+				normalizeText(actual, pred).endsWith(
+					normalizeText(String(pred.value), pred),
+				)
+			);
 		case "gt": {
 			// Coerce `actual` to a number — custom fields hydrate as strings, so a
 			// strict `typeof actual === "number"` guard rejected every stored field
@@ -91,13 +108,9 @@ function evalPredicate(
 			return a !== null && a <= Number(pred.value);
 		}
 		case "in":
-			return (
-				Array.isArray(pred.value) && pred.value.includes(actual as never)
-			);
+			return Array.isArray(pred.value) && pred.value.includes(actual as never);
 		case "not_in":
-			return (
-				Array.isArray(pred.value) && !pred.value.includes(actual as never)
-			);
+			return Array.isArray(pred.value) && !pred.value.includes(actual as never);
 		case "exists":
 			return actual !== undefined && actual !== null;
 		case "not_exists":
@@ -105,6 +118,10 @@ function evalPredicate(
 		default:
 			return false;
 	}
+}
+
+function normalizeText(value: string, predicate: Predicate): string {
+	return predicate.case_sensitive === false ? value.toLowerCase() : value;
 }
 
 /**

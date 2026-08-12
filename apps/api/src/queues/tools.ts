@@ -1,23 +1,19 @@
-import { completeToolJob, failToolJob } from "../services/tool-jobs";
-import { callDownloaderService } from "../services/tool-service";
+import { claimToolJob, executeClaimedToolJob } from "../services/tool-jobs";
 import type { Env } from "../types";
 import { recordQueueFailure } from "./failures";
 
 interface ToolJobMessage {
-	type: "tool_download" | "tool_transcript";
+	type: "tool_job";
 	job_id: string;
 	org_id: string;
-	endpoint: string;
-	payload: Record<string, unknown>;
 }
 
 export async function consumeToolsQueue(
 	batch: MessageBatch<ToolJobMessage>,
 	env: Env,
 ): Promise<void> {
-	// Process the batch concurrently — each message awaits a slow (up to 60s)
-	// downloader call, so a serial loop would stack those latencies and delay the
-	// last job in the batch by minutes. Per-message ack/retry stays isolated.
+	// A tool call can take 60 seconds. Isolate per-message decisions so one
+	// provider timeout neither serializes nor acknowledges another job.
 	const results = await Promise.allSettled(
 		batch.messages.map((message) => handleMessage(message, env)),
 	);
@@ -25,32 +21,28 @@ export async function consumeToolsQueue(
 		if (result.status === "rejected") {
 			const message = batch.messages[index];
 			if (!message) continue;
-			console.error("[Tools] handler escaped without a terminal decision", {
+			console.error("[tools] handler escaped without a terminal decision", {
+				event: "tool_job_handler_escape",
 				messageId: message.id,
-				error:
-					result.reason instanceof Error
-						? result.reason.message
-						: String(result.reason),
+				error: result.reason,
 			});
-			message.retry({ delaySeconds: Math.min(2 ** message.attempts, 900) });
+			message.retry({
+				delaySeconds: Math.min(2 ** Math.max(message.attempts, 1), 900),
+			});
 		}
 	}
 }
 
 function isToolJobMessage(value: unknown): value is ToolJobMessage {
-	if (!value || typeof value !== "object") return false;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const body = value as Partial<ToolJobMessage>;
 	return (
-		(body.type === "tool_download" || body.type === "tool_transcript") &&
+		body.type === "tool_job" &&
 		typeof body.job_id === "string" &&
 		body.job_id.length > 0 &&
 		typeof body.org_id === "string" &&
 		body.org_id.length > 0 &&
-		typeof body.endpoint === "string" &&
-		body.endpoint.length > 0 &&
-		body.payload !== null &&
-		typeof body.payload === "object" &&
-		!Array.isArray(body.payload)
+		Object.keys(body).every((key) => ["type", "job_id", "org_id"].includes(key))
 	);
 }
 
@@ -71,37 +63,18 @@ async function handleMessage(
 		return;
 	}
 
-	try {
-		// Queue consumers get 15 minutes — use 60s timeout for the VPS call
-		const result = await callDownloaderService(
-			env,
-			body.endpoint,
-			body.payload,
-			60_000,
-		);
-
-		if (result.ok) {
-			await completeToolJob(env.KV, body.job_id, result.data);
-		} else {
-			await failToolJob(env.KV, body.job_id, result.error);
-		}
+	const claim = await claimToolJob(env, body.job_id, body.org_id);
+	if (!claim) {
+		// Duplicate, stale, terminal, or not-yet-due hints are safe to discard;
+		// PostgreSQL plus the every-minute dispatcher owns recovery.
 		message.ack();
-	} catch (err) {
-		if (message.attempts >= 3) {
-			await failToolJob(
-				env.KV,
-				body.job_id,
-				`Failed after ${message.attempts} attempts: ${err}`,
-			);
-			// Preserve exhausted infrastructure work in the configured DLQ. The KV
-			// job result is only a user-facing projection, not the recovery ledger.
-			message.retry({ delaySeconds: 60 });
-		} else {
-			const delaySeconds = 2 ** message.attempts;
-			console.log(
-				`[Tools] Retrying ${body.job_id} in ${delaySeconds}s (attempt ${message.attempts})`,
-			);
-			message.retry({ delaySeconds });
-		}
+		return;
+	}
+
+	const result = await executeClaimedToolJob(env, claim);
+	if (result.delivery === "retry") {
+		message.retry({ delaySeconds: result.delaySeconds });
+	} else {
+		message.ack();
 	}
 }

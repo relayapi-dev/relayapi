@@ -6,6 +6,7 @@ import {
 	automationScheduledJobs,
 	automations,
 	autoPostRules,
+	billingOutbox,
 	broadcasts,
 	connectionLogs,
 	createDb,
@@ -18,6 +19,8 @@ import {
 	postRecyclingConfigs,
 	posts,
 	session,
+	shortLinkCredentials,
+	shortLinks,
 	socialAccounts,
 	tenantDeletionJobs,
 	tenantDeletionSteps,
@@ -25,14 +28,27 @@ import {
 	workspaces,
 } from "@relayapi/db";
 import { and, count, eq, inArray, lte, ne, or, sql } from "drizzle-orm";
-import Stripe from "stripe";
 import { buildAccountCacheKeys } from "../lib/delete-account";
 import type { Env } from "../types";
+import { adReportOrganizationPrefix } from "./ad-report-artifact-cleanup";
+import { stageSubscriptionCancellation } from "./billing-outbox";
+import { enqueueShortLinkProviderCleanup } from "./external-subject-cleanup";
+import {
+	materializeTenantFinancialRetentionBatch,
+	type TenantFinancialRetentionCursor,
+} from "./financial-retention";
 import {
 	countIncompletePhoneReleases,
 	processDuePhoneReleases,
 	stageTenantPhoneReleases,
 } from "./phone-number-operations";
+import { findActiveErasureHold } from "./privacy-retention-policy";
+import type { ProviderRef } from "./short-link-providers";
+import { invalidateRelayApiShortLinkCaches } from "./short-link-providers/relayapi";
+import {
+	deleteByosPrefixPage,
+	nextByosCleanupLocator,
+} from "./storage-locator";
 
 const LEASE_MS = 10 * 60_000;
 const WAIT_MS = 60_000;
@@ -41,6 +57,24 @@ const MAX_R2_OBJECTS_PER_BUCKET = 1000;
 const MAX_AVATARS_PER_TICK = 100;
 const TENANT_DELETE_BATCH_SIZE = 250;
 const MAX_WORK_UNITS_PER_JOB = 8;
+const TENANT_MEMBERSHIP_LOCK_RETRIES = 3;
+
+class TenantMembershipSetChangedError extends Error {
+	constructor() {
+		super("Tenant membership set changed while acquiring deletion locks");
+		this.name = "TenantMembershipSetChangedError";
+	}
+}
+
+function sameSortedIds(
+	left: ReadonlyArray<{ id: string }>,
+	right: ReadonlyArray<{ id: string }>,
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every((row, index) => row.id === right[index]?.id)
+	);
+}
 
 /**
  * Explicit child-first deletion graph for every auth/public table that carries
@@ -62,14 +96,60 @@ function tenantPurgeTable<
 	};
 }
 
+/**
+ * Tenant-identified rows that intentionally survive the destructive purge.
+ * Every entry must be tombstone-compatible and carry no credential or raw
+ * provider payload. The ownership-boundary test derives all other
+ * organization columns into `TENANT_PURGE_TABLES`.
+ */
+export const TENANT_RETAINED_TABLES = [
+	{
+		schema: "public",
+		table: "financial_retention_receipts",
+		reason:
+			"Immutable minimized financial evidence with a detached tenant tombstone and bounded retention clock",
+	},
+	{
+		schema: "public",
+		table: "operator_resolution_evidence",
+		reason: "Append-only sanitized operator decision evidence",
+	},
+	{
+		schema: "public",
+		table: "external_subject_cleanup_jobs",
+		reason:
+			"Durable external-object deletion intent survives its subject and has a bounded completed-receipt TTL",
+	},
+	{
+		schema: "public",
+		table: "tenant_deletion_jobs",
+		reason: "Terminal tenant-erasure receipt",
+	},
+	{
+		schema: "public",
+		table: "tenant_deletion_steps",
+		reason: "Bounded checkpoints supporting the terminal erasure receipt",
+	},
+] as const;
+
 export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "account_revocation_jobs"),
+	tenantPurgeTable("public", "ad_report_rows"),
+	tenantPurgeTable("public", "ad_report_jobs"),
+	tenantPurgeTable("public", "ad_conversion_events"),
+	tenantPurgeTable("public", "ad_conversion_rules"),
+	tenantPurgeTable("public", "ad_leads"),
+	tenantPurgeTable("public", "ad_lead_forms"),
+	tenantPurgeTable("public", "ad_advanced_resources"),
+	tenantPurgeTable("public", "ad_account_promotable_identities"),
+	tenantPurgeTable("public", "ad_mutation_operations"),
 	tenantPurgeTable("public", "ad_audiences"),
 	tenantPurgeTable("public", "ad_creation_operations"),
 	tenantPurgeTable("public", "ad_sync_logs"),
 	tenantPurgeTable("public", "ads"),
 	tenantPurgeTable("public", "ad_campaigns"),
 	tenantPurgeTable("public", "ad_accounts"),
+	tenantPurgeTable("public", "ad_connections"),
 	tenantPurgeTable("public", "ai_agents"),
 	tenantPurgeTable("public", "ai_knowledge_chunks"),
 	tenantPurgeTable("public", "ai_knowledge_documents"),
@@ -78,31 +158,38 @@ export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "auto_post_feed_items"),
 	tenantPurgeTable("public", "auto_post_rules"),
 	tenantPurgeTable("public", "automation_contact_controls"),
+	tenantPurgeTable("public", "automation_conversion_events"),
+	tenantPurgeTable("public", "automation_scheduled_jobs"),
 	tenantPurgeTable("public", "automation_effects"),
 	tenantPurgeTable("public", "automation_node_executions"),
+	tenantPurgeTable("public", "automation_step_runs"),
 	tenantPurgeTable("public", "automation_runs"),
 	tenantPurgeTable("public", "automation_bindings"),
 	tenantPurgeTable("public", "automation_secrets"),
 	tenantPurgeTable("public", "automation_webhook_receipts"),
+	tenantPurgeTable("public", "automation_entrypoint_daily_counts"),
 	tenantPurgeTable("public", "automation_entrypoints"),
+	tenantPurgeTable("public", "billing_operation_attempts"),
 	tenantPurgeTable("public", "billing_operations"),
 	tenantPurgeTable("public", "billing_outbox"),
 	tenantPurgeTable("public", "broadcast_recipients"),
 	tenantPurgeTable("public", "broadcasts"),
-	tenantPurgeTable("public", "byos_configs"),
 	tenantPurgeTable("public", "connection_logs"),
 	tenantPurgeTable("public", "contact_channels"),
 	tenantPurgeTable("public", "contact_consent_states"),
 	tenantPurgeTable("public", "contact_segment_memberships"),
 	tenantPurgeTable("public", "contact_subscriptions"),
-	tenantPurgeTable("public", "contact_suppressions"),
+	tenantPurgeTable("public", "contact_subscription_events"),
 	tenantPurgeTable("public", "contact_consent_events"),
 	tenantPurgeTable("public", "content_templates"),
 	tenantPurgeTable("public", "cross_post_actions"),
 	tenantPurgeTable("public", "custom_field_values"),
 	tenantPurgeTable("public", "custom_field_definitions"),
 	tenantPurgeTable("public", "dunning_events"),
+	tenantPurgeTable("public", "email_deliveries"),
 	tenantPurgeTable("public", "external_posts"),
+	tenantPurgeTable("public", "idea_activity"),
+	tenantPurgeTable("public", "idea_comments"),
 	tenantPurgeTable("public", "idea_media"),
 	tenantPurgeTable("public", "idea_conversion_operations"),
 	tenantPurgeTable("public", "idea_tags"),
@@ -112,32 +199,49 @@ export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "inbox_conversation_notes"),
 	tenantPurgeTable("public", "inbox_event_effects"),
 	tenantPurgeTable("public", "inbox_messages"),
+	tenantPurgeTable("public", "whatsapp_identity_aliases"),
 	tenantPurgeTable("public", "inbox_conversations"),
+	tenantPurgeTable("public", "social_mutation_operations"),
+	tenantPurgeTable("public", "whatsapp_groups"),
+	tenantPurgeTable("public", "public_growth_events"),
+	tenantPurgeTable("public", "queue_schedules"),
+	tenantPurgeTable("public", "qr_codes"),
+	tenantPurgeTable("public", "ref_urls"),
 	tenantPurgeTable("public", "contacts"),
 	tenantPurgeTable("auth", "invitation"),
+	tenantPurgeTable("public", "invite_token_workspaces"),
 	tenantPurgeTable("public", "invite_tokens"),
 	tenantPurgeTable("public", "landing_pages"),
+	tenantPurgeTable("public", "media_derivatives"),
+	tenantPurgeTable("public", "media_processing_jobs"),
+	tenantPurgeTable("public", "media_upload_sessions"),
 	tenantPurgeTable("public", "media"),
+	tenantPurgeTable("public", "storage_credentials"),
+	tenantPurgeTable("public", "storage_locations"),
 	tenantPurgeTable("public", "notification_preferences"),
 	tenantPurgeTable("public", "notifications"),
-	tenantPurgeTable("auth", "member"),
 	tenantPurgeTable("public", "one_time_capabilities"),
+	tenantPurgeTable("public", "operator_resolution_notes"),
 	tenantPurgeTable("public", "org_streaks"),
 	tenantPurgeTable("public", "organization_settings"),
+	tenantPurgeTable("public", "stripe_organization_leases"),
 	tenantPurgeTable("public", "telegram_connection_challenges"),
 	tenantPurgeTable("auth", "apikey"),
+	tenantPurgeTable("public", "principal_workspace_grants"),
+	tenantPurgeTable("public", "organization_principals"),
+	tenantPurgeTable("auth", "member"),
 	tenantPurgeTable("public", "organization_subscriptions"),
+	tenantPurgeTable("public", "stripe_events"),
 	tenantPurgeTable("public", "post_tags"),
 	tenantPurgeTable("public", "post_targets"),
 	tenantPurgeTable("public", "publish_outbox"),
-	tenantPurgeTable("public", "qr_codes"),
 	tenantPurgeTable("public", "recycling_occurrences"),
 	tenantPurgeTable("public", "post_recycling_configs"),
-	tenantPurgeTable("public", "ref_urls"),
 	tenantPurgeTable("public", "automations"),
 	tenantPurgeTable("public", "segments"),
 	tenantPurgeTable("public", "short_link_configs"),
 	tenantPurgeTable("public", "short_links"),
+	tenantPurgeTable("public", "short_link_credentials"),
 	tenantPurgeTable("public", "posts"),
 	tenantPurgeTable("public", "signatures"),
 	tenantPurgeTable("public", "social_account_sync_state"),
@@ -146,15 +250,22 @@ export const TENANT_PURGE_TABLES = [
 	tenantPurgeTable("public", "tags"),
 	tenantPurgeTable("public", "thread_executions"),
 	tenantPurgeTable("public", "post_threads"),
-	tenantPurgeTable("public", "usage_bucket_settlements"),
+	// Reservation-linked provider operations must precede the shared parent;
+	// the ad creation/mutation operation tables are already purged above.
+	tenantPurgeTable("public", "whatsapp_phone_release_operations"),
+	tenantPurgeTable("public", "whatsapp_phone_provisioning_operations"),
+	tenantPurgeTable("public", "tool_jobs"),
 	tenantPurgeTable("public", "invoices"),
-	tenantPurgeTable("public", "usage_records"),
+	tenantPurgeTable("public", "usage_reservation_carryovers"),
 	tenantPurgeTable("public", "usage_reservations"),
 	tenantPurgeTable("public", "usage_buckets"),
-	tenantPurgeTable("public", "webhook_deliveries"),
+	tenantPurgeTable("public", "billing_periods"),
 	tenantPurgeTable("public", "webhook_logs"),
+	tenantPurgeTable("public", "webhook_deliveries"),
 	tenantPurgeTable("public", "webhook_endpoints"),
 	tenantPurgeTable("public", "webhook_events"),
+	tenantPurgeTable("public", "whatsapp_phone_billing_attempts"),
+	tenantPurgeTable("public", "whatsapp_phone_billing_operations"),
 	tenantPurgeTable("public", "whatsapp_phone_numbers"),
 	tenantPurgeTable("public", "social_accounts"),
 	tenantPurgeTable("public", "workspace_erasure_steps"),
@@ -164,6 +275,7 @@ export const TENANT_PURGE_TABLES = [
 ] as const;
 
 const TENANT_EXTERNAL_STEP = "external_resources";
+export const TENANT_FINANCIAL_RETENTION_STEP = "financial_retention";
 const TENANT_SHARED_RECEIPTS_STEP = "shared_receipts";
 const TENANT_DELETE_ORGANIZATION_STEP = "delete_organization";
 
@@ -176,6 +288,7 @@ function tenantPurgeStepKey(
 export function tenantDeletionStepKeys(): string[] {
 	return [
 		TENANT_EXTERNAL_STEP,
+		TENANT_FINANCIAL_RETENTION_STEP,
 		TENANT_SHARED_RECEIPTS_STEP,
 		...TENANT_PURGE_TABLES.map(tenantPurgeStepKey),
 		TENANT_DELETE_ORGANIZATION_STEP,
@@ -184,16 +297,20 @@ export function tenantDeletionStepKeys(): string[] {
 
 interface CleanupPayload {
 	stripe_subscription_id?: string | null;
-	stripe_customer_id?: string | null;
 	r2_prefix?: string;
 	provider_accounts?: string[];
 	media_prefix_complete?: boolean;
 	thumbnail_prefix_complete?: boolean;
+	organization_logo_prefix_complete?: boolean;
 	queue_rescue_prefix_complete?: boolean;
+	ad_report_prefix_complete?: boolean;
+	byos_prefix_complete?: boolean;
+	byos_location_id?: string | null;
+	byos_credential_version?: number | null;
 }
 
 export interface TenantDeletionRequestResult {
-	status: "tombstoned";
+	status: "tombstoned" | "held";
 	apiKeyHashes: string[];
 	dashboardPrincipalIds: string[];
 	workspaceIds: string[];
@@ -207,6 +324,19 @@ export class TenantDeletionNotFoundError extends Error {
 	}
 }
 
+type TenantDeletionTransaction = Parameters<
+	Parameters<Database["transaction"]>[0]
+>[0];
+
+export interface TenantDeletionAuthorityFence {
+	/** Organization rows whose membership set participates in actor authority. */
+	organizationIds: readonly string[];
+	/** Acquire the actor-user lock before any tenant/member lock. */
+	lockActorUser(tx: TenantDeletionTransaction): Promise<void>;
+	/** Revalidate the exact bearer/principal/session after stable tenant locks. */
+	authorize(tx: TenantDeletionTransaction): Promise<string>;
+}
+
 /**
  * Atomically fence a tenant from new work and durably stage every cleanup
  * operation before credentials or membership are removed. Provider calls and
@@ -215,316 +345,427 @@ export class TenantDeletionNotFoundError extends Error {
 export async function requestTenantDeletion(
 	db: Database,
 	organizationId: string,
-	requestedBy: string,
+	authorityFence: TenantDeletionAuthorityFence,
+	beforeCommitInvalidation?: (
+		result: TenantDeletionRequestResult,
+	) => Promise<void>,
 ): Promise<TenantDeletionRequestResult> {
-	return db.transaction(async (tx) => {
-		const [org] = await tx
-			.select({
-				id: organization.id,
-				name: organization.name,
-				slug: organization.slug,
-				lifecycleStatus: organization.lifecycleStatus,
-			})
-			.from(organization)
-			.where(eq(organization.id, organizationId))
-			.for("update")
-			.limit(1);
-		if (!org) throw new TenantDeletionNotFoundError();
+	for (
+		let attempt = 1;
+		attempt <= TENANT_MEMBERSHIP_LOCK_RETRIES;
+		attempt += 1
+	) {
+		try {
+			return await db.transaction(
+				async (tx) => {
+					// Canonical destructive-admission order: actor user, complete stable
+					// membership sets, owner advisory locks, stable organization rows,
+					// membership recheck, then exact bearer/principal/session authority.
+					// This avoids actor/member cycles while making emergency revocation
+					// linearize with the irreversible tenant lifecycle mutation.
+					await authorityFence.lockActorUser(tx);
+					const authorityOrganizationIds = [
+						...new Set([organizationId, ...authorityFence.organizationIds]),
+					].sort();
 
-		const [keyRows, workspaceRows] = await Promise.all([
-			tx
-				.select({ key: apikey.key, referenceId: apikey.referenceId })
-				.from(apikey)
-				.where(eq(apikey.organizationId, organizationId)),
-			tx
-				.select({ id: workspaces.id })
-				.from(workspaces)
-				.where(eq(workspaces.organizationId, organizationId)),
-		]);
+					// PostgreSQL locks a member tuple before its row-level BEFORE trigger
+					// runs. Use that universally enforceable order everywhere:
+					// member tuple(s) -> owner advisory lock -> organization row. Locking
+					// the tenant's complete membership set first prevents a concurrent
+					// identity deletion or raw member mutation from forming an org/member
+					// cycle with tenant erasure.
+					const lockedMemberships = await tx
+						.select({ id: member.id })
+						.from(member)
+						.where(inArray(member.organizationId, authorityOrganizationIds))
+						.orderBy(member.organizationId, member.id)
+						.for("update");
+					for (const authorityOrganizationId of authorityOrganizationIds) {
+						await tx.execute(
+							sql`select pg_advisory_xact_lock(hashtext(${`relayapi:org-owner:${authorityOrganizationId}`}))`,
+						);
+					}
 
-		const accounts = await tx
-			.select()
-			.from(socialAccounts)
-			.where(eq(socialAccounts.organizationId, organizationId))
-			.for("update");
+					const lockedOrganizations = await tx
+						.select({
+							id: organization.id,
+							name: organization.name,
+							slug: organization.slug,
+							lifecycleStatus: organization.lifecycleStatus,
+						})
+						.from(organization)
+						.where(inArray(organization.id, authorityOrganizationIds))
+						.orderBy(organization.id)
+						.for("update");
+					const org = lockedOrganizations.find(
+						(row) => row.id === organizationId,
+					);
+					if (!org) throw new TenantDeletionNotFoundError();
+					if (
+						authorityOrganizationIds.some(
+							(id) => !lockedOrganizations.some((row) => row.id === id),
+						)
+					) {
+						throw new TenantDeletionNotFoundError();
+					}
 
-		const result: TenantDeletionRequestResult = {
-			status: "tombstoned",
-			apiKeyHashes: keyRows.map(({ key }) => key),
-			dashboardPrincipalIds: [
-				...new Set(
-					keyRows.flatMap(({ referenceId }) =>
-						referenceId ? [referenceId] : [],
-					),
-				),
-			],
-			workspaceIds: workspaceRows.map(({ id }) => id),
-			accountCacheKeys: accounts.flatMap((account) =>
-				buildAccountCacheKeys({
-					accountId: account.id,
-					platform: account.platform,
-					platformAccountId: account.platformAccountId,
-					webhookAccountId: account.webhookAccountId,
-				}),
-			),
-		};
-		if (org.lifecycleStatus === "tombstoned") return result;
-		const [subscription] = await tx
-			.select({
-				stripeSubscriptionId: organizationSubscriptions.stripeSubscriptionId,
-				stripeCustomerId: organizationSubscriptions.stripeCustomerId,
-			})
-			.from(organizationSubscriptions)
-			.where(eq(organizationSubscriptions.organizationId, organizationId))
-			.limit(1);
+					// A member insert can commit between the first row scan and the parent
+					// lock. READ COMMITTED gives this recheck a fresh snapshot; retrying the
+					// whole transaction then locks the expanded set before any mutation.
+					// Once the parent FOR UPDATE lock is held, FK validation blocks further
+					// member inserts until this transaction finishes.
+					const currentMemberships = await tx
+						.select({ id: member.id })
+						.from(member)
+						.where(inArray(member.organizationId, authorityOrganizationIds))
+						.orderBy(member.organizationId, member.id);
+					if (!sameSortedIds(lockedMemberships, currentMemberships)) {
+						throw new TenantMembershipSetChangedError();
+					}
+					const authoritativeRequestedBy = await authorityFence.authorize(tx);
 
-		await tx
-			.insert(tenantDeletionJobs)
-			.values({
-				organizationId,
-				status: "pending",
-				requestedBy,
-				auditSnapshot: {
-					organization_id: org.id,
-					name: org.name,
-					slug: org.slug,
-					account_ids: accounts.map((account) => account.id),
-					requested_at: new Date().toISOString(),
+					const [keyRows, workspaceRows] = await Promise.all([
+						tx
+							.select({ key: apikey.key, referenceId: apikey.referenceId })
+							.from(apikey)
+							.where(eq(apikey.organizationId, organizationId)),
+						tx
+							.select({ id: workspaces.id })
+							.from(workspaces)
+							.where(eq(workspaces.organizationId, organizationId)),
+					]);
+
+					const accounts = await tx
+						.select()
+						.from(socialAccounts)
+						.where(eq(socialAccounts.organizationId, organizationId))
+						.for("update");
+					const activeHold = await findActiveErasureHold(tx, {
+						kind: "organization",
+						organizationId,
+					});
+
+					const result: TenantDeletionRequestResult = {
+						status: activeHold ? "held" : "tombstoned",
+						apiKeyHashes: keyRows.map(({ key }) => key),
+						dashboardPrincipalIds: [
+							...new Set(
+								keyRows.flatMap(({ referenceId }) =>
+									referenceId ? [referenceId] : [],
+								),
+							),
+						],
+						workspaceIds: workspaceRows.map(({ id }) => id),
+						accountCacheKeys: accounts.flatMap((account) =>
+							buildAccountCacheKeys({
+								accountId: account.id,
+								platform: account.platform,
+								platformAccountId: account.platformAccountId,
+								webhookAccountId: account.webhookAccountId,
+							}),
+						),
+					};
+					// Security-critical caches must be gone before the lifecycle
+					// fence commits. A failed invalidation aborts this transaction;
+					// any entries already removed can safely rehydrate from the
+					// still-active database state.
+					await beforeCommitInvalidation?.(result);
+					if (org.lifecycleStatus === "tombstoned") return result;
+					const [subscription] = await tx
+						.select({
+							stripeSubscriptionId:
+								organizationSubscriptions.stripeSubscriptionId,
+						})
+						.from(organizationSubscriptions)
+						.where(eq(organizationSubscriptions.organizationId, organizationId))
+						.limit(1);
+					await stageSubscriptionCancellation(
+						tx,
+						organizationId,
+						subscription?.stripeSubscriptionId,
+					);
+
+					await tx
+						.insert(tenantDeletionJobs)
+						.values({
+							organizationId,
+							status: "pending",
+							requestedBy: authoritativeRequestedBy,
+							auditSnapshot: {
+								organization_id: org.id,
+								name: org.name,
+								slug: org.slug,
+								account_ids: accounts.map((account) => account.id),
+								requested_at: new Date().toISOString(),
+							},
+							cleanupPayload: {
+								stripe_subscription_id:
+									subscription?.stripeSubscriptionId ?? null,
+								r2_prefix: `${organizationId}/`,
+								provider_accounts: accounts.map((account) => account.id),
+							},
+							nextAttemptAt: new Date(),
+						})
+						.onConflictDoUpdate({
+							target: tenantDeletionJobs.organizationId,
+							set: {
+								status: "pending",
+								requestedBy: authoritativeRequestedBy,
+								attempts: 0,
+								nextAttemptAt: new Date(),
+								leaseExpiresAt: null,
+								lastError: null,
+								completedAt: null,
+								updatedAt: new Date(),
+							},
+						});
+					await tx
+						.insert(tenantDeletionSteps)
+						.values(
+							tenantDeletionStepKeys().map((stepKey) => ({
+								organizationId,
+								stepKey,
+							})),
+						)
+						.onConflictDoNothing({
+							target: [
+								tenantDeletionSteps.organizationId,
+								tenantDeletionSteps.stepKey,
+							],
+						});
+
+					// Snapshot every paid phone-provider resource while its exact provisioning
+					// grant is still available. Nested transactions are savepoints on Postgres.
+					await stageTenantPhoneReleases(
+						tx as unknown as Database,
+						organizationId,
+					);
+
+					const now = new Date();
+					await tx
+						.update(organization)
+						.set({ lifecycleStatus: "deleting", deletionRequestedAt: now })
+						.where(eq(organization.id, organizationId));
+					await tx
+						.update(apikey)
+						.set({ enabled: false, updatedAt: now })
+						.where(eq(apikey.organizationId, organizationId));
+
+					for (const account of accounts) {
+						if (account.lifecycleStatus === "disconnected") continue;
+						await tx
+							.insert(accountRevocationJobs)
+							.values({
+								accountId: account.id,
+								organizationId,
+								platform: account.platform,
+								accessTokenCiphertext: account.accessToken,
+								refreshTokenCiphertext: account.refreshToken,
+								sourceTokenVersion: account.tokenVersion,
+								status: "pending",
+								nextAttemptAt: now,
+							})
+							.onConflictDoUpdate({
+								target: accountRevocationJobs.accountId,
+								set: {
+									accessTokenCiphertext: account.accessToken,
+									refreshTokenCiphertext: account.refreshToken,
+									sourceTokenVersion: account.tokenVersion,
+									status: "pending",
+									attempts: 0,
+									leaseToken: 0,
+									nextAttemptAt: now,
+									leaseExpiresAt: null,
+									requestMayHaveBeenSentAt: null,
+									lastError: null,
+									providerResponse: null,
+									completedAt: null,
+									updatedAt: now,
+								},
+							});
+						if (account.lifecycleStatus === "active") {
+							await tx.insert(connectionLogs).values({
+								organizationId,
+								socialAccountId: account.id,
+								platform: account.platform,
+								event: "disconnected",
+								message:
+									"Tenant deletion requested; provider credential cleanup queued",
+								snapshot: {
+									account_id: account.id,
+									reason: "tenant_deleted",
+									requested_at: now.toISOString(),
+									provider_cleanup: "pending",
+								},
+							});
+						}
+					}
+
+					await tx
+						.update(socialAccounts)
+						.set({
+							lifecycleStatus: "disconnected",
+							accessToken: null,
+							refreshToken: null,
+							metadata: sql`${socialAccounts.metadata} - 'meta_ads_user_access_token' - 'meta_ads_user_access_token_expires_at' - 'facebook_user_id'`,
+							disconnectRequestedAt: now,
+							disconnectReason: "tenant_deleted",
+							tokenExpiresAt: null,
+							disconnectedAt: now,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(socialAccounts.organizationId, organizationId),
+								ne(socialAccounts.lifecycleStatus, "disconnected"),
+							),
+						);
+					await tx
+						.update(posts)
+						.set({
+							status: "failed",
+							revision: sql`${posts.revision} + 1`,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(posts.organizationId, organizationId),
+								inArray(posts.status, ["scheduled", "publishing"]),
+							),
+						);
+					await tx
+						.update(postRecyclingConfigs)
+						.set({ enabled: false, updatedAt: now })
+						.where(eq(postRecyclingConfigs.organizationId, organizationId));
+					await tx
+						.update(autoPostRules)
+						.set({ status: "paused", leaseExpiresAt: null, updatedAt: now })
+						.where(eq(autoPostRules.organizationId, organizationId));
+					await tx
+						.update(broadcasts)
+						.set({
+							status: "cancelled",
+							completedAt: now,
+							leaseExpiresAt: null,
+							revision: sql`${broadcasts.revision} + 1`,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								eq(broadcasts.organizationId, organizationId),
+								inArray(broadcasts.status, ["draft", "scheduled", "sending"]),
+							),
+						);
+					await tx
+						.update(webhookEndpoints)
+						.set({ enabled: false, updatedAt: now })
+						.where(eq(webhookEndpoints.organizationId, organizationId));
+					await tx
+						.update(crossPostActions)
+						.set({
+							status: "cancelled",
+							leaseExpiresAt: null,
+							completedAt: now,
+							error: "Tenant deletion requested",
+						})
+						.where(
+							and(
+								inArray(
+									crossPostActions.postId,
+									tx
+										.select({ id: posts.id })
+										.from(posts)
+										.where(eq(posts.organizationId, organizationId)),
+								),
+								inArray(crossPostActions.status, [
+									"pending",
+									"processing",
+									"retry",
+								]),
+							),
+						);
+					await tx
+						.update(automations)
+						.set({ status: "paused", updatedAt: now })
+						.where(eq(automations.organizationId, organizationId));
+					await tx
+						.update(automationBindings)
+						.set({ status: "inactive", updatedAt: now })
+						.where(eq(automationBindings.organizationId, organizationId));
+					const tenantAutomationIds = tx
+						.select({ id: automations.id })
+						.from(automations)
+						.where(eq(automations.organizationId, organizationId));
+					await tx
+						.update(automationRuns)
+						.set({
+							status: "exited",
+							exitReason: "tenant_deleted",
+							waitingFor: null,
+							waitingUntil: null,
+							completedAt: now,
+							revision: sql`${automationRuns.revision} + 1`,
+							updatedAt: now,
+						})
+						.where(
+							and(
+								inArray(automationRuns.automationId, tenantAutomationIds),
+								inArray(automationRuns.status, ["active", "waiting"]),
+							),
+						);
+					await tx
+						.update(automationScheduledJobs)
+						.set({ status: "failed", error: "Tenant deletion requested" })
+						.where(
+							and(
+								inArray(
+									automationScheduledJobs.automationId,
+									tenantAutomationIds,
+								),
+								eq(automationScheduledJobs.status, "pending"),
+							),
+						);
+					await tx
+						.update(session)
+						.set({ activeOrganizationId: null, updatedAt: now })
+						.where(eq(session.activeOrganizationId, organizationId));
+					await tx
+						.delete(invitation)
+						.where(eq(invitation.organizationId, organizationId));
+					await tx
+						.delete(member)
+						.where(eq(member.organizationId, organizationId));
+					await tx
+						.update(organization)
+						.set({ lifecycleStatus: "tombstoned", tombstonedAt: now })
+						.where(eq(organization.id, organizationId));
+					await tx
+						.update(tenantDeletionJobs)
+						.set({
+							status: activeHold ? "held" : "tombstoned",
+							nextAttemptAt: now,
+							leaseExpiresAt: null,
+							lastError: activeHold ? "paused_by_erasure_hold" : null,
+							completedAt: null,
+							updatedAt: now,
+						})
+						.where(eq(tenantDeletionJobs.organizationId, organizationId));
+
+					return result;
 				},
-				cleanupPayload: {
-					stripe_subscription_id: subscription?.stripeSubscriptionId ?? null,
-					stripe_customer_id: subscription?.stripeCustomerId ?? null,
-					r2_prefix: `${organizationId}/`,
-					provider_accounts: accounts.map((account) => account.id),
-				},
-				nextAttemptAt: new Date(),
-			})
-			.onConflictDoUpdate({
-				target: tenantDeletionJobs.organizationId,
-				set: {
-					status: "pending",
-					requestedBy,
-					attempts: 0,
-					nextAttemptAt: new Date(),
-					leaseExpiresAt: null,
-					lastError: null,
-					completedAt: null,
-					updatedAt: new Date(),
-				},
-			});
-		await tx
-			.insert(tenantDeletionSteps)
-			.values(
-				tenantDeletionStepKeys().map((stepKey) => ({
-					organizationId,
-					stepKey,
-				})),
-			)
-			.onConflictDoNothing({
-				target: [
-					tenantDeletionSteps.organizationId,
-					tenantDeletionSteps.stepKey,
-				],
-			});
-
-		// Snapshot every paid phone-provider resource while its exact provisioning
-		// grant is still available. Nested transactions are savepoints on Postgres.
-		await stageTenantPhoneReleases(tx as unknown as Database, organizationId);
-
-		const now = new Date();
-		await tx
-			.update(organization)
-			.set({ lifecycleStatus: "deleting", deletionRequestedAt: now })
-			.where(eq(organization.id, organizationId));
-		await tx
-			.update(apikey)
-			.set({ enabled: false, updatedAt: now })
-			.where(eq(apikey.organizationId, organizationId));
-
-		for (const account of accounts) {
-			if (account.lifecycleStatus === "disconnected") continue;
-			await tx
-				.insert(accountRevocationJobs)
-				.values({
-					accountId: account.id,
-					organizationId,
-					platform: account.platform,
-					accessTokenCiphertext: account.accessToken,
-					refreshTokenCiphertext: account.refreshToken,
-					sourceTokenVersion: account.tokenVersion,
-					status: "pending",
-					nextAttemptAt: now,
-				})
-				.onConflictDoUpdate({
-					target: accountRevocationJobs.accountId,
-					set: {
-						accessTokenCiphertext: account.accessToken,
-						refreshTokenCiphertext: account.refreshToken,
-						sourceTokenVersion: account.tokenVersion,
-						status: "pending",
-						attempts: 0,
-						nextAttemptAt: now,
-						leaseExpiresAt: null,
-						lastError: null,
-						providerResponse: null,
-						completedAt: null,
-						updatedAt: now,
-					},
-				});
-			if (account.lifecycleStatus === "active") {
-				await tx.insert(connectionLogs).values({
-					organizationId,
-					socialAccountId: account.id,
-					platform: account.platform,
-					event: "disconnecting",
-					message: "Tenant deletion requested",
-					snapshot: {
-						account_id: account.id,
-						reason: "tenant_deleted",
-						requested_at: now.toISOString(),
-					},
-				});
+				{ isolationLevel: "read committed" },
+			);
+		} catch (error) {
+			if (
+				!(error instanceof TenantMembershipSetChangedError) ||
+				attempt === TENANT_MEMBERSHIP_LOCK_RETRIES
+			) {
+				throw error;
 			}
 		}
+	}
 
-		await tx
-			.update(socialAccounts)
-			.set({
-				lifecycleStatus: "disconnecting",
-				disconnectRequestedAt: now,
-				disconnectReason: "tenant_deleted",
-				tokenExpiresAt: null,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(socialAccounts.organizationId, organizationId),
-					ne(socialAccounts.lifecycleStatus, "disconnected"),
-				),
-			);
-		await tx
-			.update(posts)
-			.set({
-				status: "failed",
-				revision: sql`${posts.revision} + 1`,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(posts.organizationId, organizationId),
-					inArray(posts.status, ["scheduled", "publishing"]),
-				),
-			);
-		await tx
-			.update(postRecyclingConfigs)
-			.set({ enabled: false, updatedAt: now })
-			.where(eq(postRecyclingConfigs.organizationId, organizationId));
-		await tx
-			.update(autoPostRules)
-			.set({ status: "paused", leaseExpiresAt: null, updatedAt: now })
-			.where(eq(autoPostRules.organizationId, organizationId));
-		await tx
-			.update(broadcasts)
-			.set({
-				status: "cancelled",
-				completedAt: now,
-				leaseExpiresAt: null,
-				revision: sql`${broadcasts.revision} + 1`,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(broadcasts.organizationId, organizationId),
-					inArray(broadcasts.status, ["draft", "scheduled", "sending"]),
-				),
-			);
-		await tx
-			.update(webhookEndpoints)
-			.set({ enabled: false, updatedAt: now })
-			.where(eq(webhookEndpoints.organizationId, organizationId));
-		await tx
-			.update(crossPostActions)
-			.set({
-				status: "cancelled",
-				leaseExpiresAt: null,
-				completedAt: now,
-				error: "Tenant deletion requested",
-			})
-			.where(
-				and(
-					inArray(
-						crossPostActions.postId,
-						tx
-							.select({ id: posts.id })
-							.from(posts)
-							.where(eq(posts.organizationId, organizationId)),
-					),
-					inArray(crossPostActions.status, ["pending", "processing", "retry"]),
-				),
-			);
-		await tx
-			.update(automations)
-			.set({ status: "paused", updatedAt: now })
-			.where(eq(automations.organizationId, organizationId));
-		await tx
-			.update(automationBindings)
-			.set({ status: "inactive", updatedAt: now })
-			.where(eq(automationBindings.organizationId, organizationId));
-		const tenantAutomationIds = tx
-			.select({ id: automations.id })
-			.from(automations)
-			.where(eq(automations.organizationId, organizationId));
-		await tx
-			.update(automationRuns)
-			.set({
-				status: "exited",
-				exitReason: "tenant_deleted",
-				waitingFor: null,
-				waitingUntil: null,
-				completedAt: now,
-				revision: sql`${automationRuns.revision} + 1`,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					inArray(automationRuns.automationId, tenantAutomationIds),
-					inArray(automationRuns.status, ["active", "waiting"]),
-				),
-			);
-		await tx
-			.update(automationScheduledJobs)
-			.set({ status: "failed", error: "Tenant deletion requested" })
-			.where(
-				and(
-					inArray(automationScheduledJobs.automationId, tenantAutomationIds),
-					eq(automationScheduledJobs.status, "pending"),
-				),
-			);
-		await tx
-			.update(session)
-			.set({ activeOrganizationId: null, updatedAt: now })
-			.where(eq(session.activeOrganizationId, organizationId));
-		await tx
-			.delete(invitation)
-			.where(eq(invitation.organizationId, organizationId));
-		await tx.delete(member).where(eq(member.organizationId, organizationId));
-		await tx
-			.update(organization)
-			.set({ lifecycleStatus: "tombstoned", tombstonedAt: now })
-			.where(eq(organization.id, organizationId));
-		await tx
-			.update(tenantDeletionJobs)
-			.set({
-				status: "tombstoned",
-				nextAttemptAt: now,
-				leaseExpiresAt: null,
-				completedAt: null,
-				updatedAt: now,
-			})
-			.where(eq(tenantDeletionJobs.organizationId, organizationId));
-
-		return result;
-	});
+	throw new TenantMembershipSetChangedError();
 }
 
 async function deleteBucketPrefixPage(
@@ -757,7 +998,6 @@ async function persistTenantStepResult(
 async function processTenantExternalResources(
 	db: TenantDeletionDb,
 	env: Env,
-	stripe: Stripe,
 	job: TenantDeletionJob,
 ): Promise<TenantStepResult> {
 	await processDuePhoneReleases(env, {
@@ -785,64 +1025,133 @@ async function processTenantExternalResources(
 
 	const payload = { ...((job.cleanupPayload ?? {}) as CleanupPayload) };
 	if (payload.stripe_subscription_id) {
-		try {
-			await stripe.subscriptions.cancel(
-				payload.stripe_subscription_id,
-				{},
-				{
-					idempotencyKey: `relayapi:tenant-delete:${job.organizationId}:subscription`,
-				},
-			);
-		} catch (error) {
-			if (
-				!(
-					error instanceof Stripe.errors.StripeInvalidRequestError &&
-					error.statusCode === 404
-				)
-			) {
-				throw error;
-			}
+		const [cancellation] = await db
+			.select({ status: billingOutbox.status })
+			.from(billingOutbox)
+			.where(
+				and(
+					eq(
+						billingOutbox.id,
+						`tenant-delete:${job.organizationId}:subscription-cancel`,
+					),
+					eq(billingOutbox.organizationId, job.organizationId),
+					eq(billingOutbox.kind, "subscription.cancel"),
+				),
+			)
+			.limit(1);
+		if (!cancellation) {
+			return {
+				kind: "manual_review",
+				reason: "Subscription cancellation outbox receipt is missing",
+			};
+		}
+		if (cancellation.status === "manual_review") {
+			return {
+				kind: "manual_review",
+				reason: "Subscription cancellation requires operator review",
+			};
+		}
+		if (cancellation.status !== "succeeded") {
+			return {
+				kind: "pending",
+				jobStatus: "waiting_external",
+				delayMs: WAIT_MS,
+				reason: "Waiting for subscription cancellation outbox",
+				cleanupPayload: payload,
+			};
 		}
 		payload.stripe_subscription_id = null;
 	}
 
-	const prefix = payload.r2_prefix ?? `${job.organizationId}/`;
+	const prefix =
+		payload.r2_prefix ?? `${encodeURIComponent(job.organizationId)}/`;
+	const byosCleanupLocator = payload.byos_prefix_complete
+		? null
+		: await nextByosCleanupLocator(
+				db,
+				job.organizationId,
+				payload.byos_location_id && payload.byos_credential_version
+					? {
+							locationId: payload.byos_location_id,
+							credentialVersion: payload.byos_credential_version,
+						}
+					: undefined,
+			);
 	const avatarBatch = (payload.provider_accounts ?? []).slice(
 		0,
 		MAX_AVATARS_PER_TICK,
 	);
-	const avatarKeys = avatarBatch.map((id) => `avatars/${id}`);
-	const [mediaComplete, thumbnailComplete, queueRescueComplete] =
-		await Promise.all([
-			payload.media_prefix_complete
-				? Promise.resolve(true)
-				: deleteBucketPrefixPage(env.MEDIA_BUCKET, prefix),
-			payload.thumbnail_prefix_complete
-				? Promise.resolve(true)
-				: deleteBucketPrefixPage(env.THUMBNAIL_BUCKET, prefix),
-			payload.queue_rescue_prefix_complete
-				? Promise.resolve(true)
-				: deleteBucketPrefixPage(
-						env.QUEUE_RESCUE_BUCKET,
-						`queue-rescue/by-organization/${job.organizationId}/`,
-					),
-			avatarKeys.length > 0
-				? Promise.all([
-						env.AVATAR_BUCKET.delete(avatarKeys),
-						env.MEDIA_BUCKET.delete(avatarKeys),
-					])
-				: Promise.resolve(),
-		]);
+	const avatarKeys = avatarBatch.map(
+		(id) => `account/${encodeURIComponent(id)}/avatar`,
+	);
+	const [
+		mediaComplete,
+		thumbnailComplete,
+		organizationLogoComplete,
+		queueRescueComplete,
+		adReportComplete,
+		byosPageComplete,
+	] = await Promise.all([
+		payload.media_prefix_complete
+			? Promise.resolve(true)
+			: deleteBucketPrefixPage(env.MEDIA_BUCKET, prefix),
+		payload.thumbnail_prefix_complete
+			? Promise.resolve(true)
+			: deleteBucketPrefixPage(env.THUMBNAIL_BUCKET, prefix),
+		payload.organization_logo_prefix_complete
+			? Promise.resolve(true)
+			: deleteBucketPrefixPage(
+					env.AVATAR_BUCKET,
+					`organization/${encodeURIComponent(job.organizationId)}/`,
+				),
+		payload.queue_rescue_prefix_complete
+			? Promise.resolve(true)
+			: deleteBucketPrefixPage(
+					env.QUEUE_RESCUE_BUCKET,
+					`queue-rescue/by-organization/${job.organizationId}/`,
+				),
+		payload.ad_report_prefix_complete
+			? Promise.resolve(true)
+			: deleteBucketPrefixPage(
+					env.AD_REPORT_BUCKET,
+					adReportOrganizationPrefix(job.organizationId),
+				),
+		payload.byos_prefix_complete || !byosCleanupLocator
+			? Promise.resolve(true)
+			: deleteByosPrefixPage(db, env, byosCleanupLocator, job.organizationId),
+		avatarKeys.length > 0
+			? Promise.all([
+					env.AVATAR_BUCKET.delete(avatarKeys),
+					env.MEDIA_BUCKET.delete(avatarKeys),
+				])
+			: Promise.resolve(),
+	]);
 	payload.media_prefix_complete = mediaComplete;
 	payload.thumbnail_prefix_complete = thumbnailComplete;
+	payload.organization_logo_prefix_complete = organizationLogoComplete;
 	payload.queue_rescue_prefix_complete = queueRescueComplete;
+	payload.ad_report_prefix_complete = adReportComplete;
+	if (byosCleanupLocator && byosPageComplete) {
+		payload.byos_location_id = byosCleanupLocator.locationId;
+		payload.byos_credential_version = byosCleanupLocator.credentialVersion;
+		// Confirm that no later historical credential exists on the next
+		// bounded tick before declaring the provider prefix fully drained.
+		payload.byos_prefix_complete = false;
+	} else {
+		payload.byos_prefix_complete =
+			!byosCleanupLocator || payload.byos_prefix_complete === true;
+	}
+	const byosComplete = payload.byos_prefix_complete;
 	payload.provider_accounts = (payload.provider_accounts ?? []).slice(
 		avatarBatch.length,
 	);
 	const cleanupComplete =
 		mediaComplete &&
 		thumbnailComplete &&
+		organizationLogoComplete &&
 		queueRescueComplete &&
+		adReportComplete &&
+		byosComplete &&
 		payload.provider_accounts.length === 0;
 	return cleanupComplete
 		? { kind: "completed", cleanupPayload: payload }
@@ -910,11 +1219,26 @@ async function processSharedReceiptBatch(
 		SET organization_ids = array_remove(target.organization_ids, ${job.organizationId})
 			${
 				table === "queue_failures"
-					? sql`, payload = jsonb_strip_nulls(jsonb_build_object(
-						'redacted', true,
-						'reason', 'deleted_tenant_scope_removed',
-						'operation_id', target.operation_id
-					))`
+					? sql`, payload_ciphertext = NULL,
+						payload_key_id = NULL,
+						payload_redacted_at = COALESCE(target.payload_redacted_at, NOW()),
+						workspace_ids = ARRAY[]::text[],
+						user_ids = ARRAY[]::text[],
+						contact_ids = ARRAY[]::text[],
+						account_ids = ARRAY[]::text[],
+						status = CASE
+							WHEN target.status IN ('replayed', 'dismissed')
+								THEN target.status
+							ELSE 'dismissed'
+						END,
+						resolved_at = CASE
+							WHEN target.status IN ('replayed', 'dismissed')
+								THEN target.resolved_at
+							ELSE COALESCE(target.resolved_at, NOW())
+						END,
+						replay_claim_token = NULL,
+						replay_claim_expires_at = NULL,
+						error = 'deleted_tenant_scope_removed'`
 					: sql``
 			}
 		FROM candidates
@@ -937,9 +1261,96 @@ async function processSharedReceiptBatch(
 
 async function deleteTenantTableBatch(
 	db: TenantDeletionDb,
+	env: Env,
 	organizationId: string,
 	table: (typeof TENANT_PURGE_TABLES)[number],
 ): Promise<number> {
+	if (table.schema === "public" && table.table === "ad_advanced_resources") {
+		const deleted = await db.execute<{ deleted: number }>(sql`
+			WITH candidates AS (
+				SELECT target.ctid
+				FROM public.ad_advanced_resources AS target
+				WHERE target.organization_id = ${organizationId}
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM public.ad_advanced_resources AS child
+					WHERE child.parent_id = target.id
+				  )
+				ORDER BY target.ctid
+				LIMIT ${TENANT_DELETE_BATCH_SIZE}
+				FOR UPDATE OF target SKIP LOCKED
+			)
+			DELETE FROM public.ad_advanced_resources AS target
+			USING candidates
+			WHERE target.ctid = candidates.ctid
+			RETURNING 1 AS deleted
+		`);
+		return deleted.length;
+	}
+	if (table.schema === "public" && table.table === "short_links") {
+		const deleted = await db.transaction(async (tx) => {
+			const candidates = await tx
+				.select({
+					id: shortLinks.id,
+					provider: shortLinks.provider,
+					providerRef: shortLinks.providerRef,
+					shortCode: shortLinks.shortCode,
+					credentialCiphertext: shortLinkCredentials.apiKeyCiphertext,
+				})
+				.from(shortLinks)
+				.leftJoin(
+					shortLinkCredentials,
+					and(
+						eq(shortLinkCredentials.organizationId, shortLinks.organizationId),
+						eq(shortLinkCredentials.provider, shortLinks.provider),
+						eq(shortLinkCredentials.version, shortLinks.credentialVersion),
+					),
+				)
+				.where(eq(shortLinks.organizationId, organizationId))
+				.orderBy(shortLinks.id)
+				.limit(TENANT_DELETE_BATCH_SIZE)
+				.for("update", { of: shortLinks });
+			if (candidates.length === 0) return [];
+			for (const candidate of candidates) {
+				if (candidate.provider === "relayapi") continue;
+				if (!candidate.credentialCiphertext) {
+					throw new Error(
+						"Historical short-link credential is missing during tenant erasure",
+					);
+				}
+				await enqueueShortLinkProviderCleanup(tx, {
+					subjectKind: "organization",
+					subjectId: organizationId,
+					organizationId,
+					provider: candidate.provider,
+					providerRef: candidate.providerRef as ProviderRef,
+					credentialCiphertext: candidate.credentialCiphertext,
+				});
+			}
+			return tx
+				.delete(shortLinks)
+				.where(
+					and(
+						eq(shortLinks.organizationId, organizationId),
+						inArray(
+							shortLinks.id,
+							candidates.map((candidate) => candidate.id),
+						),
+					),
+				)
+				.returning({
+					provider: shortLinks.provider,
+					shortCode: shortLinks.shortCode,
+				});
+		});
+		await invalidateRelayApiShortLinkCaches(
+			env.KV,
+			deleted.flatMap((row) =>
+				row.provider === "relayapi" && row.shortCode ? [row.shortCode] : [],
+			),
+		);
+		return deleted.length;
+	}
 	const deleted = await db.execute<{ deleted: number }>(sql`
 		WITH candidates AS (
 			SELECT target.ctid
@@ -1034,7 +1445,6 @@ async function completeTenantDeletion(
 async function processClaimedTenantJob(
 	db: TenantDeletionDb,
 	env: Env,
-	stripe: Stripe,
 	job: TenantDeletionJob,
 ): Promise<void> {
 	await ensureTenantDeletionSteps(db, job.organizationId);
@@ -1044,6 +1454,17 @@ async function processClaimedTenantJob(
 	let releaseReason: string | null = null;
 
 	for (let unit = 0; unit < MAX_WORK_UNITS_PER_JOB; unit += 1) {
+		// The hold-placement transaction fences this job and any processing step.
+		// Recheck between bounded units so a worker claimed immediately before
+		// placement cannot begin another destructive unit after the hold is visible.
+		if (
+			await findActiveErasureHold(db, {
+				kind: "organization",
+				organizationId: job.organizationId,
+			})
+		) {
+			return;
+		}
 		const steps = await db
 			.select()
 			.from(tenantDeletionSteps)
@@ -1069,7 +1490,23 @@ async function processClaimedTenantJob(
 
 		let result: TenantStepResult;
 		if (nextKey === TENANT_EXTERNAL_STEP) {
-			result = await processTenantExternalResources(db, env, stripe, job);
+			result = await processTenantExternalResources(db, env, job);
+		} else if (nextKey === TENANT_FINANCIAL_RETENTION_STEP) {
+			const financial = await materializeTenantFinancialRetentionBatch(
+				db,
+				job.organizationId,
+				parseTenantCursor<TenantFinancialRetentionCursor>(step.cursor),
+			);
+			result = financial.completed
+				? {
+						kind: "completed",
+						rowsDeleted: financial.receiptsWritten,
+					}
+				: {
+						kind: "pending",
+						rowsDeleted: financial.receiptsWritten,
+						cursor: financial.cursor,
+					};
 		} else if (nextKey === TENANT_SHARED_RECEIPTS_STEP) {
 			result = await processSharedReceiptBatch(db, job, step);
 		} else {
@@ -1079,6 +1516,7 @@ async function processClaimedTenantJob(
 			if (!table) throw new Error(`Unknown tenant purge step: ${nextKey}`);
 			const deleted = await deleteTenantTableBatch(
 				db,
+				env,
 				job.organizationId,
 				table,
 			);
@@ -1165,7 +1603,6 @@ async function failTenantDeletionJob(
 
 export async function processTenantDeletionJobs(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const stripe = new Stripe(env.STRIPE_SECRET_KEY);
 	const now = new Date();
 	const candidates = await db
 		.select({ organizationId: tenantDeletionJobs.organizationId })
@@ -1206,6 +1643,7 @@ export async function processTenantDeletionJobs(env: Env): Promise<void> {
 				status: "processing",
 				leaseToken: sql`${tenantDeletionJobs.leaseToken} + 1`,
 				leaseExpiresAt: new Date(claimedAt.getTime() + LEASE_MS),
+				operatorRetryRequestedAt: null,
 				lastError: null,
 				updatedAt: claimedAt,
 			})
@@ -1235,7 +1673,7 @@ export async function processTenantDeletionJobs(env: Env): Promise<void> {
 			.returning();
 		if (!job) continue;
 		try {
-			await processClaimedTenantJob(db, env, stripe, job);
+			await processClaimedTenantJob(db, env, job);
 		} catch (error) {
 			await failTenantDeletionJob(db, job, error);
 		}

@@ -3,6 +3,7 @@ import { Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StreakProvider } from "@/hooks/use-streak";
 import { UsageProvider } from "@/hooks/use-usage";
+import { useUserLanguage } from "@/hooks/use-user-language";
 import { prefetchDashboardPage } from "@/lib/dashboard-prefetch";
 import type { AppOrganization, AppUser } from "@/types/dashboard";
 import { FilterProvider } from "./filter-context";
@@ -49,6 +50,7 @@ export function DashboardShell({
 	user?: AppUser | null;
 }) {
 	const [sidebarOpen, setSidebarOpen] = useState(false);
+	useUserLanguage();
 
 	const buildPageUrl = (page: string) => {
 		// Overview canonically lives at /app, not /app/overview.

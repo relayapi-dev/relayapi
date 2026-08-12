@@ -59,6 +59,13 @@ export const StartOAuthQuery = z.object({
 		.describe(
 			'Set to "true" for headless mode (returns data instead of redirecting)',
 		),
+	instance_url: z
+		.string()
+		.url()
+		.optional()
+		.describe(
+			"Required for Mastodon. Public HTTPS origin of the account's home instance (for example, https://mastodon.social). Paths, credentials, queries, fragments, and private network destinations are rejected.",
+		),
 });
 
 export const StartOAuthResponse = z.object({
@@ -116,6 +123,43 @@ export const ConnectBlueskyBody = z.object({
 	workspace_id: ConnectionWorkspaceId,
 	handle: z.string().describe("Bluesky handle (e.g. user.bsky.social)"),
 	app_password: z.string().describe("Bluesky app password"),
+});
+
+// ---------------------------------------------------------------------------
+// Discord and SMS (credential-based)
+// ---------------------------------------------------------------------------
+
+export const ConnectDiscordBody = z.object({
+	workspace_id: ConnectionWorkspaceId,
+	webhook_url: z
+		.string()
+		.url()
+		.describe(
+			"Discord incoming webhook URL in the exact https://discord.com/api/webhooks/{id}/{token} form",
+		),
+});
+
+export const ConnectSmsBody = z.object({
+	workspace_id: ConnectionWorkspaceId,
+	account_sid: z
+		.string()
+		.regex(/^AC[0-9a-fA-F]{32}$/)
+		.describe("Twilio Account SID"),
+	auth_token: z.string().min(1).describe("Twilio Auth Token"),
+	from_number: z
+		.string()
+		.regex(/^\+[1-9]\d{6,14}$/)
+		.describe("Twilio-owned SMS-capable sender in E.164 format"),
+});
+
+export const ConnectSlackBody = z.object({
+	workspace_id: ConnectionWorkspaceId,
+	webhook_url: z
+		.string()
+		.url()
+		.describe(
+			"Slack incoming webhook URL in the exact /services/{team}/{service}/{secret} form",
+		),
 });
 
 // ---------------------------------------------------------------------------
@@ -422,6 +466,18 @@ export const WhatsAppSDKConfigResponse = z.object({
 export const WhatsAppEmbeddedSignupBody = z.object({
 	workspace_id: ConnectionWorkspaceId,
 	code: z.string().describe("Code from WhatsApp embedded signup flow"),
+	waba_id: z
+		.string()
+		.optional()
+		.describe(
+			"WABA selected by the Embedded Signup completion event. Required to disambiguate when the token grants multiple WABAs.",
+		),
+	phone_number_id: z
+		.string()
+		.optional()
+		.describe(
+			"Phone number selected by the Embedded Signup completion event. Required to disambiguate a WABA with multiple numbers.",
+		),
 });
 
 // ---------------------------------------------------------------------------

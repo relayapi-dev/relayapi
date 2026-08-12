@@ -1,25 +1,35 @@
 import { defineMiddleware } from "astro:middleware";
 import { env } from "cloudflare:workers";
+import "../lib/safe-console";
 import { type AuthEnv, createAuth } from "@relayapi/auth";
 import {
 	organization as authOrganization,
+	user as authUser,
 	createDb,
 	invitation,
+	LEGACY_CREDENTIAL_VERSION,
 	member,
 } from "@relayapi/db";
+import { createEmailIntentClient } from "@relayapi/sdk/internal";
 import { getCookieCache } from "better-auth/cookies";
 import { and, eq } from "drizzle-orm";
+import { normalizeAuthRedirect } from "../lib/auth-redirect";
 import { revokeDashboardPrincipal } from "../lib/dashboard-principal-revocation";
+import { containBannedDashboardUser } from "../lib/dashboard-user-ban";
+import { isSelfHostedDeployment } from "../lib/deployment-mode";
 import {
 	fetchRemoteDashboardContext,
 	proxyRemoteDashboardRequest,
 	type RemoteDashboardContext,
 	resolveRemoteDashboardOrigin,
 } from "../lib/remote-dashboard";
-import { prepareUserDeletion } from "../lib/user-deletion";
+import { appMaintenanceResponse } from "../lib/runtime-control";
+import { applyAppSecurityHeaders } from "../lib/security-headers";
+import { deleteUserAtomically } from "../lib/user-deletion";
 
 const PROTECTED_PATHS = ["/app"];
 const AUTH_PAGES = new Set(["/login", "/signup"]);
+const DEFAULT_PRODUCTION_APP_ORIGIN = "https://relayapi.dev";
 const STATIC_ASSET_EXTENSIONS =
 	/^(js|css|woff2?|svg|png|jpg|jpeg|gif|ico|webp|map|ttf|eot)$/;
 
@@ -32,6 +42,7 @@ interface AuthUser {
 	email: string;
 	image?: string | null;
 	role?: string | null;
+	credentialVersion?: string;
 	[key: string]: unknown;
 }
 
@@ -85,6 +96,27 @@ function shouldCheckOnboarding(path: string): boolean {
 	);
 }
 
+function requiresAuthoritativeSession(url: URL): boolean {
+	return (
+		url.pathname.startsWith("/app/admin") ||
+		(url.pathname.startsWith("/api/") && !url.pathname.startsWith("/api/auth/"))
+	);
+}
+
+function normalizedCredentialVersion(value: unknown): string {
+	return typeof value === "string" && value ? value : LEGACY_CREDENTIAL_VERSION;
+}
+
+function hasActiveBan(
+	value: { banned: boolean | null; banExpires: Date | null },
+	now = new Date(),
+): boolean {
+	return (
+		value.banned === true &&
+		(value.banExpires === null || value.banExpires > now)
+	);
+}
+
 function mergeHeaders(target: Headers, source: Headers | null): void {
 	if (!source) return;
 
@@ -114,65 +146,42 @@ function mergeHeaders(target: Headers, source: Headers | null): void {
 
 function createInvitationEmailSender(
 	cfEnv: CfEnv,
-	baseUrl: string,
 ): NonNullable<AuthEnv["sendInvitationEmail"]> {
 	return async (data) => {
-		const [{ render }, { Resend }, { InvitationEmail }] = await Promise.all([
-			import("@react-email/render"),
-			import("resend"),
-			import("../lib/emails/invitation-email"),
-		]);
+		await createEmailIntentClient(cfEnv.EMAIL_INTENTS).stage({
+			type: "organization_invitation",
+			invitationId: data.id,
+			occurrenceId: data.occurrenceId,
+		});
+		console.info(JSON.stringify({ event: "invitation_email_staged" }));
+	};
+}
 
-		const inviteUrl = `${baseUrl}/invite/${data.id}`;
-		const html = await render(
-			InvitationEmail({
-				invitedByEmail: data.inviterEmail,
-				organizationName: data.organizationName,
-				role: data.role,
-				inviteUrl,
-			}),
-		);
-
-		const emailMessage = {
-			id: `invitation:${data.id}`,
-			organization_id: data.organizationId,
-			to: data.email,
-			subject: `You've been invited to join ${data.organizationName} on RelayAPI`,
-			html,
-			from: "RelayAPI <notifications@relayapi.dev>",
-		};
-
-		const queue = cfEnv.EMAIL_QUEUE;
-
-		if (queue) {
-			await queue.send(emailMessage);
-			console.info(JSON.stringify({ event: "invitation_email_enqueued" }));
-			return;
-		}
-
-		if (cfEnv.RESEND_API_KEY) {
-			const resend = new Resend(cfEnv.RESEND_API_KEY);
-			const { error } = await resend.emails.send(
-				{
-					from: emailMessage.from,
-					to: emailMessage.to,
-					subject: emailMessage.subject,
-					html: emailMessage.html,
-				},
-				{ idempotencyKey: emailMessage.id },
+function createAccountEmailSender(
+	cfEnv: CfEnv,
+): NonNullable<AuthEnv["sendAccountEmail"]> {
+	return async (data) => {
+		try {
+			await createEmailIntentClient(cfEnv.EMAIL_INTENTS).stage({
+				type: "account_action",
+				kind: data.kind,
+				authUserId: data.userId,
+				actionUrl: data.url,
+				token: data.token,
+			});
+			console.info(
+				JSON.stringify({ event: "account_email_staged", kind: data.kind }),
 			);
-			if (error) {
-				throw new Error(
-					`Invitation email provider rejected request: ${error.name}`,
-				);
-			}
-			console.info(JSON.stringify({ event: "invitation_email_sent_directly" }));
-			return;
+		} catch (error) {
+			console.error(
+				JSON.stringify({
+					event: "account_email_failed",
+					kind: data.kind,
+					error: error instanceof Error ? error.name : "UnknownError",
+				}),
+			);
+			throw new Error("Account email delivery failed.");
 		}
-
-		console.warn(
-			JSON.stringify({ event: "invitation_email_delivery_unconfigured" }),
-		);
 	};
 }
 
@@ -252,10 +261,10 @@ async function userHasOrganizations(
 /**
  * Authoritative membership check. better-auth's removeMember does not revoke
  * the removed user's session or clear their `activeOrganizationId`, so a stale
- * session (or the signed cookie cache used for internal /api/* routes) can keep
- * pointing at an org the user no longer belongs to. We re-verify membership on
- * every request that resolves an organization so removed members lose access
- * immediately instead of for the lifetime of their session.
+ * page-navigation session can keep pointing at an org the user no longer
+ * belongs to. We re-verify membership on every request that resolves an
+ * organization so removed members lose access immediately instead of for the
+ * lifetime of their session.
  */
 async function getOrganizationMembershipRole(
 	db: Database,
@@ -288,32 +297,60 @@ async function userHasPendingInvitations(
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const path = context.url.pathname;
-
-	if (isStaticAssetPath(path)) {
-		return next();
+	const cfEnv: CfEnv = env;
+	const productionAppOrigin =
+		cfEnv.BETTER_AUTH_URL?.trim() || DEFAULT_PRODUCTION_APP_ORIGIN;
+	if (import.meta.env.PROD && context.url.protocol === "http:") {
+		const secureUrl = `${productionAppOrigin}${context.url.pathname}${context.url.search}`;
+		return applyAppSecurityHeaders(Response.redirect(secureUrl, 308), true);
 	}
 
-	const cfEnv: CfEnv = env;
+	if (isStaticAssetPath(path)) {
+		return applyAppSecurityHeaders(await next(), import.meta.env.PROD);
+	}
+
+	const maintenanceResponse = await appMaintenanceResponse(
+		context.request,
+		cfEnv,
+	);
+	if (maintenanceResponse) {
+		return applyAppSecurityHeaders(maintenanceResponse, import.meta.env.PROD);
+	}
+
+	const publicAppOrigin =
+		cfEnv.BETTER_AUTH_URL?.trim() ||
+		(import.meta.env.PROD ? productionAppOrigin : context.url.origin);
 	const remoteDashboardOrigin = resolveRemoteDashboardOrigin(
 		cfEnv.REMOTE_DASHBOARD_ORIGIN,
 		import.meta.env.DEV,
 	);
 	if (remoteDashboardOrigin && path.startsWith("/api/")) {
 		try {
-			return await proxyRemoteDashboardRequest(
-				context.request,
-				remoteDashboardOrigin,
+			return applyAppSecurityHeaders(
+				await proxyRemoteDashboardRequest(
+					context.request,
+					remoteDashboardOrigin,
+				),
+				import.meta.env.PROD,
 			);
 		} catch (error) {
-			console.error("Remote dashboard proxy failed", error);
-			return Response.json(
-				{
-					error: {
-						code: "REMOTE_DASHBOARD_UNAVAILABLE",
-						message: "The remote dashboard is unavailable.",
+			console.error(
+				JSON.stringify({
+					event: "remote_dashboard_proxy_failed",
+					error: error instanceof Error ? error.name : "UnknownError",
+				}),
+			);
+			return applyAppSecurityHeaders(
+				Response.json(
+					{
+						error: {
+							code: "REMOTE_DASHBOARD_UNAVAILABLE",
+							message: "The remote dashboard is unavailable.",
+						},
 					},
-				},
-				{ status: 502 },
+					{ status: 502 },
+				),
+				import.meta.env.PROD,
 			);
 		}
 	}
@@ -347,19 +384,36 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 	const getAuth = () => {
 		if (!auth) {
+			const selfHosted = isSelfHostedDeployment(cfEnv);
+			const selfHostedEmailEnabled =
+				selfHosted && cfEnv.SELF_HOSTED_FEATURE_EMAIL === "1";
 			auth = createAuth(getDb(), {
 				BETTER_AUTH_SECRET: cfEnv.BETTER_AUTH_SECRET,
-				BETTER_AUTH_URL: cfEnv.BETTER_AUTH_URL || context.url.origin,
+				BETTER_AUTH_URL: publicAppOrigin,
 				GOOGLE_CLIENT_ID: cfEnv.GOOGLE_CLIENT_ID,
 				GOOGLE_CLIENT_SECRET: cfEnv.GOOGLE_CLIENT_SECRET,
-				sendInvitationEmail: createInvitationEmailSender(
-					cfEnv,
-					cfEnv.BETTER_AUTH_URL || context.url.origin,
-				),
-				beforeRemoveMember: ({ userId, organizationId }) =>
+				sendInvitationEmail:
+					!selfHosted || selfHostedEmailEnabled
+						? createInvitationEmailSender(cfEnv)
+						: undefined,
+				requireInvitationForSignUp: true,
+				requireEmailVerification: !selfHosted || selfHostedEmailEnabled,
+				sendAccountEmail:
+					!selfHosted || selfHostedEmailEnabled
+						? createAccountEmailSender(cfEnv)
+						: undefined,
+				afterRemoveMember: ({ userId, organizationId }) =>
 					revokeDashboardPrincipal(getDb(), cfEnv.KV, organizationId, userId),
-				beforeDeleteUser: ({ userId }) =>
-					prepareUserDeletion(getDb(), cfEnv.KV, userId),
+				afterUserBanned: ({ userId }) =>
+					containBannedDashboardUser(getDb(), cfEnv.KV, userId),
+				deleteUserAtomically: ({ userId }) =>
+					deleteUserAtomically(
+						getDb(),
+						cfEnv.KV,
+						cfEnv.AVATARS_BUCKET,
+						cfEnv.QUEUE_RESCUE_BUCKET,
+						userId,
+					),
 			});
 		}
 		return auth;
@@ -380,6 +434,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	if (cfEnv.KV) {
 		context.locals.kv = cfEnv.KV;
 	}
+	context.locals.dashboardCredentialSecret = cfEnv.BETTER_AUTH_SECRET;
 
 	const finalize = (response: Response) => {
 		mergeHeaders(response.headers, authHeaders);
@@ -392,7 +447,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			);
 		}
 
-		return response;
+		return applyAppSecurityHeaders(response, import.meta.env.PROD);
 	};
 
 	if (shouldResolveSession(path)) {
@@ -414,26 +469,41 @@ export const onRequest = defineMiddleware(async (context, next) => {
 			} catch (error) {
 				// Fail closed: an unavailable or malformed remote session must never
 				// become an authenticated local dashboard request.
-				console.error("Remote dashboard session resolution failed", error);
+				console.error(
+					JSON.stringify({
+						event: "remote_dashboard_session_resolution_failed",
+						error: error instanceof Error ? error.name : "UnknownError",
+					}),
+				);
 			}
 		} else {
 			let sessionState: SessionState | null = null;
+			let resolvedFromCookieCache = false;
 
-			// Fast path: resolve the session from the signed cookie cache (HMAC
-			// verify, no DB round trip or auth-instance construction) for ALL
-			// session-resolving paths, including /app/* page views. The fallback
-			// to getSession() below still runs whenever the 5-minute cookie cache
-			// is absent or expired, preserving cookie refresh and revocation.
-			if (cfEnv.BETTER_AUTH_SECRET) {
+			// Fast path for document navigation: resolve the session from the signed
+			// cookie cache (HMAC verify, no DB round trip or auth-instance
+			// construction). Internal /api/* requests always resolve the database
+			// session row so logout or explicit session revocation cannot leave a
+			// five-minute mutation window through the server-held dashboard key.
+			if (
+				cfEnv.BETTER_AUTH_SECRET &&
+				!requiresAuthoritativeSession(context.url)
+			) {
 				const cached = (await getCookieCache(context.request, {
 					secret: cfEnv.BETTER_AUTH_SECRET,
 				})) as SessionState | null;
-				if (cached) sessionState = cached;
+				if (cached) {
+					sessionState = cached;
+					resolvedFromCookieCache = true;
+				}
 			}
 
 			if (!sessionState) {
 				const sessionResult = (await getAuth().api.getSession({
 					headers: context.request.headers,
+					query: {
+						disableCookieCache: requiresAuthoritativeSession(context.url),
+					},
 					returnHeaders: true,
 				})) as {
 					headers?: Headers | null;
@@ -443,6 +513,34 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				sessionState = sessionResult.response;
 			}
 
+			if (sessionState && resolvedFromCookieCache) {
+				const [liveUser] = await getDb()
+					.select({
+						id: authUser.id,
+						banned: authUser.banned,
+						banExpires: authUser.banExpires,
+						credentialVersion: authUser.credentialVersion,
+					})
+					.from(authUser)
+					.where(eq(authUser.id, sessionState.user.id))
+					.limit(1);
+				const cachedCredentialVersion = normalizedCredentialVersion(
+					sessionState.user.credentialVersion,
+				);
+				if (
+					!liveUser ||
+					hasActiveBan(liveUser) ||
+					normalizedCredentialVersion(liveUser.credentialVersion) !==
+						cachedCredentialVersion
+				) {
+					// The signed cookie is only a cache. A ban or credential-generation
+					// change invalidates it immediately, even when no organization is active.
+					sessionState = null;
+				} else {
+					sessionState.user.credentialVersion = cachedCredentialVersion;
+				}
+			}
+
 			if (sessionState) {
 				user = sessionState.user;
 				session = sessionState.session;
@@ -450,9 +548,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				const activeOrganizationId = session.activeOrganizationId ?? null;
 				if (activeOrganizationId) {
 					// SECURITY: re-verify the user is still a member of the active org.
-					// The session (and the signed cookie cache for internal /api/* routes)
-					// can outlive a removeMember, so trusting activeOrganizationId blindly
-					// lets a removed member keep reading/writing the org's tenant data.
+					// The session can outlive a removeMember, so trusting
+					// activeOrganizationId blindly lets a removed member keep
+					// reading/writing the org's tenant data.
 					const membershipRole = await getOrganizationMembershipRole(
 						getDb(),
 						user.id,
@@ -530,7 +628,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	}
 
 	if (user && AUTH_PAGES.has(path)) {
-		const redirectParam = context.url.searchParams.get("redirect");
+		const redirectParam = normalizeAuthRedirect(
+			context.url.searchParams.get("redirect"),
+			"/app",
+		);
 		if (redirectParam?.startsWith("/invite/")) {
 			return redirect(redirectParam);
 		}

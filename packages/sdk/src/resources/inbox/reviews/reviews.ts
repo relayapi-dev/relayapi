@@ -68,7 +68,12 @@ export namespace ReviewListResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     /**
      * Rating (1-5)
@@ -127,7 +132,12 @@ export interface ReviewListParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 }
 
 Reviews.Reply = Reply;

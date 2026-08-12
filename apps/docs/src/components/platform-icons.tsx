@@ -146,6 +146,14 @@ export function DiscordIcon(props: IconProps) {
   );
 }
 
+export function SlackIcon(props: IconProps) {
+  return (
+    <Icon viewBox="0 0 448 512" {...props}>
+      <path d="M94.1 315.1c0 25.9-21.2 47.1-47.1 47.1S0 341 0 315.1 21.2 268 47.1 268h47.1v47.1zm23.7 0c0-25.9 21.2-47.1 47.1-47.1s47.1 21.2 47.1 47.1v117.8c0 25.9-21.2 47.1-47.1 47.1s-47.1-21.2-47.1-47.1V315.1zm47.1-189c-25.9 0-47.1-21.2-47.1-47.1S139 32 164.9 32 212 53.2 212 79.1v47.1h-47.1zm0 23.7c25.9 0 47.1 21.2 47.1 47.1S190.8 244 164.9 244H47.1C21.2 244 0 222.8 0 196.9s21.2-47.1 47.1-47.1h117.8zm189 47.1c0-25.9 21.2-47.1 47.1-47.1s47.1 21.2 47.1 47.1-21.2 47.1-47.1 47.1h-47.1v-47.1zm-23.7 0c0 25.9-21.2 47.1-47.1 47.1S236 222.8 236 196.9V79.1C236 53.2 257.2 32 283.1 32s47.1 21.2 47.1 47.1v117.8zm-47.1 189c25.9 0 47.1 21.2 47.1 47.1S309 480 283.1 480 236 458.8 236 432.9v-47.1h47.1zm0-23.7c-25.9 0-47.1-21.2-47.1-47.1S257.2 268 283.1 268h117.8c25.9 0 47.1 21.2 47.1 47.1s-21.2 47.1-47.1 47.1H283.1z" />
+    </Icon>
+  );
+}
+
 export const platformIcons: Record<string, React.FC<IconProps>> = {
   twitter: TwitterIcon,
   instagram: InstagramIcon,
@@ -163,4 +171,5 @@ export const platformIcons: Record<string, React.FC<IconProps>> = {
   whatsapp: WhatsAppIcon,
   mastodon: MastodonIcon,
   discord: DiscordIcon,
+  slack: SlackIcon,
 };

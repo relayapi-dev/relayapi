@@ -1,0 +1,33 @@
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_DEVELOPMENT="03ad9dd8b5edbb7a0695008d2a367aa55184f206321aef3e13fc21184ea6886213" # -fk ../../../../../../Users/zank/Developer/majestico/relayapi/.env.keys
+
+# .env.development
+# Meta App (shared across Facebook, Instagram, Threads, WhatsApp)
+FACEBOOK_APP_ID=encrypted:BBrSRRfojpbdU4TU/EHYK2Oe3bCRks5aG3EFs92+pbBr4Yer1dAAQS4c87PMHjNNgTom3/YjSiFqQLs74tSL6WEhIEkLMGQ/juVRaIsYpscMiMOf4FX0oNE77G4gcTb2rrsnO0r/9hY1Ms2qzJzKEg==
+FACEBOOK_APP_SECRET=encrypted:BMPQvVAh2g3+JlQnFD8DyXe4pOKAeaMP65ZqUrJvqCGD/8NDY7y4H6law7RMUS6XF6mSnGut7zyA588PVr6KPtG3etsrf/94KlBjgW2NwUqpMZJAxcwyHj6ZO80aHcLCGHVbtZicxvibCstC5l3jX9g+Rj/a3n6z97qKwltRAp+m
+
+# Instagram (separate credentials from Meta dashboard)
+INSTAGRAM_APP_ID=encrypted:BMzWJTYJN6sMnG6DwVAjvOcLHohkqzFcZPiKvg1km8Hei1HAOB68g5bSBAl2yWzMNG9ZGFnD1EFB6f2Ln/yDdEPhpvCcwL+VRu5+CLH9+d9rOcg+VLjxoS5ugJC3gRQO0vGVIKrouqQF89KinsAfrHw=
+INSTAGRAM_APP_SECRET=encrypted:BKpdv/mIl5bCdDE3V4yUmWSHh/iorGO7yd/bPLptaVHL+Gvf2jGHl9BOGP46ZjSYQKpnfhbi8LuZViQOKKlh4YbfFTJ1HgXDSeQtmLbRDNZDjUQWx326WQ8xS06mV4ORPFvZ7ffsHlNmolD3ffwGrZy6D7o8yGLxk9J+xEwMGDx9
+
+# Threads
+THREADS_APP_ID=encrypted:BOZbewVIyle07vQsBJyDm+o69gw66kVs/SfgEi7qY9/o9WhE6m7ElaKVgrD0F018QplMQpRy5L34qyiJK7vbjaoCoLRWTDP8jRg68c9aUnyo+ZD3gwvxUWHpt7c3cC8/ue2sAWsMYHWXp2gT0QX/r/k=
+THREADS_APP_SECRET=encrypted:BA4FPIO+2va9C80jH7J91kzaq2N7iH6gjwVDT42NrzXk8VbDzYBDcXuDe0esMubHt9UBY/QhkQQFE6Q6U4NGgYMJsWXL68XTSylJUWEMDKsFKdJznMQMdiO4Ukb4cimMJwOp7Viy7CGq3zYLUZggC0397DvBOFaWr1PRATQv0iH8
+
+# WhatsApp (uses main Meta App credentials for OAuth)
+WHATSAPP_APP_ID=encrypted:BKiSiHOkfrrA1t+hHyLbphhAMRU2ovMkmfZlwdH0Ev8vT7odXoYzFNfU1y/352FFOARedylRu4wArndwZHJ2reigLYlDqVCKsVbBYa0LvSmlc0ALuEUcl6BZr3xTB3L3+zv7La1KlY9g9g5/+azbyg==
+WHATSAPP_APP_SECRET=encrypted:BDRC2GXEvlwSKkgmWlX/NOwJGIaBMVwXtdmDzfBqsxHSy2NKZ++hYic9oRq8OVibpzmiiAEXpTsM3Y9ewZFNXkWCY7txDhnpZFdGg7PAxnTP3CkBCyXBQQk/BbPE4x8lZJxI6tdVoJdEQho/G3r3PoLaXjmHnPS8siJNlcN+bPcZ
+
+# Telnyx phone number provisioning
+TELNYX_API_KEY=encrypted:BBKhBrE0MrL+v69KEcFu2ZyFUMp8p4IYpDXrFjbNwor4wWb+bl2NhH7ldG6+N5N86/b6OM0ADRskAkDd45Em/xY68NMJM3rnwWN82oQ/Chc2wFVDMXz1FSfNrvWSdmdcw7+45FBv8aMi8ButdLcYJy+e/UhbRiPPCX02yghbqI1f6EBtmMtNw2L7FZiRjgvswojZ9zdJns9xBKk=
+STRIPE_WA_PHONE_PRICE_ID=encrypted:BLRPzKrWswBI8aAFj2US0DNS5rHpjL1bEvwh9FM9OnPCKVDZXvHwN1/Q82Syq+Kbny/xwUZOkdrqajyP3ZE5UNvJ/cR+E7OGa1dzKs3Iotmy/bWfKLbSl8vqVDiy2GXzdqQQQr94PHkKEvqZOX6ua5TgYGLNRczMrFPxrrM7SA==
+
+# Token encryption (AES-256-GCM) — required
+ENCRYPTION_KEY=encrypted:BLXaFRCIyKp4nYp12ydbVdrrom9c4Z6x4HKq9lDkzFFBSCNzkAdDrJGn+HxdUWSKtnX2XIoQKX5cE7VmRSs8CzOtwmeEMIxyXHE29L/WKZ0t/O25CreSYiz5HDjXgNVtyeja05TL4LEc+TnosMEcOcuyzzxaQtxScFwgbyj+yoj5poWe2HkCbXiF7Wzh85jMT9avp8zR7XvjnZvpHzyLiAA=
+
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=encrypted:BJGU2ysK9T+lco9vrj8Rihr5T2JAS9JmUIBXYUngQqknR+k07ehl/6cVZIbhMErKNqIWOJrk4yLv43j42gQ/ZzaZL3MDYSHUyYTRcRTep06bT/PnQemnFflvkNv/nGM1o/GM1z+fGKfm0OHByk0BnZ5R1Q0r/Tjh4Nreh9CQqwxK9dYcZeIUbnGlq6yp1ufVvh6EGD2RV8Zz9ALUbLJ526d2kWPj7iCVdFls3KEZza1K5ZzXtnqWVtiPRQ==
+
+BETTER_AUTH_SECRET=encrypted:BJLFnmlVdFf9j+YFjnXupCGPIGy3nhSxYCSjcwdxQn/ibzYlO7RCgsIOk6wRtVppZIY5KXnpPMyL4dhvXLUtALLPyOdDmlFoeJbyegwBAzFAziMxMj6IKPM1fui85SD23Y3OTMa+7y/p+3aQ+qXFqtPWeSF76YTUJF5UlEo5RPfFiSFdP+ptHr+CbK7M

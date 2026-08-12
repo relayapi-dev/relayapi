@@ -1,137 +1,134 @@
 ---
 title: Platforms Overview
-description: Supported social media platforms and their capabilities.
+description: RelayAPI's 22 connected publishing platforms, connection models, and capability boundaries.
 icon: Globe
 ---
 
-## Supported Platforms
+## Supported publishers
 
-RelayAPI supports posting to 21 platforms through a single unified API. Each platform has specific features, limitations, and content requirements.
+RelayAPI's runtime registry and database schema support 22 connected publishing platforms. Scheduling is handled by RelayAPI for every publisher; provider capabilities and connection requirements still differ.
 
-## Platform Comparison
+| Platform | Connection model | Core publisher behavior |
+|----------|------------------|-------------------------|
+| [Twitter/X](/platforms/twitter) | OAuth 2.0 | Text, media, replies, polls, threads, geo, and sensitive-media labels |
+| [Instagram](/platforms/instagram) | Meta OAuth | Feed, Reels, Trial Reels, custom covers, and Stories for eligible professional accounts |
+| [Facebook](/platforms/facebook) | Meta OAuth + Page selection | Page feed/unpublished posts, geo targeting, Reels/drafts, and Stories |
+| [LinkedIn](/platforms/linkedin) | OAuth + profile/organization selection | Personal and organization posts |
+| [TikTok](/platforms/tiktok) | OAuth | Direct video/photo publishing or creator-inbox upload; photos require verified pull URLs |
+| [YouTube](/platforms/youtube) | Google OAuth | Video upload, metadata, visibility, and scheduling |
+| [Pinterest](/platforms/pinterest) | OAuth + board selection | Image/video Pins |
+| [Reddit](/platforms/reddit) | OAuth | Subreddit self/link posts; one media URL can be submitted as a link |
+| [Bluesky](/platforms/bluesky) | Handle + app password | Text, images, embeds, quotes, and threads |
+| [Threads](/platforms/threads) | Meta OAuth | Text/media posts, replies, threads, polls, quotes, and location tags |
+| [Telegram](/platforms/telegram) | Managed-bot challenge | Text, single media, and media groups |
+| [Snapchat](/platforms/snapchat) | Public Profile OAuth + selection | Saved Story and Spotlight; ordinary Story is currently disabled |
+| [Google Business](/platforms/googlebusiness) | Google OAuth + location selection | Business Profile local posts |
+| [WhatsApp](/platforms/whatsapp) | Embedded signup or direct business credentials | Business messages/templates plus capability-gated groups, block lists, usernames, and template administration |
+| [Mastodon](/platforms/mastodon) | Dynamic per-instance OAuth | Statuses, media, polls, replies, and visibility |
+| [Discord](/platforms/discord) | Validated incoming webhook | Text, attachments, polls, forum threads, TTS, video links, and embeds |
+| [Slack](/platforms/slack) | Incoming webhook | Text, blocks, attachments, and public media links; no delete/reconcile |
+| [SMS](/platforms/sms) | Validated Twilio credentials | SMS/MMS with per-recipient outcomes |
+| [Beehiiv](/platforms/beehiiv) | API credential | Newsletter publication |
+| [Kit (ConvertKit)](/platforms/convertkit) | API credential | Broadcast publication |
+| [Mailchimp](/platforms/mailchimp) | API credential | Campaign publication |
+| [Listmonk](/platforms/listmonk) | Instance credentials | Self-hosted newsletter campaigns |
 
-| Platform | Text | Images | Video | Stories | Reels | Scheduling |
-|----------|------|--------|-------|---------|-------|------------|
-| [Twitter/X](/platforms/twitter) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Instagram](/platforms/instagram) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Facebook](/platforms/facebook) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [LinkedIn](/platforms/linkedin) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [TikTok](/platforms/tiktok) | ✅ | — | ✅ | — | — | ✅ |
-| [YouTube](/platforms/youtube) | ✅ | — | ✅ | ✅ | ✅ | ✅ |
-| [Pinterest](/platforms/pinterest) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Reddit](/platforms/reddit) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Bluesky](/platforms/bluesky) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Threads](/platforms/threads) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Telegram](/platforms/telegram) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Snapchat](/platforms/snapchat) | ✅ | ✅ | ✅ | ✅ | — | ✅ |
-| [Discord](/platforms/discord) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Mastodon](/platforms/mastodon) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [WhatsApp](/platforms/whatsapp) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Google Business](/platforms/googlebusiness) | ✅ | ✅ | — | — | — | ✅ |
-| [SMS](/platforms/sms) | ✅ | ✅ | ✅ | — | — | ✅ |
-| [Beehiiv](/platforms/beehiiv) | ✅ | ✅ | — | — | — | ✅ |
-| [ConvertKit](/platforms/convertkit) | ✅ | ✅ | — | — | — | ✅ |
-| [Mailchimp](/platforms/mailchimp) | ✅ | ✅ | — | — | — | ✅ |
-| [Listmonk](/platforms/listmonk) | ✅ | ✅ | — | — | — | ✅ |
+“Supported” means a concrete publisher is registered and the platform identity can be represented by the current database schema. It does not override provider app review, product tier, regional availability, account type, media policy, or permissions. Check the platform page before relying on a specific content type.
 
-## Getting Started
+## Target selectors and provider identities
 
-1. Connect your social accounts via the [dashboard](https://relayapi.dev) or [API](/api-reference/accounts/connect-account)
-2. Create a post with target account IDs
-3. RelayAPI handles platform-specific formatting automatically
+Create a connection first. Each `targets` entry may be a RelayAPI account ID, a
+platform key, or a workspace ID:
 
-## Platform Overrides
+- `acc_...` selects one exact connected account.
+- A platform key such as `twitter` expands to every active, authorized Twitter
+  account in the post's workspace boundary.
+- `ws_...` expands to every active, authorized account in that workspace.
 
-Use `target_options` to customize content per platform:
+Overlapping selectors are de-duplicated before publishing. Prefer account IDs
+when a post must reach one exact provider identity; use the broader selectors
+only when their fan-out is intentional.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
-  content: 'Check out our new feature!',
-  targets: ['acc_twitter_123', 'acc_linkedin_456'],
+  content: 'Release 2.0 is live.',
+  targets: ['acc_x_example', 'acc_linkedin_example'],
   scheduled_at: 'now',
   target_options: {
     twitter: {
-      content: 'Check out our new feature! 🚀 #tech',
+      content: 'Release 2.0 is live. 🚀',
     },
     linkedin: {
-      content: "Excited to announce our latest feature. Here's what it means for the industry...",
+      content: 'We have released version 2.0. Read the full changelog…',
     },
   },
 });
 ```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Check out our new feature!',
-    targets=['acc_twitter_123', 'acc_linkedin_456'],
-    scheduled_at='now',
-    target_options={
-        'twitter': {
-            'content': 'Check out our new feature! 🚀 #tech',
-        },
-        'linkedin': {
-            'content': "Excited to announce our latest feature. Here's what it means for the industry...",
-        },
-    },
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Check out our new feature!"),
-    Targets:     relaygo.F([]string{"acc_twitter_123", "acc_linkedin_456"}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "twitter": map[string]interface{}{
-            "content": "Check out our new feature! 🚀 #tech",
-        },
-        "linkedin": map[string]interface{}{
-            "content": "Excited to announce our latest feature. Here's what it means for the industry...",
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Check out our new feature!")
-    .addTarget("acc_twitter_123")
-    .addTarget("acc_linkedin_456")
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("twitter", JsonValue.from(Map.of(
-            "content", "Check out our new feature! 🚀 #tech"
-        )))
-        .putAdditionalProperty("linkedin", JsonValue.from(Map.of(
-            "content", "Excited to announce our latest feature. Here's what it means for the industry..."
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
+
 ```bash
 curl -X POST https://api.relayapi.dev/v1/posts \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: release-2-announcement" \
   -d '{
-    "content": "Check out our new feature!",
-    "targets": ["acc_twitter_123", "acc_linkedin_456"],
+    "content": "Release 2.0 is live.",
+    "targets": ["acc_x_example", "acc_linkedin_example"],
     "scheduled_at": "now",
     "target_options": {
-      "twitter": {
-        "content": "Check out our new feature! 🚀 #tech"
-      },
-      "linkedin": {
-        "content": "Excited to announce our latest feature. Here'\''s what it means for the industry..."
-      }
+      "twitter": {"content": "Release 2.0 is live. 🚀"},
+      "linkedin": {"content": "We have released version 2.0."}
     }
   }'
 ```
-</Tab>
-</Tabs>
+
+The post's workspace and every resolved account must be mutually authorized.
+Organization-scoped accounts are visible to credentials with at least one
+workspace grant; zero-grant credentials see no operational accounts.
+
+Selector expansion does not let publisher options retarget a provider
+credential. For example, Snapchat always uses the selected Public Profile,
+Telegram always uses the challenged chat, and Slack/Discord always use the
+connected webhook destination. TikTok pull-mode media is restricted to the
+verified URL prefixes snapshotted when that account connected.
+
+## Connection classes
+
+- **OAuth** — RelayAPI redirects the user and stores encrypted access/refresh credentials. Some platforms require a second provider-identity selection.
+- **Dynamic OAuth** — Mastodon registers an OAuth client on the chosen safe public instance and pins that origin to the account.
+- **Credential connection** — RelayAPI stores an encrypted app password, API key, Twilio credential, or webhook after the strongest validation the provider offers. Slack has no non-mutating webhook probe, so its first publish is the activation check.
+- **Managed bot** — Telegram uses a short-lived challenge and verifies both the human administrator and the managed bot's posting permission.
+
+See [Connecting Accounts](/guides/connecting-accounts) for the exact flows and credential lifecycle.
+
+## Published edits and interactions
+
+RelayAPI exposes provider-backed text edits for published X, Facebook, Discord,
+and Reddit targets, plus a narrower capability matrix for message/comment
+editing, read receipts, mentions, moderation, likes, votes, and ratings. These
+are durable mutations with required idempotency keys; unsupported
+platform/action pairs fail before provider I/O. See [Published Edits and Social
+Actions](/guides/published-edits-and-social-actions).
+
+## Native analytics
+
+RelayAPI currently exposes native account analytics for Facebook, Instagram, Twitter/X, LinkedIn, YouTube, TikTok, Pinterest, Threads, Google Business, and WhatsApp when the account type and scopes allow them. Other publishers can still participate in stored cross-platform post analytics when RelayAPI has collected snapshots, but they do not gain a live provider adapter merely because publishing is supported.
+
+See [Analytics](/guides/analytics) for endpoint, workspace, cache, and pagination behavior.
+
+## Provider outcomes
+
+Provider acknowledgement is not always the same as publication or delivery:
+
+- Snapchat Spotlight can remain in moderation.
+- Twilio SMS can be accepted, sent, delivered, partially failed, or unknown per recipient.
+- WhatsApp's signed `sent` callback remains nonterminal; only `delivered`/`read` or `failed` terminalizes an outbound target.
+- Slack incoming webhooks return `ok` without a message ID, so they cannot be reconciled or deleted through this integration.
+- Telegram returns a Message (or one Message per media-group item) but has no later delivery/read lifecycle in this publisher; RelayAPI persists every album message ID for unpublish.
+
+Use one RelayAPI `Idempotency-Key` per logical mutation, retain it across retries, and follow [Error Handling](/guides/error-handling) whenever the provider outcome is uncertain.
+
+## Unpublish support
+
+`POST /v1/posts/{id}/unpublish` attempts provider deletion independently for each published target. RelayAPI currently implements provider delete for Twitter/X, Facebook, LinkedIn, Reddit, Pinterest, Threads, YouTube, Bluesky, Google Business, Telegram, Mastodon, and Discord.
+
+Instagram is intentionally not on that list: the current official Instagram API does not document deletion of published Instagram Media. Slack incoming webhooks also provide no message ID suitable for deletion. Targets on Instagram, Slack, TikTok, Snapchat, WhatsApp, SMS, and the newsletter publishers remain published when no supported provider-delete contract exists; RelayAPI returns a per-target error instead of pretending the remote object was removed.

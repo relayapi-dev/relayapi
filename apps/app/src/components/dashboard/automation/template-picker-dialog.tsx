@@ -16,7 +16,6 @@
 // `AutomationTemplatePickerDialog` export is kept as an alias pointing at the
 // same component for any callers not yet migrated.
 
-import { useEffect, useId, useMemo, useState } from "react";
 import {
 	ArrowLeft,
 	Bot,
@@ -29,6 +28,10 @@ import {
 	UserPlus,
 	Workflow,
 } from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
+import { PostSearchCombobox } from "@/components/dashboard/post-search-combobox";
+import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
@@ -37,11 +40,8 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
-import { PostSearchCombobox } from "@/components/dashboard/post-search-combobox";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,7 +104,7 @@ const TEMPLATES: TemplateMeta[] = [
 	{
 		slug: "follow_to_dm",
 		name: "Follow to DM",
-		description: "DM new followers automatically.",
+		description: "Welcome verified followers when they first DM you.",
 		icon: UserPlus,
 		channels: ["instagram"],
 		group: "quick_start",
@@ -139,7 +139,7 @@ const TEMPLATES: TemplateMeta[] = [
 // Form state per template
 // ---------------------------------------------------------------------------
 
-interface FormState {
+export interface AutomationTemplateFormState {
 	name: string;
 	description?: string;
 	channel: ChannelOption;
@@ -156,23 +156,91 @@ interface FormState {
 	capture_field?: "email" | "phone";
 	success_tag?: string;
 	// follower_growth fields
-	contest_post_id?: string;
 	trigger_keyword?: string;
-	entry_requirements?: string[];
-	// follow_to_dm fields
-	daily_cap?: number;
-	cooldown_hours?: number;
+	must_tag_friends?: number;
+	must_share_story?: boolean;
+	winner_tag?: string;
 }
+
+type FormState = AutomationTemplateFormState;
 
 const defaultForm: FormState = {
 	name: "",
 	channel: "instagram",
 	once_per_user: true,
 	capture_field: "email",
-	success_tag: "lead",
-	daily_cap: 100,
-	cooldown_hours: 24,
+	success_tag: "story_lead",
 };
+
+/** Build the exact strict config accepted by AutomationTemplateInputSchema. */
+export function buildAutomationTemplateConfig(
+	selected: TemplateSlug,
+	form: AutomationTemplateFormState,
+): Record<string, unknown> {
+	if (selected === "blank") return {};
+	const keywords = (form.keyword_filter ?? "")
+		.split(",")
+		.map((keyword) => keyword.trim())
+		.filter(Boolean);
+
+	switch (selected) {
+		case "comment_to_dm":
+			return {
+				post_ids: form.post_ids,
+				keyword_filter: keywords.length > 0 ? keywords : undefined,
+				public_reply: form.public_reply?.trim() || undefined,
+				dm_message: {
+					blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
+				},
+				once_per_user: form.once_per_user,
+				fallback_message: form.fallback_message?.trim() || undefined,
+				social_account_id: form.social_account_id,
+			};
+		case "story_leads":
+			return {
+				story_ids: form.story_ids ?? null,
+				keyword_filter: keywords.length > 0 ? keywords : undefined,
+				dm_message: {
+					blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
+				},
+				capture_field: form.capture_field,
+				success_tag: form.success_tag?.trim() || undefined,
+				social_account_id: form.social_account_id,
+			};
+		case "follower_growth": {
+			const mustTagFriends = form.must_tag_friends ?? 0;
+			const hasRequirements =
+				mustTagFriends > 0 || form.must_share_story === true;
+			return {
+				post_ids: form.post_ids,
+				trigger_keyword: form.trigger_keyword?.trim() || undefined,
+				public_reply: form.public_reply?.trim() || undefined,
+				dm_message: {
+					blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
+				},
+				entry_requirements: hasRequirements
+					? {
+							must_tag_friends: mustTagFriends > 0 ? mustTagFriends : undefined,
+							must_share_story: form.must_share_story === true || undefined,
+						}
+					: undefined,
+				winner_tag: form.winner_tag?.trim() || undefined,
+				social_account_id: form.social_account_id,
+			};
+		}
+		case "follow_to_dm":
+			return {
+				dm_message: {
+					blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
+				},
+				social_account_id: form.social_account_id,
+			};
+		case "welcome_flow":
+		case "faq_bot":
+		case "lead_capture":
+			return {};
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -196,13 +264,16 @@ export function CreateAutomationDialog({
 	initialTemplate = null,
 }: Props) {
 	const [step, setStep] = useState<1 | 2 | 3>(1);
-	const [selected, setSelected] = useState<TemplateSlug | null>(initialTemplate);
+	const [selected, setSelected] = useState<TemplateSlug | null>(
+		initialTemplate,
+	);
 	const [form, setForm] = useState<FormState>(defaultForm);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const template = useMemo(
-		() => (selected ? TEMPLATES.find((t) => t.slug === selected) ?? null : null),
+		() =>
+			selected ? (TEMPLATES.find((t) => t.slug === selected) ?? null) : null,
 		[selected],
 	);
 
@@ -251,6 +322,14 @@ export function CreateAutomationDialog({
 				if (!form.trigger_keyword?.trim())
 					return "Trigger keyword is required.";
 				if (!form.dm_text?.trim()) return "DM text is required.";
+				if (
+					form.must_tag_friends !== undefined &&
+					(!Number.isInteger(form.must_tag_friends) ||
+						form.must_tag_friends < 0 ||
+						form.must_tag_friends > 20)
+				) {
+					return "Friends tagged must be a whole number from 0 to 20.";
+				}
 				return null;
 			case "follow_to_dm":
 				if (!form.social_account_id) return "Select an account.";
@@ -258,67 +337,6 @@ export function CreateAutomationDialog({
 				return null;
 			default:
 				return null;
-		}
-	};
-
-	// ---- Build server payload --------------------------------------------
-
-	const buildTemplateConfig = (): Record<string, unknown> => {
-		if (!selected || selected === "blank") return {};
-		const kw = (form.keyword_filter ?? "")
-			.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean);
-		switch (selected) {
-			case "comment_to_dm":
-				return {
-					post_ids: form.post_ids,
-					keyword_filter: kw.length > 0 ? kw : undefined,
-					public_reply: form.public_reply?.trim() || undefined,
-					dm_message: {
-						blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
-					},
-					once_per_user: form.once_per_user,
-					fallback_message: form.fallback_message?.trim() || undefined,
-					social_account_id: form.social_account_id,
-				};
-			case "story_leads":
-				return {
-					story_ids: form.story_ids ?? null,
-					keyword_filter: kw.length > 0 ? kw : undefined,
-					dm_message: {
-						blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
-					},
-					capture_field: form.capture_field,
-					success_tag: form.success_tag,
-					social_account_id: form.social_account_id,
-				};
-			case "follower_growth":
-				return {
-					contest_post_id: form.contest_post_id,
-					trigger_keyword: form.trigger_keyword,
-					public_reply: form.public_reply?.trim() || undefined,
-					dm_message: {
-						blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
-					},
-					entry_requirements: form.entry_requirements ?? [],
-					social_account_id: form.social_account_id,
-				};
-			case "follow_to_dm":
-				return {
-					dm_message: {
-						blocks: [{ id: "txt", type: "text", text: form.dm_text ?? "" }],
-					},
-					daily_cap: form.daily_cap,
-					cooldown_hours: form.cooldown_hours,
-					social_account_id: form.social_account_id,
-				};
-			case "welcome_flow":
-			case "faq_bot":
-			case "lead_capture":
-				return {};
-			default:
-				return {};
 		}
 	};
 
@@ -340,7 +358,7 @@ export function CreateAutomationDialog({
 			if (selected && selected !== "blank") {
 				body.template = {
 					kind: selected,
-					config: buildTemplateConfig(),
+					config: buildAutomationTemplateConfig(selected, form),
 				};
 			}
 			const res = await fetch("/api/automations", {
@@ -353,9 +371,9 @@ export function CreateAutomationDialog({
 				setError(parsed?.error?.message ?? `Request failed (${res.status}).`);
 				return;
 			}
-			const created = (await res.json().catch(() => null)) as
-				| { id?: string }
-				| null;
+			const created = (await res.json().catch(() => null)) as {
+				id?: string;
+			} | null;
 			onCreated();
 			onOpenChange(false);
 			if (created?.id) {
@@ -463,25 +481,31 @@ export function CreateAutomationDialog({
 								</select>
 							</div>
 
-							{!blank && template.slug !== "welcome_flow" && template.slug !== "faq_bot" && template.slug !== "lead_capture" && (
-								<div>
-									<span className="block text-xs font-medium text-muted-foreground">
-										Account
-									</span>
-									<div className="mt-1">
-										<AccountSearchCombobox
-											value={form.social_account_id ?? null}
-											onSelect={(id) =>
-												setForm((f) => ({ ...f, social_account_id: id ?? undefined }))
-											}
-											platforms={[form.channel]}
-											showAllOption={false}
-											placeholder="Select an account"
-											variant="input"
-										/>
+							{!blank &&
+								template.slug !== "welcome_flow" &&
+								template.slug !== "faq_bot" &&
+								template.slug !== "lead_capture" && (
+									<div>
+										<span className="block text-xs font-medium text-muted-foreground">
+											Account
+										</span>
+										<div className="mt-1">
+											<AccountSearchCombobox
+												value={form.social_account_id ?? null}
+												onSelect={(id) =>
+													setForm((f) => ({
+														...f,
+														social_account_id: id ?? undefined,
+													}))
+												}
+												platforms={[form.channel]}
+												showAllOption={false}
+												placeholder="Select an account"
+												variant="input"
+											/>
+										</div>
 									</div>
-								</div>
-							)}
+								)}
 
 							{template.slug === "comment_to_dm" && (
 								<CommentToDmFields form={form} setForm={setForm} />
@@ -537,7 +561,12 @@ export function CreateAutomationDialog({
 						</Button>
 					)}
 					{step === 3 && (
-						<Button type="button" size="sm" onClick={submit} disabled={submitting}>
+						<Button
+							type="button"
+							size="sm"
+							onClick={submit}
+							disabled={submitting}
+						>
 							{submitting ? (
 								<Loader2 className="mr-1.5 size-3.5 animate-spin" />
 							) : (
@@ -562,7 +591,10 @@ export type AutomationTemplateId = TemplateSlug;
 // ---------------------------------------------------------------------------
 
 function TemplateGrid({ onPick }: { onPick: (slug: TemplateSlug) => void }) {
-	const groups: Array<{ key: "blank" | "quick_start" | "scaffold"; label: string }> = [
+	const groups: Array<{
+		key: "blank" | "quick_start" | "scaffold";
+		label: string;
+	}> = [
 		{ key: "blank", label: "Start from scratch" },
 		{ key: "quick_start", label: "Quick starts" },
 		{ key: "scaffold", label: "Scaffolds" },
@@ -659,7 +691,7 @@ function CommentToDmFields({
 				label="DM text"
 				value={form.dm_text ?? ""}
 				onChange={(v) => setForm((f) => ({ ...f, dm_text: v }))}
-				placeholder="Hey {{first_name}} 👋 here's the link you asked for."
+				placeholder="Hey {{contact.name}} 👋 here's the link you asked for."
 			/>
 			<Checkbox
 				label="Only once per user"
@@ -735,6 +767,7 @@ function FollowerGrowthFields({
 	form: FormState;
 	setForm: React.Dispatch<React.SetStateAction<FormState>>;
 }) {
+	const tagFriendsId = useId();
 	return (
 		<>
 			<div>
@@ -743,9 +776,12 @@ function FollowerGrowthFields({
 				</span>
 				<div className="mt-1">
 					<PostSearchCombobox
-						value={form.contest_post_id ?? null}
+						value={form.post_ids?.[0] ?? null}
 						onSelect={(id) =>
-							setForm((f) => ({ ...f, contest_post_id: id ?? undefined }))
+							setForm((f) => ({
+								...f,
+								post_ids: id ? [id] : undefined,
+							}))
 						}
 						accountId={form.social_account_id ?? null}
 						placeholder={
@@ -775,19 +811,47 @@ function FollowerGrowthFields({
 				onChange={(v) => setForm((f) => ({ ...f, dm_text: v }))}
 				placeholder="Welcome to the contest 🎉"
 			/>
-			<TextField
-				label="Entry requirements (comma-separated, optional)"
-				value={(form.entry_requirements ?? []).join(", ")}
-				onChange={(v) =>
-					setForm((f) => ({
-						...f,
-						entry_requirements: v
-							.split(",")
-							.map((s) => s.trim())
-							.filter(Boolean),
+			<div>
+				<label
+					htmlFor={tagFriendsId}
+					className="text-xs font-medium text-muted-foreground"
+				>
+					Friends that must be tagged
+				</label>
+				<input
+					id={tagFriendsId}
+					type="number"
+					min={0}
+					max={20}
+					value={form.must_tag_friends ?? 0}
+					onChange={(event) => {
+						const value = event.target.value;
+						setForm((current) => ({
+							...current,
+							must_tag_friends:
+								value === "" ? undefined : Number.parseInt(value, 10),
+						}));
+					}}
+					className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+				/>
+			</div>
+			<Checkbox
+				label="Require a story mention"
+				checked={form.must_share_story ?? false}
+				onChange={(value) =>
+					setForm((current) => ({
+						...current,
+						must_share_story: value,
 					}))
 				}
-				placeholder="follow, tag_friend"
+			/>
+			<TextField
+				label="Qualification tag (optional)"
+				value={form.winner_tag ?? "contest_qualified"}
+				onChange={(value) =>
+					setForm((current) => ({ ...current, winner_tag: value }))
+				}
+				placeholder="contest_qualified"
 			/>
 		</>
 	);
@@ -801,30 +865,12 @@ function FollowToDmFields({
 	setForm: React.Dispatch<React.SetStateAction<FormState>>;
 }) {
 	return (
-		<>
-			<TextAreaField
-				label="DM text"
-				value={form.dm_text ?? ""}
-				onChange={(v) => setForm((f) => ({ ...f, dm_text: v }))}
-				placeholder="Thanks for following 🙌"
-			/>
-			<div className="grid grid-cols-2 gap-2">
-				<TextField
-					label="Daily cap"
-					type="number"
-					value={String(form.daily_cap ?? 100)}
-					onChange={(v) => setForm((f) => ({ ...f, daily_cap: Number(v) || 0 }))}
-				/>
-				<TextField
-					label="Cooldown (hours)"
-					type="number"
-					value={String(form.cooldown_hours ?? 24)}
-					onChange={(v) =>
-						setForm((f) => ({ ...f, cooldown_hours: Number(v) || 0 }))
-					}
-				/>
-			</div>
-		</>
+		<TextAreaField
+			label="DM text"
+			value={form.dm_text ?? ""}
+			onChange={(v) => setForm((f) => ({ ...f, dm_text: v }))}
+			placeholder="Thanks for following 🙌"
+		/>
 	);
 }
 
@@ -846,9 +892,7 @@ function ReviewStep({
 	if (form.dm_text) {
 		rows.push([
 			"DM text",
-			form.dm_text.length > 60
-				? `${form.dm_text.slice(0, 60)}…`
-				: form.dm_text,
+			form.dm_text.length > 60 ? `${form.dm_text.slice(0, 60)}…` : form.dm_text,
 		]);
 	}
 	if (form.keyword_filter) {

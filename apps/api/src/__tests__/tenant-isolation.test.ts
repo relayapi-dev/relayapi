@@ -85,6 +85,8 @@ function makeRouteApp(
 	app.use("*", async (c, next) => {
 		c.set("orgId", organizationId);
 		c.set("workspaceScope", workspaceScope);
+		c.set("principalType", "service");
+		c.set("permissions", ["read", "write", "manage_spend"]);
 		// biome-ignore lint/suspicious/noExplicitAny: route-isolation DB stub
 		c.set("db", tenantSelectDb(row) as any);
 		await next();
@@ -223,9 +225,17 @@ const routeMatrix: RouteCase[] = [
 ];
 
 function requestFor(testCase: RouteCase): Request {
+	const mutation = ["POST", "PUT", "PATCH", "DELETE"].includes(
+		testCase.method ?? "GET",
+	);
 	return new Request(`http://localhost${testCase.path}`, {
 		method: testCase.method ?? "GET",
-		headers: testCase.body ? { "content-type": "application/json" } : undefined,
+		headers: {
+			...(testCase.body ? { "content-type": "application/json" } : {}),
+			...(testCase.router === adsRouter && mutation
+				? { "idempotency-key": `tenant-isolation-${testCase.name}` }
+				: {}),
+		},
 		body: testCase.body ? JSON.stringify(testCase.body) : undefined,
 	});
 }
@@ -246,6 +256,7 @@ async function authorizedResponse(
 
 describe("F-04 direct-id route matrix", () => {
 	for (const testCase of routeMatrix) {
+		const authorizedStatus = testCase.name === "media get" ? "ready" : "draft";
 		it(`permits an all-workspace key to pass authorization: ${testCase.name}`, async () => {
 			const app = makeRouteApp(
 				testCase.router,
@@ -253,7 +264,7 @@ describe("F-04 direct-id route matrix", () => {
 					id: "resource",
 					organizationId: "org_a",
 					workspaceId: "ws_a",
-					status: "draft",
+					status: authorizedStatus,
 				},
 				"all",
 			);
@@ -269,7 +280,7 @@ describe("F-04 direct-id route matrix", () => {
 					id: "resource",
 					organizationId: "org_a",
 					workspaceId: "ws_allowed",
-					status: "draft",
+					status: authorizedStatus,
 				},
 				["ws_allowed"],
 			);

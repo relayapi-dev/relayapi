@@ -1,8 +1,10 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 export { Logs, type LogRetrieveResponse, type LogListResponse, type LogListParams } from './logs';
+export { PostTags, type PostTagListResponse, type PostTagListParams } from './tags';
 export {
   Posts,
+  POST_TARGET_PLATFORMS,
   type RecyclingConfig,
   type RecyclingInput,
   type PostTargetPlatform,

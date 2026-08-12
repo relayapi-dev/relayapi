@@ -18,24 +18,32 @@ icon: whatsapp
 | Video formats | MP4, 3GPP |
 | Video max size | 16 MB |
 | Message types | Text, Image, Video, Document, Audio, Template |
+| Administration | Capability-gated groups, block lists, business usernames, and template library/editing |
 | Scheduling | Yes |
 | Analytics | No (use WhatsApp Business Manager) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
 
 <Callout type="warn">
-WhatsApp requires a **WhatsApp Business Account** with access to the **Cloud API** (via Meta for Developers). Messages outside the **24-hour conversation window** require pre-approved **message templates**. Every message requires a **recipient phone number** in E.164 format (without the `+` prefix). Only **1 media item per message** is supported. Media captions are limited to **1,024 characters**.
+WhatsApp requires a **WhatsApp Business Account** with access to the **Cloud API** (via Meta for Developers). Messages outside the **24-hour conversation window** require pre-approved **message templates**. Every message requires a **recipient phone number** in E.164 format (without the `+` prefix). Only **1 media item per message** is supported. Image, video, and document captions are limited to **1,024 characters**. Audio attachments cannot include post content as a caption; RelayAPI rejects that combination before provider I/O.
+</Callout>
+
+<Callout type="warn">
+WhatsApp administration and messaging require an embedded token with both
+`whatsapp_business_management` and `whatsapp_business_messaging`. Reconnect or
+repeat embedded signup for an older connection whose token lacks either grant;
+refreshing the existing token cannot add permissions.
 </Callout>
 
 ## Quick Start
 
 Send a text message via WhatsApp:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -54,26 +62,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-
-post = client.posts.create(
-    content='Hello from RelayAPI!',
-    targets=['whatsapp'],
-    scheduled_at='now',
-    target_options={
-        'whatsapp': {
-            'to': '14155238886'
-        }
-    }
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -135,7 +123,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Plain text message up to 4,096 characters.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -148,20 +136,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Hello from RelayAPI!',
-    targets=['whatsapp'],
-    scheduled_at='now',
-    target_options={
-        'whatsapp': {
-            'to': '14155238886'
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -215,7 +189,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Enable URL previews in text messages.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -229,21 +203,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Check out our new feature: https://example.com/launch',
-    targets=['whatsapp'],
-    scheduled_at='now',
-    target_options={
-        'whatsapp': {
-            'to': '14155238886',
-            'preview_url': True
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -300,7 +259,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Send a single image with an optional caption (max 1,024 chars).
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -316,23 +275,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Check out this photo!',
-    targets=['whatsapp'],
-    media=[
-        {'url': 'https://cdn.example.com/photo.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'whatsapp': {
-            'to': '14155238886'
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -395,7 +337,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 ### Video Message
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -411,23 +353,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Watch our latest update!',
-    targets=['whatsapp'],
-    media=[
-        {'url': 'https://cdn.example.com/video.mp4', 'type': 'video'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'whatsapp': {
-            'to': '14155238886'
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -492,7 +417,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Send a file as a document attachment.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -508,23 +433,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Here is your invoice.',
-    targets=['whatsapp'],
-    media=[
-        {'url': 'https://cdn.example.com/invoice.pdf', 'type': 'document'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'whatsapp': {
-            'to': '14155238886'
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -589,7 +497,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Use pre-approved message templates for outbound messages outside the 24-hour window.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -612,30 +520,6 @@ const post = await client.posts.create({
     }
   }
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['whatsapp'],
-    scheduled_at='now',
-    target_options={
-        'whatsapp': {
-            'to': '14155238886',
-            'template_name': 'order_confirmation',
-            'template_language': 'en_US',
-            'template_components': [
-                {
-                    'type': 'body',
-                    'parameters': [
-                        {'type': 'text', 'text': 'John'},
-                        {'type': 'text', 'text': '#12345'}
-                    ]
-                }
-            ]
-        }
-    }
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -757,6 +641,31 @@ All fields go inside `target_options.whatsapp` on your post request.
 | `template_language` | string | `"en_US"` | Template language code |
 | `template_components` | object[] | — | Template parameter components |
 
+## Delivery status lifecycle
+
+The Cloud API's message-create response supplies a WhatsApp message ID and
+confirms acceptance, not recipient delivery. RelayAPI keeps that outbound post
+target nonterminal while it waits for a signed WhatsApp status callback.
+
+| Provider event | RelayAPI outcome | Terminal? |
+|----------------|------------------|-----------|
+| Initial message acknowledgement | Accepted; message ID retained for callback correlation | No |
+| `sent` | Accepted by WhatsApp, but not proven delivered to the recipient | No |
+| `delivered` | Delivered | Yes, success |
+| `read` | Delivered/read | Yes, success |
+| `failed` | Failed, with Meta's error code/message when supplied | Yes, failure |
+
+Status callbacks are processed only after RelayAPI verifies the raw request's
+`X-Hub-Signature-256` with the configured Meta app secret. Callback delivery is
+at-least-once and can be reordered, so RelayAPI applies monotonic transitions:
+a duplicate or late `sent`/`delivered` event cannot regress a terminal `read`
+or `failed` result. A terminal callback persists the target and its publish
+attempt together and schedules any parent-post/thread continuation in the same
+fenced transaction.
+
+If no terminal callback arrives, the target remains nonterminal; do not treat a
+`sent` event as proof of handset delivery.
+
 ## Common Errors
 
 | Error | Cause | Fix |
@@ -771,11 +680,168 @@ All fields go inside `target_options.whatsapp` on your post request.
 
 - **24-hour conversation window** — you can only send free-form messages within 24 hours of the user's last message. Outside this window, use templates.
 - **1 media item per message** — no multi-image or gallery support.
-- **Audio messages have no caption** — captions are only supported on image, video, and document messages.
+- **Audio messages have no caption** — captions are only supported on image, video, and document messages. A publisher request that combines audio with nonblank post content or a WhatsApp content override is rejected before provider I/O.
 - **Media captions limited to 1,024 characters** — shorter than the 4,096-character text limit.
 - **Phone numbers use E.164 format without the `+`** — e.g., `14155238886` not `+14155238886`.
 - **Template messages require pre-approval** — submit templates in the WhatsApp Business Manager.
 - **Media must be publicly accessible via HTTPS** — private URLs will fail.
+
+RelayAPI also sends provider-native read receipts for persisted inbound
+WhatsApp messages. See [Published Edits and Social
+Actions](/guides/published-edits-and-social-actions#send-a-read-receipt).
+
+## Business administration
+
+The authenticated `/v1/whatsapp/admin` surface uses the exact connected
+WhatsApp phone-number identity and its stored WABA. Start with a live capability
+probe rather than assuming every Meta account has the same rollout:
+
+```typescript
+const capabilities = await client.whatsapp.admin.capabilities({
+  account_id: 'acc_whatsapp123',
+});
+
+if (capabilities.capabilities.groups !== 'supported') {
+  console.log(capabilities.requirements);
+}
+```
+
+Every field uses the same conservative state vocabulary:
+
+| State | Meaning |
+| --- | --- |
+| `supported` | A feature-specific, non-mutating read succeeded for this exact connected account |
+| `requires_eligibility` | RelayAPI implements the write/webhook feature, but no safe read can prove this account's program eligibility or app configuration |
+| `unavailable` | The feature-specific read was rejected as unauthorized, forbidden, or not found, or the required WABA identity is absent |
+| `unverified` | A generic provider rejection or transient failure did not prove support either way |
+| `not_yet_available` | Reserved for an implementation that is not exposed yet |
+
+Groups, block lists, business usernames, and the template library each have an
+independent read probe. Template editing and BSUID features cannot be certified
+with a non-mutating account probe, so their state is eligibility-based. Treat
+the snapshot as implementation and account evidence, not as a promise that a
+later provider mutation will be accepted.
+
+Meta currently restricts the Groups API to eligible Official Business Accounts
+without coexistence. RelayAPI returns `WHATSAPP_GROUPS_UNAVAILABLE` before a
+group write unless the exact Groups read probe returned `supported`. A
+non-supported state does not by itself diagnose which Meta eligibility or
+configuration requirement is missing.
+
+### Groups and participants
+
+```typescript
+const operation = await client.whatsapp.admin.createGroup({
+  account_id: 'acc_whatsapp123',
+  idempotency_key: 'create-customer-group-20260810',
+  subject: 'Customer launch group',
+  description: 'Launch coordination',
+  join_approval_mode: 'approval_required',
+});
+
+const current = await client.whatsapp.admin.getOperation(operation.id, {
+  account_id: 'acc_whatsapp123',
+});
+```
+
+Group create and delete are asynchronous at Meta. A provider acknowledgement
+does not prove the group is active or deleted: RelayAPI keeps a local
+`creating`/`deleting` projection and applies the terminal lifecycle from signed
+`group_create`/`group_delete` webhooks. List or retrieve groups after the
+provider lifecycle event to get the current projection.
+
+| Capability | TypeScript SDK method |
+| --- | --- |
+| List, create, retrieve, update, delete | `listGroups`, `createGroup`, `retrieveGroup`, `updateGroup`, `deleteGroup` |
+| Read or rotate invite link | `getInviteLink`, `resetInviteLink` |
+| List and approve/reject join requests | `listJoinRequests`, `approveJoinRequests`, `rejectJoinRequests` |
+| Remove participants | `removeParticipants` (1–8 identities) |
+| Send text, image, video, document, audio, or template | `sendGroupMessage` |
+| Pin or unpin a group message | `pinGroupMessage` |
+
+RelayAPI does not invent a manual-participant-add operation because Meta's
+official contract does not provide one. Use invite links and join approvals.
+Group media accepts exactly one Meta media `id` or public `link`. Pinning
+requires `expiration_days` from 1–30; unpinning must omit it.
+
+### Block lists
+
+```typescript
+await client.whatsapp.admin.blockUsers({
+  account_id: 'acc_whatsapp123',
+  idempotency_key: 'block-abuse-batch-1',
+  users: [{ user: '15550001111' }],
+});
+
+const blocked = await client.whatsapp.admin.listBlockedUsers({
+  account_id: 'acc_whatsapp123',
+  limit: 100,
+});
+```
+
+Use `unblockUsers()` with the same input shape to remove entries. Meta can
+partially apply a batch, so inspect the durable operation result rather than
+assuming all identities changed together.
+
+### Business usernames and BSUIDs
+
+`getUsername()`, `setUsername()`, `deleteUsername()`, and
+`usernameSuggestions()` expose Meta's business-username contract. Username
+activation is asynchronous; poll `getUsername()` for `RESERVED` or `ACTIVE`.
+RelayAPI intentionally does not subscribe to
+`phone_number_username_update` until that webhook can be resolved to one exact
+connected phone number without ambiguity.
+
+WhatsApp webhook ingestion accepts phone-optional business-scoped user IDs
+(BSUIDs). RelayAPI derives tenant-separated conversation keys, encrypts the raw
+BSUID at rest, and resolves it only at the provider boundary for a reply in the
+same authorized conversation. Callers do not supply or retrieve the stored raw
+BSUID.
+
+### Template library and editing
+
+```typescript
+const library = await client.whatsapp.admin.templateLibrary({
+  account_id: 'acc_whatsapp123',
+  category: 'UTILITY',
+  language: 'en_US',
+});
+
+await client.whatsapp.admin.createTemplateFromLibrary({
+  account_id: 'acc_whatsapp123',
+  idempotency_key: 'create-order-update-template',
+  name: 'order_update',
+  language: 'en_US',
+  category: 'UTILITY',
+  library_template_name: 'order_update_1',
+});
+```
+
+`editTemplate()` updates only Meta's documented editable fields: components,
+category, parameter format, message-send TTL, and CTA link-tracking opt-out.
+Template review/approval remains authoritative at Meta.
+
+### Durable mutation behavior
+
+Every WhatsApp admin write requires `Idempotency-Key` (`idempotency_key` in the
+TypeScript SDK) and returns a durable operation. Reuse the same key only for the
+same logical write. An ambiguous provider outcome is parked as `unknown` and is
+not replayed automatically. Poll it with `client.whatsapp.admin.getOperation()`
+before deciding whether any manual provider reconciliation is needed. See
+[Published Edits and Social Actions](/guides/published-edits-and-social-actions#idempotency-and-ambiguous-outcomes)
+for the shared status contract.
+
+An HTTP `2xx` alone is not enough to complete an administration operation.
+RelayAPI requires the operation-specific success flag or durable group,
+request, template, or message ID. An unrecognized successful response is
+recorded as `WHATSAPP_PROVIDER_RESPONSE_INVALID` with an unknown outcome so it
+cannot be replayed as though Meta had proved no effect.
+
+<Callout type="info">
+RelayAPI does not provide WhatsApp calling/telephony, a proprietary sandbox,
+manual participant addition, or proprietary template/Flow version history.
+Those are outside this administration contract.
+</Callout>
 
 ## Automations
 
@@ -800,7 +866,7 @@ All nodes hit `POST {GRAPH_BASE.facebook}/{phone-number-id}/messages` with `mess
 | Node | Required fields |
 | --- | --- |
 | `whatsapp_send_text` | `text`, optional `preview_url` |
-| `whatsapp_send_media` | `url`, `media_type` ∈ image\|video\|audio\|document\|sticker, optional `caption` |
+| `whatsapp_send_media` | `url`, `media_type` ∈ image\|video\|audio\|document\|sticker; optional `caption` only for image, video, or document. RelayAPI rejects audio captions before provider I/O; sticker captions are unsupported by the provider. |
 | `whatsapp_send_template` | `template_name`, `language` (default `en_US`), optional `components` |
 | `whatsapp_send_interactive` | `text` + either `buttons[]` (≤3 reply buttons) or `list` (sectioned rows) |
 | `whatsapp_send_flow` | `flow_id`, `flow_token`, `text`, optional `cta` / `flow_action` |
@@ -812,3 +878,13 @@ All nodes hit `POST {GRAPH_BASE.facebook}/{phone-number-id}/messages` with `mess
 <Callout type="warn">
 Outside the 24-hour window, only **pre-approved template messages** can be sent. Use `whatsapp_send_template`; free-form `whatsapp_send_text` will be rejected by Meta.
 </Callout>
+
+## Official WhatsApp references
+
+- [Meta's WhatsApp Cloud API documentation](https://www.postman.com/meta/whatsapp-business-platform/documentation/wlk6lh4/whatsapp-cloud-api)
+- [Meta WhatsApp Groups documentation](https://developers.facebook.com/documentation/business-messaging/whatsapp/groups)
+- [Meta business-scoped user IDs](https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids)
+- [Meta template library](https://developers.facebook.com/documentation/business-messaging/whatsapp/templates/template-library)
+- [Meta's official Block Users API request](https://www.postman.com/meta/whatsapp-business-platform/request/ywjuxcf/block-user-s)
+- [Webhook payload and message-status reference](https://www.postman.com/meta/whatsapp-business-platform/folder/tduohwq/webhook-payload-reference)
+- [Message status update notifications](https://www.postman.com/meta/whatsapp-business-platform/request/rgtfq23/message-status-update-notifications)

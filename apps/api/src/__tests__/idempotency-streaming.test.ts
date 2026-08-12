@@ -6,6 +6,7 @@ import { ResponseTooLargeError } from "../lib/fetch-public-url";
 import {
 	bindReceiptRoute,
 	idempotencyMiddleware,
+	isExplicitlyRetryableConflict,
 	replayBodyForStatus,
 	trackRequestDigest,
 } from "../middleware/idempotency";
@@ -146,5 +147,22 @@ describe("idempotency request digest streaming", () => {
 			expect(replay.body).toBeNull();
 		}
 		expect(replayBodyForStatus(200, "{}")).toBe("{}");
+	});
+
+	it("releases only explicitly marked durable-operation conflicts", () => {
+		expect(
+			isExplicitlyRetryableConflict(
+				new Response(null, {
+					status: 409,
+					headers: {
+						"Idempotency-Retryable": "true",
+						"Retry-After": "2",
+					},
+				}),
+			),
+		).toBe(true);
+		expect(
+			isExplicitlyRetryableConflict(new Response(null, { status: 409 })),
+		).toBe(false);
 	});
 });

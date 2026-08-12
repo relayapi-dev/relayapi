@@ -5,24 +5,22 @@
 
 import {
 	createDb,
+	type NotificationType as DurableNotificationType,
 	notificationPreferences,
 	notifications,
 	user,
 } from "@relayapi/db";
 import { and, eq, inArray } from "drizzle-orm";
+import { isSelfHosted, selfHostedFeatureEnabled } from "../lib/deployment-mode";
 import { sendEmail } from "../lib/email-queue/producer";
 import { notifyRealtime } from "../lib/notify-post-update";
 import type { Env } from "../types";
 
-export type NotificationType =
-	| "post_failed"
-	| "post_published"
-	| "account_disconnected"
-	| "payment_failed"
-	| "usage_warning"
-	| "weekly_digest"
-	| "marketing"
-	| "streak_warning";
+/** Notification kinds routed through per-user preference and email policy. */
+export type NotificationType = Exclude<
+	DurableNotificationType,
+	"automation_notice"
+>;
 
 interface ChannelPrefs {
 	push: boolean;
@@ -107,7 +105,9 @@ export async function sendNotification(
 		? ((prefRow[column] as ChannelPrefs) ?? DEFAULT_PREFS[type])
 		: DEFAULT_PREFS[type];
 
-	const shouldEmail = prefs.email || ALWAYS_EMAIL.has(type);
+	const shouldEmail =
+		(!isSelfHosted(env) || selfHostedFeatureEnabled(env, "email")) &&
+		(prefs.email || ALWAYS_EMAIL.has(type));
 
 	// Run push insert + email send in parallel
 	const tasks: Promise<unknown>[] = [];
@@ -139,8 +139,9 @@ export async function sendNotification(
 					body,
 				}).then((html) => {
 					if (html) {
-						return sendEmail(env.EMAIL_QUEUE, env.RESEND_API_KEY, {
+						return sendEmail(env, {
 							organizationId: orgId,
+							subjectUserId: userId,
 							to: userRow.email,
 							subject: title,
 							html,
@@ -210,7 +211,7 @@ export async function sendNotificationToOrg(
 	const insertValues: Array<{
 		userId: string;
 		organizationId: string;
-		type: string;
+		type: NotificationType;
 		title: string;
 		body: string;
 		data: Record<string, unknown> | null;
@@ -237,7 +238,9 @@ export async function sendNotificationToOrg(
 			});
 		}
 
-		const shouldEmail = prefs.email || ALWAYS_EMAIL.has(type);
+		const shouldEmail =
+			(!isSelfHosted(env) || selfHostedFeatureEnabled(env, "email")) &&
+			(prefs.email || ALWAYS_EMAIL.has(type));
 		if (shouldEmail) {
 			const userRow = userMap.get(userId);
 			if (userRow?.email) {
@@ -253,8 +256,9 @@ export async function sendNotificationToOrg(
 			if (html) {
 				for (const recipient of emailRecipients) {
 					emailTasks.push(
-						sendEmail(env.EMAIL_QUEUE, env.RESEND_API_KEY, {
+						sendEmail(env, {
 							organizationId: orgId,
+							subjectUserId: recipient.userId,
 							to: recipient.email,
 							subject: title,
 							html,

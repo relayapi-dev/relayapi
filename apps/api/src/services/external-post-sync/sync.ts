@@ -10,23 +10,23 @@ import {
 	socialAccountSyncState,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, inArray, sql } from "drizzle-orm";
+import { and, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import {
+	classifyProviderReadError,
+	exponentialBackoffSeconds,
+	EXTERNAL_POST_POLL,
+	type ProviderReadErrorClass,
+} from "../../lib/async-policy";
 import { PLATFORMS, type Platform } from "../../schemas/common";
 import type { Env } from "../../types";
 import { hasStoredAvatar, rehostAvatar } from "../avatar-store";
 import { fetchAvatarUrl } from "../token-refresh";
 import { refreshTokenIfNeeded } from "../token-refresh-coordinator";
 import { getExternalPostFetcher } from "./index";
-import type {
-	GenerateExternalPreviewMessage,
-	RefreshMetricsMessage,
-	SyncPostsMessage,
-} from "./types";
+import type { GenerateExternalPreviewMessage, SyncPostsMessage } from "./types";
 import { RateLimitError } from "./types";
 
 type Database = ReturnType<typeof createDb>;
-
-const MAX_PAGES_PER_RUN = 5;
 
 function parsePlatform(value: string): Platform | null {
 	return (PLATFORMS as readonly string[]).includes(value)
@@ -85,6 +85,8 @@ export async function syncExternalPosts(
 			lastPostFoundAt: socialAccountSyncState.lastPostFoundAt,
 			pollIntervalSec: socialAccountSyncState.pollIntervalSec,
 			consecutiveEmptyPolls: socialAccountSyncState.consecutiveEmptyPolls,
+			consecutiveErrors: socialAccountSyncState.consecutiveErrors,
+			pollGeneration: socialAccountSyncState.pollGeneration,
 		})
 		.from(socialAccountSyncState)
 		.where(eq(socialAccountSyncState.socialAccountId, account.id))
@@ -113,6 +115,8 @@ export async function syncExternalPosts(
 						lastPostFoundAt: socialAccountSyncState.lastPostFoundAt,
 						pollIntervalSec: socialAccountSyncState.pollIntervalSec,
 						consecutiveEmptyPolls: socialAccountSyncState.consecutiveEmptyPolls,
+						consecutiveErrors: socialAccountSyncState.consecutiveErrors,
+						pollGeneration: socialAccountSyncState.pollGeneration,
 					})
 					.from(socialAccountSyncState)
 					.where(eq(socialAccountSyncState.socialAccountId, account.id))
@@ -123,10 +127,65 @@ export async function syncExternalPosts(
 
 	if (!syncState.enabled) return;
 
+	// The scheduled producer has already reserved an exact generation. Manual
+	// and webhook-triggered work reaches this path without one and atomically
+	// creates its own generation. Either way only one duplicate delivery can
+	// move the claim from unstarted to started before provider I/O.
+	const claimStartedAt = new Date();
+	const claimLeaseExpiresAt = new Date(
+		claimStartedAt.getTime() + EXTERNAL_POST_POLL.leaseSeconds * 1000,
+	);
+	const [claimed] = await db
+		.update(socialAccountSyncState)
+		.set({
+			...(message.poll_generation === undefined
+				? {
+						pollGeneration: sql`${socialAccountSyncState.pollGeneration} + 1`,
+						pollLeaseExpiresAt: claimLeaseExpiresAt,
+					}
+				: {}),
+			pollStartedAt: claimStartedAt,
+			updatedAt: claimStartedAt,
+		})
+		.where(
+			and(
+				eq(socialAccountSyncState.id, syncState.id),
+				eq(socialAccountSyncState.enabled, true),
+				...(message.poll_generation === undefined
+					? [
+							or(
+								isNull(socialAccountSyncState.pollLeaseExpiresAt),
+								lte(socialAccountSyncState.pollLeaseExpiresAt, claimStartedAt),
+							),
+						]
+					: [
+							eq(
+								socialAccountSyncState.pollGeneration,
+								message.poll_generation,
+							),
+							isNull(socialAccountSyncState.pollStartedAt),
+							gt(socialAccountSyncState.pollLeaseExpiresAt, claimStartedAt),
+						]),
+			),
+		)
+		.returning({
+			pollGeneration: socialAccountSyncState.pollGeneration,
+		});
+	if (!claimed) return;
+	const pollGeneration = claimed.pollGeneration;
+
 	// 3. Get platform fetcher
 	const fetcher = getExternalPostFetcher(platform);
 	if (!fetcher) {
-		console.warn(`[Sync] No fetcher for platform ${message.platform}`);
+		await updateSyncStateError(
+			db,
+			syncState.id,
+			pollGeneration,
+			claimStartedAt,
+			`No external-post fetcher for platform ${message.platform}`,
+			"permanent",
+			syncState.consecutiveErrors + 1,
+		);
 		return;
 	}
 
@@ -139,7 +198,11 @@ export async function syncExternalPosts(
 		await updateSyncStateError(
 			db,
 			syncState.id,
+			pollGeneration,
+			claimStartedAt,
 			`Token refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+			classifyProviderReadError(err),
+			syncState.consecutiveErrors + 1,
 		);
 		return;
 	}
@@ -172,9 +235,10 @@ export async function syncExternalPosts(
 	let totalNewPosts = 0;
 	let cursor = syncState.syncCursor;
 	let lastRateLimit: { remaining: number; resetAt: Date } | undefined;
+	let hasMore = false;
 
 	try {
-		while (pagesProcessed < MAX_PAGES_PER_RUN) {
+		while (pagesProcessed < EXTERNAL_POST_POLL.maxPagesPerAttempt) {
 			const result = await fetcher.fetchPosts(
 				accessToken,
 				account.platformAccountId,
@@ -229,9 +293,26 @@ export async function syncExternalPosts(
 			}
 
 			cursor = result.nextCursor;
+			hasMore = result.hasMore;
 			pagesProcessed++;
 
-			if (!result.hasMore) break;
+			// Persist continuation after every provider page. A worker crash can
+			// repeat at most the in-flight page, not all pages fetched earlier in
+			// this delivery.
+			const progressed = await db
+				.update(socialAccountSyncState)
+				.set({ syncCursor: cursor, updatedAt: new Date() })
+				.where(
+					and(
+						eq(socialAccountSyncState.id, syncState.id),
+						eq(socialAccountSyncState.pollGeneration, pollGeneration),
+						eq(socialAccountSyncState.pollStartedAt, claimStartedAt),
+					),
+				)
+				.returning({ id: socialAccountSyncState.id });
+			if (!progressed[0]) return;
+
+			if (!hasMore) break;
 		}
 
 		// 8. Update sync state
@@ -252,144 +333,77 @@ export async function syncExternalPosts(
 			.set({
 				lastSyncAt: now,
 				lastPostFoundAt: totalNewPosts > 0 ? now : syncState.lastPostFoundAt,
-				nextSyncAt: new Date(now.getTime() + newPollInterval * 1000),
+				// Continuations return to the fair PostgreSQL scheduler instead of
+				// self-requeueing and resetting the Queue delivery budget.
+				nextSyncAt: hasMore
+					? now
+					: new Date(now.getTime() + newPollInterval * 1000),
 				pollIntervalSec: newPollInterval,
 				consecutiveEmptyPolls: newEmptyPolls,
 				syncCursor: cursor,
+				pollLeaseExpiresAt: null,
+				pollStartedAt: null,
 				consecutiveErrors: 0,
 				lastError: null,
+				lastErrorClass: null,
 				totalPostsSynced: sql`${socialAccountSyncState.totalPostsSynced} + ${totalNewPosts}`,
 				totalSyncRuns: sql`${socialAccountSyncState.totalSyncRuns} + 1`,
 				rateLimitRemaining: lastRateLimit?.remaining ?? null,
 				rateLimitResetAt: lastRateLimit?.resetAt ?? null,
 				updatedAt: now,
 			})
-			.where(eq(socialAccountSyncState.id, syncState.id));
-
-		// 9. If more pages remain, re-enqueue
-		if (cursor && pagesProcessed >= MAX_PAGES_PER_RUN) {
-			await env.SYNC_QUEUE.send({
-				type: "sync_posts",
-				social_account_id: message.social_account_id,
-				organization_id: message.organization_id,
-				platform,
-			} satisfies SyncPostsMessage);
-		}
+			.where(
+				and(
+					eq(socialAccountSyncState.id, syncState.id),
+					eq(socialAccountSyncState.pollGeneration, pollGeneration),
+					eq(socialAccountSyncState.pollStartedAt, claimStartedAt),
+				),
+			);
 	} catch (err) {
 		if (err instanceof RateLimitError) {
-			// Store rate limit info and let the queue retry with delay
+			// PostgreSQL owns the retry schedule. ACK this Queue delivery after the
+			// durable rate-limit clock is recorded; stacking Queue retry on the DB
+			// schedule would multiply reads after the reset.
 			await db
 				.update(socialAccountSyncState)
 				.set({
 					rateLimitResetAt: err.resetAt,
 					rateLimitRemaining: err.remaining,
 					nextSyncAt: err.resetAt,
+					pollLeaseExpiresAt: null,
+					pollStartedAt: null,
+					consecutiveErrors: sql`${socialAccountSyncState.consecutiveErrors} + 1`,
+					lastError: err.message.slice(0, 1000),
+					lastErrorClass: "rate_limited",
+					lastErrorAt: new Date(),
+					totalSyncRuns: sql`${socialAccountSyncState.totalSyncRuns} + 1`,
 					updatedAt: new Date(),
 				})
-				.where(eq(socialAccountSyncState.id, syncState.id));
-			throw err; // Re-throw for queue consumer to handle
+				.where(
+					and(
+						eq(socialAccountSyncState.id, syncState.id),
+						eq(socialAccountSyncState.pollGeneration, pollGeneration),
+						eq(socialAccountSyncState.pollStartedAt, claimStartedAt),
+					),
+				);
+			return;
 		}
 
 		await updateSyncStateError(
 			db,
 			syncState.id,
+			pollGeneration,
+			claimStartedAt,
 			err instanceof Error ? err.message : String(err),
+			classifyProviderReadError(err),
+			syncState.consecutiveErrors + 1,
 		);
-		throw err;
 	}
 }
 
 // ---------------------------------------------------------------------------
 // Metrics refresh: update engagement stats for recent external posts
 // ---------------------------------------------------------------------------
-
-export async function refreshExternalPostMetrics(
-	env: Env,
-	message: RefreshMetricsMessage,
-): Promise<void> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
-	const platform = parsePlatform(message.platform);
-	if (!platform) return;
-
-	// Load account
-	const [account] = await db
-		.select()
-		.from(socialAccounts)
-		.where(
-			and(
-				eq(socialAccounts.id, message.social_account_id),
-				eq(socialAccounts.organizationId, message.organization_id),
-				eq(socialAccounts.platform, platform),
-				eq(socialAccounts.lifecycleStatus, "active"),
-			),
-		)
-		.limit(1);
-
-	if (!account) return;
-
-	const fetcher = getExternalPostFetcher(platform);
-	if (!fetcher) return;
-
-	let accessToken: string;
-	try {
-		accessToken = await refreshTokenIfNeeded(env, account);
-	} catch {
-		return; // Can't refresh without valid token
-	}
-
-	// Load external posts to get platform post IDs
-	const posts = await db
-		.select({
-			id: externalPosts.id,
-			platformPostId: externalPosts.platformPostId,
-		})
-		.from(externalPosts)
-		.where(
-			and(
-				inArray(externalPosts.id, message.external_post_ids),
-				eq(externalPosts.organizationId, message.organization_id),
-				eq(externalPosts.socialAccountId, message.social_account_id),
-				eq(externalPosts.platform, platform),
-			),
-		);
-
-	if (posts.length === 0) return;
-
-	const platformPostIds = posts.map((p) => p.platformPostId);
-	const metricsMap = await fetcher.fetchPostMetrics(
-		accessToken,
-		account.platformAccountId,
-		platformPostIds,
-	);
-
-	// Batch-update metrics in a single statement (UPDATE ... FROM VALUES) instead
-	// of one UPDATE per post — up to 50 posts per message would otherwise be 50
-	// sequential round trips capped at the pool's max:5 concurrency.
-	const now = new Date();
-	const updates = posts.flatMap((post) => {
-		const metrics = metricsMap.get(post.platformPostId);
-		return metrics ? [{ id: post.id, metrics }] : [];
-	});
-	if (updates.length === 0) return;
-
-	const valuesList = sql.join(
-		updates.map(
-			(u) => sql`(${u.id}::text, ${JSON.stringify(u.metrics)}::jsonb)`,
-		),
-		sql`, `,
-	);
-	await db.execute(sql`
-		UPDATE external_posts AS ep
-		SET metrics = v.metrics,
-			metrics_updated_at = ${now},
-			updated_at = ${now}
-		FROM (VALUES ${valuesList}) AS v(id, metrics)
-		WHERE ep.id = v.id
-		  AND ep.organization_id = ${message.organization_id}
-		  AND ep.social_account_id = ${message.social_account_id}
-		  AND ep.platform = ${platform}
-	`);
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -505,29 +519,45 @@ async function upsertExternalPosts(
 async function updateSyncStateError(
 	db: Database,
 	syncStateId: string,
+	pollGeneration: number,
+	claimStartedAt: Date,
 	errorMessage: string,
+	errorClass: ProviderReadErrorClass,
+	attempt: number,
 ): Promise<void> {
 	const now = new Date();
-
-	// Read current consecutive errors to calculate backoff
-	const [current] = await db
-		.select({ consecutiveErrors: socialAccountSyncState.consecutiveErrors })
-		.from(socialAccountSyncState)
-		.where(eq(socialAccountSyncState.id, syncStateId))
-		.limit(1);
-
-	const errors = (current?.consecutiveErrors ?? 0) + 1;
-	const backoffSec = Math.min(2 ** errors * 60, 3600); // Cap at 1h
+	const backoffSec = exponentialBackoffSeconds(
+		attempt,
+		EXTERNAL_POST_POLL.retry,
+		`${syncStateId}:${attempt}`,
+	);
+	const budgetExhausted = attempt >= EXTERNAL_POST_POLL.maxAutomaticAttempts;
+	const nextSyncAt =
+		errorClass === "permanent"
+			? new Date(now.getTime() + 24 * 60 * 60 * 1000)
+			: new Date(now.getTime() + backoffSec * 1000);
+	const persistentMessage = budgetExhausted
+		? `Automatic poll attempt budget reached; polling suspended until a manual sync succeeds. ${errorMessage}`
+		: errorMessage;
 
 	await db
 		.update(socialAccountSyncState)
 		.set({
-			lastError: errorMessage.slice(0, 1000),
-			consecutiveErrors: errors,
+			lastError: persistentMessage.slice(0, 1000),
+			lastErrorClass: errorClass,
+			consecutiveErrors: sql`${socialAccountSyncState.consecutiveErrors} + 1`,
 			lastErrorAt: now,
-			nextSyncAt: new Date(now.getTime() + backoffSec * 1000),
+			nextSyncAt,
+			pollLeaseExpiresAt: null,
+			pollStartedAt: null,
 			totalSyncRuns: sql`${socialAccountSyncState.totalSyncRuns} + 1`,
 			updatedAt: now,
 		})
-		.where(eq(socialAccountSyncState.id, syncStateId));
+		.where(
+			and(
+				eq(socialAccountSyncState.id, syncStateId),
+				eq(socialAccountSyncState.pollGeneration, pollGeneration),
+				eq(socialAccountSyncState.pollStartedAt, claimStartedAt),
+			),
+		);
 }

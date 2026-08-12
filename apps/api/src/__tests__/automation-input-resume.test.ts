@@ -14,29 +14,83 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	workspaces,
 } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../schemas/automation-graph";
 import {
+	resolveAttachmentForInputValidation,
 	resolveInputResume,
 	resumeWaitingRunOnInput,
 } from "../services/automations/input-resume";
 import { enrollContact } from "../services/automations/runner";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 // ---------------------------------------------------------------------------
 // Unit tests — resolveInputResume (pure function)
 // ---------------------------------------------------------------------------
 
 describe("resolveInputResume", () => {
-	it("accepts free text by default", () => {
-		const out = resolveInputResume(
-			{ field: "answer" },
-			"hello world",
-			null,
-			0,
+	it("hydrates unknown size only for capped file inputs", async () => {
+		const attachment = { id: "wa_media", mime_type: "image/jpeg" };
+		let calls = 0;
+		const resolver = async () => {
+			calls++;
+			return { ...attachment, size_bytes: 1_024 };
+		};
+
+		expect(
+			await resolveAttachmentForInputValidation(
+				{ input_type: "text" },
+				attachment,
+				resolver,
+			),
+		).toEqual(attachment);
+		expect(
+			await resolveAttachmentForInputValidation(
+				{ input_type: "file" },
+				attachment,
+				resolver,
+			),
+		).toEqual(attachment);
+		expect(
+			await resolveAttachmentForInputValidation(
+				{ input_type: "file", max_size_mb: 1 },
+				attachment,
+				resolver,
+			),
+		).toEqual({ ...attachment, size_bytes: 1_024 });
+		expect(calls).toBe(1);
+	});
+
+	it("turns capped-file metadata failures into unknown-size validation", async () => {
+		const attachment = { id: "wa_media", mime_type: "image/jpeg" };
+		const config = {
+			input_type: "file" as const,
+			max_size_mb: 1,
+			max_retries: 1,
+		};
+		const unresolved = await resolveAttachmentForInputValidation(
+			config,
+			attachment,
+			async () => {
+				throw new Error("temporary provider failure");
+			},
 		);
+
+		expect(unresolved).toEqual(attachment);
+		expect(resolveInputResume(config, "", unresolved, 0)).toEqual({
+			port: "invalid",
+		});
+	});
+
+	it("accepts free text by default", () => {
+		const out = resolveInputResume({ field: "answer" }, "hello world", null, 0);
 		expect(out.port).toBe("captured");
 		if (out.port === "captured") {
 			expect(out.capturedValue).toBe("hello world");
@@ -82,7 +136,11 @@ describe("resolveInputResume", () => {
 	});
 
 	it("exhausts email retries before firing `invalid`", () => {
-		const cfg = { field: "email", input_type: "email" as const, max_retries: 2 };
+		const cfg = {
+			field: "email",
+			input_type: "email" as const,
+			max_retries: 2,
+		};
 		const first = resolveInputResume(cfg, "still-bad", null, 0);
 		expect(first.port).toBe("retry");
 		const second = resolveInputResume(cfg, "still-bad", null, 1);
@@ -141,9 +199,12 @@ describe("resolveInputResume", () => {
 		expect(byValue.port).toBe("captured");
 		expect(byLabel.port).toBe("captured");
 		expect(byMatch.port).toBe("captured");
-		if (byValue.port === "captured") expect(byValue.capturedValue).toBe("large");
-		if (byLabel.port === "captured") expect(byLabel.capturedValue).toBe("small");
-		if (byMatch.port === "captured") expect(byMatch.capturedValue).toBe("large");
+		if (byValue.port === "captured")
+			expect(byValue.capturedValue).toBe("large");
+		if (byLabel.port === "captured")
+			expect(byLabel.capturedValue).toBe("small");
+		if (byMatch.port === "captured")
+			expect(byMatch.capturedValue).toBe("large");
 
 		const miss = resolveInputResume(
 			{ ...cfg, max_retries: 1 },
@@ -197,19 +258,9 @@ describe("resolveInputResume", () => {
 			accepted_mime_types: ["image/jpeg"],
 			max_retries: 2,
 		};
-		const first = resolveInputResume(
-			cfg,
-			"",
-			{ mime_type: "video/mp4" },
-			0,
-		);
+		const first = resolveInputResume(cfg, "", { mime_type: "video/mp4" }, 0);
 		expect(first.port).toBe("retry");
-		const second = resolveInputResume(
-			cfg,
-			"",
-			{ mime_type: "video/mp4" },
-			1,
-		);
+		const second = resolveInputResume(cfg, "", { mime_type: "video/mp4" }, 1);
 		expect(second.port).toBe("invalid");
 	});
 
@@ -249,21 +300,34 @@ describe("resolveInputResume", () => {
 		}
 	});
 
-	it("ignores size when attachment omits size_bytes (platform didn't supply one)", () => {
+	it("fails closed when a configured size cap cannot be verified", () => {
 		const cfg = {
 			field: "file",
 			input_type: "file" as const,
 			max_size_mb: 1,
 		};
-		// No size_bytes — should NOT reject; operator can't enforce what the
-		// platform doesn't surface.
 		const out = resolveInputResume(
 			cfg,
 			"",
 			{ mime_type: "image/jpeg", url: "https://example.com/a.jpg" },
 			0,
 		);
-		expect(out.port).toBe("captured");
+		expect(out.port).toBe("invalid");
+	});
+
+	it("retries an unverifiable file size when attempts remain", () => {
+		const out = resolveInputResume(
+			{
+				field: "file",
+				input_type: "file",
+				max_size_mb: 1,
+				max_retries: 2,
+			},
+			"",
+			{ id: "whatsapp-media-without-size", mime_type: "image/jpeg" },
+			0,
+		);
+		expect(out.port).toBe("retry");
 	});
 
 	it("goes invalid when no attachment at all (out of retries)", () => {
@@ -340,7 +404,7 @@ let workspaceId = "";
 
 async function seedFixtureOrg() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "input-resume-test-org",
 		slug: `input-resume-test-${orgId.slice(-8)}`,
@@ -360,8 +424,8 @@ async function teardownFixtureOrg() {
 	if (!orgId) return;
 	await db.delete(automations).where(eq(automations.organizationId, orgId));
 	await db.delete(contacts).where(eq(contacts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 async function createAutomation(graph: Graph, channel = "telegram") {
@@ -383,11 +447,13 @@ async function createAutomation(graph: Graph, channel = "telegram") {
 async function createContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
-			organizationId: orgId,
-			workspaceId,
-			name: "input-resume-test-contact",
-		})
+		.values(
+			await protectedContactFixture({
+				organizationId: orgId,
+				workspaceId,
+				name: "input-resume-test-contact",
+			}),
+		)
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -506,7 +572,7 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 		});
 		if (!run) throw new Error("expected run to exist");
 		expect(run.status).toBe("completed");
-		expect(run.exitReason).toBe("completed");
+		expect(run.exitReason).toBe("captured");
 		// Captured value should have landed in context under the configured field.
 		const context = (run.context as Record<string, unknown>) ?? {};
 		expect(context.email).toBe("alice@example.com");
@@ -518,72 +584,68 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 		expect(retries?.ask_email).toBeUndefined();
 	});
 
-	it(
-		"retries once on invalid input, then exits via the invalid port",
-		async () => {
-			if (!dbAvailable) {
-				console.warn("skipping: DB fixture unavailable");
-				return;
-			}
+	it("retries once on invalid input, then exits via the invalid port", async () => {
+		if (!dbAvailable) {
+			console.warn("skipping: DB fixture unavailable");
+			return;
+		}
 
-			const auto = await createAutomation(emailCaptureGraph({ maxRetries: 2 }));
-			const ct = await createContact();
+		const auto = await createAutomation(emailCaptureGraph({ maxRetries: 2 }));
+		const ct = await createContact();
 
-			const { runId } = await enrollContact(db, {
-				automationId: auto.id,
-				organizationId: orgId,
-				contactId: ct.id,
-				conversationId: null,
-				channel: "telegram",
-				entrypointId: null,
-				bindingId: null,
-				env: {},
-			});
+		const { runId } = await enrollContact(db, {
+			automationId: auto.id,
+			organizationId: orgId,
+			contactId: ct.id,
+			conversationId: null,
+			channel: "telegram",
+			entrypointId: null,
+			bindingId: null,
+			env: {},
+		});
 
-			// First bad input — should retry, run stays waiting.
-			let outcome = await resumeWaitingRunOnInput(
-				db,
-				runId,
-				"not-an-email",
-				null,
-				{},
-			);
-			expect(outcome).toBe("retried");
+		// First bad input — should retry, run stays waiting.
+		let outcome = await resumeWaitingRunOnInput(
+			db,
+			runId,
+			"not-an-email",
+			null,
+			{},
+		);
+		expect(outcome).toBe("retried");
 
-			let run = await db.query.automationRuns.findFirst({
-				where: eq(automationRuns.id, runId),
-			});
-			if (!run) throw new Error("expected run to exist");
-			expect(run.status).toBe("waiting");
-			expect(run.waitingFor).toBe("input");
-			expect(run.currentNodeKey).toBe("ask_email");
-			const ctx = (run.context as Record<string, unknown>) ?? {};
-			expect(
-				(ctx._input_retries as Record<string, number> | undefined)?.ask_email,
-			).toBe(1);
+		let run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("waiting");
+		expect(run.waitingFor).toBe("input");
+		expect(run.currentNodeKey).toBe("ask_email");
+		const ctx = (run.context as Record<string, unknown>) ?? {};
+		expect(
+			(ctx._input_retries as Record<string, number> | undefined)?.ask_email,
+		).toBe(1);
 
-			// Second bad input — retries exhausted, run exits via `invalid` port.
-			outcome = await resumeWaitingRunOnInput(
-				db,
-				runId,
-				"still-not-an-email",
-				null,
-				{},
-			);
-			expect(outcome).toBe("advanced");
+		// Second bad input — retries exhausted, run exits via `invalid` port.
+		outcome = await resumeWaitingRunOnInput(
+			db,
+			runId,
+			"still-not-an-email",
+			null,
+			{},
+		);
+		expect(outcome).toBe("advanced");
 
-			run = await db.query.automationRuns.findFirst({
-				where: eq(automationRuns.id, runId),
-			});
-			if (!run) throw new Error("expected run to exist");
-			expect(run.status).toBe("completed");
-			// The `invalid` edge routes to the "fail" end node, so the run
-			// completes cleanly. Email must NOT be stored in context.
-			const finalCtx = (run.context as Record<string, unknown>) ?? {};
-			expect(finalCtx.email).toBeUndefined();
-		},
-		30_000,
-	);
+		run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, runId),
+		});
+		if (!run) throw new Error("expected run to exist");
+		expect(run.status).toBe("completed");
+		// The `invalid` edge routes to the "fail" end node, so the run
+		// completes cleanly. Email must NOT be stored in context.
+		const finalCtx = (run.context as Record<string, unknown>) ?? {};
+		expect(finalCtx.email).toBeUndefined();
+	}, 30_000);
 
 	it("returns 'race' when the run is no longer waiting for input", async () => {
 		if (!dbAvailable) {
@@ -695,5 +757,9 @@ describe("resumeWaitingRunOnInput (integration)", () => {
 		if (!run) throw new Error("expected run to exist");
 		expect(run.status).toBe("completed");
 		expect(run.currentPortKey).toBe("invalid");
+		const counted = await db.query.automations.findFirst({
+			where: eq(automations.id, auto.id),
+		});
+		expect(counted?.totalCompleted).toBe(1);
 	});
 });

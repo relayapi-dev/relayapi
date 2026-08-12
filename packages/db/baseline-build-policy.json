@@ -1,8 +1,17 @@
 {
-	"schemaVersion": 1,
+	"schemaVersion": 2,
 	"lifecycle": "sealed",
+	"generation": 1,
 	"baseline": {
 		"tag": "0000_baseline",
 		"folderMillis": 1783987200000
+	},
+	"authorizedCollapse": {
+		"fromGeneration": 1,
+		"toGeneration": 2,
+		"baseline": {
+			"tag": "0000_baseline",
+			"folderMillis": 1785196800000
+		}
 	}
 }

@@ -2,13 +2,20 @@ import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import {
 	type createDb,
 	generateId,
-	postThreads,
 	posts,
 	postTargets,
+	postThreads,
 	publishOutbox,
 	threadExecutions,
 } from "@relayapi/db";
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
+import { mediaPublicHost } from "../lib/deployment-mode";
+import {
+	decodeKeysetCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
+import { loadRelayMediaPolicy } from "../lib/relay-media-policy";
 import {
 	inheritOperationalCreateScope,
 	workspaceScopeKey,
@@ -147,6 +154,10 @@ const listThreads = createRoute({
 		200: {
 			description: "Threads list",
 			content: { "application/json": { schema: ThreadListResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -288,6 +299,33 @@ app.openapi(createThread, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const relayMediaInput = {
+		media: body.items.map((item) => item.media),
+		target_options: body.target_options,
+	};
+	const relayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		relayMediaInput,
+		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
+	);
+	const mediaViolation = relayMediaPolicy.violationFor(relayMediaInput);
+	if (mediaViolation) {
+		return c.json(
+			{
+				error: {
+					code: "MEDIA_NOT_READY",
+					message:
+						mediaViolation.reason === "invalid_relay_url"
+							? "Relay-hosted media must use its canonical HTTPS URL"
+							: "Relay-hosted media must belong to this organization and be ready before it can be used",
+					details: { url: mediaViolation.url },
+				},
+			},
+			400,
+		);
+	}
 
 	// Resolve targets
 	const targetResolution = await resolveTargets(
@@ -335,6 +373,9 @@ app.openapi(createThread, async (c) => {
 	} else if (isAuto) {
 		const { findBestSlot } = await import("../services/slot-finder");
 		const slot = await findBestSlot(c.env, orgId, {
+			db,
+			workspaceScope: c.get("workspaceScope"),
+			workspaceId,
 			accountId: resolved[0]?.accounts[0]?.id,
 			after: new Date(),
 			strategy: "smart",
@@ -496,20 +537,30 @@ app.openapi(listThreads, async (c) => {
 		conditions.push(
 			eq(posts.status, status as typeof posts.$inferSelect.status),
 		);
-	if (cursor) conditions.push(sql`${posts.createdAt} < ${new Date(cursor)}`);
+	if (cursor) {
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			decoded.kind === "composite"
+				? sql`(${posts.createdAt}, ${posts.id}) < (${decoded.timestamp}::timestamptz, ${decoded.id})`
+				: lt(posts.createdAt, new Date(decoded.timestamp)),
+		);
+	}
 
 	const rootPosts = await db
 		.select({
+			id: posts.id,
 			threadGroupId: posts.threadGroupId,
 			content: posts.content,
 			status: posts.status,
 			scheduledAt: posts.scheduledAt,
 			createdAt: posts.createdAt,
 			updatedAt: posts.updatedAt,
+			cursorTimestamp: sql<string>`to_char(${posts.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(posts)
 		.where(and(...conditions))
-		.orderBy(desc(posts.createdAt))
+		.orderBy(desc(posts.createdAt), desc(posts.id))
 		.limit(limit + 1);
 
 	const hasMore = rootPosts.length > limit;
@@ -552,7 +603,12 @@ app.openapi(listThreads, async (c) => {
 
 	const nextCursor =
 		hasMore && page.length > 0
-			? (page[page.length - 1]?.createdAt.toISOString() ?? null)
+			? (() => {
+					const last = page.at(-1);
+					return last
+						? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+						: null;
+				})()
 			: null;
 
 	return c.json({ data, next_cursor: nextCursor, has_more: hasMore }, 200);

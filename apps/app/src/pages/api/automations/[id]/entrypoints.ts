@@ -1,5 +1,9 @@
 import type { APIRoute } from "astro";
-import { requireClient, handleSdkError } from "@/lib/api-utils";
+import {
+	handleSdkError,
+	requireClient,
+	requireSessionBoundClient,
+} from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
 	const client = await requireClient(ctx);
@@ -14,12 +18,16 @@ export const GET: APIRoute = async (ctx) => {
 };
 
 export const POST: APIRoute = async (ctx) => {
-	const client = await requireClient(ctx);
-	if (client instanceof Response) return client;
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) return boundClient;
 	try {
 		const id = ctx.params.id as string;
 		const body = await ctx.request.json();
-		const data = await client.automationEntrypoints.create(id, body);
+		const data = await boundClient.client.automationEntrypoints.create(
+			id,
+			body,
+			boundClient.requestOptions,
+		);
 		return Response.json(data, { status: 201 });
 	} catch (e) {
 		return handleSdkError(e);

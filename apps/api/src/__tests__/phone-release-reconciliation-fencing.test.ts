@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type { Database, whatsappPhoneNumbers } from "@relayapi/db";
+import type { Database } from "@relayapi/db";
 import * as dbExports from "@relayapi/db";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
+import type { PhoneRow } from "../services/phone-number-operations";
 import type { Env } from "../types";
-
-type PhoneRow = typeof whatsappPhoneNumbers.$inferSelect;
 
 interface CapturedUpdate {
 	values: Partial<PhoneRow>;
@@ -21,15 +20,21 @@ const telnyxCalls = {
 	release: 0,
 };
 
-const fakeDb = {
+let fakeDb: Database;
+const fakeDbImplementation = {
 	select: () => {
 		const builder = {
 			from: (_table: unknown) => builder,
+			innerJoin: (_table: unknown, _condition: unknown) => builder,
 			where: (_condition: unknown) => builder,
 			orderBy: (..._columns: unknown[]) => builder,
 			limit: async (_limit: number) => {
 				selectExecutions += 1;
-				return selectedRows;
+				return selectedRows.map((row) => ({
+					phone: row,
+					provisioning: row,
+					release: row,
+				}));
 			},
 		};
 		return builder;
@@ -46,7 +51,10 @@ const fakeDb = {
 			}),
 		}),
 	}),
-} as unknown as Database;
+	transaction: async <T>(callback: (transaction: Database) => Promise<T>) =>
+		callback(fakeDb),
+};
+fakeDb = fakeDbImplementation as unknown as Database;
 
 mock.module("@relayapi/db", () => ({
 	...dbExports,
@@ -159,6 +167,17 @@ const staleTransitions: Array<{
 		expectedState: "failed",
 		expectedTelnyxReads: 1,
 	},
+	{
+		name: "a completed provider sequence awaiting its local projection",
+		row: phoneRow({
+			releaseState: "unknown",
+			releasePhase: "completed",
+			releaseLeaseExpiresAt: null,
+			releaseRequestMayHaveBeenSentAt: null,
+		}),
+		expectedState: "failed",
+		expectedTelnyxReads: 0,
+	},
 ];
 
 describe("phone release reconciliation fencing", () => {
@@ -181,19 +200,19 @@ describe("phone release reconciliation fencing", () => {
 			const query = new PgDialect().sqlToQuery(captured);
 			const normalized = query.sql.replace(/\s+/g, " ");
 			expect(normalized).toContain(
-				'"whatsapp_phone_numbers"."release_state" =',
+				'"whatsapp_phone_release_operations"."status" =',
 			);
 			expect(normalized).toContain(
-				'"whatsapp_phone_numbers"."release_lease_token" =',
+				'"whatsapp_phone_release_operations"."lease_token" =',
 			);
 			expect(normalized).toContain(
-				'"whatsapp_phone_numbers"."release_lease_expires_at"',
+				'"whatsapp_phone_release_operations"."lease_expires_at"',
 			);
 			expect(normalized).toContain(
-				'"whatsapp_phone_numbers"."release_request_may_have_been_sent_at"',
+				'"whatsapp_phone_release_operations"."request_may_have_been_sent_at"',
 			);
 			expect(normalized).toContain(
-				'"whatsapp_phone_numbers"."release_phase" =',
+				'"whatsapp_phone_release_operations"."phase" =',
 			);
 			expect(query.params).toContain(scenario.row.releaseState);
 			expect(query.params).toContain(scenario.row.releaseLeaseToken);
@@ -204,7 +223,7 @@ describe("phone release reconciliation fencing", () => {
 				);
 			} else {
 				expect(normalized).toContain(
-					'"whatsapp_phone_numbers"."release_lease_expires_at" is null',
+					'"whatsapp_phone_release_operations"."lease_expires_at" is null',
 				);
 			}
 			if (scenario.row.releaseRequestMayHaveBeenSentAt) {
@@ -213,7 +232,7 @@ describe("phone release reconciliation fencing", () => {
 				);
 			} else {
 				expect(normalized).toContain(
-					'"whatsapp_phone_numbers"."release_request_may_have_been_sent_at" is null',
+					'"whatsapp_phone_release_operations"."request_may_have_been_sent_at" is null',
 				);
 			}
 		});

@@ -49,7 +49,9 @@ export function RandomizerEditor({
 					{variants.map((variant, idx) => {
 						const pct =
 							totalWeight > 0
-								? Math.round(((Number(variant.weight) || 0) / totalWeight) * 100)
+								? Math.round(
+										((Number(variant.weight) || 0) / totalWeight) * 100,
+									)
 								: 0;
 						return (
 							<div
@@ -65,7 +67,8 @@ export function RandomizerEditor({
 								/>
 								<input
 									type="number"
-									min={0}
+									min={0.01}
+									step="any"
 									value={variant.weight ?? ""}
 									onChange={(e) =>
 										patchVariant(idx, {
@@ -102,10 +105,10 @@ export function RandomizerEditor({
 				</div>
 			</Field>
 
-			{variants.length === 0 ? (
+			{variants.length < 2 ? (
 				<p className="flex items-center gap-1.5 text-[11px] text-[#b45309]">
 					<AlertTriangle className="size-3.5" />
-					Add at least one variant — the node fails at runtime with none.
+					Add at least two variants before activating this automation.
 				</p>
 			) : null}
 		</FormShell>

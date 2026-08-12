@@ -6,6 +6,9 @@
  * fetching, DB upsert, webhook subscriptions, and error handling.
  */
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { OpenAPIHono } from "@hono/zod-openapi";
+import { DASHBOARD_SESSION_AUTHORITY_HEADER } from "@relayapi/config";
+import type { Env, Variables } from "../types";
 
 // ── Module mocks (must be before imports of modules under test) ──
 
@@ -36,7 +39,14 @@ mock.module("../config/oauth", () => {
 				tokenUrl: "https://api.x.com/2/oauth2/token",
 				profileUrl:
 					"https://api.x.com/2/users/me?user.fields=profile_image_url",
-				scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
+				scopes: [
+					"tweet.read",
+					"tweet.write",
+					"tweet.moderate.write",
+					"users.read",
+					"like.write",
+					"offline.access",
+				],
 				requiresPkce: true,
 				tokenExchangeUsesBasicAuth: true,
 			}),
@@ -44,7 +54,11 @@ mock.module("../config/oauth", () => {
 				authUrl: "https://www.facebook.com/v25.0/dialog/oauth",
 				tokenUrl: "https://graph.facebook.com/v25.0/oauth/access_token",
 				profileUrl: "https://graph.facebook.com/v25.0/me?fields=id,name",
-				scopes: ["pages_manage_posts", "pages_show_list"],
+				scopes: [
+					"pages_manage_posts",
+					"pages_manage_engagement",
+					"pages_show_list",
+				],
 			}),
 			instagram: makeConfig({
 				authUrl: "https://www.facebook.com/v25.0/dialog/oauth",
@@ -53,10 +67,14 @@ mock.module("../config/oauth", () => {
 				scopes: ["instagram_basic", "instagram_content_publish"],
 			}),
 			threads: makeConfig({
-				authUrl: "https://threads.com/oauth/authorize",
-				tokenUrl: "https://graph.threads.com/oauth/access_token",
-				profileUrl: "https://graph.threads.com/v1.0/me?fields=id,username,name",
-				scopes: ["threads_basic", "threads_content_publish"],
+				authUrl: "https://threads.net/oauth/authorize",
+				tokenUrl: "https://graph.threads.net/oauth/access_token",
+				profileUrl: "https://graph.threads.net/v1.0/me?fields=id,username,name",
+				scopes: [
+					"threads_basic",
+					"threads_content_publish",
+					"threads_location_tagging",
+				],
 			}),
 			googlebusiness: makeConfig({
 				profileUrl:
@@ -64,8 +82,9 @@ mock.module("../config/oauth", () => {
 				scopes: ["https://www.googleapis.com/auth/business.manage"],
 			}),
 			snapchat: makeConfig({
-				profileUrl: "https://adsapi.snapchat.com/v1/me",
-				scopes: ["snapchat-marketing-api"],
+				profileUrl:
+					"https://businessapi.snapchat.com/v1/public_profiles/my_profile",
+				scopes: ["snapchat-profile-api"],
 			}),
 		},
 		INSTAGRAM_DIRECT_CONFIG: makeConfig({
@@ -127,6 +146,7 @@ mock.module("@relayapi/db", () => {
 	};
 
 	return {
+		SOCIAL_PLATFORM_IDS: ["twitter", "facebook", "instagram", "threads"],
 		createDb: () => activeDb,
 		organization,
 		socialAccounts,
@@ -194,6 +214,35 @@ mock.module("../services/one-time-capability", () => ({
 	issueOneTimeCapability: mock(async () => {}),
 	claimOneTimeCapability: mock(async () => null),
 }));
+type MockPersistedScopeValidation =
+	| {
+			ok: true;
+			authorization: {
+				apiKeyId: string;
+				workspaceScope: "all";
+				permissions: string[];
+			};
+	  }
+	| {
+			ok: false;
+			status: 403;
+			code: "CONNECTION_INITIATOR_INVALID";
+			message: string;
+	  };
+
+const successfulPersistedScopeValidation =
+	(): MockPersistedScopeValidation => ({
+		ok: true,
+		authorization: {
+			apiKeyId: "key_test",
+			workspaceScope: "all",
+			permissions: ["write"],
+		},
+	});
+const mockValidatePersistedOperationalScope = mock(
+	async (): Promise<MockPersistedScopeValidation> =>
+		successfulPersistedScopeValidation(),
+);
 mock.module("../lib/request-access", () => ({
 	assertWriteAccess: () => undefined,
 	resolveOperationalCreateScope: mock(async () => ({
@@ -208,14 +257,7 @@ mock.module("../lib/request-access", () => ({
 			permissions: ["write"],
 		}),
 	),
-	validatePersistedOperationalScope: mock(async () => ({
-		ok: true,
-		authorization: {
-			apiKeyId: "key_test",
-			workspaceScope: "all" as const,
-			permissions: ["write"],
-		},
-	})),
+	validatePersistedOperationalScope: mockValidatePersistedOperationalScope,
 }));
 mock.module("../services/account-revocation", () => ({
 	supersedeAccountRevocationJob: mock(async () => {}),
@@ -237,10 +279,14 @@ mock.module("../routes/connections", () => ({
 const mockVerifyInstagramWebhook = mock(async () => ({ success: true }));
 const mockSubscribeInstagramAccount = mock(async () => ({ success: true }));
 const mockSubscribeFacebookPage = mock(async () => ({ success: true }));
+const mockSubscribeWhatsAppBusinessAccount = mock(async () => ({
+	success: true,
+}));
 mock.module("../services/webhook-subscription", () => ({
 	verifyInstagramWebhookSubscription: mockVerifyInstagramWebhook,
 	subscribeInstagramAccount: mockSubscribeInstagramAccount,
 	subscribeFacebookPage: mockSubscribeFacebookPage,
+	subscribeWhatsAppBusinessAccount: mockSubscribeWhatsAppBusinessAccount,
 	verifyWhatsAppWebhookSubscription: mock(async () => ({ success: true })),
 }));
 
@@ -255,7 +301,9 @@ mock.module("../services/ad-service", () => ({
 
 // ── Import the function under test (AFTER all mocks) ──
 
-const { exchangeAndSaveAccount } = await import("../routes/connect");
+const connectModule = await import("../routes/connect");
+const { exchangeAndSaveAccount } = connectModule;
+const connectRoutes = connectModule.default;
 
 import { createMockDb } from "./__mocks__/db";
 import { createMockEnv, type MockKV } from "./__mocks__/env";
@@ -376,6 +424,10 @@ describe("exchangeAndSaveAccount", () => {
 			async (value: string | undefined | null, _key: string) =>
 				value ? `enc:${value}` : null,
 		);
+		mockValidatePersistedOperationalScope.mockReset();
+		mockValidatePersistedOperationalScope.mockImplementation(async () =>
+			successfulPersistedScopeValidation(),
+		);
 		mockDispatchWebhookEvent.mockReset();
 		mockPersistWebhookEvent.mockReset();
 		mockPersistWebhookEvent.mockImplementation(
@@ -413,6 +465,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: "session_test",
 				authorizedWorkspaceScope: "all",
 				platform: "instagram",
 				code: "auth_code_123",
@@ -427,6 +480,13 @@ describe("exchangeAndSaveAccount", () => {
 			// Should use profile user_id as platform account ID (not token user_id)
 			expect(result.account.platform_account_id).toBe("17841441563557251");
 			expect(result.account.platform).toBe("instagram");
+			expect(mockValidatePersistedOperationalScope).toHaveBeenCalledWith(
+				expect.anything(),
+				expect.objectContaining({
+					apiKeyId: "key_test",
+					authoritySessionId: "session_test",
+				}),
+			);
 
 			// The canonical writer seals the long-lived token to the stable account id.
 			const credentialUpdate = activeDb._updates.find(
@@ -453,6 +513,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				platform: "twitter",
 				code: "twitter_code",
@@ -483,6 +544,7 @@ describe("exchangeAndSaveAccount", () => {
 					env,
 					orgId: "ws_test123",
 					initiatorKeyId: "key_test",
+					authoritySessionId: null,
 					authorizedWorkspaceScope: "all",
 					platform: "twitter",
 					code: `code-${operationId}`,
@@ -509,6 +571,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: "session_a",
 				authorizedWorkspaceScope: ["ws_a"],
 				workspaceId: "ws_a",
 				workspaceWasExplicit: true,
@@ -520,6 +583,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test_2",
+				authoritySessionId: "session_b",
 				authorizedWorkspaceScope: ["ws_b"],
 				workspaceId: "ws_b",
 				workspaceWasExplicit: true,
@@ -544,6 +608,7 @@ describe("exchangeAndSaveAccount", () => {
 				access_token?: unknown;
 				connection_operation_id?: unknown;
 				initiator_key_id?: unknown;
+				authority_session_ciphertext?: unknown;
 				initial_workspace_scope?: unknown;
 				workspace_id?: unknown;
 			} | null;
@@ -551,6 +616,7 @@ describe("exchangeAndSaveAccount", () => {
 				access_token?: unknown;
 				connection_operation_id?: unknown;
 				initiator_key_id?: unknown;
+				authority_session_ciphertext?: unknown;
 				initial_workspace_scope?: unknown;
 				workspace_id?: unknown;
 			} | null;
@@ -559,6 +625,7 @@ describe("exchangeAndSaveAccount", () => {
 					access_token: expect.any(String),
 					connection_operation_id: expect.any(String),
 					initiator_key_id: "key_test",
+					authority_session_ciphertext: "enc:session_a",
 					initial_workspace_scope: ["ws_a"],
 					workspace_id: "ws_a",
 				}),
@@ -568,6 +635,7 @@ describe("exchangeAndSaveAccount", () => {
 					access_token: expect.any(String),
 					connection_operation_id: expect.any(String),
 					initiator_key_id: "key_test_2",
+					authority_session_ciphertext: "enc:session_b",
 					initial_workspace_scope: ["ws_b"],
 					workspace_id: "ws_b",
 				}),
@@ -575,6 +643,39 @@ describe("exchangeAndSaveAccount", () => {
 			expect(kv._raw().has("pending-secondary:ws_test123:facebook")).toBe(
 				false,
 			);
+		});
+
+		it("does not persist pending provider credentials after authority revocation", async () => {
+			mockValidatePersistedOperationalScope.mockImplementationOnce(
+				async () => ({
+					ok: false,
+					status: 403,
+					code: "CONNECTION_INITIATOR_INVALID",
+					message: "The initiating session was revoked.",
+				}),
+			);
+
+			const result = await exchangeAndSaveAccount({
+				env,
+				orgId: "ws_test123",
+				initiatorKeyId: "key_test",
+				authoritySessionId: "session_revoked",
+				authorizedWorkspaceScope: "all",
+				platform: "facebook",
+				code: "fb_code_revoked",
+				redirectUri: "https://api.test.dev/connect/oauth/callback",
+			});
+
+			expect(result).toEqual({
+				status: "error",
+				code: "CONNECTION_INITIATOR_INVALID",
+				message: "The initiating session was revoked.",
+			});
+			expect(
+				[...kv._raw().keys()].filter((key) =>
+					key.startsWith("pending-secondary:"),
+				),
+			).toEqual([]);
 		});
 	});
 
@@ -588,6 +689,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				platform: "twitter",
 				code: "twitter_code",
@@ -614,6 +716,7 @@ describe("exchangeAndSaveAccount", () => {
 					env,
 					orgId: "ws_test123",
 					initiatorKeyId: "key_test",
+					authoritySessionId: null,
 					authorizedWorkspaceScope: "all",
 					platform: "twitter",
 					code: "bad_code",
@@ -634,6 +737,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				platform: "twitter",
 				code: "code_123",
@@ -660,6 +764,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				platform: "instagram",
 				code: "code_123",
@@ -681,6 +786,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				platform: "discord",
 				code: "code_123",
@@ -723,6 +829,7 @@ describe("exchangeAndSaveAccount", () => {
 				env,
 				orgId: "ws_test123",
 				initiatorKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				platform: "twitter",
 				code: "code_123",
@@ -733,5 +840,69 @@ describe("exchangeAndSaveAccount", () => {
 			if (result.status !== "error") throw new Error("Expected error");
 			expect(result.code).toBe("ACCOUNT_SAVE_FAILED");
 		});
+	});
+});
+
+describe("direct OAuth completion authority", () => {
+	it("rejects a dashboard code without one-time state before provider exchange", async () => {
+		activeDb = createMockDb();
+		const { env } = createMockEnv();
+		const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+		app.use("*", async (c, next) => {
+			c.set("orgId", "org_test");
+			c.set("keyId", "key_current_session");
+			c.set("principalId", "prn_current_session");
+			c.set("principalType", "dashboard_user");
+			c.set("principalUserId", "usr_current_session");
+			c.set("permissions", ["read", "write"]);
+			c.set("workspaceScope", "all");
+			c.set("db", activeDb as never);
+			await next();
+		});
+		app.route("/v1/connect", connectRoutes);
+
+		mockExchangeCode.mockClear();
+		const response = await app.request(
+			"/v1/connect/facebook",
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					[DASHBOARD_SESSION_AUTHORITY_HEADER]: "session_current",
+				},
+				body: JSON.stringify({ code: "code_from_revoked_flow" }),
+			},
+			env as Env,
+		);
+
+		expect(response.status).toBe(400);
+		expect((await response.json()) as unknown).toEqual({
+			error: {
+				code: "STATE_REQUIRED",
+				message:
+					"state is required to complete a dashboard OAuth flow securely.",
+			},
+		});
+		expect(mockExchangeCode).not.toHaveBeenCalled();
+	});
+
+	it("retains the documented service-principal no-state branch", async () => {
+		const source = await Bun.file(
+			new URL("../routes/connect.ts", import.meta.url),
+		).text();
+		const handler = source.slice(
+			source.indexOf("app.openapi(completeOAuth"),
+			source.indexOf("export default app"),
+		);
+		const dashboardFence = handler.indexOf(
+			'c.get("principalType") === "dashboard_user"',
+		);
+		const serviceScope = handler.indexOf(
+			"if (!body.state) {\n\t\tconst scope = await resolveOperationalCreateScope",
+		);
+		const providerExchange = handler.indexOf("await exchangeAndSaveAccount");
+		expect(dashboardFence).toBeGreaterThan(-1);
+		expect(serviceScope).toBeGreaterThan(dashboardFence);
+		expect(providerExchange).toBeGreaterThan(serviceScope);
 	});
 });

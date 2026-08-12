@@ -8,7 +8,9 @@ import {
 import { and, eq } from "drizzle-orm";
 import { GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountTokens } from "../lib/account-token-crypto";
-import { fetchPublicUrl } from "../lib/fetch-public-url";
+import { fetchPublicUrl, readResponseBytes } from "../lib/fetch-public-url";
+import { trackSingleUnitProviderMutation } from "../lib/mutation-provider-boundary";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import { canAccessWorkspaceScope } from "../lib/workspace-scope";
 import { BroadcastResponse as GenericBroadcastResponse } from "../schemas/broadcasts";
 import { ErrorResponse } from "../schemas/common";
@@ -44,6 +46,7 @@ import type { Env, Variables } from "../types";
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
 const WA_API_BASE = GRAPH_BASE.facebook;
+const WHATSAPP_PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helper: look up a WhatsApp social account by its relay account_id + org
@@ -630,7 +633,7 @@ app.openapi(bulkSend, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -643,6 +646,7 @@ app.openapi(bulkSend, async (c) => {
 	}
 	const allowedHashes = await getAllowedRecipientHashes(
 		db,
+		c.env.ENCRYPTION_KEY,
 		orgId,
 		"whatsapp",
 		"marketing",
@@ -653,7 +657,10 @@ app.openapi(bulkSend, async (c) => {
 			body.recipients.map(async (recipient) => ({
 				...recipient,
 				identifierHash: await hashRecipientIdentifier(
+					c.env.ENCRYPTION_KEY,
+					orgId,
 					"whatsapp",
+					"marketing",
 					recipient.phone,
 				),
 			})),
@@ -791,7 +798,7 @@ app.openapi(listTemplates, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -825,7 +832,7 @@ app.openapi(listTemplates, async (c) => {
 			headers: { Authorization: `Bearer ${account.accessToken}` },
 		});
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -836,7 +843,7 @@ app.openapi(listTemplates, async (c) => {
 				401,
 			);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				name: string;
 				language: string;
@@ -897,7 +904,7 @@ app.openapi(createTemplate, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -927,22 +934,27 @@ app.openapi(createTemplate, async (c) => {
 	try {
 		// WhatsApp Business Management API: Create a new message template
 		// https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates#create-message-templates
-		const res = await fetch(`${WA_API_BASE}/${wabaId}/message_templates`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				name: body.name,
-				language: body.language,
-				category: body.category,
-				components: body.components,
-			}),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.template.create",
+			() =>
+				fetch(`${WA_API_BASE}/${wabaId}/message_templates`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						name: body.name,
+						language: body.language,
+						category: body.category,
+						components: body.components,
+					}),
+				}),
+		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -955,7 +967,7 @@ app.openapi(createTemplate, async (c) => {
 		}
 
 		// The Cloud API returns { id, status, category } on success
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			id: string;
 			status: string;
 			category: string;
@@ -1000,7 +1012,7 @@ app.openapi(getTemplate, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1040,7 +1052,7 @@ app.openapi(getTemplate, async (c) => {
 				404,
 			);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				name: string;
 				language: string;
@@ -1112,7 +1124,7 @@ app.openapi(deleteTemplate, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1142,18 +1154,23 @@ app.openapi(deleteTemplate, async (c) => {
 	try {
 		// WhatsApp Business Management API: Delete a message template by name
 		// https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates#delete-message-templates
-		const res = await fetch(
-			`${WA_API_BASE}/${wabaId}/message_templates?name=${encodeURIComponent(template_name)}`,
-			{
-				method: "DELETE",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-				},
-			},
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.template.delete",
+			() =>
+				fetch(
+					`${WA_API_BASE}/${wabaId}/message_templates?name=${encodeURIComponent(template_name)}`,
+					{
+						method: "DELETE",
+						headers: {
+							Authorization: `Bearer ${account.accessToken}`,
+						},
+					},
+				),
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1193,7 +1210,7 @@ app.openapi(getBusinessProfile, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1217,7 +1234,7 @@ app.openapi(getBusinessProfile, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1229,7 +1246,7 @@ app.openapi(getBusinessProfile, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				about?: string;
 				address?: string;
@@ -1278,7 +1295,7 @@ app.openapi(updateBusinessProfile, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1306,20 +1323,22 @@ app.openapi(updateBusinessProfile, async (c) => {
 	try {
 		// WhatsApp Cloud API: Update the business profile for a phone number
 		// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/business-profiles
-		const updateRes = await fetch(
-			`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(updatePayload),
-			},
+		const updateRes = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.business_profile.update",
+			() =>
+				fetch(`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(updatePayload),
+				}),
 		);
 
 		if (!updateRes.ok) {
-			const err = await updateRes.text();
+			const err = await readProviderText(updateRes);
 			return c.json(
 				{
 					error: {
@@ -1355,7 +1374,7 @@ app.openapi(updateBusinessProfile, async (c) => {
 			);
 		}
 
-		const json = (await getRes.json()) as {
+		const json = (await readProviderJson(getRes)) as {
 			data: Array<{
 				about?: string;
 				address?: string;
@@ -1406,7 +1425,7 @@ app.openapi(listPhoneNumbers, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1441,7 +1460,7 @@ app.openapi(listPhoneNumbers, async (c) => {
 		});
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1453,7 +1472,7 @@ app.openapi(listPhoneNumbers, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				display_phone_number: string;
@@ -1505,7 +1524,7 @@ app.openapi(getDisplayName, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1530,7 +1549,7 @@ app.openapi(getDisplayName, async (c) => {
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1542,7 +1561,7 @@ app.openapi(getDisplayName, async (c) => {
 			);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			verified_name?: string;
 			name_status?: string;
 		};
@@ -1579,7 +1598,7 @@ app.openapi(updateDisplayName, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1600,18 +1619,23 @@ app.openapi(updateDisplayName, async (c) => {
 		// Official curl: POST 'https://graph.facebook.com/v25.0/{id}?new_display_name=Lucky%20Shrub'
 		// Note: new_display_name is a QUERY PARAMETER, not a JSON body field.
 		// Review by Meta takes 1-3 business days. name_status field tracks review progress.
-		const res = await fetch(
-			`${WA_API_BASE}/${phoneNumberId}?new_display_name=${encodeURIComponent(body.display_name)}`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-				},
-			},
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.display_name.update",
+			() =>
+				fetch(
+					`${WA_API_BASE}/${phoneNumberId}?new_display_name=${encodeURIComponent(body.display_name)}`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${account.accessToken}`,
+						},
+					},
+				),
 		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1659,7 +1683,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1710,7 +1734,11 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		}
 
 		// Step 1: Fetch the image from the provided URL
-		const imageRes = await fetchPublicUrl(body.photo_url, { timeout: 30_000 });
+		const imageRes = await fetchPublicUrl(body.photo_url, {
+			timeout: 30_000,
+			timeoutThroughBody: true,
+			maxBytes: WHATSAPP_PROFILE_PHOTO_MAX_BYTES,
+		});
 		if (!imageRes.ok) {
 			return c.json(
 				{
@@ -1723,7 +1751,10 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			);
 		}
 
-		const imageBytes = await imageRes.arrayBuffer();
+		const imageBytes = await readResponseBytes(
+			imageRes,
+			WHATSAPP_PROFILE_PHOTO_MAX_BYTES,
+		);
 		const contentType = imageRes.headers.get("content-type") ?? "image/jpeg";
 		const fileSize = imageBytes.byteLength;
 
@@ -1744,7 +1775,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		);
 
 		if (!sessionRes.ok) {
-			const err = await sessionRes.text();
+			const err = await readProviderText(sessionRes);
 			return c.json(
 				{
 					error: {
@@ -1756,7 +1787,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			);
 		}
 
-		const sessionData = (await sessionRes.json()) as { id?: string };
+		const sessionData = (await readProviderJson(sessionRes)) as { id?: string };
 		const uploadSessionId = sessionData.id;
 		if (!uploadSessionId) {
 			return c.json(
@@ -1786,7 +1817,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		});
 
 		if (!uploadRes.ok) {
-			const err = await uploadRes.text();
+			const err = await readProviderText(uploadRes);
 			return c.json(
 				{
 					error: {
@@ -1798,7 +1829,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			);
 		}
 
-		const uploadData = (await uploadRes.json()) as { h?: string };
+		const uploadData = (await readProviderJson(uploadRes)) as { h?: string };
 		const fileHandle = uploadData.h;
 		if (!fileHandle) {
 			return c.json(
@@ -1814,23 +1845,25 @@ app.openapi(uploadProfilePhoto, async (c) => {
 		// Confirmed via: https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/whatsapp-business-profile-api
 		// Section: "Update Fields" — profile_picture_handle is a valid POST field
 		// Requires: messaging_product: "whatsapp" and the handle from Resumable Upload API
-		const profileRes = await fetch(
-			`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`,
-			{
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${account.accessToken}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					messaging_product: "whatsapp",
-					profile_picture_handle: fileHandle,
+		const profileRes = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.business_profile.photo.update",
+			() =>
+				fetch(`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						messaging_product: "whatsapp",
+						profile_picture_handle: fileHandle,
+					}),
 				}),
-			},
 		);
 
 		if (!profileRes.ok) {
-			const err = await profileRes.text();
+			const err = await readProviderText(profileRes);
 			return c.json(
 				{
 					error: {
@@ -1847,7 +1880,7 @@ app.openapi(uploadProfilePhoto, async (c) => {
 			`${WA_API_BASE}/${phoneNumberId}/whatsapp_business_profile?fields=profile_picture_url`,
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
-		const updatedJson = (await updatedRes.json()) as {
+		const updatedJson = (await readProviderJson(updatedRes)) as {
 			data?: Array<{ profile_picture_url?: string }>;
 		};
 		const newUrl = updatedJson.data?.[0]?.profile_picture_url ?? null;
@@ -1891,7 +1924,7 @@ async function assertFlowOwnership(
 				owned: false,
 				error: `Flow not found or inaccessible (HTTP ${res.status})`,
 			};
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			whatsapp_business_account?: { id?: string };
 		};
 		const flowWabaId = data.whatsapp_business_account?.id;
@@ -1926,7 +1959,7 @@ app.openapi(listFlows, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -1954,7 +1987,7 @@ app.openapi(listFlows, async (c) => {
 			headers: { Authorization: `Bearer ${account.accessToken}` },
 		});
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -1965,7 +1998,7 @@ app.openapi(listFlows, async (c) => {
 				502,
 			);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data?: Array<Record<string, unknown>>;
 		};
 		return c.json({ data: json.data ?? [] }, 200);
@@ -1995,7 +2028,7 @@ app.openapi(createFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2028,17 +2061,22 @@ app.openapi(createFlow, async (c) => {
 			payload.clone_flow_id = body.clone_flow_id;
 		}
 
-		const res = await fetch(`${WA_API_BASE}/${wabaId}/flows`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(payload),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.create",
+			() =>
+				fetch(`${WA_API_BASE}/${wabaId}/flows`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(payload),
+				}),
+		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2050,7 +2088,7 @@ app.openapi(createFlow, async (c) => {
 			);
 		}
 
-		const data = (await res.json()) as { id?: string };
+		const data = (await readProviderJson(res)) as { id?: string };
 		if (!data.id) {
 			return c.json(
 				{ error: { code: "WA_API_ERROR", message: "No flow ID returned" } },
@@ -2063,7 +2101,10 @@ app.openapi(createFlow, async (c) => {
 			`${WA_API_BASE}/${data.id}?fields=id,name,status,categories,validation_errors`,
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
-		const detail = (await detailRes.json()) as Record<string, unknown>;
+		const detail = (await readProviderJson(detailRes)) as Record<
+			string,
+			unknown
+		>;
 		return c.json(detail, 201);
 	} catch (e) {
 		return c.json(
@@ -2092,7 +2133,7 @@ app.openapi(getFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2130,7 +2171,7 @@ app.openapi(getFlow, async (c) => {
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2141,7 +2182,7 @@ app.openapi(getFlow, async (c) => {
 				502,
 			);
 		}
-		const data = (await res.json()) as Record<string, unknown>;
+		const data = (await readProviderJson(res)) as Record<string, unknown>;
 		return c.json(data, 200);
 	} catch (e) {
 		return c.json(
@@ -2170,7 +2211,7 @@ app.openapi(updateFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2206,17 +2247,22 @@ app.openapi(updateFlow, async (c) => {
 		if (body.name !== undefined) payload.name = body.name;
 		if (body.categories !== undefined) payload.categories = body.categories;
 
-		const res = await fetch(`${WA_API_BASE}/${flow_id}`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(payload),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.update",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(payload),
+				}),
+		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2233,7 +2279,10 @@ app.openapi(updateFlow, async (c) => {
 			`${WA_API_BASE}/${flow_id}?fields=id,name,status,categories,validation_errors`,
 			{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 		);
-		const detail = (await detailRes.json()) as Record<string, unknown>;
+		const detail = (await readProviderJson(detailRes)) as Record<
+			string,
+			unknown
+		>;
 		return c.json(detail, 200);
 	} catch (e) {
 		return c.json(
@@ -2262,7 +2311,7 @@ app.openapi(deleteFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2293,13 +2342,18 @@ app.openapi(deleteFlow, async (c) => {
 		// WhatsApp Flows API — Delete a DRAFT flow
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Delete Flow" — DELETE /{flow-id}, returns { success: true }
-		const res = await fetch(`${WA_API_BASE}/${flow_id}`, {
-			method: "DELETE",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.delete",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}`, {
+					method: "DELETE",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				}),
+		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2339,7 +2393,7 @@ app.openapi(publishFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2370,13 +2424,18 @@ app.openapi(publishFlow, async (c) => {
 		// WhatsApp Flows API — Publish a flow (irreversible, DRAFT → PUBLISHED)
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Publish Flow" — POST /{flow-id}/publish, no body required, returns { success: true }
-		const res = await fetch(`${WA_API_BASE}/${flow_id}/publish`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.publish",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}/publish`, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				}),
+		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2416,7 +2475,7 @@ app.openapi(deprecateFlow, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2447,13 +2506,18 @@ app.openapi(deprecateFlow, async (c) => {
 		// WhatsApp Flows API — Deprecate a published flow (irreversible)
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Deprecate Flow" — POST /{flow-id}/deprecate, no body, returns { success: true }
-		const res = await fetch(`${WA_API_BASE}/${flow_id}/deprecate`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.deprecate",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}/deprecate`, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+				}),
+		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2493,7 +2557,7 @@ app.openapi(getFlowJson, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2530,7 +2594,7 @@ app.openapi(getFlowJson, async (c) => {
 		});
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2542,7 +2606,7 @@ app.openapi(getFlowJson, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data?: Array<{ name?: string; download_url?: string }>;
 		};
 		const asset = json.data?.find((a) => a.name === "flow.json");
@@ -2581,7 +2645,7 @@ app.openapi(uploadFlowJson, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2613,7 +2677,8 @@ app.openapi(uploadFlowJson, async (c) => {
 		// Docs: https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
 		// Section: "Update Flow JSON" — POST /{flow-id}/assets (multipart form-data)
 		// Required fields: file (JSON blob), name: "flow.json", asset_type: "FLOW_JSON"
-		// Returns validation_errors array if JSON is invalid
+		// A successful update still returns validation_errors when the uploaded
+		// draft is invalid. The asset was updated, so that response remains K=1.
 		const flowJsonBlob = new Blob([JSON.stringify(body.flow_json)], {
 			type: "application/json",
 		});
@@ -2622,46 +2687,64 @@ app.openapi(uploadFlowJson, async (c) => {
 		formData.append("name", "flow.json");
 		formData.append("asset_type", "FLOW_JSON");
 
-		const res = await fetch(`${WA_API_BASE}/${flow_id}/assets`, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${account.accessToken}` },
-			body: formData,
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.json.update",
+			() =>
+				fetch(`${WA_API_BASE}/${flow_id}/assets`, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${account.accessToken}` },
+					body: formData,
+				}),
+		);
 
-		if (!res.ok) {
-			const err = await res.text();
-			// Meta returns validation errors in the response body
-			try {
-				const parsed = JSON.parse(err) as {
+		const responseBody = await readProviderText(res);
+		let parsed:
+			| {
+					success?: boolean;
+					validation_errors?: unknown[];
 					error?: {
 						error_user_msg?: string;
 						error_data?: { validation_errors?: unknown[] };
 					};
-				};
-				if (parsed.error?.error_data?.validation_errors) {
-					return c.json(
-						{
-							success: false,
-							validation_errors: parsed.error.error_data.validation_errors,
-						},
-						200,
-					);
-				}
-			} catch {
-				/* not JSON, fall through */
+			  }
+			| undefined;
+		try {
+			parsed = JSON.parse(responseBody) as typeof parsed;
+		} catch {
+			/* not JSON */
+		}
+
+		if (!res.ok) {
+			const validationErrors = parsed?.error?.error_data?.validation_errors;
+			if (validationErrors) {
+				// The provider-boundary helper has already classified this status.
+				// Do not turn an ambiguous 408/425/429/5xx into false K=0 proof.
+				return c.json(
+					{ success: false, validation_errors: validationErrors },
+					200,
+				);
 			}
 			return c.json(
 				{
 					error: {
 						code: "WA_API_ERROR",
-						message: `Failed to upload flow JSON: ${err}`,
+						message: `Failed to upload flow JSON: ${responseBody}`,
 					},
 				},
 				502,
 			);
 		}
 
-		return c.json({ success: true }, 200);
+		return c.json(
+			{
+				success: parsed?.success ?? true,
+				...(parsed?.validation_errors
+					? { validation_errors: parsed.validation_errors }
+					: {}),
+			},
+			200,
+		);
 	} catch (e) {
 		return c.json(
 			{
@@ -2688,7 +2771,7 @@ app.openapi(sendFlowMessage, async (c) => {
 		c.env.ENCRYPTION_KEY,
 		c.get("workspaceScope"),
 	);
-	if (!account || !account.accessToken) {
+	if (!account?.accessToken) {
 		return c.json(
 			{
 				error: {
@@ -2701,6 +2784,7 @@ app.openapi(sendFlowMessage, async (c) => {
 	}
 	const allowedFlowHashes = await getAllowedRecipientHashes(
 		db,
+		c.env.ENCRYPTION_KEY,
 		orgId,
 		"whatsapp",
 		"automation",
@@ -2708,7 +2792,13 @@ app.openapi(sendFlowMessage, async (c) => {
 	);
 	if (
 		!allowedFlowHashes.has(
-			await hashRecipientIdentifier("whatsapp", body.recipient_phone),
+			await hashRecipientIdentifier(
+				c.env.ENCRYPTION_KEY,
+				orgId,
+				"whatsapp",
+				"automation",
+				body.recipient_phone,
+			),
 		)
 	) {
 		return c.json(
@@ -2760,17 +2850,22 @@ app.openapi(sendFlowMessage, async (c) => {
 			},
 		};
 
-		const res = await fetch(`${WA_API_BASE}/${phoneNumberId}/messages`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${account.accessToken}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(payload),
-		});
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"meta.whatsapp.flow.message.send",
+			() =>
+				fetch(`${WA_API_BASE}/${phoneNumberId}/messages`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${account.accessToken}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(payload),
+				}),
+		);
 
 		if (!res.ok) {
-			const err = await res.text();
+			const err = await readProviderText(res);
 			return c.json(
 				{
 					error: {
@@ -2782,7 +2877,9 @@ app.openapi(sendFlowMessage, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as { messages?: Array<{ id?: string }> };
+		const json = (await readProviderJson(res)) as {
+			messages?: Array<{ id?: string }>;
+		};
 		const messageId = json.messages?.[0]?.id ?? "";
 
 		return c.json({ message_id: messageId }, 200);

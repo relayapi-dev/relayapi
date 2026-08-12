@@ -31,6 +31,15 @@ const isBlobLike = (value: any): value is BlobLike & { arrayBuffer(): Promise<Ar
   typeof value.slice === 'function' &&
   typeof value.arrayBuffer === 'function';
 
+const isArrayBufferLike = (value: unknown): value is ArrayBuffer =>
+  value instanceof ArrayBuffer || Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+
+const isBlobLikePart = (value: unknown): value is BlobLikePart =>
+  typeof value === 'string' ||
+  ArrayBuffer.isView(value) ||
+  isArrayBufferLike(value) ||
+  isBlobLike(value);
+
 /**
  * Intended to match DOM File, node:buffer File, undici File, etc.
  */
@@ -110,9 +119,16 @@ export async function toFile(
   name ||= getName(value);
 
   if (!options?.type) {
-    const type = parts.find((part) => typeof part === 'object' && 'type' in part && part.type);
-    if (typeof type === 'string') {
-      options = { ...options, type };
+    const typedPart = parts.find(
+      (part) => typeof part === 'object' && part !== null && 'type' in part && part.type,
+    );
+    if (
+      typedPart &&
+      typeof typedPart === 'object' &&
+      'type' in typedPart &&
+      typeof typedPart.type === 'string'
+    ) {
+      options = { ...options, type: typedPart.type };
     }
   }
 
@@ -124,7 +140,7 @@ async function getBytes(value: BlobLikePart | AsyncIterable<BlobLikePart>): Prom
   if (
     typeof value === 'string' ||
     ArrayBuffer.isView(value) || // includes Uint8Array, Buffer, etc.
-    value instanceof ArrayBuffer
+    isArrayBufferLike(value)
   ) {
     parts.push(value);
   } else if (isBlobLike(value)) {
@@ -132,19 +148,26 @@ async function getBytes(value: BlobLikePart | AsyncIterable<BlobLikePart>): Prom
   } else if (
     isAsyncIterable(value) // includes Readable, ReadableStream, etc.
   ) {
+    let chunkIndex = 0;
     for await (const chunk of value) {
-      parts.push(...(await getBytes(chunk as BlobLikePart))); // TODO, consider validating?
+      if (!isBlobLikePart(chunk)) {
+        throw new TypeError(
+          `Invalid async iterable chunk at index ${chunkIndex}: expected a string, ArrayBuffer, ArrayBufferView, or Blob-like value; received ${describeValue(chunk)}`,
+        );
+      }
+      parts.push(...(await getBytes(chunk)));
+      chunkIndex += 1;
     }
   } else {
-    const constructor = value?.constructor?.name;
-    throw new Error(
-      `Unexpected data type: ${typeof value}${
-        constructor ? `; constructor: ${constructor}` : ''
-      }${propsForError(value)}`,
-    );
+    throw new TypeError(`Unexpected data type: ${describeValue(value)}${propsForError(value)}`);
   }
 
   return parts;
+}
+
+function describeValue(value: unknown): string {
+  const constructor = (value as any)?.constructor?.name;
+  return `${typeof value}${constructor ? `; constructor: ${constructor}` : ''}`;
 }
 
 function propsForError(value: unknown): string {

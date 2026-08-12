@@ -1,10 +1,25 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, type z } from "@hono/zod-openapi";
-import {
-	type createDb,
-	socialAccounts,
-} from "@relayapi/db";
+import { type createDb, socialAccounts } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import { mapConcurrently } from "../lib/concurrency";
+import {
+	isDefinitiveProviderMutationRejection,
+	SingleUnitProviderMutationAggregate,
+	trackSingleUnitProviderMutation,
+} from "../lib/mutation-provider-boundary";
+import { notifyRealtime } from "../lib/notify-post-update";
+import {
+	compareTimestampIdDescending,
+	decodeKeysetCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	isTimestampIdAfterCursor,
+	normalizeCursorTimestamp,
+	type TimestampIdCursor,
+} from "../lib/pagination-cursor";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { ErrorResponse } from "../schemas/common";
 import {
 	CommentActionResponse,
@@ -23,8 +38,6 @@ import {
 	ReviewsQuery,
 } from "../schemas/inbox";
 import type { Env, Variables } from "../types";
-import { notifyRealtime } from "../lib/notify-post-update";
-import { mapConcurrently } from "../lib/concurrency";
 import { getAccount, getAccountsForOrg, igGraphHost } from "./inbox-helpers";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -63,7 +76,7 @@ async function fetchFacebookComments(
 		// Docs: https://developers.facebook.com/docs/graph-api/reference/object/comments/#reading
 		const res = await fetch(url);
 		if (!res.ok) return { data: [], next_cursor: null };
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				from?: { name: string; picture?: { data?: { url?: string } } };
@@ -115,7 +128,9 @@ async function fetchFacebookComments(
 				});
 			}
 		}
-		const nextCursor = json.paging?.next ? (json.paging.cursors?.after ?? null) : null;
+		const nextCursor = json.paging?.next
+			? (json.paging.cursors?.after ?? null)
+			: null;
 		return { data: comments, next_cursor: nextCursor };
 	} catch {
 		return { data: [], next_cursor: null };
@@ -141,7 +156,7 @@ async function fetchInstagramComments(
 		}
 		const res = await fetch(url);
 		if (!res.ok) return { data: [], next_cursor: null };
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				from?: { username: string; profile_picture_url?: string };
@@ -207,7 +222,9 @@ async function fetchInstagramComments(
 				});
 			}
 		}
-		const nextCursor = json.paging?.next ? (json.paging.cursors?.after ?? null) : null;
+		const nextCursor = json.paging?.next
+			? (json.paging.cursors?.after ?? null)
+			: null;
 		return { data: comments, next_cursor: nextCursor };
 	} catch {
 		return { data: [], next_cursor: null };
@@ -233,7 +250,7 @@ async function fetchYouTubeComments(
 			headers: { Authorization: `Bearer ${token}` },
 		});
 		if (!res.ok) return { data: [], next_cursor: null };
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items: Array<{
 				id: string;
 				snippet: {
@@ -326,6 +343,57 @@ interface CommentWithPost extends CommentData {
 	account_avatar_url: string | null;
 }
 
+function stableCursorKey(parts: string[]): string {
+	return parts.map((part) => `${part.length}:${part}`).join("|");
+}
+
+function postCursorId(post: PostContext): string {
+	return stableCursorKey([post.platform, post.account_id, post.id]);
+}
+
+function commentCursorId(comment: CommentWithPost): string {
+	return stableCursorKey([
+		comment.platform,
+		comment.account_id,
+		comment.post_id,
+		comment.id,
+	]);
+}
+
+/**
+ * Provider payloads (and anything replayed out of KV) are unvalidated, but the
+ * keyset comparators and the cursor encoder both throw on a malformed sort key.
+ * Items are screened at ingestion so one bad `created_at` cannot take down a
+ * whole multi-account feed — and so a poisoned cache entry can never be written
+ * in the first place.
+ */
+export function hasSortableItemKey(item: {
+	id?: unknown;
+	platform?: unknown;
+	created_at?: unknown;
+}): boolean {
+	return (
+		typeof item.id === "string" &&
+		item.id.length > 0 &&
+		typeof item.platform === "string" &&
+		normalizeCursorTimestamp(item.created_at) !== null
+	);
+}
+
+/**
+ * Posts additionally carry `account_id` in their cursor key, and comments
+ * inherit both `account_id` and `post_id` from the post they were fetched for —
+ * so screening it here also covers the comment side.
+ */
+export function hasSortablePostKey(post: {
+	id?: unknown;
+	platform?: unknown;
+	account_id?: unknown;
+	created_at?: unknown;
+}): boolean {
+	return hasSortableItemKey(post) && typeof post.account_id === "string";
+}
+
 async function fetchFacebookPosts(
 	token: string,
 	limit = 10,
@@ -336,7 +404,7 @@ async function fetchFacebookPosts(
 		const url = `${GRAPH_BASE.facebook}/me/published_posts?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,message,created_time,full_picture,permalink_url,comments.summary(true)`;
 		const res = await fetch(url);
 		if (!res.ok) return [];
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				message?: string;
@@ -372,7 +440,7 @@ async function fetchInstagramPosts(
 		const url = `https://${host}/${API_VERSIONS.meta_graph}/me/media?access_token=${encodeURIComponent(token)}&limit=${limit}&fields=id,caption,timestamp,thumbnail_url,media_url,permalink,comments_count`;
 		const res = await fetch(url);
 		if (!res.ok) return [];
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				caption?: string;
@@ -410,7 +478,7 @@ async function fetchYouTubePosts(
 			{ headers: { Authorization: `Bearer ${token}` } },
 		);
 		if (!channelRes.ok) return [];
-		const channelJson = (await channelRes.json()) as {
+		const channelJson = (await readProviderJson(channelRes)) as {
 			items: Array<{
 				contentDetails: { relatedPlaylists: { uploads: string } };
 			}>;
@@ -426,7 +494,7 @@ async function fetchYouTubePosts(
 			{ headers: { Authorization: `Bearer ${token}` } },
 		);
 		if (!videosRes.ok) return [];
-		const videosJson = (await videosRes.json()) as {
+		const videosJson = (await readProviderJson(videosRes)) as {
 			items: Array<{
 				contentDetails: { videoId: string };
 				snippet: {
@@ -501,16 +569,22 @@ async function getCachedComments(
 ): Promise<{ data: CommentData[]; next_cursor: string | null }> {
 	const cacheKey = `inbox-comments:${postId}:${commentsPerPost}`;
 	try {
-		const cached = await kv.get<{ data: CommentData[]; next_cursor: string | null }>(
-			cacheKey,
-			"json",
-		);
-		if (cached) return cached;
+		const cached = await kv.get<{
+			data: CommentData[];
+			next_cursor: string | null;
+		}>(cacheKey, "json");
+		if (cached) {
+			return { ...cached, data: cached.data.filter(hasSortableItemKey) };
+		}
 	} catch {
 		// cache miss
 	}
 
-	const result = await fetcher();
+	const fetched = await fetcher();
+	const result = {
+		...fetched,
+		data: fetched.data.filter(hasSortableItemKey),
+	};
 	try {
 		await kv.put(cacheKey, JSON.stringify(result), {
 			expirationTtl: COMMENTS_CACHE_TTL,
@@ -531,7 +605,7 @@ async function getCachedPosts(
 	const cacheKey = `inbox-posts:${accountId}`;
 	try {
 		const cached = await kv.get<PostContext[]>(cacheKey, "json");
-		if (cached) return cached;
+		if (cached) return cached.filter(hasSortablePostKey);
 	} catch {
 		// cache miss
 	}
@@ -555,6 +629,9 @@ async function getCachedPosts(
 	for (const p of posts) {
 		p.account_id = accountId;
 	}
+	// Screen after stamping and before the write, so an unsortable item is never
+	// persisted into the cache.
+	posts = posts.filter(hasSortablePostKey);
 
 	// Cache empty results too, with a shorter negative-cache TTL, so accounts
 	// with zero posts or broken/expired tokens (every fetcher returns [] on a
@@ -587,6 +664,10 @@ const listComments = createRoute({
 		200: {
 			description: "Comments list",
 			content: { "application/json": { schema: CommentsResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -629,6 +710,10 @@ const listPostsByComments = createRoute({
 			content: {
 				"application/json": { schema: PostsWithCommentsResponse },
 			},
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -884,11 +969,30 @@ app.openapi(listComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: TimestampIdCursor | undefined;
+	if (cursor) {
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		decodedCursor =
+			decoded.kind === "composite"
+				? decoded
+				: // A pre-composite cursor carried only a timestamp. The empty id
+					// sorts before every real id in the descending keyset, so items
+					// sharing the boundary timestamp are excluded — which is exactly
+					// what the timestamp-only filter this replaced did.
+					{ timestamp: decoded.timestamp, id: "" };
+	}
 	// Hard ceiling independent of limit so a large limit can't blow up the live
 	// comment fan-out (each inspected post is one Graph/YouTube subrequest).
 	const maxPostsToInspect = Math.min(Math.max(limit, 10) * 3, 30);
 
-	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		{ platform, accountId: account_id },
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (accounts.length === 0) {
 		return c.json({ data: [], next_cursor: null, has_more: false }, 200);
 	}
@@ -924,8 +1028,11 @@ app.openapi(listComments, async (c) => {
 		return c.json({ data: [], next_cursor: null, has_more: false }, 200);
 	}
 
-	allPosts.sort(
-		(a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+	allPosts.sort((a, b) =>
+		compareTimestampIdDescending(
+			{ timestamp: a.created_at, id: postCursorId(a) },
+			{ timestamp: b.created_at, id: postCursorId(b) },
+		),
 	);
 	if (allPosts.length > maxPostsToInspect) {
 		allPosts.length = maxPostsToInspect;
@@ -947,11 +1054,27 @@ app.openapi(listComments, async (c) => {
 				async () => {
 					switch (post.platform) {
 						case "facebook":
-							return fetchFacebookComments(accessToken, post.id, undefined, commentsPerPost);
+							return fetchFacebookComments(
+								accessToken,
+								post.id,
+								undefined,
+								commentsPerPost,
+							);
 						case "instagram":
-							return fetchInstagramComments(accessToken, post.id, undefined, commentsPerPost, account.username ?? undefined);
+							return fetchInstagramComments(
+								accessToken,
+								post.id,
+								undefined,
+								commentsPerPost,
+								account.username ?? undefined,
+							);
 						case "youtube":
-							return fetchYouTubeComments(accessToken, post.id, undefined, commentsPerPost);
+							return fetchYouTubeComments(
+								accessToken,
+								post.id,
+								undefined,
+								commentsPerPost,
+							);
 						default:
 							return { data: [], next_cursor: null };
 					}
@@ -978,23 +1101,33 @@ app.openapi(listComments, async (c) => {
 	}
 
 	// 3. Sort by created_at descending
-	allComments.sort(
-		(a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+	allComments.sort((a, b) =>
+		compareTimestampIdDescending(
+			{ timestamp: a.created_at, id: commentCursorId(a) },
+			{ timestamp: b.created_at, id: commentCursorId(b) },
+		),
 	);
 
-	// 4. Time-based cursor pagination
+	// 4. Composite keyset pagination across all provider/account/post namespaces.
 	let filtered = allComments;
-	if (cursor) {
-		const cursorTime = new Date(cursor).getTime();
-		filtered = allComments.filter(
-			(c) => new Date(c.created_at).getTime() < cursorTime,
+	if (decodedCursor) {
+		filtered = allComments.filter((comment) =>
+			isTimestampIdAfterCursor(
+				{
+					timestamp: comment.created_at,
+					id: commentCursorId(comment),
+				},
+				decodedCursor,
+			),
 		);
 	}
 
 	const page = filtered.slice(0, limit);
 	const lastItem = page[page.length - 1];
 	const nextCursor =
-		lastItem && filtered.length > limit ? lastItem.created_at : null;
+		lastItem && filtered.length > limit
+			? encodeTimestampIdCursor(lastItem.created_at, commentCursorId(lastItem))
+			: null;
 
 	return c.json(
 		{
@@ -1014,8 +1147,27 @@ app.openapi(listPostsByComments, async (c) => {
 	const orgId = c.get("orgId");
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
+	let decodedCursor: TimestampIdCursor | undefined;
+	if (cursor) {
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		decodedCursor =
+			decoded.kind === "composite"
+				? decoded
+				: // A pre-composite cursor carried only a timestamp. The empty id
+					// sorts before every real id in the descending keyset, so items
+					// sharing the boundary timestamp are excluded — which is exactly
+					// what the timestamp-only filter this replaced did.
+					{ timestamp: decoded.timestamp, id: "" };
+	}
 
-	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		{ platform, accountId: account_id },
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (accounts.length === 0) {
 		return c.json({ data: [], next_cursor: null, has_more: false }, 200);
 	}
@@ -1032,7 +1184,13 @@ app.openapi(listPostsByComments, async (c) => {
 			const accessToken = account.accessToken;
 			if (!accessToken) return [] as PostContext[];
 			try {
-				return await getCachedPosts(c.env.KV, account.id, account.platform, accessToken, 10);
+				return await getCachedPosts(
+					c.env.KV,
+					account.id,
+					account.platform,
+					accessToken,
+					10,
+				);
 			} catch {
 				return [] as PostContext[];
 			}
@@ -1048,23 +1206,30 @@ app.openapi(listPostsByComments, async (c) => {
 	}
 
 	// Sort by created_at descending
-	allPosts.sort(
-		(a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+	allPosts.sort((a, b) =>
+		compareTimestampIdDescending(
+			{ timestamp: a.created_at, id: postCursorId(a) },
+			{ timestamp: b.created_at, id: postCursorId(b) },
+		),
 	);
 
-	// Time-based cursor pagination
+	// Composite keyset pagination across provider/account namespaces.
 	let filtered = allPosts;
-	if (cursor) {
-		const cursorTime = new Date(cursor).getTime();
-		filtered = allPosts.filter(
-			(p) => new Date(p.created_at).getTime() < cursorTime,
+	if (decodedCursor) {
+		filtered = allPosts.filter((post) =>
+			isTimestampIdAfterCursor(
+				{ timestamp: post.created_at, id: postCursorId(post) },
+				decodedCursor,
+			),
 		);
 	}
 
 	const page = filtered.slice(0, limit);
 	const lastItem = page[page.length - 1];
 	const nextCursor =
-		lastItem && filtered.length > limit ? lastItem.created_at : null;
+		lastItem && filtered.length > limit
+			? encodeTimestampIdCursor(lastItem.created_at, postCursorId(lastItem))
+			: null;
 
 	return c.json(
 		{
@@ -1092,7 +1257,13 @@ app.openapi(getPostComments, async (c) => {
 	const { platform, account_id, cursor, limit } = c.req.valid("query");
 	const db = c.get("db");
 
-	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		{ platform, accountId: account_id },
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (accounts.length === 0) {
 		return c.json(
 			{ data: [], post_id, next_cursor: null, has_more: false },
@@ -1116,7 +1287,13 @@ app.openapi(getPostComments, async (c) => {
 			result = await fetchFacebookComments(accessToken, post_id, cursor, limit);
 			break;
 		case "instagram":
-			result = await fetchInstagramComments(accessToken, post_id, cursor, limit, account.username ?? undefined);
+			result = await fetchInstagramComments(
+				accessToken,
+				post_id,
+				cursor,
+				limit,
+				account.username ?? undefined,
+			);
 			break;
 		case "youtube":
 			result = await fetchYouTubeComments(accessToken, post_id, cursor, limit);
@@ -1129,8 +1306,7 @@ app.openapi(getPostComments, async (c) => {
 		{
 			data: result.data as z.infer<typeof CommentsResponse>["data"],
 			post_id,
-			platform:
-				account.platform as typeof socialAccounts.$inferSelect.platform,
+			platform: account.platform as typeof socialAccounts.$inferSelect.platform,
 			next_cursor: result.next_cursor,
 			has_more: result.next_cursor !== null,
 		},
@@ -1144,10 +1320,18 @@ app.openapi(replyToComment, async (c) => {
 	const { text, account_id, comment_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account?.accessToken) {
+		markMutationInputNotApplied(c);
 		return c.json({ success: false }, 200);
 	}
+	const accessToken = account.accessToken;
 
 	// The comment_id to reply to — use the body's comment_id if provided, otherwise the post_id
 	const parentId = comment_id ?? post_id;
@@ -1157,20 +1341,24 @@ app.openapi(replyToComment, async (c) => {
 			case "facebook": {
 				// Facebook Graph API: Post a comment reply on an object
 				// Docs: https://developers.facebook.com/docs/graph-api/reference/object/comments/#creating
-				const res = await fetch(
-					`${GRAPH_BASE.facebook}/${parentId}/comments`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							message: text,
-							access_token: account.accessToken,
+				const res = await trackSingleUnitProviderMutation(
+					c.get("mutationEffectTracker"),
+					"facebook.comment.reply.create",
+					() =>
+						fetch(`${GRAPH_BASE.facebook}/${parentId}/comments`, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								message: text,
+								access_token: accessToken,
+							}),
 						}),
-					},
 				);
 				if (!res.ok) return c.json({ success: false }, 200);
-				const json = (await res.json()) as { id?: string };
-				c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
+				const json = (await readProviderJson(res)) as { id?: string };
+				c.executionCtx.waitUntil(
+					invalidateInboxCache(c.env.KV, db, orgId, c.env),
+				);
 				return c.json({ success: true, comment_id: json.id }, 200);
 			}
 			case "instagram": {
@@ -1179,47 +1367,62 @@ app.openapi(replyToComment, async (c) => {
 				// Top-level: POST /<IG_MEDIA_ID>/comments — Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-media/comments/#creating
 				// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
 				const igEdge = comment_id ? "replies" : "comments";
-				const igRes = await fetch(
-					`https://${igGraphHost(account.accessToken)}/${API_VERSIONS.meta_graph}/${parentId}/${igEdge}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							message: text,
-							access_token: account.accessToken,
-						}),
-					},
+				const igRes = await trackSingleUnitProviderMutation(
+					c.get("mutationEffectTracker"),
+					"instagram.comment.reply.create",
+					() =>
+						fetch(
+							`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${parentId}/${igEdge}`,
+							{
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({
+									message: text,
+									access_token: accessToken,
+								}),
+							},
+						),
 				);
 				if (!igRes.ok) return c.json({ success: false }, 200);
-				const igJson = (await igRes.json()) as { id?: string };
-				c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
+				const igJson = (await readProviderJson(igRes)) as { id?: string };
+				c.executionCtx.waitUntil(
+					invalidateInboxCache(c.env.KV, db, orgId, c.env),
+				);
 				return c.json({ success: true, comment_id: igJson.id }, 200);
 			}
 			case "youtube": {
 				// YouTube Data API: Insert a reply to a comment
 				// Docs: https://developers.google.com/youtube/v3/docs/comments/insert
-				const res = await fetch(
-					"https://www.googleapis.com/youtube/v3/comments?part=snippet",
-					{
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${account.accessToken}`,
-							"Content-Type": "application/json",
-						},
-						body: JSON.stringify({
-							snippet: {
-								parentId,
-								textOriginal: text,
+				const res = await trackSingleUnitProviderMutation(
+					c.get("mutationEffectTracker"),
+					"youtube.comment.reply.create",
+					() =>
+						fetch(
+							"https://www.googleapis.com/youtube/v3/comments?part=snippet",
+							{
+								method: "POST",
+								headers: {
+									Authorization: `Bearer ${accessToken}`,
+									"Content-Type": "application/json",
+								},
+								body: JSON.stringify({
+									snippet: {
+										parentId,
+										textOriginal: text,
+									},
+								}),
 							},
-						}),
-					},
+						),
 				);
 				if (!res.ok) return c.json({ success: false }, 200);
-				const json = (await res.json()) as { id?: string };
-				c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
+				const json = (await readProviderJson(res)) as { id?: string };
+				c.executionCtx.waitUntil(
+					invalidateInboxCache(c.env.KV, db, orgId, c.env),
+				);
 				return c.json({ success: true, comment_id: json.id }, 200);
 			}
 			default:
+				markMutationInputNotApplied(c);
 				return c.json({ success: false }, 200);
 		}
 	} catch {
@@ -1237,11 +1440,22 @@ app.openapi(deleteComment, async (c) => {
 	// from listComments), target that single account. Otherwise comment_id alone
 	// doesn't tell us the owner, so fan out a platform delete to every candidate
 	// and take the first success.
-	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		account_id ? { accountId: account_id } : undefined,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	const candidates = accounts.filter(
 		(a) =>
 			a.accessToken &&
-			(a.platform === "facebook" || a.platform === "instagram" || a.platform === "youtube"),
+			(a.platform === "facebook" ||
+				a.platform === "instagram" ||
+				a.platform === "youtube"),
+	);
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
 	);
 
 	const results = await Promise.allSettled(
@@ -1252,9 +1466,11 @@ app.openapi(deleteComment, async (c) => {
 				case "facebook": {
 					// Facebook Graph API: Delete a comment
 					// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#deleting
-					const res = await fetch(
-						`${GRAPH_BASE.facebook}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`,
-						{ method: "DELETE" },
+					const res = await mutation.track("facebook.comment.delete", () =>
+						fetch(
+							`${GRAPH_BASE.facebook}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`,
+							{ method: "DELETE" },
+						),
 					);
 					if (!res.ok) throw new Error(`fb ${res.status}`);
 					return;
@@ -1263,9 +1479,11 @@ app.openapi(deleteComment, async (c) => {
 					// Instagram Graph API: DELETE a comment
 					// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#deleting
 					// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
-					const res = await fetch(
-						`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`,
-						{ method: "DELETE" },
+					const res = await mutation.track("instagram.comment.delete", () =>
+						fetch(
+							`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`,
+							{ method: "DELETE" },
+						),
 					);
 					if (!res.ok) throw new Error(`ig ${res.status}`);
 					return;
@@ -1273,12 +1491,14 @@ app.openapi(deleteComment, async (c) => {
 				case "youtube": {
 					// YouTube Data API: Delete a comment
 					// Docs: https://developers.google.com/youtube/v3/docs/comments/delete
-					const res = await fetch(
-						`https://www.googleapis.com/youtube/v3/comments?id=${encodeURIComponent(comment_id)}`,
-						{
-							method: "DELETE",
-							headers: { Authorization: `Bearer ${accessToken}` },
-						},
+					const res = await mutation.track("youtube.comment.delete", () =>
+						fetch(
+							`https://www.googleapis.com/youtube/v3/comments?id=${encodeURIComponent(comment_id)}`,
+							{
+								method: "DELETE",
+								headers: { Authorization: `Bearer ${accessToken}` },
+							},
+						),
 					);
 					if (!res.ok) throw new Error(`yt ${res.status}`);
 					return;
@@ -1286,6 +1506,7 @@ app.openapi(deleteComment, async (c) => {
 			}
 		}),
 	);
+	mutation.finalize();
 
 	if (results.some((r) => r.status === "fulfilled")) {
 		c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
@@ -1303,9 +1524,20 @@ app.openapi(hideComment, async (c) => {
 	// Hide is Facebook/Instagram only. Target the supplied account when given;
 	// otherwise parallelize across candidates and take the first success. See
 	// deleteComment for the rationale.
-	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		account_id ? { accountId: account_id } : undefined,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	const candidates = accounts.filter(
-		(a) => a.accessToken && (a.platform === "facebook" || a.platform === "instagram"),
+		(a) =>
+			a.accessToken &&
+			(a.platform === "facebook" || a.platform === "instagram"),
+	);
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
 	);
 
 	const results = await Promise.allSettled(
@@ -1316,36 +1548,38 @@ app.openapi(hideComment, async (c) => {
 				// Instagram Graph API: Hide a comment (set hide to true)
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
 				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
-				const res = await fetch(
-					`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							hide: true,
-							access_token: account.accessToken,
-						}),
-					},
+				const res = await mutation.track("instagram.comment.hide", () =>
+					fetch(
+						`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}`,
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								hide: true,
+								access_token: account.accessToken,
+							}),
+						},
+					),
 				);
 				if (!res.ok) throw new Error(`ig ${res.status}`);
 				return;
 			}
 			// Facebook Graph API: Hide a comment (set is_hidden to true)
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
-			const res = await fetch(
-				`${GRAPH_BASE.facebook}/${comment_id}`,
-				{
+			const res = await mutation.track("facebook.comment.hide", () =>
+				fetch(`${GRAPH_BASE.facebook}/${comment_id}`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						is_hidden: true,
 						access_token: account.accessToken,
 					}),
-				},
+				}),
 			);
 			if (!res.ok) throw new Error(`fb ${res.status}`);
 		}),
 	);
+	mutation.finalize();
 
 	if (results.some((r) => r.status === "fulfilled")) {
 		c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
@@ -1362,9 +1596,20 @@ app.openapi(unhideComment, async (c) => {
 
 	// Unhide is Facebook/Instagram only. Target the supplied account when given;
 	// otherwise parallelize and take the first success.
-	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		account_id ? { accountId: account_id } : undefined,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	const candidates = accounts.filter(
-		(a) => a.accessToken && (a.platform === "facebook" || a.platform === "instagram"),
+		(a) =>
+			a.accessToken &&
+			(a.platform === "facebook" || a.platform === "instagram"),
+	);
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
 	);
 
 	const results = await Promise.allSettled(
@@ -1375,36 +1620,38 @@ app.openapi(unhideComment, async (c) => {
 				// Instagram Graph API: Unhide a comment (set hide to false)
 				// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/#updating
 				// NOTE: Instagram uses "hide" param, NOT "is_hidden" (the Facebook param)
-				const res = await fetch(
-					`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							hide: false,
-							access_token: account.accessToken,
-						}),
-					},
+				const res = await mutation.track("instagram.comment.unhide", () =>
+					fetch(
+						`https://${igGraphHost(accessToken)}/${API_VERSIONS.meta_graph}/${comment_id}`,
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								hide: false,
+								access_token: account.accessToken,
+							}),
+						},
+					),
 				);
 				if (!res.ok) throw new Error(`ig ${res.status}`);
 				return;
 			}
 			// Facebook Graph API: Unhide a comment (set is_hidden to false)
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/comment/#updating
-			const res = await fetch(
-				`${GRAPH_BASE.facebook}/${comment_id}`,
-				{
+			const res = await mutation.track("facebook.comment.unhide", () =>
+				fetch(`${GRAPH_BASE.facebook}/${comment_id}`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						is_hidden: false,
 						access_token: account.accessToken,
 					}),
-				},
+				}),
 			);
 			if (!res.ok) throw new Error(`fb ${res.status}`);
 		}),
 	);
+	mutation.finalize();
 
 	if (results.some((r) => r.status === "fulfilled")) {
 		c.executionCtx.waitUntil(invalidateInboxCache(c.env.KV, db, orgId, c.env));
@@ -1425,26 +1672,37 @@ app.openapi(likeComment, async (c) => {
 	// FB-account fan-out (first success wins).
 	// NOTE: Instagram Graph API does NOT support liking comments.
 	// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
-	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	const candidates = accounts.filter((a) => a.accessToken && a.platform === "facebook");
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		account_id ? { accountId: account_id } : undefined,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
+	const candidates = accounts.filter(
+		(a) => a.accessToken && a.platform === "facebook",
+	);
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	const results = await Promise.allSettled(
 		candidates.map(async (account) => {
 			// Facebook Graph API: Like a comment
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#creating
-			const res = await fetch(
-				`${GRAPH_BASE.facebook}/${comment_id}/likes`,
-				{
+			const res = await mutation.track("facebook.comment.like", () =>
+				fetch(`${GRAPH_BASE.facebook}/${comment_id}/likes`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						access_token: account.accessToken,
 					}),
-				},
+				}),
 			);
 			if (!res.ok) throw new Error(`fb ${res.status}`);
 		}),
 	);
+	mutation.finalize();
 
 	if (results.some((r) => r.status === "fulfilled")) {
 		return c.json({ success: true }, 200);
@@ -1462,8 +1720,19 @@ app.openapi(unlikeComment, async (c) => {
 	// given; otherwise fall back to the FB-account fan-out.
 	// NOTE: Instagram Graph API does NOT support unliking comments.
 	// Docs: https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-comment/
-	const accounts = await getAccountsForOrg(db, orgId, account_id ? { accountId: account_id } : undefined, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
-	const candidates = accounts.filter((a) => a.accessToken && a.platform === "facebook");
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		account_id ? { accountId: account_id } : undefined,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
+	const candidates = accounts.filter(
+		(a) => a.accessToken && a.platform === "facebook",
+	);
+	const mutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 
 	const results = await Promise.allSettled(
 		candidates.map(async (account) => {
@@ -1471,13 +1740,16 @@ app.openapi(unlikeComment, async (c) => {
 			if (!accessToken) return;
 			// Facebook Graph API: Unlike a comment (remove like)
 			// Docs: https://developers.facebook.com/docs/graph-api/reference/object/likes/#deleting
-			const res = await fetch(
-				`${GRAPH_BASE.facebook}/${comment_id}/likes?access_token=${encodeURIComponent(accessToken)}`,
-				{ method: "DELETE" },
+			const res = await mutation.track("facebook.comment.unlike", () =>
+				fetch(
+					`${GRAPH_BASE.facebook}/${comment_id}/likes?access_token=${encodeURIComponent(accessToken)}`,
+					{ method: "DELETE" },
+				),
 			);
 			if (!res.ok) throw new Error(`fb ${res.status}`);
 		}),
 	);
+	mutation.finalize();
 
 	if (results.some((r) => r.status === "fulfilled")) {
 		return c.json({ success: true }, 200);
@@ -1491,32 +1763,42 @@ app.openapi(privateReply, async (c) => {
 	const { text, account_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account?.accessToken) {
+		markMutationInputNotApplied(c);
 		return c.json({ success: false }, 200);
 	}
 
 	// Private replies are Facebook only
 	if (account.platform !== "facebook") {
+		markMutationInputNotApplied(c);
 		return c.json({ success: false }, 200);
 	}
 
 	try {
 		// Facebook Messenger Platform: Send a private reply to a comment author
 		// Docs: https://developers.facebook.com/docs/messenger-platform/instagram/features/private-replies
-		const res = await fetch(
-			`${GRAPH_BASE.facebook}/${comment_id}/private_replies`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					message: text,
-					access_token: account.accessToken,
+		const res = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"facebook.comment.private_reply.create",
+			() =>
+				fetch(`${GRAPH_BASE.facebook}/${comment_id}/private_replies`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						message: text,
+						access_token: account.accessToken,
+					}),
 				}),
-			},
 		);
 		if (res.ok) {
-			const json = (await res.json()) as { id?: string };
+			const json = (await readProviderJson(res)) as { id?: string };
 			return c.json({ success: true, comment_id: json.id }, 200);
 		}
 	} catch {
@@ -1535,11 +1817,18 @@ app.openapi(privateReply, async (c) => {
 
 app.openapi(listReviews, async (c) => {
 	const orgId = c.get("orgId");
-	const { platform, account_id, min_rating, max_rating, cursor, limit } = c.req.valid("query");
+	const { platform, account_id, min_rating, max_rating, cursor, limit } =
+		c.req.valid("query");
 	const db = c.get("db");
 
 	// Default to googlebusiness if platform is specified
-	const accounts = await getAccountsForOrg(db, orgId, { platform, accountId: account_id }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		{ platform, accountId: account_id },
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (accounts.length === 0) {
 		return c.json({ data: [], next_cursor: null, has_more: false }, 200);
 	}
@@ -1561,7 +1850,9 @@ app.openapi(listReviews, async (c) => {
 	// hand each account ONLY its own token. When a cursor was supplied but an
 	// account has no entry, that account is already exhausted — return empty
 	// instead of replaying a foreign token.
-	const decodeCursorMap = (raw: string | undefined): Record<string, string> | null => {
+	const decodeCursorMap = (
+		raw: string | undefined,
+	): Record<string, string> | null => {
 		if (!raw) return null;
 		try {
 			const json = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
@@ -1590,7 +1881,13 @@ app.openapi(listReviews, async (c) => {
 	const results = await mapConcurrently(
 		accounts.filter((account) => account.accessToken),
 		4,
-		async (account): Promise<{ accountId: string; reviews: ReviewItem[]; cursor: string | null }> => {
+		async (
+			account,
+		): Promise<{
+			accountId: string;
+			reviews: ReviewItem[];
+			cursor: string | null;
+		}> => {
 			// Per-account token from the composite cursor. If a cursor was supplied
 			// but this account has no entry, it's exhausted — skip it.
 			const accountCursor = cursorMap ? cursorMap[account.id] : undefined;
@@ -1624,19 +1921,22 @@ app.openapi(listReviews, async (c) => {
 								"https://mybusinessaccountmanagement.googleapis.com/v1/accounts",
 								{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 							);
-							if (!accountsRes.ok) return { accountId: account.id, reviews: [], cursor: null };
-							const accountsJson = (await accountsRes.json()) as {
+							if (!accountsRes.ok)
+								return { accountId: account.id, reviews: [], cursor: null };
+							const accountsJson = (await readProviderJson(accountsRes)) as {
 								accounts: Array<{ name: string }>;
 							};
 							const gmbAccount = accountsJson.accounts?.[0];
-							if (!gmbAccount) return { accountId: account.id, reviews: [], cursor: null };
+							if (!gmbAccount)
+								return { accountId: account.id, reviews: [], cursor: null };
 
 							const locRes = await fetch(
 								`https://mybusinessbusinessinformation.googleapis.com/v1/${gmbAccount.name}/locations`,
 								{ headers: { Authorization: `Bearer ${account.accessToken}` } },
 							);
-							if (!locRes.ok) return { accountId: account.id, reviews: [], cursor: null };
-							const locJson = (await locRes.json()) as {
+							if (!locRes.ok)
+								return { accountId: account.id, reviews: [], cursor: null };
+							const locJson = (await readProviderJson(locRes)) as {
 								locations: Array<{ name: string }>;
 							};
 							locationName = locJson.locations?.[0]?.name;
@@ -1662,17 +1962,20 @@ app.openapi(listReviews, async (c) => {
 							}
 						}
 
-						if (!locationName) return { accountId: account.id, reviews: [], cursor: null };
+						if (!locationName)
+							return { accountId: account.id, reviews: [], cursor: null };
 
 						let url = `https://mybusiness.googleapis.com/v4/${locationName}/reviews?pageSize=${perAccountPageSize}`;
-						if (accountCursor) url += `&pageToken=${encodeURIComponent(accountCursor)}`;
+						if (accountCursor)
+							url += `&pageToken=${encodeURIComponent(accountCursor)}`;
 
 						const res = await fetch(url, {
 							headers: { Authorization: `Bearer ${account.accessToken}` },
 						});
-						if (!res.ok) return { accountId: account.id, reviews: [], cursor: null };
+						if (!res.ok)
+							return { accountId: account.id, reviews: [], cursor: null };
 
-						const json = (await res.json()) as {
+						const json = (await readProviderJson(res)) as {
 							reviews: Array<{
 								name: string;
 								reviewer: { displayName: string };
@@ -1685,7 +1988,11 @@ app.openapi(listReviews, async (c) => {
 						};
 
 						const ratingMap: Record<string, number> = {
-							ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5,
+							ONE: 1,
+							TWO: 2,
+							THREE: 3,
+							FOUR: 4,
+							FIVE: 5,
 						};
 
 						const reviews: ReviewItem[] = [];
@@ -1703,14 +2010,20 @@ app.openapi(listReviews, async (c) => {
 								created_at: review.createTime,
 							});
 						}
-						return { accountId: account.id, reviews, cursor: json.nextPageToken ?? null };
+						return {
+							accountId: account.id,
+							reviews,
+							cursor: json.nextPageToken ?? null,
+						};
 					}
 					case "facebook": {
 						let url = `${GRAPH_BASE.facebook}/${account.platformAccountId}/ratings?access_token=${encodeURIComponent(accessToken)}&limit=${perAccountPageSize}&fields=reviewer,rating,review_text,created_time`;
-						if (accountCursor) url += `&after=${encodeURIComponent(accountCursor)}`;
+						if (accountCursor)
+							url += `&after=${encodeURIComponent(accountCursor)}`;
 						const res = await fetch(url);
-						if (!res.ok) return { accountId: account.id, reviews: [], cursor: null };
-						const json = (await res.json()) as {
+						if (!res.ok)
+							return { accountId: account.id, reviews: [], cursor: null };
+						const json = (await readProviderJson(res)) as {
 							data: Array<{
 								reviewer: { name: string; id: string };
 								rating: number;
@@ -1735,7 +2048,13 @@ app.openapi(listReviews, async (c) => {
 								created_at: review.created_time,
 							});
 						}
-						return { accountId: account.id, reviews, cursor: json.paging?.next ? (json.paging.cursors?.after ?? null) : null };
+						return {
+							accountId: account.id,
+							reviews,
+							cursor: json.paging?.next
+								? (json.paging.cursors?.after ?? null)
+								: null,
+						};
 					}
 					default:
 						return { accountId: account.id, reviews: [], cursor: null };
@@ -1756,7 +2075,9 @@ app.openapi(listReviews, async (c) => {
 	}
 
 	const nextCursor =
-		Object.keys(nextCursorMap).length > 0 ? encodeCursorMap(nextCursorMap) : null;
+		Object.keys(nextCursorMap).length > 0
+			? encodeCursorMap(nextCursorMap)
+			: null;
 
 	return c.json(
 		{
@@ -1774,8 +2095,15 @@ app.openapi(replyToReview, async (c) => {
 	const { text, account_id } = c.req.valid("json");
 	const db = c.get("db");
 
-	const account = await getAccount(db, account_id, orgId, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const account = await getAccount(
+		db,
+		account_id,
+		orgId,
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
 	if (!account?.accessToken) {
+		markMutationInputNotApplied(c);
 		return c.json({ success: false }, 200);
 	}
 
@@ -1785,20 +2113,23 @@ app.openapi(replyToReview, async (c) => {
 				// review_id is the full resource name e.g. accounts/x/locations/y/reviews/z
 				// Google Business Profile API: Reply to a review
 				// Docs: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/updateReply
-				const res = await fetch(
-					`https://mybusiness.googleapis.com/v4/${review_id}/reply`,
-					{
-						method: "PUT",
-						headers: {
-							Authorization: `Bearer ${account.accessToken}`,
-							"Content-Type": "application/json",
-						},
-						body: JSON.stringify({ comment: text }),
-					},
+				const res = await trackSingleUnitProviderMutation(
+					c.get("mutationEffectTracker"),
+					"googlebusiness.review.reply.update",
+					() =>
+						fetch(`https://mybusiness.googleapis.com/v4/${review_id}/reply`, {
+							method: "PUT",
+							headers: {
+								Authorization: `Bearer ${account.accessToken}`,
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify({ comment: text }),
+						}),
 				);
 				return c.json({ success: res.ok }, 200);
 			}
 			default:
+				markMutationInputNotApplied(c);
 				return c.json({ success: false }, 200);
 		}
 	} catch {
@@ -1812,10 +2143,19 @@ app.openapi(deleteReviewReply, async (c) => {
 	const db = c.get("db");
 
 	// Try all googlebusiness accounts
-	const accounts = await getAccountsForOrg(db, orgId, { platform: "googlebusiness" }, c.env.ENCRYPTION_KEY, c.get("workspaceScope"));
+	const accounts = await getAccountsForOrg(
+		db,
+		orgId,
+		{ platform: "googlebusiness" },
+		c.env.ENCRYPTION_KEY,
+		c.get("workspaceScope"),
+	);
+	const tracker = c.get("mutationEffectTracker");
+	let ambiguous = false;
 	for (const account of accounts) {
 		if (!account.accessToken) continue;
 
+		const attempt = tracker?.begin("googlebusiness.review.reply.delete");
 		try {
 			// Google Business Profile API: Delete a review reply
 			// Docs: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/deleteReply
@@ -1826,12 +2166,26 @@ app.openapi(deleteReviewReply, async (c) => {
 					headers: { Authorization: `Bearer ${account.accessToken}` },
 				},
 			);
-			if (res.ok) return c.json({ success: true }, 200);
+			if (res.ok) {
+				attempt?.committed();
+				tracker?.setAuthoritativeOutcome({ kind: "committed", units: 1 });
+				return c.json({ success: true }, 200);
+			}
+			if (isDefinitiveProviderMutationRejection(res.status)) {
+				attempt?.notApplied();
+			} else {
+				attempt?.unknown();
+				ambiguous = true;
+			}
 		} catch {
-			// try next account
+			attempt?.unknown();
+			ambiguous = true;
 		}
 	}
 
+	tracker?.setAuthoritativeOutcome(
+		ambiguous ? { kind: "unknown" } : { kind: "not_applied" },
+	);
 	return c.json({ success: false }, 200);
 });
 

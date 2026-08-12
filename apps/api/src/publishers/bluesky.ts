@@ -5,14 +5,19 @@ import {
 	getFixedLengthResponseBody,
 	readResponseBytes,
 } from "../lib/fetch-public-url";
+import { readPublisherJson, readPublisherText } from "./provider-response";
 import {
 	classifyPublishError,
 	type EngagementAccount,
 	type EngagementActionResult,
+	getSucceededProviderEffect,
+	mergeProviderEffects,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	recordProviderEffect,
 } from "./types";
 
 interface BlueskySession {
@@ -20,6 +25,7 @@ interface BlueskySession {
 	accessJwt: string;
 	refreshJwt: string;
 	handle: string;
+	pdsUrl: string;
 }
 
 interface BlueskyFacet {
@@ -27,12 +33,56 @@ interface BlueskyFacet {
 	features: Array<{ $type: string; [key: string]: unknown }>;
 }
 
-const BSKY_API = "https://bsky.social/xrpc";
 const BSKY_VIDEO_API = "https://video.bsky.app/xrpc";
 const BSKY_IMAGE_MAX_BYTES = 2_000_000;
 const BSKY_VIDEO_MAX_BYTES = 100_000_000;
 
 type BlueskyMedia = { url: string; type?: string };
+
+/**
+ * Resolve the PDS origin selected and verified by the connection flow. AT
+ * Protocol accounts can migrate between PDS hosts, so using bsky.social for an
+ * arbitrary account can disclose an app password and write to the wrong host.
+ */
+export function resolveBlueskyPdsUrl(
+	metadata: Record<string, unknown> | null | undefined,
+): string {
+	const raw = metadata?.pds_url;
+	if (typeof raw !== "string" || !raw.trim()) {
+		throw new PublishError(
+			"This Bluesky account has no verified PDS. Reconnect the account before publishing.",
+			{ code: "ACCOUNT_RECONNECT_REQUIRED" },
+		);
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(raw.trim());
+	} catch {
+		throw new PublishError(
+			"This Bluesky account has an invalid verified PDS. Reconnect the account before publishing.",
+			{ code: "ACCOUNT_RECONNECT_REQUIRED" },
+		);
+	}
+	if (
+		parsed.protocol !== "https:" ||
+		parsed.username ||
+		parsed.password ||
+		parsed.port ||
+		parsed.pathname !== "/" ||
+		parsed.search ||
+		parsed.hash
+	) {
+		throw new PublishError(
+			"The connected Bluesky PDS must be a bare HTTPS origin. Reconnect the account before publishing.",
+			{ code: "ACCOUNT_RECONNECT_REQUIRED" },
+		);
+	}
+	return parsed.origin;
+}
+
+function pdsXrpcUrl(pdsUrl: string, method: string): string {
+	return `${pdsUrl}/xrpc/${method}`;
+}
 
 function validateBlueskyMedia(media: BlueskyMedia[]): void {
 	if (media.length === 0) return;
@@ -62,48 +112,47 @@ function validateBlueskyMedia(media: BlueskyMedia[]): void {
 		);
 	}
 }
-/** Resolve the user's PDS DID for service auth (required for video uploads) */
-async function resolvePdsDid(session: BlueskySession): Promise<string> {
-	const res = await fetch(
-		`https://plc.directory/${encodeURIComponent(session.did)}`,
-	);
-	if (!res.ok) {
-		// Fallback: assume bsky.social for hosted accounts
-		return "did:web:bsky.social";
-	}
-	const doc = (await res.json()) as {
-		service?: Array<{ id: string; serviceEndpoint: string }>;
-	};
-	const pdsEndpoint = doc.service?.find(
-		(s) => s.id === "#atproto_pds" || s.id.endsWith("#atproto_pds"),
-	)?.serviceEndpoint;
-	if (!pdsEndpoint) {
-		return "did:web:bsky.social";
-	}
-	const host = new URL(pdsEndpoint).host;
-	return `did:web:${host}`;
+/** Resolve the verified dispatch host DID used by Bluesky video service auth. */
+function resolvePdsDid(session: BlueskySession): string {
+	return `did:web:${new URL(session.pdsUrl).host}`;
 }
 
 async function createSession(
 	identifier: string,
 	password: string,
+	pdsUrl: string,
 ): Promise<BlueskySession> {
 	// AT Protocol — Create an authenticated session with Bluesky
 	// https://docs.bsky.app/docs/api/com-atproto-server-create-session
-	const res = await fetch(`${BSKY_API}/com.atproto.server.createSession`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ identifier, password }),
-	});
+	const res = await fetchPublicUrl(
+		pdsXrpcUrl(pdsUrl, "com.atproto.server.createSession"),
+		{
+			method: "POST",
+			redirect: "error",
+			timeout: 30_000,
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ identifier, password }),
+		},
+	);
 	if (!res.ok) {
-		const err = await res.json().catch(() => ({}));
+		const err = await readPublisherJson(res).catch(() => ({}));
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`Bluesky auth failed: ${(err as Record<string, string>).message ?? res.statusText}`,
 			{ statusCode: res.status, detail: raw },
 		);
 	}
-	return res.json() as Promise<BlueskySession>;
+	const session = (await readPublisherJson(res)) as Omit<
+		BlueskySession,
+		"pdsUrl"
+	>;
+	if (session.did !== identifier) {
+		throw new PublishError(
+			"The Bluesky PDS authenticated a different identity. Reconnect the account.",
+			{ code: "ACCOUNT_RECONNECT_REQUIRED" },
+		);
+	}
+	return { ...session, pdsUrl };
 }
 
 /** Count grapheme clusters (Bluesky counts graphemes, not UTF-16 code units) */
@@ -117,9 +166,11 @@ async function resolveHandle(
 	handle: string,
 ): Promise<string> {
 	const params = new URLSearchParams({ handle });
-	const res = await fetch(
-		`${BSKY_API}/com.atproto.identity.resolveHandle?${params}`,
+	const res = await fetchPublicUrl(
+		`${pdsXrpcUrl(session.pdsUrl, "com.atproto.identity.resolveHandle")}?${params}`,
 		{
+			redirect: "error",
+			timeout: 30_000,
 			headers: { Authorization: `Bearer ${session.accessJwt}` },
 		},
 	);
@@ -129,7 +180,7 @@ async function resolveHandle(
 			detail: `HTTP ${res.status} ${res.statusText}`,
 		});
 	}
-	const data = (await res.json()) as { did: string };
+	const data = (await readPublisherJson(res)) as { did: string };
 	return data.did;
 }
 
@@ -241,14 +292,19 @@ async function uploadBlob(
 	// canonical app.bsky.embed.images lexicon sets maxSize to 2,000,000 bytes.
 	// AT Protocol — Upload a blob (image/media) to Bluesky
 	// https://docs.bsky.app/docs/api/com-atproto-repo-upload-blob
-	const uploadRes = await fetch(`${BSKY_API}/com.atproto.repo.uploadBlob`, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${session.accessJwt}`,
-			"Content-Type": contentType,
+	const uploadRes = await fetchPublicUrl(
+		pdsXrpcUrl(session.pdsUrl, "com.atproto.repo.uploadBlob"),
+		{
+			method: "POST",
+			redirect: "error",
+			timeout: 30_000,
+			headers: {
+				Authorization: `Bearer ${session.accessJwt}`,
+				"Content-Type": contentType,
+			},
+			body: blob,
 		},
-		body: blob,
-	});
+	);
 	if (!uploadRes.ok) {
 		throw new PublishError(
 			`Bluesky blob upload failed: ${uploadRes.statusText}`,
@@ -258,7 +314,7 @@ async function uploadBlob(
 			},
 		);
 	}
-	const result = (await uploadRes.json()) as {
+	const result = (await readPublisherJson(uploadRes)) as {
 		blob: { ref: { $link: string }; mimeType: string; size: number };
 	};
 	return {
@@ -279,22 +335,24 @@ async function getServiceAuth(
 	// https://docs.bsky.app/docs/api/com-atproto-server-get-service-auth
 	// Only aud and lxm are documented query parameters; exp is set server-side
 	const params = new URLSearchParams({ aud, lxm });
-	const res = await fetch(
-		`${BSKY_API}/com.atproto.server.getServiceAuth?${params}`,
+	const res = await fetchPublicUrl(
+		`${pdsXrpcUrl(session.pdsUrl, "com.atproto.server.getServiceAuth")}?${params}`,
 		{
 			method: "GET",
+			redirect: "error",
+			timeout: 30_000,
 			headers: { Authorization: `Bearer ${session.accessJwt}` },
 		},
 	);
 	if (!res.ok) {
-		const err = await res.json().catch(() => ({}));
+		const err = await readPublisherJson(res).catch(() => ({}));
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`Bluesky service auth failed: ${(err as Record<string, string>).message ?? res.statusText}`,
 			{ statusCode: res.status, detail: raw },
 		);
 	}
-	const data = (await res.json()) as { token: string };
+	const data = (await readPublisherJson(res)) as { token: string };
 	return data.token;
 }
 
@@ -311,7 +369,7 @@ async function uploadVideo(
 	// Get service auth token for video upload
 	// aud must be the user's PDS DID, not the video service DID
 	// https://docs.bsky.app/docs/tutorials/video
-	const pdsDid = await resolvePdsDid(session);
+	const pdsDid = resolvePdsDid(session);
 	const serviceToken = await getServiceAuth(
 		session,
 		pdsDid,
@@ -364,7 +422,7 @@ async function uploadVideo(
 	);
 
 	if (!uploadRes.ok && uploadRes.status !== 409) {
-		const err = await uploadRes.text();
+		const err = await readPublisherText(uploadRes);
 		const raw = `HTTP ${uploadRes.status}\n${err}`;
 		throw new PublishError(
 			`Bluesky video upload failed: ${uploadRes.status} ${err}`,
@@ -377,7 +435,7 @@ async function uploadVideo(
 
 	// Response wraps data in a jobStatus key
 	// https://docs.bsky.app/docs/api/app-bsky-video-upload-video
-	const uploadData = (await uploadRes.json()) as {
+	const uploadData = (await readPublisherJson(uploadRes)) as {
 		jobStatus: {
 			jobId: string;
 			state: string;
@@ -413,7 +471,7 @@ async function uploadVideo(
 		if (!statusRes.ok) continue;
 
 		// Response also wraps in jobStatus key
-		const statusData = (await statusRes.json()) as {
+		const statusData = (await readPublisherJson(statusRes)) as {
 			jobStatus: {
 				jobId: string;
 				state: string;
@@ -448,27 +506,122 @@ async function createPost(
 ): Promise<{ uri: string; cid: string }> {
 	// AT Protocol — Create a record (post) in a Bluesky repo
 	// https://docs.bsky.app/docs/api/com-atproto-repo-create-record
-	const res = await fetch(`${BSKY_API}/com.atproto.repo.createRecord`, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${session.accessJwt}`,
-			"Content-Type": "application/json",
+	const res = await fetchPublicUrl(
+		pdsXrpcUrl(session.pdsUrl, "com.atproto.repo.createRecord"),
+		{
+			method: "POST",
+			redirect: "error",
+			timeout: 30_000,
+			headers: {
+				Authorization: `Bearer ${session.accessJwt}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				repo: session.did,
+				collection: "app.bsky.feed.post",
+				record,
+			}),
 		},
-		body: JSON.stringify({
-			repo: session.did,
-			collection: "app.bsky.feed.post",
-			record,
-		}),
-	});
+	);
 	if (!res.ok) {
-		const err = await res.json().catch(() => ({}));
+		const err = await readPublisherJson(res).catch(() => ({}));
 		const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 		throw new PublishError(
 			`Bluesky post creation failed: ${(err as Record<string, string>).message ?? res.statusText}`,
 			{ statusCode: res.status, detail: raw },
 		);
 	}
-	return res.json() as Promise<{ uri: string; cid: string }>;
+	return readPublisherJson(res) as Promise<{ uri: string; cid: string }>;
+}
+
+/** Delete a post record from the connector-verified PDS. */
+export async function deleteBlueskyPost(
+	account: PublishRequest["account"],
+	postUri: string,
+	signal?: AbortSignal,
+): Promise<Response> {
+	// AT Protocol canonical Lexicon:
+	// https://github.com/bluesky-social/atproto/blob/main/lexicons/com/atproto/repo/deleteRecord.json
+	// POST com.atproto.repo.deleteRecord with repo, collection, and rkey.
+	const match = /^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([^/?#]+)$/u.exec(
+		postUri,
+	);
+	if (!match?.[1] || !match[2] || match[1] !== account.platform_account_id) {
+		throw new PublishError(
+			"The Bluesky post URI does not belong to the connected repository.",
+			{ code: "CONTENT_ERROR" },
+		);
+	}
+	const pdsUrl = resolveBlueskyPdsUrl(account.metadata);
+	const session = await createSession(
+		account.platform_account_id,
+		account.access_token,
+		pdsUrl,
+	);
+	return fetchPublicUrl(
+		pdsXrpcUrl(session.pdsUrl, "com.atproto.repo.deleteRecord"),
+		{
+			method: "POST",
+			redirect: "error",
+			timeout: 30_000,
+			signal,
+			headers: {
+				Authorization: `Bearer ${session.accessJwt}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				repo: session.did,
+				collection: "app.bsky.feed.post",
+				rkey: decodeURIComponent(match[2]),
+			}),
+		},
+	);
+}
+
+/** Resolve the strong reference needed to continue a previously journaled thread. */
+async function getPostStrongRef(
+	session: BlueskySession,
+	uri: string,
+): Promise<{ uri: string; cid: string }> {
+	const parts = uri.split("/");
+	const repo = parts[2];
+	const rkey = parts.at(-1);
+	if (!repo || !rkey) {
+		throw new Error("Bluesky recorded thread effect has an invalid AT URI.");
+	}
+	const response = await fetchPublicUrl(
+		`${pdsXrpcUrl(session.pdsUrl, "com.atproto.repo.getRecord")}?${new URLSearchParams(
+			{
+				repo,
+				collection: "app.bsky.feed.post",
+				rkey,
+			},
+		)}`,
+		{
+			redirect: "error",
+			timeout: 30_000,
+			headers: { Authorization: `Bearer ${session.accessJwt}` },
+		},
+	);
+	if (!response.ok) {
+		throw new PublishError(
+			`Bluesky could not resume recorded thread item ${uri}: ${response.statusText}`,
+			{
+				statusCode: response.status,
+				detail: `HTTP ${response.status} ${response.statusText}`,
+			},
+		);
+	}
+	const record = (await readPublisherJson(response)) as {
+		uri?: string;
+		cid?: string;
+	};
+	if (!record.uri || !record.cid) {
+		throw new Error(
+			"Bluesky recorded thread item no longer has a resolvable strong reference.",
+		);
+	}
+	return { uri: record.uri, cid: record.cid };
 }
 
 export const blueskyPublisher: Publisher = {
@@ -479,20 +632,26 @@ export const blueskyPublisher: Publisher = {
 		platformPostId: string,
 	): Promise<EngagementActionResult> {
 		try {
+			const pdsUrl = resolveBlueskyPdsUrl(account.metadata);
 			const session = await createSession(
 				account.platform_account_id,
 				account.access_token,
+				pdsUrl,
 			);
 			// AT Protocol — Repost a record
 			// https://docs.bsky.app/docs/api/com-atproto-repo-create-record
 			// Need to resolve the CID of the post to repost
-			const getRes = await fetch(
-				`${BSKY_API}/com.atproto.repo.getRecord?${new URLSearchParams({
-					repo: platformPostId.split("/")[2] ?? "",
-					collection: "app.bsky.feed.post",
-					rkey: platformPostId.split("/").pop() ?? "",
-				})}`,
+			const getRes = await fetchPublicUrl(
+				`${pdsXrpcUrl(pdsUrl, "com.atproto.repo.getRecord")}?${new URLSearchParams(
+					{
+						repo: platformPostId.split("/")[2] ?? "",
+						collection: "app.bsky.feed.post",
+						rkey: platformPostId.split("/").pop() ?? "",
+					},
+				)}`,
 				{
+					redirect: "error",
+					timeout: 30_000,
 					headers: { Authorization: `Bearer ${session.accessJwt}` },
 				},
 			);
@@ -505,33 +664,41 @@ export const blueskyPublisher: Publisher = {
 					},
 				);
 			}
-			const postData = (await getRes.json()) as { uri: string; cid: string };
+			const postData = (await readPublisherJson(getRes)) as {
+				uri: string;
+				cid: string;
+			};
 
-			const res = await fetch(`${BSKY_API}/com.atproto.repo.createRecord`, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${session.accessJwt}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					repo: session.did,
-					collection: "app.bsky.feed.repost",
-					record: {
-						$type: "app.bsky.feed.repost",
-						subject: { uri: postData.uri, cid: postData.cid },
-						createdAt: new Date().toISOString(),
+			const res = await fetchPublicUrl(
+				pdsXrpcUrl(pdsUrl, "com.atproto.repo.createRecord"),
+				{
+					method: "POST",
+					redirect: "error",
+					timeout: 30_000,
+					headers: {
+						Authorization: `Bearer ${session.accessJwt}`,
+						"Content-Type": "application/json",
 					},
-				}),
-			});
+					body: JSON.stringify({
+						repo: session.did,
+						collection: "app.bsky.feed.repost",
+						record: {
+							$type: "app.bsky.feed.repost",
+							subject: { uri: postData.uri, cid: postData.cid },
+							createdAt: new Date().toISOString(),
+						},
+					}),
+				},
+			);
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 				throw new PublishError(
 					`Bluesky repost failed: ${(err as Record<string, string>).message ?? res.statusText}`,
 					{ statusCode: res.status, detail: raw },
 				);
 			}
-			const result = (await res.json()) as { uri: string };
+			const result = (await readPublisherJson(res)) as { uri: string };
 			return { success: true, platform_post_id: result.uri };
 		} catch (err) {
 			const result = classifyPublishError(err);
@@ -545,18 +712,24 @@ export const blueskyPublisher: Publisher = {
 		text: string,
 	): Promise<EngagementActionResult> {
 		try {
+			const pdsUrl = resolveBlueskyPdsUrl(account.metadata);
 			const session = await createSession(
 				account.platform_account_id,
 				account.access_token,
+				pdsUrl,
 			);
 			// Fetch the original post to build reply reference
-			const getRes = await fetch(
-				`${BSKY_API}/com.atproto.repo.getRecord?${new URLSearchParams({
-					repo: platformPostId.split("/")[2] ?? "",
-					collection: "app.bsky.feed.post",
-					rkey: platformPostId.split("/").pop() ?? "",
-				})}`,
+			const getRes = await fetchPublicUrl(
+				`${pdsXrpcUrl(pdsUrl, "com.atproto.repo.getRecord")}?${new URLSearchParams(
+					{
+						repo: platformPostId.split("/")[2] ?? "",
+						collection: "app.bsky.feed.post",
+						rkey: platformPostId.split("/").pop() ?? "",
+					},
+				)}`,
 				{
+					redirect: "error",
+					timeout: 30_000,
 					headers: { Authorization: `Bearer ${session.accessJwt}` },
 				},
 			);
@@ -569,7 +742,7 @@ export const blueskyPublisher: Publisher = {
 					},
 				);
 			}
-			const postData = (await getRes.json()) as {
+			const postData = (await readPublisherJson(getRes)) as {
 				uri: string;
 				cid: string;
 				value?: { reply?: { root?: { uri: string; cid: string } } };
@@ -622,16 +795,18 @@ export const blueskyPublisher: Publisher = {
 			} else {
 				validateBlueskyMedia(media);
 			}
+			const pdsUrl = resolveBlueskyPdsUrl(request.account.metadata);
 
-			// Auth — access_token is the app password, platform_account_id is the handle
+			// Auth — access_token is the app password, platform_account_id is the DID.
 			const session = await createSession(
 				request.account.platform_account_id,
 				request.account.access_token,
+				pdsUrl,
 			);
 
 			// Check for thread
 			if (threadItems && threadItems.length > 0) {
-				return await publishThread(session, threadItems);
+				return await publishThread(session, threadItems, request);
 			}
 
 			// Single post
@@ -795,82 +970,138 @@ async function publishThread(
 		content: string;
 		media?: Array<{ url: string; type?: string }>;
 	}>,
+	request: Pick<PublishRequest, "effect_recorder">,
 ): Promise<PublishResult> {
 	let rootUri: string | undefined;
 	let rootCid: string | undefined;
 	let parentUri: string | undefined;
 	let parentCid: string | undefined;
+	let effects: ProviderEffect[] = (request.effect_recorder?.effects ?? [])
+		.filter(
+			(effect) =>
+				effect.name.startsWith("thread_item_") && effect.status === "succeeded",
+		)
+		.slice();
+	let currentIndex = 0;
 
-	for (const [i, item] of items.entries()) {
-		const itemGraphemes = countGraphemes(item.content);
-		if (itemGraphemes > 300) {
-			return {
-				success: false,
-				error: {
-					code: "CONTENT_TOO_LONG",
-					message: `Thread item ${i + 1} is ${itemGraphemes} characters (graphemes). Bluesky limit is 300.`,
-				},
-			};
-		}
-
-		const record: Record<string, unknown> = {
-			$type: "app.bsky.feed.post",
-			text: item.content,
-			createdAt: new Date().toISOString(),
-		};
-
-		const facets = detectFacets(item.content);
-		if (facets.length > 0) {
-			await resolveFacetDids(session, facets, item.content);
-			record.facets = facets;
-		}
-
-		// Reply reference for thread items after the first
-		if (i > 0 && rootUri && rootCid && parentUri && parentCid) {
-			record.reply = {
-				root: { uri: rootUri, cid: rootCid },
-				parent: { uri: parentUri, cid: parentCid },
-			};
-		}
-
-		// Media — handle video vs images (video requires service auth upload)
-		if (item.media && item.media.length > 0) {
-			validateBlueskyMedia(item.media);
-			const videoMedia = item.media.filter((m) => m.type === "video");
-			const imageMedia = item.media.filter(
-				(m) => !m.type || m.type === "image" || m.type === "gif",
-			);
-
-			const firstVideo = videoMedia[0];
-			if (firstVideo) {
-				const videoBlob = await uploadVideo(session, firstVideo.url);
-				record.embed = {
-					$type: "app.bsky.embed.video",
-					video: videoBlob,
-					aspectRatio: { width: 16, height: 9 },
-				};
-			} else if (imageMedia.length > 0) {
-				const images = await Promise.all(
-					imageMedia.map(async (m) => {
-						const blob = await uploadBlob(session, m.url);
-						return {
-							alt: (m as { alt_text?: string }).alt_text ?? "",
-							image: blob,
-						};
-					}),
+	try {
+		for (const [i, item] of items.entries()) {
+			currentIndex = i;
+			const itemGraphemes = countGraphemes(item.content);
+			if (itemGraphemes > 300) {
+				throw new Error(
+					`CONTENT_ERROR: Thread item ${i + 1} is ${itemGraphemes} characters (graphemes). Bluesky limit is 300.`,
 				);
-				record.embed = { $type: "app.bsky.embed.images", images };
 			}
-		}
 
-		const result = await createPost(session, record);
+			const recorded = getSucceededProviderEffect(
+				request,
+				`thread_item_${i + 1}`,
+			);
+			if (recorded?.provider_id) {
+				const strongRef = await getPostStrongRef(session, recorded.provider_id);
+				if (i === 0) {
+					rootUri = strongRef.uri;
+					rootCid = strongRef.cid;
+				}
+				parentUri = strongRef.uri;
+				parentCid = strongRef.cid;
+				continue;
+			}
 
-		if (i === 0) {
-			rootUri = result.uri;
-			rootCid = result.cid;
+			const record: Record<string, unknown> = {
+				$type: "app.bsky.feed.post",
+				text: item.content,
+				createdAt: new Date().toISOString(),
+			};
+
+			const facets = detectFacets(item.content);
+			if (facets.length > 0) {
+				await resolveFacetDids(session, facets, item.content);
+				record.facets = facets;
+			}
+
+			// Reply reference for thread items after the first
+			if (i > 0 && rootUri && rootCid && parentUri && parentCid) {
+				record.reply = {
+					root: { uri: rootUri, cid: rootCid },
+					parent: { uri: parentUri, cid: parentCid },
+				};
+			}
+
+			// Media — handle video vs images (video requires service auth upload)
+			if (item.media && item.media.length > 0) {
+				validateBlueskyMedia(item.media);
+				const videoMedia = item.media.filter((m) => m.type === "video");
+				const imageMedia = item.media.filter(
+					(m) => !m.type || m.type === "image" || m.type === "gif",
+				);
+
+				const firstVideo = videoMedia[0];
+				if (firstVideo) {
+					const videoBlob = await uploadVideo(session, firstVideo.url);
+					record.embed = {
+						$type: "app.bsky.embed.video",
+						video: videoBlob,
+						aspectRatio: { width: 16, height: 9 },
+					};
+				} else if (imageMedia.length > 0) {
+					const images = await Promise.all(
+						imageMedia.map(async (m) => {
+							const blob = await uploadBlob(session, m.url);
+							return {
+								alt: (m as { alt_text?: string }).alt_text ?? "",
+								image: blob,
+							};
+						}),
+					);
+					record.embed = { $type: "app.bsky.embed.images", images };
+				}
+			}
+
+			const result = await createPost(session, record);
+			const effect: ProviderEffect = {
+				name: `thread_item_${i + 1}`,
+				status: "succeeded",
+				provider_id: result.uri,
+			};
+			await recordProviderEffect(request, effect);
+			effects = mergeProviderEffects(effects, [effect]);
+
+			if (i === 0) {
+				rootUri = result.uri;
+				rootCid = result.cid;
+			}
+			parentUri = result.uri;
+			parentCid = result.cid;
 		}
-		parentUri = result.uri;
-		parentCid = result.cid;
+	} catch (error) {
+		if (effects.length === 0) throw error;
+		const classified = classifyPublishError(error);
+		const postId = rootUri?.split("/").pop();
+		const webUrl = rootUri
+			? `https://bsky.app/profile/${session.handle}/post/${postId}`
+			: undefined;
+		return {
+			...classified,
+			success: false,
+			platform_post_id: rootUri,
+			platform_url: webUrl,
+			provider_outcome: {
+				disposition: "partial",
+				platform_post_id: rootUri,
+				platform_url: webUrl,
+				provider_state: `${effects.length}_thread_items_published`,
+				effects: [
+					...effects,
+					{
+						name: `thread_item_${currentIndex + 1}`,
+						status: "outcome_unknown",
+						error: classified.error,
+					},
+				],
+			},
+		};
 	}
 
 	const postId = rootUri?.split("/").pop();
@@ -880,5 +1111,11 @@ async function publishThread(
 		success: true,
 		platform_post_id: rootUri,
 		platform_url: webUrl,
+		provider_outcome: {
+			disposition: "published",
+			platform_post_id: rootUri,
+			platform_url: webUrl,
+			effects,
+		},
 	};
 }

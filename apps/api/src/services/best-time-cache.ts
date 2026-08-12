@@ -1,10 +1,11 @@
+import type { Database } from "@relayapi/db";
+import { postAnalytics, posts, postTargets } from "@relayapi/db";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { sha256Hex, stableOperationJson } from "../lib/durable-operation";
 import {
-	createDb,
-	postAnalytics,
-	postTargets,
-	posts,
-} from "@relayapi/db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+	type LegacyAnalyticsScope,
+	legacyAnalyticsConditions,
+} from "../lib/legacy-analytics-scope";
 import type { Env } from "../types";
 
 export interface BestTimeSlot {
@@ -14,34 +15,45 @@ export interface BestTimeSlot {
 	post_count: number;
 }
 
+export type BestTimeFilters = LegacyAnalyticsScope;
+
 const CACHE_TTL_SECONDS = 6 * 60 * 60; // 6 hours
 
-function cacheKey(orgId: string): string {
-	return `best-time:${orgId}`;
+export async function bestTimeCacheKey(
+	filters: BestTimeFilters,
+): Promise<string> {
+	const digest = await sha256Hex(
+		stableOperationJson({
+			...filters,
+			workspaceScope:
+				filters.workspaceScope === "all"
+					? "all"
+					: [...new Set(filters.workspaceScope)].sort(),
+			fromDate: filters.fromDate?.toISOString(),
+			toDate: filters.toDate?.toISOString(),
+		}),
+	);
+	return `best-time:v2:${digest}`;
 }
 
 /**
- * Get best posting times for an org, using KV cache with 6h TTL.
- * Falls back to a live DB query if cache is empty.
+ * Get scoped best posting times using a filter-specific 6h KV cache.
+ * PostgreSQL remains authoritative and the caller's request-scoped database
+ * instance is reused so Workers never share a socket across requests.
  */
 export async function getCachedBestTimes(
 	env: Env,
-	orgId: string,
-	// Only waitUntil is used; narrowing keeps Hono's c.executionCtx assignable here
-	// regardless of fields Cloudflare's generated runtime types add to ExecutionContext.
+	db: Database,
+	filters: BestTimeFilters,
+	// Only waitUntil is used; narrowing keeps Hono's c.executionCtx assignable here.
 	executionCtx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<BestTimeSlot[]> {
-	// Try KV cache first
-	const cached = await env.KV.get<BestTimeSlot[]>(cacheKey(orgId), "json");
+	const key = await bestTimeCacheKey(filters);
+	const cached = await env.KV.get<BestTimeSlot[]>(key, "json");
 	if (cached) return cached;
 
-	// Compute from DB
-	const result = await computeBestTimes(env, orgId);
-
-	// Persist the cache write via waitUntil so it cannot be cancelled when the
-	// response returns — otherwise a request that finishes before the floating
-	// put resolves forces the next request to redo the full-history scan.
-	const write = env.KV.put(cacheKey(orgId), JSON.stringify(result), {
+	const result = await computeBestTimes(db, filters);
+	const write = env.KV.put(key, JSON.stringify(result), {
 		expirationTtl: CACHE_TTL_SECONDS,
 	}).catch(() => {});
 	if (executionCtx) executionCtx.waitUntil(write);
@@ -51,112 +63,77 @@ export async function getCachedBestTimes(
 }
 
 /**
- * Compute best posting times from historical data.
- * Extracted from analytics.ts getBestTime handler.
+ * Compute at most one row per UTC weekday/hour in PostgreSQL. The owning
+ * post's workspace is applied before any analytics row can contribute.
  */
 async function computeBestTimes(
-	env: Env,
-	orgId: string,
+	db: Database,
+	filters: BestTimeFilters,
 ): Promise<BestTimeSlot[]> {
-	const db = createDb(env.HYPERDRIVE.connectionString);
+	const conditions = legacyAnalyticsConditions(filters);
+	conditions.push(eq(posts.status, "published"), isNotNull(posts.publishedAt));
 
-	// Single JOIN: published posts + targets
-	const rows = await db
-		.select({
-			publishedAt: posts.publishedAt,
-			targetId: postTargets.id,
-		})
-		.from(posts)
-		.innerJoin(postTargets, eq(postTargets.postId, posts.id))
-		.where(
-			and(
-				eq(posts.organizationId, orgId),
-				eq(posts.status, "published"),
-			),
-		);
+	const rows = await db.execute<{
+		day_of_week: string | number;
+		hour_utc: string | number;
+		avg_engagement: string | number | null;
+		post_count: string | number;
+	}>(sql`
+		WITH scoped_targets AS (
+			SELECT
+				${postTargets.id} AS post_target_id,
+				${posts.publishedAt} AS published_at
+			FROM ${postTargets}
+			INNER JOIN ${posts} ON ${postTargets.postId} = ${posts.id}
+			WHERE ${and(...conditions)}
+		),
+		latest AS (
+			SELECT DISTINCT ON (${postAnalytics.postTargetId})
+				${postAnalytics.postTargetId} AS post_target_id,
+				${postAnalytics.likes} AS likes,
+				${postAnalytics.comments} AS comments,
+				${postAnalytics.shares} AS shares
+			FROM ${postAnalytics}
+			INNER JOIN scoped_targets
+				ON scoped_targets.post_target_id = ${postAnalytics.postTargetId}
+			ORDER BY
+				${postAnalytics.postTargetId},
+				${postAnalytics.collectedAt} DESC,
+				${postAnalytics.id} DESC
+		)
+		SELECT
+			EXTRACT(DOW FROM scoped_targets.published_at)::integer AS day_of_week,
+			EXTRACT(HOUR FROM scoped_targets.published_at)::integer AS hour_utc,
+			AVG(
+				COALESCE(latest.likes, 0) +
+				COALESCE(latest.comments, 0) +
+				COALESCE(latest.shares, 0)
+			) AS avg_engagement,
+			COUNT(*)::integer AS post_count
+		FROM scoped_targets
+		LEFT JOIN latest ON latest.post_target_id = scoped_targets.post_target_id
+		GROUP BY
+			EXTRACT(DOW FROM scoped_targets.published_at),
+			EXTRACT(HOUR FROM scoped_targets.published_at)
+		ORDER BY avg_engagement DESC, day_of_week, hour_utc
+		LIMIT 168
+	`);
 
-	if (rows.length === 0) return [];
+	type ResultRow = {
+		day_of_week: string | number;
+		hour_utc: string | number;
+		avg_engagement: string | number | null;
+		post_count: string | number;
+	};
+	const result = rows as { rows?: ResultRow[] } & ArrayLike<ResultRow>;
+	const raw = result.rows ?? Array.from(result);
+	const toNumber = (value: string | number | null) =>
+		value == null ? 0 : typeof value === "number" ? value : Number(value);
 
-	// Batch fetch latest analytics per target
-	const targetIds = [...new Set(rows.map((r) => r.targetId))];
-	const analyticsRows = await getLatestAnalyticsForTargets(db, targetIds);
-	const analyticsMap = new Map(
-		analyticsRows.map((a) => [a.postTargetId, a]),
-	);
-
-	// Group engagement by day_of_week + hour
-	const timeMap = new Map<string, { totalEngagement: number; count: number }>();
-
-	for (const row of rows) {
-		if (!row.publishedAt) continue;
-		const dow = row.publishedAt.getUTCDay();
-		const hour = row.publishedAt.getUTCHours();
-		const key = `${dow}:${hour}`;
-
-		const analytics = analyticsMap.get(row.targetId);
-		const engagement = analytics
-			? (analytics.likes ?? 0) +
-				(analytics.comments ?? 0) +
-				(analytics.shares ?? 0)
-			: 0;
-
-		const existing = timeMap.get(key) ?? { totalEngagement: 0, count: 0 };
-		existing.totalEngagement += engagement;
-		existing.count++;
-		timeMap.set(key, existing);
-	}
-
-	return Array.from(timeMap.entries())
-		.map(([key, val]) => {
-			const [dow, hour] = key.split(":") as [string, string];
-			return {
-				day_of_week: Number.parseInt(dow, 10),
-				hour_utc: Number.parseInt(hour, 10),
-				avg_engagement:
-					val.count > 0
-						? Math.round((val.totalEngagement / val.count) * 10) / 10
-						: 0,
-				post_count: val.count,
-			};
-		})
-		.sort((a, b) => b.avg_engagement - a.avg_engagement);
-}
-
-/**
- * Get the latest analytics row for each target ID (same logic as analytics.ts).
- */
-async function getLatestAnalyticsForTargets(
-	db: ReturnType<typeof createDb>,
-	targetIds: string[],
-) {
-	if (targetIds.length === 0) return [];
-
-	// Subquery: latest collectedAt per target
-	const latestSq = db
-		.select({
-			postTargetId: postAnalytics.postTargetId,
-			maxCollectedAt: sql<Date>`max(${postAnalytics.collectedAt})`.as(
-				"max_collected_at",
-			),
-		})
-		.from(postAnalytics)
-		.where(inArray(postAnalytics.postTargetId, targetIds))
-		.groupBy(postAnalytics.postTargetId)
-		.as("latest");
-
-	return db
-		.select({
-			postTargetId: postAnalytics.postTargetId,
-			likes: postAnalytics.likes,
-			comments: postAnalytics.comments,
-			shares: postAnalytics.shares,
-		})
-		.from(postAnalytics)
-		.innerJoin(
-			latestSq,
-			and(
-				eq(postAnalytics.postTargetId, latestSq.postTargetId),
-				eq(postAnalytics.collectedAt, latestSq.maxCollectedAt),
-			),
-		);
+	return raw.map((row) => ({
+		day_of_week: toNumber(row.day_of_week),
+		hour_utc: toNumber(row.hour_utc),
+		avg_engagement: Math.round(toNumber(row.avg_engagement) * 10) / 10,
+		post_count: toNumber(row.post_count),
+	}));
 }

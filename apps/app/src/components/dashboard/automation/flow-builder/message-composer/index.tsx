@@ -11,29 +11,30 @@
 // returns a *new* config object. The parent (PropertyPanel / graph store) is
 // responsible for persisting it.
 
-import { useMemo, useState } from "react";
 import { Eye, EyeOff, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+	type BlockType,
 	channelDisplayName,
 	channelSupportsBlock,
 	channelSupportsButtons,
 	channelSupportsQuickReplies,
-	type BlockType,
 } from "../channel-capabilities";
 import type { AutomationNode } from "../graph-types";
-import { useAutomationCatalog, type ChannelCapabilities } from "../use-catalog";
-import { BlockList } from "./block-list";
+import { type ChannelCapabilities, useAutomationCatalog } from "../use-catalog";
 import { blockLabel } from "./block-editors";
+import { BlockList } from "./block-list";
+import { MediaLibraryProvider } from "./media-library";
 import { Preview } from "./preview";
 import { QuickReplyEditor } from "./quick-reply-editor";
 import {
 	hasInteractiveElements,
-	newBlock,
 	type MessageBlock,
 	type MessageBlockType,
 	type MessageConfig,
+	newBlock,
 	type QuickReply,
 } from "./types";
 
@@ -46,6 +47,8 @@ interface Props {
 	node: Pick<AutomationNode, "key" | "kind" | "config">;
 	/** Channel of the automation (e.g. "instagram"). */
 	channel: string;
+	/** Operational scope used by media list and upload calls. */
+	workspaceId: string | null;
 	/** Called with the new `config` whenever the user edits. */
 	onChange(config: MessageConfig): void;
 	/**
@@ -74,6 +77,7 @@ const ALL_BLOCK_TYPES: BlockType[] = [
 export function MessageComposer({
 	node,
 	channel,
+	workspaceId,
 	onChange,
 	channelCapabilities,
 }: Props) {
@@ -104,12 +108,22 @@ export function MessageComposer({
 		<div className="flex flex-col gap-4 p-4">
 			<ChannelBanner channel={channel} />
 
-			<BlockList
-				blocks={blocks}
-				channel={channel}
-				channelCapabilities={caps}
-				onChange={setBlocks}
-			/>
+			<MediaLibraryProvider
+				enabled={blocks.some((block) =>
+					["image", "video", "audio", "file", "card", "gallery"].includes(
+						block.type,
+					),
+				)}
+				workspaceId={workspaceId}
+			>
+				<BlockList
+					blocks={blocks}
+					channel={channel}
+					workspaceId={workspaceId}
+					channelCapabilities={caps}
+					onChange={setBlocks}
+				/>
+			</MediaLibraryProvider>
 
 			<AddBlockButton
 				channel={channel}
@@ -254,7 +268,7 @@ function MessageSettings({
 	interactive: boolean;
 	onChange(patch: Partial<MessageConfig>): void;
 }) {
-	const waitForReply = interactive ? true : config.wait_for_reply ?? false;
+	const waitForReply = interactive ? true : (config.wait_for_reply ?? false);
 	const timeout = config.no_response_timeout_min;
 	const typingDelay = config.typing_indicator_seconds ?? 0;
 
@@ -295,13 +309,13 @@ function MessageSettings({
 					<input
 						id="mc-no-response-timeout"
 						type="number"
-						min={0}
+						min={1}
 						value={timeout ?? ""}
 						onChange={(e) => {
 							const v = e.target.value;
 							onChange({
 								no_response_timeout_min:
-									v === "" ? undefined : Math.max(0, Number(v)),
+									v === "" ? undefined : Math.max(1, Number(v)),
 							});
 						}}
 						className="h-9 w-full rounded-lg border border-[#d9dde6] bg-white px-3 text-[12px]"

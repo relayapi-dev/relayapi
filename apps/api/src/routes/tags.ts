@@ -1,6 +1,11 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import { tags } from "@relayapi/db";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { assertAllWorkspaceScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -43,6 +48,10 @@ const listTags = createRoute({
 			description: "List of tags",
 			content: { "application/json": { schema: TagListResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -62,22 +71,21 @@ app.openapi(listTags, async (c) => {
 	}
 	// Composite keyset pagination on (created_at, id). The cursor is the id of the
 	// last row from the previous page; resolve its (created_at, id) entirely in SQL
-	// so microsecond-precision ties are preserved and rows sharing a millisecond are
-	// never silently skipped. Legacy timestamp cursors still parse as dates and fall
-	// back to the old lt(created_at) behavior for transition compatibility.
+	// so microsecond-precision ties are preserved and rows sharing a timestamp are
+	// never silently skipped.
 	if (cursor) {
-		const asDate = new Date(cursor);
-		if (!Number.isNaN(asDate.getTime())) {
-			conditions.push(lt(tags.createdAt, asDate));
-		} else {
-			conditions.push(
-				sql`(${tags.createdAt}, ${tags.id}) < (select t.created_at, t.id from tags t where t.id = ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${tags.createdAt}, ${tags.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(tags),
+			cursorTimestamp: sql<string>`to_char(${tags.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(tags)
 		.where(and(...conditions))
 		.orderBy(desc(tags.createdAt), desc(tags.id))
@@ -85,11 +93,16 @@ app.openapi(listTags, async (c) => {
 
 	const hasMore = rows.length > limit;
 	const data = rows.slice(0, limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	return c.json(
 		{
 			data: data.map(serialize),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,
@@ -221,10 +234,16 @@ app.openapi(updateTag, async (c) => {
 	const [updated] = await db
 		.update(tags)
 		.set(updates)
-		.where(eq(tags.id, id))
+		.where(and(eq(tags.id, id), eq(tags.organizationId, orgId)))
 		.returning();
 
-	return c.json(serialize(updated ?? existing), 200);
+	if (!updated) {
+		return c.json(
+			{ error: { code: "tag_not_found", message: "Tag not found" } },
+			404,
+		);
+	}
+	return c.json(serialize(updated), 200);
 });
 
 // ── Delete tag ───────────────────────────────────────────────────────────────
@@ -271,7 +290,16 @@ app.openapi(deleteTag, async (c) => {
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied;
 
-	await db.delete(tags).where(eq(tags.id, id));
+	const [deleted] = await db
+		.delete(tags)
+		.where(and(eq(tags.id, id), eq(tags.organizationId, orgId)))
+		.returning({ id: tags.id });
+	if (!deleted) {
+		return c.json(
+			{ error: { code: "tag_not_found", message: "Tag not found" } },
+			404,
+		);
+	}
 
 	return c.body(null, 204);
 });

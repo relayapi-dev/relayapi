@@ -1,6 +1,8 @@
+import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { createDb } from "@relayapi/db";
 import { Hono } from "hono";
 import { assertAllWorkspaceScope } from "../lib/request-access";
+import { ErrorResponse } from "../schemas/common";
 import {
 	claimOneTimeCapability,
 	issueOneTimeCapability,
@@ -75,17 +77,55 @@ websocketUpgrade.get("/", async (c) => {
 });
 
 /** Ticket issuance uses the normal authenticated /v1 middleware chain. */
-export const websocketTicket = new Hono<{
+export const websocketTicket = new OpenAPIHono<{
 	Bindings: Env;
 	Variables: Variables;
 }>();
 
-websocketTicket.get("/", async (c) => {
+const retrieveTicketRoute = createRoute({
+	operationId: "retrieveWebSocketTicket",
+	method: "get",
+	path: "/",
+	tags: ["Realtime"],
+	summary: "Create a WebSocket ticket",
+	description:
+		"Issues a single-use, short-lived ticket for an authenticated WebSocket upgrade. Pass the returned protocol as a WebSocket subprotocol; never put the ticket in a URL.",
+	security: [{ Bearer: [] }],
+	responses: {
+		200: {
+			description: "A short-lived WebSocket capability",
+			content: {
+				"application/json": {
+					schema: z.object({
+						ticket: z.string().length(32),
+						protocol: z.string(),
+						expires_at: z.string().datetime(),
+						ws_url: z.string(),
+					}),
+				},
+			},
+		},
+		401: {
+			description: "The API key is missing or invalid",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "The credential does not have organization-wide scope",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		429: {
+			description: "The credential has exceeded its request limit",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+websocketTicket.openapi(retrieveTicketRoute, async (c) => {
 	const denied = assertAllWorkspaceScope(
 		c,
 		"Realtime streaming requires an API key with access to all workspaces.",
 	);
-	if (denied) return denied;
+	if (denied) return denied as never;
 
 	const ticket = crypto.randomUUID().replace(/-/g, "");
 	const expiresAt = new Date(Date.now() + 60_000);
@@ -96,6 +136,7 @@ websocketTicket.get("/", async (c) => {
 		payload: { org_id: c.get("orgId") },
 		expiresAt,
 	});
+	c.header("Cache-Control", "no-store");
 	return c.json(
 		{
 			ticket,

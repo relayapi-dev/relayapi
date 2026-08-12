@@ -11,11 +11,11 @@ icon: pinterest
 | Platform key | `pinterest` |
 | Auth method | OAuth 2.0 |
 | Title limit | 100 characters |
-| Description limit | 500 characters |
-| Images per pin | 1 |
+| Description limit | 800 characters |
+| Images per pin | 1, or 2–5 in a carousel |
 | Videos per pin | 1 |
 | Image formats | JPEG, PNG |
-| Image max size | 20 MB |
+| Image max size | 20 MiB |
 | Video formats | MP4, MOV |
 | Video max size | 2 GB |
 | Video duration | 4 sec - 15 min |
@@ -24,20 +24,20 @@ icon: pinterest
 | Analytics | Limited (impressions, saves, clicks) |
 
 <Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
+**Client options** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python REST/OpenAPI](/sdks/python) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
 </Callout>
 
 ## Before You Start
 
 <Callout type="warn">
-Pinterest is a **search engine, not a social feed**. Pins are discovered through search and browse, not by followers. SEO (title, description, board name) matters more than posting time. Pins have a **3-6 month lifespan** unlike hours on other platforms. The `board_id` field is effectively **required** — always provide it. Media is required for all pins; there are no text-only posts. Only **1 image or 1 video** per pin — no carousels or multi-image posts.
+Pinterest is a **search engine, not a social feed**. Pins are discovered through search and browse, not by followers. SEO (title, description, board name) matters more than posting time. Pins have a **3-6 month lifespan** unlike hours on other platforms. The `board_id` field is effectively **required** — always provide it. Media is required for all pins; there are no text-only posts. RelayAPI accepts a single image, a **2–5 image carousel**, or one video with one optional cover image.
 </Callout>
 
 ## Quick Start
 
 Create a pin on Pinterest:
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 import Relay from '@relayapi/sdk';
@@ -60,30 +60,6 @@ const post = await client.posts.create({
 });
 
 console.log(post.id); // post_abc123
-```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
-
-client = Relay()
-post = client.posts.create(
-    content='Modern kitchen renovation ideas for small spaces',
-    targets=['pinterest'],
-    media=[
-        {'url': 'https://cdn.example.com/kitchen.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'pinterest': {
-            'title': 'Modern Kitchen Renovation Ideas',
-            'board_id': 'YOUR_BOARD_ID',
-            'link': 'https://myblog.com/kitchen-renovation',
-        },
-    },
-)
-
-print(post.id)  # post_abc123
 ```
 </Tab>
 <Tab value="Go">
@@ -163,7 +139,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Use 2:3 aspect ratio (1000 x 1500 px) for optimal feed display. The `link` field is critical for driving traffic to your website.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -181,25 +157,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Modern kitchen renovation ideas for small spaces',
-    targets=['pinterest'],
-    media=[
-        {'url': 'https://cdn.example.com/kitchen.jpg', 'type': 'image'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'pinterest': {
-            'title': 'Modern Kitchen Renovation Ideas',
-            'board_id': 'YOUR_BOARD_ID',
-            'link': 'https://myblog.com/kitchen-renovation',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -269,7 +226,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Single video per pin. Supports a custom cover image.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -288,26 +245,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Quick 5-minute breakfast recipe',
-    targets=['pinterest'],
-    media=[
-        {'url': 'https://cdn.example.com/recipe.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'pinterest': {
-            'title': '5-Minute Breakfast Recipe',
-            'board_id': 'YOUR_BOARD_ID',
-            'link': 'https://myrecipes.com/quick-breakfast',
-            'cover_image_url': 'https://cdn.example.com/recipe-cover.jpg',
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -380,7 +317,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 
 Instead of providing a cover image, extract a frame from the video at a specific timestamp.
 
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
+<Tabs items={['TypeScript', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
 ```typescript
 const post = await client.posts.create({
@@ -399,26 +336,6 @@ const post = await client.posts.create({
     },
   },
 });
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='DIY home project walkthrough',
-    targets=['pinterest'],
-    media=[
-        {'url': 'https://cdn.example.com/diy.mp4', 'type': 'video'},
-    ],
-    scheduled_at='now',
-    target_options={
-        'pinterest': {
-            'title': 'DIY Bookshelf Build',
-            'board_id': 'YOUR_BOARD_ID',
-            'link': 'https://myblog.com/diy-bookshelf',
-            'cover_image_key_frame_time': 5,
-        },
-    },
-)
 ```
 </Tab>
 <Tab value="Go">
@@ -497,9 +414,9 @@ The `link` field is critical on Pinterest. It determines where users go when the
 
 | Property | Requirement |
 |----------|-------------|
-| Max per pin | 1 |
-| Formats | JPEG, PNG, WebP, GIF |
-| Max file size | 32 MB |
+| Max per pin | 5 (2–5 for a carousel) |
+| Formats | JPEG, PNG |
+| Max file size | 20 MiB each |
 | Recommended | 1000 x 1500 px (2:3 portrait) |
 | Min dimensions | 100 x 100 px |
 
@@ -552,8 +469,8 @@ All fields go inside `target_options.pinterest` on your post request.
 - **`board_id` is effectively required** — always specify which board to pin to.
 - **`link` field is critical** for driving traffic. Without it, users cannot click through to your content.
 - **No text-only pins** — media is required for every pin.
-- **No carousels or multi-image pins** — only 1 image or 1 video per pin.
-- **Animated GIFs are supported** and auto-play in the Pinterest feed.
+- **Image carousels contain 2–5 images** — a single image remains a normal image Pin.
+- **Generic `gif` attachments are rejected** — RelayAPI's Pinterest publisher accepts JPEG/PNG images and MP4/MOV video, not the channel-neutral GIF media type.
 - **2:3 aspect ratio (1000 x 1500 px)** gets the best feed placement and engagement.
 
 ## Automations

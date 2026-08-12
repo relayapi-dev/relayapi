@@ -1,16 +1,21 @@
+import { hasCurrentDashboardCredentialPermissions } from "@relayapi/config";
 import {
 	apikey,
+	session as authSession,
 	type Database,
+	LEGACY_CREDENTIAL_VERSION,
 	member,
 	ORGANIZATION_SCOPE_KEY,
 	organization,
+	organizationPrincipals,
 	organizationSettings,
+	principalWorkspaceGrants,
+	user,
 	workspaces,
 } from "@relayapi/db";
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Env, Variables } from "../types";
-import { parseApiKeyWorkspaceScope } from "./api-key-workspace-scope";
 import { canAccessWorkspaceScope } from "./workspace-scope";
 
 type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
@@ -23,76 +28,263 @@ export interface LiveApiKeyAuthorization {
 
 /**
  * Re-read the initiating API key from PostgreSQL instead of trusting an OAuth
- * capability's historical grant snapshot. Long-running connection flows use
- * this immediately before durable writes so disable, expiry, permission, and
- * workspace-grant changes take effect without waiting for the auth KV TTL.
+ * capability's historical grant snapshot. Long-running connection flows call
+ * this with their write transaction immediately before durable writes, locking
+ * the user, membership, organization, exact key/principal, and workspace
+ * grants. Bans, generation rotation, membership removal, expiry, permission,
+ * and scope changes therefore linearize with provider-credential persistence.
  */
 export async function loadLiveApiKeyAuthorization(
 	database: Pick<Database, "select">,
-	params: { apiKeyId: string; organizationId: string; requireWrite?: boolean },
+	params: {
+		apiKeyId: string;
+		organizationId: string;
+		requireWrite?: boolean;
+		/**
+		 * Exact Better Auth session carried by a credential-granting flow.
+		 * `undefined` preserves legacy key-only checks for non-credential callers;
+		 * `null` explicitly requires a service principal.
+		 */
+		authoritySessionId?: string | null;
+	},
 ): Promise<LiveApiKeyAuthorization | null> {
-	const now = new Date();
-	const [row] = await database
+	const [discovered] = await database
 		.select({
 			id: apikey.id,
 			referenceId: apikey.referenceId,
-			permissions: apikey.permissions,
-			metadata: apikey.metadata,
+			principalId: apikey.principalId,
+			principalKind: organizationPrincipals.kind,
+			principalMemberId: organizationPrincipals.memberId,
 		})
 		.from(apikey)
 		.innerJoin(
-			organization,
+			organizationPrincipals,
 			and(
-				eq(organization.id, apikey.organizationId),
-				eq(organization.lifecycleStatus, "active"),
+				eq(organizationPrincipals.id, apikey.principalId),
+				eq(organizationPrincipals.organizationId, apikey.organizationId),
+				eq(organizationPrincipals.lifecycleStatus, "active"),
 			),
 		)
 		.where(
 			and(
 				eq(apikey.id, params.apiKeyId),
 				eq(apikey.organizationId, params.organizationId),
-				eq(apikey.enabled, true),
-				or(isNull(apikey.expiresAt), gt(apikey.expiresAt, now)),
+			),
+		)
+		.limit(1);
+	if (!discovered) return null;
+
+	let lockedUser:
+		| {
+				id: string;
+				banned: boolean | null;
+				banExpires: Date | null;
+				credentialVersion: string;
+		  }
+		| undefined;
+	let lockedMember:
+		| { id: string; role: string; userId: string; organizationId: string }
+		| undefined;
+	if (discovered.principalKind === "member") {
+		if (!discovered.referenceId || !discovered.principalMemberId) return null;
+		[lockedUser] = await database
+			.select({
+				id: user.id,
+				banned: user.banned,
+				banExpires: user.banExpires,
+				credentialVersion: user.credentialVersion,
+			})
+			.from(user)
+			.where(eq(user.id, discovered.referenceId))
+			.for("share")
+			.limit(1);
+		[lockedMember] = await database
+			.select({
+				id: member.id,
+				role: member.role,
+				userId: member.userId,
+				organizationId: member.organizationId,
+			})
+			.from(member)
+			.where(
+				and(
+					eq(member.id, discovered.principalMemberId),
+					eq(member.organizationId, params.organizationId),
+					eq(member.userId, discovered.referenceId),
+				),
+			)
+			.for("share")
+			.limit(1);
+	}
+
+	const [lockedOrganization] = await database
+		.select({ lifecycleStatus: organization.lifecycleStatus })
+		.from(organization)
+		.where(eq(organization.id, params.organizationId))
+		.for("share")
+		.limit(1);
+	const [lockedKey] = await database
+		.select({
+			id: apikey.id,
+			referenceId: apikey.referenceId,
+			principalId: apikey.principalId,
+			credentialVersion: apikey.credentialVersion,
+			enabled: apikey.enabled,
+			expiresAt: apikey.expiresAt,
+			permissions: apikey.permissions,
+		})
+		.from(apikey)
+		.where(
+			and(
+				eq(apikey.id, params.apiKeyId),
+				eq(apikey.organizationId, params.organizationId),
+				eq(apikey.principalId, discovered.principalId),
 			),
 		)
 		.for("share")
 		.limit(1);
-	if (!row) return null;
+	const [lockedPrincipal] = await database
+		.select({
+			id: organizationPrincipals.id,
+			kind: organizationPrincipals.kind,
+			memberId: organizationPrincipals.memberId,
+			scopeMode: organizationPrincipals.scopeMode,
+			lifecycleStatus: organizationPrincipals.lifecycleStatus,
+		})
+		.from(organizationPrincipals)
+		.where(
+			and(
+				eq(organizationPrincipals.id, discovered.principalId),
+				eq(organizationPrincipals.organizationId, params.organizationId),
+			),
+		)
+		.for("share")
+		.limit(1);
+	if (
+		lockedOrganization?.lifecycleStatus !== "active" ||
+		!lockedKey ||
+		lockedKey.enabled !== true ||
+		!lockedPrincipal ||
+		lockedPrincipal.lifecycleStatus !== "active" ||
+		lockedPrincipal.kind !== discovered.principalKind ||
+		lockedPrincipal.memberId !== discovered.principalMemberId
+	) {
+		return null;
+	}
 
-	const permissions = (row.permissions ?? "read,write")
+	const permissions = (lockedKey.permissions ?? "read,write")
 		.split(",")
 		.map((permission) => permission.trim())
 		.filter(Boolean);
 	if (params.requireWrite !== false && !permissions.includes("write")) {
 		return null;
 	}
-
-	const metadata =
-		row.metadata &&
-		typeof row.metadata === "object" &&
-		!Array.isArray(row.metadata)
-			? (row.metadata as Record<string, unknown>)
-			: null;
-	if (metadata?.principal_type === "dashboard_user") {
-		if (!row.referenceId) return null;
-		const [activeMembership] = await database
-			.select({ id: member.id })
-			.from(member)
-			.where(
-				and(
-					eq(member.userId, row.referenceId),
-					eq(member.organizationId, params.organizationId),
-				),
+	if (lockedPrincipal.kind === "member") {
+		const userCredentialVersion =
+			lockedUser?.credentialVersion || LEGACY_CREDENTIAL_VERSION;
+		const keyCredentialVersion =
+			lockedKey.credentialVersion || LEGACY_CREDENTIAL_VERSION;
+		if (
+			!lockedUser ||
+			!lockedMember ||
+			lockedUser.id !== discovered.referenceId ||
+			lockedMember.id !== lockedPrincipal.memberId ||
+			lockedMember.userId !== lockedUser.id ||
+			lockedKey.referenceId !== lockedUser.id ||
+			keyCredentialVersion !== userCredentialVersion ||
+			!hasCurrentDashboardCredentialPermissions(
+				lockedKey.permissions,
+				lockedMember.role,
 			)
-			.for("share")
-			.limit(1);
-		if (!activeMembership) return null;
+		) {
+			return null;
+		}
+	} else if (
+		lockedPrincipal.kind !== "service" ||
+		lockedPrincipal.memberId !== null ||
+		lockedKey.referenceId !== null
+	) {
+		return null;
 	}
 
-	const workspaceScope = parseApiKeyWorkspaceScope(row.metadata);
-	if (workspaceScope === null) return null;
+	const principalWorkspaceIds =
+		lockedPrincipal.scopeMode === "selected"
+			? (
+					await database
+						.select({ workspaceId: principalWorkspaceGrants.workspaceId })
+						.from(principalWorkspaceGrants)
+						.where(
+							and(
+								eq(
+									principalWorkspaceGrants.organizationId,
+									params.organizationId,
+								),
+								eq(principalWorkspaceGrants.principalId, lockedPrincipal.id),
+							),
+						)
+						.orderBy(principalWorkspaceGrants.workspaceId)
+						.for("share")
+				).map((grant) => grant.workspaceId)
+			: [];
+
+	let lockedAuthoritySessionExpiresAt: Date | null = null;
+	if (params.authoritySessionId !== undefined) {
+		if (lockedPrincipal.kind === "member") {
+			if (!params.authoritySessionId || !lockedUser) return null;
+			const [lockedSession] = await database
+				.select({
+					id: authSession.id,
+					userId: authSession.userId,
+					activeOrganizationId: authSession.activeOrganizationId,
+					impersonatedBy: authSession.impersonatedBy,
+					expiresAt: authSession.expiresAt,
+				})
+				.from(authSession)
+				.where(
+					and(
+						eq(authSession.id, params.authoritySessionId),
+						eq(authSession.userId, lockedUser.id),
+						eq(authSession.activeOrganizationId, params.organizationId),
+						gt(authSession.expiresAt, sql`statement_timestamp()`),
+					),
+				)
+				.for("share")
+				.limit(1);
+			if (
+				!lockedSession ||
+				lockedSession.userId !== lockedUser.id ||
+				lockedSession.activeOrganizationId !== params.organizationId ||
+				lockedSession.impersonatedBy !== null
+			) {
+				return null;
+			}
+			lockedAuthoritySessionExpiresAt = lockedSession.expiresAt;
+		} else if (params.authoritySessionId !== null) {
+			return null;
+		}
+	}
+
+	// Take the wall-clock snapshot only after every potentially blocking
+	// authority lock, including grants and the exact session. A key or temporary
+	// ban must not be evaluated against a timestamp captured before a concurrent
+	// revocation transaction released or before the last lock was acquired.
+	const now = new Date();
+	if (
+		(lockedKey.expiresAt !== null && lockedKey.expiresAt <= now) ||
+		(lockedPrincipal.kind === "member" &&
+			params.authoritySessionId !== undefined &&
+			(lockedAuthoritySessionExpiresAt === null ||
+				lockedAuthoritySessionExpiresAt <= now)) ||
+		(lockedUser?.banned === true &&
+			(lockedUser.banExpires === null || lockedUser.banExpires > now))
+	) {
+		return null;
+	}
+
+	const workspaceScope: "all" | string[] =
+		lockedPrincipal.scopeMode === "all" ? "all" : principalWorkspaceIds;
 	return {
-		apiKeyId: row.id,
+		apiKeyId: lockedKey.id,
 		workspaceScope,
 		permissions,
 	};
@@ -124,11 +316,13 @@ export async function validatePersistedOperationalScope(
 		organizationId: string;
 		workspaceId: string | null;
 		resourceName?: string;
+		authoritySessionId?: string | null;
 	},
 ): Promise<PersistedOperationalScopeValidation> {
 	const authorization = await loadLiveApiKeyAuthorization(database, {
 		apiKeyId: params.apiKeyId,
 		organizationId: params.organizationId,
+		authoritySessionId: params.authoritySessionId,
 	});
 	if (!authorization) {
 		return {

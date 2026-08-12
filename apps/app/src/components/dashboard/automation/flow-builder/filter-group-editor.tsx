@@ -6,6 +6,7 @@ export interface Predicate {
 	field: string;
 	op: PredicateOp;
 	value?: unknown;
+	case_sensitive?: boolean;
 }
 
 export type PredicateOp =
@@ -70,6 +71,12 @@ const PREDICATE_OPS: { value: PredicateOp; label: string }[] = [
 
 const VALUELESS_OPS: PredicateOp[] = ["exists", "not_exists"];
 const LIST_OPS: PredicateOp[] = ["in", "not_in"];
+const STRING_MATCH_OPS: PredicateOp[] = [
+	"contains",
+	"not_contains",
+	"starts_with",
+	"ends_with",
+];
 
 export function mergeFilterGroup(
 	prev: FilterGroup | undefined,
@@ -100,27 +107,21 @@ export function FilterGroupEditor({
 				label={labels.all.label}
 				helper={labels.all.helper}
 				value={value?.all ?? []}
-				onChange={(preds) =>
-					onChange(mergeFilterGroup(value, { all: preds }))
-				}
+				onChange={(preds) => onChange(mergeFilterGroup(value, { all: preds }))}
 				readOnly={readOnly}
 			/>
 			<PredicateGroupField
 				label={labels.any.label}
 				helper={labels.any.helper}
 				value={value?.any ?? []}
-				onChange={(preds) =>
-					onChange(mergeFilterGroup(value, { any: preds }))
-				}
+				onChange={(preds) => onChange(mergeFilterGroup(value, { any: preds }))}
 				readOnly={readOnly}
 			/>
 			<PredicateGroupField
 				label={labels.none.label}
 				helper={labels.none.helper}
 				value={value?.none ?? []}
-				onChange={(preds) =>
-					onChange(mergeFilterGroup(value, { none: preds }))
-				}
+				onChange={(preds) => onChange(mergeFilterGroup(value, { none: preds }))}
 				readOnly={readOnly}
 			/>
 		</div>
@@ -202,6 +203,7 @@ function PredicateRow({
 }) {
 	const needsValue = !VALUELESS_OPS.includes(value.op);
 	const isList = LIST_OPS.includes(value.op);
+	const supportsCaseSensitivity = STRING_MATCH_OPS.includes(value.op);
 
 	const displayedValue = (() => {
 		if (!needsValue) return "";
@@ -245,7 +247,11 @@ function PredicateRow({
 			return;
 		}
 		const parsed = Number(raw);
-		if (raw.trim() !== "" && !Number.isNaN(parsed) && /^-?\d+(\.\d+)?$/.test(raw)) {
+		if (
+			raw.trim() !== "" &&
+			!Number.isNaN(parsed) &&
+			/^-?\d+(\.\d+)?$/.test(raw)
+		) {
 			onChange({ ...value, value: parsed });
 			return;
 		}
@@ -266,9 +272,16 @@ function PredicateRow({
 				<select
 					value={value.op}
 					disabled={readOnly}
-					onChange={(e) =>
-						onChange({ ...value, op: e.target.value as PredicateOp })
-					}
+					onChange={(e) => {
+						const op = e.target.value as PredicateOp;
+						onChange({
+							...value,
+							op,
+							case_sensitive: STRING_MATCH_OPS.includes(op)
+								? value.case_sensitive
+								: undefined,
+						});
+					}}
 					className="h-6 rounded-md border border-border bg-background px-1 text-[11px] disabled:opacity-60"
 				>
 					{PREDICATE_OPS.map((op) => (
@@ -304,6 +317,22 @@ function PredicateRow({
 					className={`${INPUT_CLS} h-6 disabled:opacity-60`}
 				/>
 			)}
+			{needsValue && supportsCaseSensitivity ? (
+				<label className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+					<input
+						type="checkbox"
+						checked={value.case_sensitive !== false}
+						disabled={readOnly}
+						onChange={(event) =>
+							onChange({
+								...value,
+								case_sensitive: event.target.checked ? undefined : false,
+							})
+						}
+					/>
+					Match case
+				</label>
+			) : null}
 		</div>
 	);
 }

@@ -1,6 +1,6 @@
 ---
 name: relayapi
-description: Use RelayAPI to post to 21 platforms, manage accounts, groups, media, scheduling, analytics, inbox, and webhooks via a single unified API. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
+description: Use RelayAPI to post to 22 platforms, manage accounts, workspaces, media, scheduling, analytics, inbox, and webhooks via a single unified API. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
 ---
 
 # RelayAPI – Unified Social Media API
@@ -27,9 +27,9 @@ const client = new Relay({ apiKey: process.env['CLAUDE_PLUGIN_OPTION_RELAYAPI_AP
 
 Base URL: `https://api.relayapi.dev`
 
-## Supported Platforms (21)
+## Supported Platforms (22)
 
-`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `sms`, `beehiiv`, `convertkit`, `mailchimp`, `listmonk`
+`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `slack`, `sms`, `beehiiv`, `convertkit`, `mailchimp`, `listmonk`
 
 ---
 
@@ -52,7 +52,7 @@ const post = await client.posts.create({
 | `content` | string | No* | Post text. Optional if every target has content in `target_options`. |
 | `targets` | string[] | Yes (min 1) | Where to publish. See "Target Resolution" below. |
 | `scheduled_at` | string | Yes | `"now"` = publish immediately, `"draft"` = save as draft, or ISO 8601 datetime to schedule. |
-| `media` | array | No | `[{ url: "https://...", type: "image" }]`. Type: `"image"`, `"video"`, `"gif"`, `"document"`. Inferred from extension if omitted. |
+| `media` | array | No | `[{ url: "https://...", type: "image" }]`. Type: `"image"`, `"video"`, `"gif"`, `"document"`, or `"audio"`. Inferred from extension if omitted. |
 | `target_options` | object | No | Per-target content overrides keyed by target value. |
 | `timezone` | string | No | IANA timezone for scheduling (default: `"UTC"`). |
 | `workspace_id` | string | No | Scope the post to a specific workspace. If omitted, operates across all workspaces. |
@@ -73,17 +73,17 @@ Targets tell RelayAPI where to publish. You can mix all three in the same reques
 // Use client.accounts.list() to find IDs
 ```
 
-**3. Workspace ID** — publishes to ALL accounts in a group:
+**3. Workspace ID** — publishes to ALL accounts in a workspace:
 ```typescript
 { targets: ["ws_xyz789"] }
 // Use client.workspaces.list() to find IDs
-// A group with Twitter + Instagram accounts publishes to both
+// A workspace with Twitter + Instagram accounts publishes to both
 ```
 
 **Mixed example:**
 ```typescript
 { targets: ["ws_marketing", "acc_ceo_linkedin", "youtube"] }
-// All accounts in "Marketing" group + CEO's LinkedIn + all YouTube accounts
+// All accounts in the "Marketing" workspace + CEO's LinkedIn + all YouTube accounts
 ```
 
 **Error codes for failed targets:**
@@ -112,7 +112,7 @@ Keys can also be account IDs or workspace IDs:
 ```typescript
 target_options: {
   "acc_abc123": { content: "Custom for this specific account" },
-  "ws_xyz": { content: "Custom for all accounts in this group" },
+  "ws_xyz": { content: "Custom for all accounts in this workspace" },
 }
 ```
 
@@ -128,13 +128,43 @@ const post = await client.posts.create({
 });
 ```
 
+Audio is a first-class media type. For example, a WhatsApp audio message must omit
+caption content and provide its recipient in `target_options`:
+
+```typescript
+await client.posts.create({
+  targets: ["whatsapp"],
+  scheduled_at: "now",
+  media: [{ url: "https://example.com/voice.mp3", type: "audio" }],
+  target_options: { whatsapp: { to: "15551234567" } },
+});
+```
+
 **Upload first (more reliable):**
 ```typescript
+import { readFile } from "node:fs/promises";
+
 const presign = await client.media.getPresignURL({
   filename: "photo.jpg",
   content_type: "image/jpeg",
 });
-// Upload to presign.url, then use the media URL in a post
+const photoBytes = await readFile("photo.jpg");
+const upload = await fetch(presign.upload_url, {
+  method: "PUT",
+  headers: presign.upload_headers, // Exact Content-Type + create-only precondition
+  body: photoBytes,
+});
+if (!upload.ok) throw new Error(`Upload failed: ${upload.status}`);
+
+const storageKey = decodeURIComponent(new URL(presign.url).pathname.slice(1));
+await client.media.confirm({ storage_key: storageKey }); // Mandatory
+
+const post = await client.posts.create({
+  content: "Check this out!",
+  targets: ["instagram"],
+  scheduled_at: "now",
+  media: [{ url: presign.url, type: "image" }],
+});
 ```
 
 ### Post Statuses
@@ -235,13 +265,13 @@ const postLogs = await client.posts.logs.retrieve("post_abc123");
 ```typescript
 const accounts = await client.accounts.list();
 const filtered = await client.accounts.list({
-  workspace_id: "ws_abc",    // accounts in a group
-  ungrouped: true,         // accounts not in any group
+  workspace_id: "ws_abc",    // accounts in a workspace
+  ungrouped: true,             // accounts not assigned to a workspace
   search: "johndoe",       // search by username
 });
 ```
 
-Response per account: `{ id, platform, platform_account_id, username, display_name, avatar_url, metadata, group: { id, name } | null, connected_at, updated_at }`
+Response per account: `{ id, platform, platform_account_id, username, display_name, avatar_url, metadata, workspace: { id, name } | null, connected_at, updated_at }`
 
 ### Get / Update / Delete Account
 
@@ -250,7 +280,7 @@ const account = await client.accounts.retrieve("acc_abc123");
 
 await client.accounts.update("acc_abc123", {
   display_name: "New Name",
-  workspace_id: "ws_xyz",   // assign to group (null to ungroup)
+  workspace_id: "ws_xyz",   // assign to workspace (null to unassign)
   metadata: { custom: "value" },
 });
 
@@ -270,14 +300,14 @@ const single = await client.accounts.health.retrieve("acc_abc123");
 
 ### Workspaces
 
-Groups organize accounts and allow publishing to all of them with a single `grp_*` target:
+Workspaces organize accounts and allow publishing to all of them with a single `ws_*` target:
 
 ```typescript
-// List groups (includes account_count)
-const groups = await client.workspaces.list({ search: "marketing" });
+// List workspaces (includes account_count)
+const workspaces = await client.workspaces.list({ search: "marketing" });
 
 // Create
-const group = await client.workspaces.create({
+const workspace = await client.workspaces.create({
   name: "Marketing Team",
   description: "All brand accounts",
 });
@@ -288,13 +318,13 @@ await client.workspaces.update("ws_abc123", { name: "Rebranded" });
 // Delete (accounts are ungrouped, not deleted)
 await client.workspaces.delete("ws_abc123");
 
-// Assign an account to a group
+// Assign an account to a workspace
 await client.accounts.update("acc_xyz", { workspace_id: "ws_abc123" });
 ```
 
 **Workflow — "publish to Marketing Team":**
 1. `client.workspaces.list()` → find `ws_abc123` named "Marketing Team"
-2. `client.posts.create({ targets: ["ws_abc123"], ... })` → publishes to all accounts in the group
+2. `client.posts.create({ targets: ["ws_abc123"], ... })` → publishes to all accounts in the workspace
 
 ### Platform Sub-Resources
 
@@ -750,7 +780,7 @@ const logs = await client.usage.listLogs();
 | Facebook | 63,206 |
 | TikTok | 2,200 |
 | YouTube | 5,000 (description) |
-| Pinterest | 500 |
+| Pinterest | 800 |
 | Reddit | 40,000 |
 | Bluesky | 300 |
 | Threads | 500 |
@@ -784,7 +814,7 @@ Common codes: `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_ERROR`, `RAT
 - Use `target_options` to customize content per platform — different limits and conventions.
 - Use workspace IDs (`ws_*`) when the user refers to a collection of accounts by name.
 - Use validation tools before publishing to catch issues early.
-- Upload media via presigned URLs for reliability.
+- Complete the presign -> exact returned-header PUT -> confirm flow before attaching the canonical media URL.
 - Set up webhooks for real-time notifications instead of polling.
 - When the user says "post to X", first check `accounts.list()` or `workspaces.list()` to resolve "X".
 - For stats, use `analytics.getPlatformOverview()` for live data, `analytics.retrieve()` for historical.

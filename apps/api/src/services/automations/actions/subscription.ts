@@ -1,23 +1,21 @@
 // apps/api/src/services/automations/actions/subscription.ts
 //
-// subscribe_list / unsubscribe_list — upsert rows in `contact_subscriptions`,
-// setting `unsubscribedAt` to null on subscribe and to NOW on unsubscribe.
+// subscribe_list / unsubscribe_list — atomically project current membership in
+// `contact_subscriptions` and append immutable transition evidence.
 //
 // opt_in_channel / opt_out_channel — record immutable evidence through the
 // canonical consent ledger used by send-time enforcement.
 
-import {
-	contactSubscriptions,
-	contactChannels,
-	contacts,
-	subscriptionLists,
-} from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { contactChannels, contacts, subscriptionLists } from "@relayapi/db";
+import { and, eq, isNull } from "drizzle-orm";
+import { requireConsentHmacKeyConfig } from "../../../lib/consent-hmac";
 import type { Action } from "../../../schemas/automation-actions";
 import {
 	normalizeRecipientIdentifier,
 	recordContactConsent,
 } from "../../contact-consent";
+import { decryptContactChannelRows } from "../../contact-protection";
+import { transitionContactSubscription } from "../../contact-subscription-transitions";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type SubscribeListAction = Extract<Action, { type: "subscribe_list" }>;
@@ -33,13 +31,14 @@ async function assertListScope(
 		where: and(
 			eq(subscriptionLists.id, action.list_id),
 			eq(subscriptionLists.organizationId, ctx.organizationId),
-			...(ctx.workspaceId
-				? [eq(subscriptionLists.workspaceId, ctx.workspaceId)]
-				: []),
+			ctx.workspaceId
+				? eq(subscriptionLists.workspaceId, ctx.workspaceId)
+				: isNull(subscriptionLists.workspaceId),
 		),
 	});
 	if (!list)
 		throw new Error("subscription list does not belong to automation tenant");
+	return list;
 }
 
 const subscribeList: ActionHandler<SubscribeListAction> = async (
@@ -48,31 +47,17 @@ const subscribeList: ActionHandler<SubscribeListAction> = async (
 ) => {
 	const db = ctx.db;
 	if (!db) throw new Error("subscribe_list: db binding missing");
-	await assertListScope(action, ctx);
-	const existing = await db.query.contactSubscriptions.findFirst({
-		where: and(
-			eq(contactSubscriptions.contactId, ctx.contactId),
-			eq(contactSubscriptions.listId, action.list_id),
-		),
+	const list = await assertListScope(action, ctx);
+	await transitionContactSubscription(db, {
+		organizationId: ctx.organizationId,
+		scopeKey: list.scopeKey,
+		contactId: ctx.contactId,
+		listId: action.list_id,
+		type: "subscribed",
+		source: "automation",
+		actorId: ctx.automationId,
+		occurredAt: ctx.now,
 	});
-	if (existing) {
-		await db
-			.update(contactSubscriptions)
-			.set({ unsubscribedAt: null, source: "automation" })
-			.where(
-				and(
-					eq(contactSubscriptions.contactId, ctx.contactId),
-					eq(contactSubscriptions.listId, action.list_id),
-				),
-			);
-	} else {
-		await db.insert(contactSubscriptions).values({
-			organizationId: ctx.organizationId,
-			contactId: ctx.contactId,
-			listId: action.list_id,
-			source: "automation",
-		});
-	}
 };
 
 const unsubscribeList: ActionHandler<UnsubscribeListAction> = async (
@@ -81,16 +66,17 @@ const unsubscribeList: ActionHandler<UnsubscribeListAction> = async (
 ) => {
 	const db = ctx.db;
 	if (!db) throw new Error("unsubscribe_list: db binding missing");
-	await assertListScope(action, ctx);
-	await db
-		.update(contactSubscriptions)
-		.set({ unsubscribedAt: new Date(), source: "automation" })
-		.where(
-			and(
-				eq(contactSubscriptions.contactId, ctx.contactId),
-				eq(contactSubscriptions.listId, action.list_id),
-			),
-		);
+	const list = await assertListScope(action, ctx);
+	await transitionContactSubscription(db, {
+		organizationId: ctx.organizationId,
+		scopeKey: list.scopeKey,
+		contactId: ctx.contactId,
+		listId: action.list_id,
+		type: "unsubscribed",
+		source: "automation",
+		actorId: ctx.automationId,
+		occurredAt: ctx.now,
+	});
 };
 
 // ---------------------------------------------------------------------------
@@ -115,15 +101,24 @@ async function recordAutomationConsent(
 	}
 	const matchingRecipients = await db
 		.select({
-			identifier: contactChannels.identifier,
+			id: contactChannels.id,
+			organizationId: contactChannels.organizationId,
+			identifierCiphertext: contactChannels.identifierCiphertext,
+			identifierHash: contactChannels.identifierHash,
+			identityKeyFingerprint: contactChannels.identityKeyFingerprint,
 			workspaceId: contacts.workspaceId,
 		})
 		.from(contactChannels)
 		.innerJoin(contacts, eq(contacts.id, contactChannels.contactId))
 		.where(and(...conditions));
+	const keyConfig = requireConsentHmacKeyConfig(ctx.env.ENCRYPTION_KEY);
+	const plaintextRecipients = await decryptContactChannelRows(
+		keyConfig,
+		matchingRecipients,
+	);
 	const recipients = [
 		...new Map(
-			matchingRecipients.map((recipient) => [
+			plaintextRecipients.map((recipient) => [
 				normalizeRecipientIdentifier(action.channel, recipient.identifier),
 				recipient,
 			]),
@@ -134,10 +129,9 @@ async function recordAutomationConsent(
 			`${action.type}: contact has no ${action.channel} identifier`,
 		);
 	}
-
 	await Promise.all(
 		recipients.map((recipient) =>
-			recordContactConsent(db, {
+			recordContactConsent(db, keyConfig, {
 				organizationId: ctx.organizationId,
 				workspaceId: recipient.workspaceId,
 				contactId: ctx.contactId,

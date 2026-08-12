@@ -18,7 +18,11 @@ const perform = async (z: ZObject, bundle: Bundle) => {
     }),
   });
 
-  const presign = presignResponse.data as { upload_url: string; url: string };
+  const presign = presignResponse.data as {
+    upload_url: string;
+    upload_headers: { 'Content-Type': string; 'If-None-Match': '*' };
+    url: string;
+  };
 
   // Zapier file fields contain a temporary, authenticated download URL. Stream
   // that response into R2 so large files are not copied into an extra Buffer.
@@ -33,10 +37,8 @@ const perform = async (z: ZObject, bundle: Bundle) => {
     url: presign.upload_url,
     method: 'PUT',
     headers: {
-      'Content-Type': contentType,
-      ...(contentLength && /^\d+$/.test(contentLength)
-        ? { 'Content-Length': contentLength }
-        : {}),
+      ...presign.upload_headers,
+      ...(contentLength && /^\d+$/.test(contentLength) ? { 'Content-Length': contentLength } : {}),
     },
     body: fileResponse.body,
     raw: true,
@@ -59,8 +61,7 @@ const uploadMedia = {
 
   display: {
     label: 'Upload Media',
-    description:
-      'Upload a media file to RelayAPI and return the confirmed media record.',
+    description: 'Upload a media file to RelayAPI and return the confirmed media record.',
   },
 
   operation: {
@@ -86,7 +87,7 @@ const uploadMedia = {
         required: true,
         default: 'image/jpeg',
         helpText:
-          'MIME type of the file (e.g. image/jpeg, image/png, video/mp4).',
+          'MIME type of the file (e.g. image/jpeg, video/mp4, audio/mpeg, application/pdf).',
       },
     ],
 

@@ -1,11 +1,15 @@
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
 import type { createDb } from "@relayapi/db";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { getOwnedAccount } from "../lib/accounts";
 import { fetchWithTimeout } from "../lib/fetch-timeout";
+import type { MutationEffectTracker } from "../lib/mutation-effect";
+import { trackSingleUnitProviderMutation } from "../lib/mutation-provider-boundary";
 import { isBlockedUrl } from "../lib/ssrf-guard";
 import { canAccessWorkspaceScope } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
 import { ErrorResponse, IdParam } from "../schemas/common";
 import {
 	GmbAttributeBody,
@@ -40,7 +44,7 @@ async function getGmbContext(
 	workspaceScope: "all" | string[] = "all",
 ) {
 	const account = await getOwnedAccount(db, accountId, orgId, encryptionKey);
-	if (!account || account.platform !== "googlebusiness") return null;
+	if (account?.platform !== "googlebusiness") return null;
 	if (!canAccessWorkspaceScope(workspaceScope, account.workspaceId))
 		return null;
 	if (!account.accessToken) return null;
@@ -62,28 +66,40 @@ async function gmbFetch(
 	url: string,
 	method: string,
 	body?: unknown,
+	tracker?: MutationEffectTracker,
 ): Promise<
 	| { ok: true; data: unknown }
 	| { ok: false; status: number; code: string; message: string }
 > {
-	const res = await fetchWithTimeout(url, {
-		method,
-		headers: {
-			Authorization: `Bearer ${accessToken}`,
-			"Content-Type": "application/json",
-		},
-		body: body ? JSON.stringify(body) : undefined,
-		timeout: 5_000,
-	});
+	const operation = () =>
+		fetchWithTimeout(url, {
+			method,
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+				"Content-Type": "application/json",
+			},
+			body: body ? JSON.stringify(body) : undefined,
+			timeout: 5_000,
+		});
+	const res =
+		method === "GET"
+			? await operation()
+			: await trackSingleUnitProviderMutation(
+					tracker,
+					`googlebusiness.${method.toLowerCase()}`,
+					operation,
+				);
 
 	if (res.ok) {
-		const text = await res.text();
+		const text = await readProviderText(res);
 		return { ok: true, data: text ? JSON.parse(text) : {} };
 	}
 
 	let message = `Google API error (${res.status})`;
 	try {
-		const errBody = (await res.json()) as { error?: { message?: string } };
+		const errBody = (await readProviderJson(res)) as {
+			error?: { message?: string };
+		};
 		if (errBody.error?.message) message = errBody.error.message;
 	} catch {}
 
@@ -445,6 +461,7 @@ const deletePlaceAction = createRoute({
 // ---------------------------------------------------------------------------
 
 function notFound(c: AppContext) {
+	markMutationInputNotApplied(c);
 	return c.json(
 		{
 			error: {
@@ -457,6 +474,7 @@ function notFound(c: AppContext) {
 }
 
 function missingGoogleAccount(c: AppContext) {
+	markMutationInputNotApplied(c);
 	return c.json(
 		{
 			error: {
@@ -526,7 +544,13 @@ app.openapi(putFoodMenus, async (c) => {
 		? `?updateMask=${encodeURIComponent(update_mask)}`
 		: "";
 	const url = `https://mybusiness.googleapis.com/v4/${ctx.googleAccountName}/${ctx.locationName}/foodMenus${maskParam}`;
-	const result = await gmbFetch(ctx.accessToken, url, "PATCH", menuData);
+	const result = await gmbFetch(
+		ctx.accessToken,
+		url,
+		"PATCH",
+		menuData,
+		c.get("mutationEffectTracker"),
+	);
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });
@@ -576,7 +600,13 @@ app.openapi(putLocationDetails, async (c) => {
 	// https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/patch
 	const { update_mask, ...locationData } = body;
 	const url = `https://mybusinessbusinessinformation.googleapis.com/v1/${ctx.locationName}?updateMask=${encodeURIComponent(update_mask)}`;
-	const result = await gmbFetch(ctx.accessToken, url, "PATCH", locationData);
+	const result = await gmbFetch(
+		ctx.accessToken,
+		url,
+		"PATCH",
+		locationData,
+		c.get("mutationEffectTracker"),
+	);
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });
@@ -622,6 +652,7 @@ app.openapi(postMedia, async (c) => {
 
 	// SECURITY: Block private/internal URLs
 	if (isBlockedUrl(body.source_url)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -636,12 +667,18 @@ app.openapi(postMedia, async (c) => {
 	// Google Business Profile — Create media
 	// https://developers.google.com/my-business/reference/rest/v4/accounts.locations.media/create
 	const url = `https://mybusiness.googleapis.com/v4/${ctx.googleAccountName}/${ctx.locationName}/media`;
-	const result = await gmbFetch(ctx.accessToken, url, "POST", {
-		mediaFormat: "PHOTO",
-		locationAssociation: { category: body.category },
-		sourceUrl: body.source_url,
-		description: body.description,
-	});
+	const result = await gmbFetch(
+		ctx.accessToken,
+		url,
+		"POST",
+		{
+			mediaFormat: "PHOTO",
+			locationAssociation: { category: body.category },
+			sourceUrl: body.source_url,
+			description: body.description,
+		},
+		c.get("mutationEffectTracker"),
+	);
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });
@@ -664,7 +701,13 @@ app.openapi(deleteMedia, async (c) => {
 	// Google Business Profile — Delete media
 	// https://developers.google.com/my-business/reference/rest/v4/accounts.locations.media/delete
 	const url = `https://mybusiness.googleapis.com/v4/${ctx.googleAccountName}/${ctx.locationName}/media/${media_id}`;
-	const result = await gmbFetch(ctx.accessToken, url, "DELETE");
+	const result = await gmbFetch(
+		ctx.accessToken,
+		url,
+		"DELETE",
+		undefined,
+		c.get("mutationEffectTracker"),
+	);
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });
@@ -709,9 +752,13 @@ app.openapi(putAttributes, async (c) => {
 	// Google Business Information — Patch attributes
 	// https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations.attributes
 	const url = `https://mybusinessbusinessinformation.googleapis.com/v1/${ctx.locationName}/attributes?attributeMask=${encodeURIComponent(body.attribute_mask)}`;
-	const result = await gmbFetch(ctx.accessToken, url, "PATCH", {
-		attributes: body.attributes,
-	});
+	const result = await gmbFetch(
+		ctx.accessToken,
+		url,
+		"PATCH",
+		{ attributes: body.attributes },
+		c.get("mutationEffectTracker"),
+	);
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });
@@ -756,11 +803,17 @@ app.openapi(postPlaceAction, async (c) => {
 	// Google Business Place Actions — Create place action link
 	// https://developers.google.com/my-business/reference/placeactions/rest/v1/locations.placeActionLinks/create
 	const url = `https://mybusinessplaceactions.googleapis.com/v1/${ctx.locationName}/placeActionLinks`;
-	const result = await gmbFetch(ctx.accessToken, url, "POST", {
-		placeActionType: body.type,
-		uri: body.url,
-		...(body.name && { name: body.name }),
-	});
+	const result = await gmbFetch(
+		ctx.accessToken,
+		url,
+		"POST",
+		{
+			placeActionType: body.type,
+			uri: body.url,
+			...(body.name && { name: body.name }),
+		},
+		c.get("mutationEffectTracker"),
+	);
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });
@@ -782,7 +835,13 @@ app.openapi(deletePlaceAction, async (c) => {
 	// Google Business Place Actions — Delete place action link
 	// https://developers.google.com/my-business/reference/placeactions/rest/v1/locations.placeActionLinks/delete
 	const url = `https://mybusinessplaceactions.googleapis.com/v1/${ctx.locationName}/placeActionLinks/${action_id}`;
-	const result = await gmbFetch(ctx.accessToken, url, "DELETE");
+	const result = await gmbFetch(
+		ctx.accessToken,
+		url,
+		"DELETE",
+		undefined,
+		c.get("mutationEffectTracker"),
+	);
 	if (!result.ok) return googleError(c, result);
 	return c.json({ data: result.data }, 200);
 });

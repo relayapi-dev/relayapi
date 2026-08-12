@@ -1,126 +1,25 @@
-import { env } from "cloudflare:workers";
-import { render } from "@react-email/render";
-import { eq, invitation, member, organization, user } from "@relayapi/db";
 import type { APIRoute } from "astro";
-import { and } from "drizzle-orm";
-import { Resend } from "resend";
-import { canManageOrganizationCredentials } from "../../../../lib/credential-authorization";
-import { InvitationEmail } from "../../../../lib/emails/invitation-email";
+import { handleSdkError, requireClient } from "../../../../lib/api-utils";
 
 export const POST: APIRoute = async (context) => {
-	const currentUser = context.locals.user;
-	if (!currentUser) {
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
-	}
-
 	const id = context.params.id;
 	if (!id) {
 		return Response.json({ error: "Missing invitation ID" }, { status: 400 });
 	}
-
-	const db = context.locals.db;
-	const cfEnv: Cloudflare.Env = env;
+	const client = await requireClient(context);
+	if (client instanceof Response) return client;
 
 	try {
-		const [row] = await db
-			.select({
-				id: invitation.id,
-				email: invitation.email,
-				role: invitation.role,
-				status: invitation.status,
-				organizationId: invitation.organizationId,
-				organizationName: organization.name,
-				inviterEmail: user.email,
-			})
-			.from(invitation)
-			.innerJoin(organization, eq(invitation.organizationId, organization.id))
-			.innerJoin(user, eq(invitation.inviterId, user.id))
-			.where(eq(invitation.id, id))
-			.limit(1);
-
-		if (!row) {
-			return Response.json({ error: "Invitation not found" }, { status: 404 });
-		}
-
-		// AUTHZ: the caller must be an owner/admin of the invitation's org.
-		// Without this, any authenticated user could resend (and re-trigger the
-		// invite email for) any invitation by guessing its id (IDOR).
-		const currentUserId = currentUser.id as string;
-		const [membership] = await db
-			.select({ role: member.role })
-			.from(member)
-			.where(
-				and(
-					eq(member.userId, currentUserId),
-					eq(member.organizationId, row.organizationId),
-				),
-			)
-			.limit(1);
-
-		if (!canManageOrganizationCredentials(membership?.role)) {
-			return Response.json({ error: "Forbidden" }, { status: 403 });
-		}
-
-		if (row.status !== "pending") {
-			return Response.json(
-				{ error: "Invitation is no longer pending" },
-				{ status: 400 },
-			);
-		}
-
-		const baseUrl = cfEnv.BETTER_AUTH_URL || context.url.origin;
-		const inviteUrl = `${baseUrl}/invite/${row.id}`;
-
-		const html = await render(
-			InvitationEmail({
-				invitedByEmail: row.inviterEmail,
-				organizationName: row.organizationName,
-				role: row.role || "member",
-				inviteUrl,
-			}),
-		);
-
-		const emailMessage = {
-			id: crypto.randomUUID(),
-			organization_id: row.organizationId,
-			to: row.email,
-			subject: `You've been invited to join ${row.organizationName} on RelayAPI`,
-			html,
-			from: "RelayAPI <notifications@relayapi.dev>",
-		};
-
-		const queue = cfEnv.EMAIL_QUEUE;
-		if (queue) {
-			await queue.send(emailMessage);
-		} else if (cfEnv.RESEND_API_KEY) {
-			const resend = new Resend(cfEnv.RESEND_API_KEY);
-			const { error } = await resend.emails.send(
-				{
-					from: emailMessage.from,
-					to: emailMessage.to,
-					subject: emailMessage.subject,
-					html: emailMessage.html,
-				},
-				{ idempotencyKey: emailMessage.id },
-			);
-			if (error) {
-				throw new Error(
-					`Invitation email provider rejected request: ${error.name}`,
-				);
-			}
-		} else {
-			return Response.json(
-				{ error: "Email service not configured" },
-				{ status: 500 },
-			);
-		}
-
-		return Response.json({ success: true });
-	} catch (e) {
-		console.error("Failed to resend invitation:", e);
-		return Response.json(
-			{ error: "Failed to resend invitation" },
-			{ status: 500 },
-		);
+		const requestedKey = context.request.headers.get("Idempotency-Key")?.trim();
+		const idempotencyKey =
+			requestedKey && /^[A-Za-z0-9._:-]{8,200}$/.test(requestedKey)
+				? requestedKey
+				: crypto.randomUUID();
+		const staged = await client.emailIntents.resendInvitation(id, {
+			idempotencyKey,
+		});
+		return Response.json({ success: true, ...staged }, { status: 202 });
+	} catch (error) {
+		return handleSdkError(error);
 	}
 };

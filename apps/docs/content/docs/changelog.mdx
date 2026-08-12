@@ -4,12 +4,35 @@ description: Latest updates and improvements to the RelayAPI platform.
 icon: History
 ---
 
+## August 2026
+
+### Advanced publishing, interactions, reports, and media
+
+- Added typed advanced publishing options for Instagram Trial Reels and custom covers, TikTok creator-inbox uploads, Facebook unpublished/geo-targeted posts and Reel states, X geo/sensitive-media fields, Discord polls/forum threads/TTS, and Threads polls/quotes/location tags.
+- Added 200 MiB direct-to-storage upload sessions with resumable multipart upload above 64 MiB. The Worker-proxy route remains 50 MiB.
+- Media responses now separate the stable post-attachment `reference_url` from the potentially expiring read `url`; hosted and self-host provisioning pin upload CORS to the dashboard origin and expose multipart `ETag`.
+- Added optional asynchronous, fail-open image/video/audio normalization plus stable custom-cover derivatives. Self-hosted operators opt in to the private ffmpeg Container and Workflow with `--media-processing`.
+- Added durable published-text edits for X, Facebook, Discord, and Reddit plus provider-backed message/comment edits, read receipts, mentions, moderation, likes, votes, and ratings on the documented platform matrix.
+- Added conservatively capability-gated WhatsApp Groups administration, invite/join/participant-removal operations, group messaging/pins, block lists, business usernames, BSUID-safe webhook/reply handling, and template library/editing. Only a successful feature-specific read reports `supported`; write/webhook eligibility without a safe proof endpoint remains explicit. Mutations require operation-specific confirmation rather than treating every HTTP `2xx` as success. Calling/telephony, manual participant addition, and proprietary sandbox/version history are not included.
+- Added durable TikTok and X ad-report jobs and approval-gated LinkedIn report reads. Lead inbox ingestion, conversion delivery, forecasts, and keyword planning remain unsupported; advanced asset/catalog/messaging endpoints link gated local projections rather than creating provider resources.
+- Expanded provider grants for the new operations. Existing Facebook, Instagram, TikTok, Threads, X, YouTube, Reddit, and WhatsApp connections must be reauthorized when they need missing scopes; refresh alone cannot add them.
+
+### Provider correctness and containment remediation
+
+- Added Slack as publishing channel 22 through validated Slack/GovSlack incoming webhooks, including channel-bound publishing, blocks, attachments, media links, and caller-supplied `thread_ts` replies.
+- Added public Discord webhook and Twilio SMS connectors, a permission-verified Telegram managed-bot challenge, dynamic per-instance Mastodon OAuth, and connector-owned provider identity boundaries. Pre-change Snapchat accounts must reconnect to a verified Public Profile.
+- Hardened asynchronous publisher lifecycles and durable partial effects, including Facebook/Twilio reconciliation, monotonic signed WhatsApp delivery callbacks, Telegram album message journals, TikTok terminal completion, and multi-step thread/newsletter recovery.
+- Rolled out registered adapters and dedicated credential authority for all six advertised ad networks. Account discovery and external sync now cover Meta, Google, TikTok, LinkedIn, Pinterest, and X; every read/write remains governed by the per-operation capability and provider-approval response from `GET /v1/ads/platforms`.
+- Scoped all seven stored analytics endpoints through the owning post's workspace, wired their documented filters, bounded result/time-series work, and isolated best-time cache keys by authorization scope.
+- Added pre-parse request containment: 4 MiB authenticated JSON, 2 MiB bulk-CSV multipart, and 3 MiB idea-media multipart envelopes, with exact byte counting for unknown-length bodies and `415` for compressed buffered JSON.
+- Expanded published-post deletion to Twitter/X, Facebook, LinkedIn, Reddit, Pinterest, Threads, YouTube, Bluesky, Google Business, Telegram, Mastodon, and Discord while retaining unsupported targets with truthful per-target errors.
+
 ## March 2026
 
 ### Initial Release
 
 - Launch of the RelayAPI unified social media API
-- Support for 21 platforms: Twitter/X, Instagram, Facebook, LinkedIn, TikTok, YouTube, Pinterest, Reddit, Bluesky, Threads, Telegram, Snapchat, Discord, Mastodon, WhatsApp, Google Business Profile, SMS, Beehiiv, ConvertKit, Mailchimp, Listmonk
+- Support for 21 publishing channels: Twitter/X, Instagram, Facebook, LinkedIn, TikTok, YouTube, Pinterest, Reddit, Bluesky, Threads, Telegram, Snapchat, Discord, Mastodon, WhatsApp, Google Business Profile, SMS, Beehiiv, ConvertKit, Mailchimp, Listmonk
 - Post creation, scheduling, and publishing
 - Media upload with R2 storage
 - Webhook notifications

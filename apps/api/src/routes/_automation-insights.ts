@@ -10,19 +10,22 @@
 
 import { z } from "@hono/zod-openapi";
 import {
+	AUTOMATION_STEP_FAILURE_OUTCOME,
 	automationEntrypoints,
 	automationRuns,
 	automationStepRuns,
 	automations,
+	type Database,
 } from "@relayapi/db";
-import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
-import type { Database } from "@relayapi/db";
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Query params
 // ---------------------------------------------------------------------------
 
-const PeriodSchema = z.enum(["24h", "7d", "30d", "90d", "custom"]).default("7d");
+const PeriodSchema = z
+	.enum(["24h", "7d", "30d", "90d", "custom"])
+	.default("7d");
 
 const BaseInsightsQuery = z.object({
 	period: PeriodSchema,
@@ -108,7 +111,9 @@ export function resolvePeriod(query: {
 	const now = new Date();
 	const period = query.period ?? "7d";
 	if (period === "custom") {
-		const from = query.from ? new Date(query.from) : new Date(now.getTime() - 7 * 24 * 3600 * 1000);
+		const from = query.from
+			? new Date(query.from)
+			: new Date(now.getTime() - 7 * 24 * 3600 * 1000);
 		const to = query.to ? new Date(query.to) : now;
 		return { from, to };
 	}
@@ -247,7 +252,11 @@ export async function aggregateInsights(
 				out.totals.waiting = n;
 				break;
 		}
-		if (r.status === "completed" || r.status === "exited" || r.status === "failed") {
+		if (
+			r.status === "completed" ||
+			r.status === "exited" ||
+			r.status === "failed"
+		) {
 			durationTotalMs += Number(r.avgMs ?? 0) * n;
 			durationCount += n;
 		}
@@ -298,12 +307,11 @@ export async function aggregateInsights(
 		};
 	});
 
-	// 4. Per node — group step_runs by (node_key, node_kind).
-	// Because automation_step_runs has no organization_id column (it's
-	// partitioned and denormalized by automation_id), we MUST scope to a
-	// specific automation set — either the explicit one, the template /
-	// workspace filter, OR the org's automation ids — before aggregating.
+	// 4. Per node — group step_runs by (node_key, node_kind). Tenant identity is
+	// projected from the authoritative run and protected by a composite FK, so
+	// every analytical query starts with the direct organization fence.
 	const stepConds: SQL[] = [
+		eq(automationStepRuns.organizationId, scope.orgId),
 		sql`${automationStepRuns.executedAt} >= ${from.toISOString()}`,
 		sql`${automationStepRuns.executedAt} <= ${to.toISOString()}`,
 	];
@@ -313,18 +321,6 @@ export async function aggregateInsights(
 		stepConds.push(
 			inArray(automationStepRuns.automationId, filteredAutomationIds),
 		);
-	} else {
-		// No explicit automation scope yet — fetch the org's full automation id
-		// set so the aggregate stays tenant-bounded.
-		const orgAutomationRows = await db
-			.select({ id: automations.id })
-			.from(automations)
-			.where(eq(automations.organizationId, scope.orgId));
-		const ids = orgAutomationRows.map((r) => r.id);
-		if (ids.length === 0) {
-			return out;
-		}
-		stepConds.push(inArray(automationStepRuns.automationId, ids));
 	}
 	// Scope step-runs to the runs whose entrypoint / binding we're filtering by.
 	if (scope.entrypointId || scope.bindingId) {
@@ -356,7 +352,7 @@ export async function aggregateInsights(
 			nodeKey: automationStepRuns.nodeKey,
 			kind: automationStepRuns.nodeKind,
 			executions: sql<number>`count(*)::int`,
-			successes: sql<number>`sum(case when ${automationStepRuns.outcome} != 'fail' then 1 else 0 end)::int`,
+			successes: sql<number>`sum(case when ${automationStepRuns.outcome} != ${AUTOMATION_STEP_FAILURE_OUTCOME} then 1 else 0 end)::int`,
 		})
 		.from(automationStepRuns)
 		.where(and(...stepConds))
@@ -374,7 +370,12 @@ export async function aggregateInsights(
 			count: sql<number>`count(*)::int`,
 		})
 		.from(automationStepRuns)
-		.where(and(...stepConds, sql`${automationStepRuns.exitedViaPortKey} IS NOT NULL`))
+		.where(
+			and(
+				...stepConds,
+				sql`${automationStepRuns.exitedViaPortKey} IS NOT NULL`,
+			),
+		)
 		.groupBy(automationStepRuns.nodeKey, automationStepRuns.exitedViaPortKey);
 
 	const perPortByNode = new Map<string, Record<string, number>>();

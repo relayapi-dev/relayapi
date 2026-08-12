@@ -14,7 +14,10 @@
 
 import type { Action } from "../../../schemas/automation-actions";
 import { dispatchAction } from "../actions";
-import type { NodeHandler } from "../types";
+import {
+	isAutomationExternalEffectControlError,
+	type NodeHandler,
+} from "../types";
 
 type ActionGroupConfig = {
 	actions: Action[];
@@ -33,8 +36,8 @@ export const actionGroupHandler: NodeHandler<ActionGroupConfig> = {
 				await dispatchAction(action, ctx);
 				results.push({ id: action.id, ok: true });
 			} catch (err: unknown) {
-				const message =
-					err instanceof Error ? err.message : String(err);
+				if (isAutomationExternalEffectControlError(err)) throw err;
+				const message = err instanceof Error ? err.message : String(err);
 				results.push({ id: action.id, ok: false, error: message });
 				const onError = action.on_error ?? "abort";
 				if (onError === "abort") {

@@ -1,0 +1,16 @@
+{
+	"$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+	"packages": {
+		"apps/cli": {
+			"package-name": "@relayapi/cli",
+			"release-type": "node",
+			"extra-files": [
+				{
+					"type": "generic",
+					"path": "src/version.ts",
+					"glob": false
+				}
+			]
+		}
+	}
+}

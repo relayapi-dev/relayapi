@@ -1,6 +1,6 @@
 ---
 name: relayapi
-description: Post to 21 platforms via a single unified API. Manage accounts, groups, media, scheduling, analytics, inbox, and webhooks through RelayAPI. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
+description: Post to 22 platforms via a single unified API. Manage accounts, workspaces, media, scheduling, analytics, inbox, and webhooks through RelayAPI. Activate when the user mentions social media posting, cross-posting, scheduling posts, managing social accounts, analytics, inbox, comments, or webhooks.
 version: 1.0.0
 metadata:
   openclaw:
@@ -16,7 +16,7 @@ metadata:
 
 # RelayAPI – Unified Social Media API
 
-You have access to RelayAPI, a unified API for managing 21 platforms. Use the `RELAYAPI_API_KEY` environment variable for authentication.
+You have access to RelayAPI, a unified API for managing 22 platforms. Use the `RELAYAPI_API_KEY` environment variable for authentication.
 
 ## Authentication
 
@@ -46,9 +46,9 @@ Authorization: Bearer $RELAYAPI_API_KEY
 
 Base URL: `https://api.relayapi.dev`
 
-## Supported Platforms (21)
+## Supported Platforms (22)
 
-`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `sms`, `beehiiv`, `convertkit`, `mailchimp`, `listmonk`
+`twitter`, `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube`, `pinterest`, `reddit`, `bluesky`, `threads`, `telegram`, `snapchat`, `googlebusiness`, `whatsapp`, `mastodon`, `discord`, `slack`, `sms`, `beehiiv`, `convertkit`, `mailchimp`, `listmonk`
 
 ---
 
@@ -74,7 +74,7 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 | `content` | string | No* | Post text. Optional if every target has content in `target_options`. |
 | `targets` | string[] | Yes (min 1) | Where to publish. See "Target Resolution" below. |
 | `scheduled_at` | string | Yes | `"now"` = publish immediately, `"draft"` = save as draft, or ISO 8601 datetime (e.g. `"2026-06-01T12:00:00Z"`) to schedule. |
-| `media` | array | No | Media attachments: `[{ "url": "https://...", "type": "image" }]`. Type can be `"image"`, `"video"`, `"gif"`, or `"document"`. If omitted, type is inferred from the file extension. |
+| `media` | array | No | Media attachments: `[{ "url": "https://...", "type": "image" }]`. Type can be `"image"`, `"video"`, `"gif"`, `"document"`, or `"audio"`. If omitted, type is inferred from the file extension. |
 | `target_options` | object | No | Per-target content overrides. Keys are target values (platform name, account ID, or workspace ID). |
 | `timezone` | string | No | IANA timezone for scheduling (default: `"UTC"`). Example: `"America/New_York"`. |
 | `workspace_id` | string | No | Scope the post to a specific workspace. If omitted, operates across all workspaces. |
@@ -95,23 +95,23 @@ If the user has 2 Twitter accounts connected, the post goes to both.
 ```
 Use `GET /v1/accounts` to find account IDs.
 
-**3. Workspace ID** — publishes to ALL accounts in a group:
+**3. Workspace ID** — publishes to ALL accounts in a workspace:
 ```json
 { "targets": ["ws_xyz789"] }
 ```
-Use `GET /v1/workspaces` to find workspace IDs. A group named "Marketing" with a Twitter and Instagram account will publish to both.
+Use `GET /v1/workspaces` to find workspace IDs. A workspace named "Marketing" with a Twitter and Instagram account will publish to both.
 
 **Mixed example:**
 ```json
 { "targets": ["ws_marketing", "acc_ceo_linkedin", "youtube"] }
 ```
-This publishes to all accounts in the "Marketing" group + the CEO's specific LinkedIn account + all YouTube accounts.
+This publishes to all accounts in the "Marketing" workspace + the CEO's specific LinkedIn account + all YouTube accounts.
 
 **Error codes for failed targets:**
 - `NO_ACCOUNT` — no accounts exist for the platform name
 - `ACCOUNT_NOT_FOUND` — the `acc_*` ID doesn't exist in this workspace
-- `WORKSPACE_NOT_FOUND` — the `grp_*` ID doesn't exist in this workspace
-- `EMPTY_WORKSPACE` — the group exists but has no accounts assigned
+- `WORKSPACE_NOT_FOUND` — the `ws_*` ID doesn't exist in this organization
+- `EMPTY_WORKSPACE` — the workspace exists but has no accounts assigned
 - `INVALID_TARGET` — not a valid platform name, account ID, or workspace ID
 
 ### Per-Platform Customization
@@ -136,8 +136,20 @@ You can also key by account ID or workspace ID:
 {
   "target_options": {
     "acc_abc123": { "content": "Custom for this specific account" },
-    "ws_xyz": { "content": "Custom for all accounts in this group" }
+    "ws_xyz": { "content": "Custom for all accounts in this workspace" }
   }
+}
+```
+
+Audio is a first-class media type. WhatsApp audio messages require a digits-only
+recipient under `target_options.whatsapp.to` and cannot include caption content:
+
+```json
+{
+  "targets": ["whatsapp"],
+  "scheduled_at": "now",
+  "media": [{ "url": "https://example.com/voice.mp3", "type": "audio" }],
+  "target_options": { "whatsapp": { "to": "15551234567" } }
 }
 ```
 
@@ -157,18 +169,33 @@ You can also key by account ID or workspace ID:
 
 **Option 2 — Upload first, then reference** (more reliable):
 ```bash
-# Get a presigned upload URL
-curl -X POST https://api.relayapi.dev/v1/media/presign \
+# Create a pending upload intent
+presign="$(curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/presign \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "filename": "photo.jpg", "content_type": "image/jpeg" }'
+  -d '{"filename":"photo.jpg","content_type":"image/jpeg"}')"
 
-# Upload the file to the presigned URL (returned in response)
-curl -X PUT "<presigned_url>" \
-  -H "Content-Type: image/jpeg" \
+upload_url="$(printf '%s' "$presign" | jq -r '.upload_url')"
+upload_content_type="$(printf '%s' "$presign" | jq -r '.upload_headers["Content-Type"]')"
+upload_precondition="$(printf '%s' "$presign" | jq -r '.upload_headers["If-None-Match"]')"
+media_url="$(printf '%s' "$presign" | jq -r '.url')"
+storage_key="${media_url#https://media.relayapi.dev/}"
+
+# PUT once using every exact header returned above
+curl --fail-with-body -sS -X PUT "$upload_url" \
+  -H "Content-Type: $upload_content_type" \
+  -H "If-None-Match: $upload_precondition" \
   --data-binary @photo.jpg
 
-# Use the media URL in a post
+# Confirm the object before attaching it (mandatory)
+jq -n --arg storage_key "$storage_key" '{storage_key: $storage_key}' | \
+  curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/confirm \
+    -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+    -H "Content-Type: application/json" \
+    --data-binary @-
+
+# Use media: [{"url": media_url, "type": "image"}] in the post body.
+# The presign response also contains the pending intent id and expires_in.
 ```
 
 **Option 3 — Direct upload:**
@@ -291,11 +318,11 @@ curl "https://api.relayapi.dev/v1/posts/logs?limit=50" \
 curl https://api.relayapi.dev/v1/accounts \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Filter by group
+# Filter by workspace
 curl "https://api.relayapi.dev/v1/accounts?workspace_id=ws_abc123" \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Ungrouped accounts only
+# Accounts not assigned to a workspace
 curl "https://api.relayapi.dev/v1/accounts?ungrouped=true" \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
@@ -314,7 +341,7 @@ Response per account:
   "display_name": "John Doe",
   "avatar_url": "https://...",
   "metadata": {},
-  "group": { "id": "ws_xyz", "name": "Marketing" },
+  "workspace": { "id": "ws_xyz", "name": "Marketing" },
   "connected_at": "2026-01-15T10:00:00Z",
   "updated_at": "2026-03-30T14:00:00Z"
 }
@@ -340,7 +367,7 @@ curl -X PATCH https://api.relayapi.dev/v1/accounts/{account_id} \
   }'
 ```
 
-Set `"workspace_id": null` to remove from a group.
+Set `"workspace_id": null` to remove the account from its workspace.
 
 ### Disconnect (Delete) Account
 
@@ -367,30 +394,30 @@ Response: `{ "id", "platform", "username", "healthy": true/false, "token_expires
 
 ### Workspaces
 
-Groups let you organize accounts and publish to all of them at once using `grp_*` IDs as targets.
+Workspaces let you organize accounts and publish to all of them at once using `ws_*` IDs as targets.
 
 ```bash
-# List groups
+# List workspaces
 curl https://api.relayapi.dev/v1/workspaces \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Create group
+# Create workspace
 curl -X POST https://api.relayapi.dev/v1/workspaces \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{ "name": "Marketing Team", "description": "All brand accounts" }'
 
-# Update group
+# Update workspace
 curl -X PATCH https://api.relayapi.dev/v1/workspaces/{workspace_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{ "name": "Rebranded Team" }'
 
-# Delete group (accounts are ungrouped, not deleted)
+# Delete workspace (accounts are unassigned, not deleted)
 curl -X DELETE https://api.relayapi.dev/v1/workspaces/{workspace_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY"
 
-# Assign account to a group
+# Assign account to a workspace
 curl -X PATCH https://api.relayapi.dev/v1/accounts/{account_id} \
   -H "Authorization: Bearer $RELAYAPI_API_KEY" \
   -H "Content-Type: application/json" \
@@ -399,7 +426,7 @@ curl -X PATCH https://api.relayapi.dev/v1/accounts/{account_id} \
 
 **Workflow example — "publish to Marketing Team":**
 1. `GET /v1/workspaces` → find `ws_abc123` named "Marketing Team"
-2. `POST /v1/posts` with `"targets": ["ws_abc123"]` → publishes to all accounts in that group
+2. `POST /v1/posts` with `"targets": ["ws_abc123"]` → publishes to all accounts in that workspace
 
 ### Platform Sub-Resources
 
@@ -930,7 +957,7 @@ curl https://api.relayapi.dev/v1/usage/logs \
 | Facebook | 63,206 |
 | TikTok | 2,200 |
 | YouTube | 5,000 (description) |
-| Pinterest | 500 |
+| Pinterest | 800 |
 | Reddit | 40,000 |
 | Bluesky | 300 |
 | Threads | 500 |
@@ -977,9 +1004,9 @@ Headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
 
 - Always check post status after creation — `"now"` publishes asynchronously and the post can end up as `partial` or `failed`.
 - Use `target_options` to customize content per platform — different character limits and conventions require different text.
-- Use workspace IDs (`grp_*`) when the user refers to a collection of accounts by name.
+- Use workspace IDs (`ws_*`) when the user refers to a collection of accounts by name.
 - Use validation tools before publishing to catch issues early.
-- Upload media via presigned URLs for reliability.
+- Complete the presign -> PUT with every exact returned header -> confirm flow before attaching the canonical media URL.
 - Set up webhooks for real-time notifications instead of polling.
 - When the user says "post to X", first check `GET /v1/accounts` or `GET /v1/workspaces` to resolve what "X" means.
 - When the user wants stats, use `/v1/analytics/platform/overview` for live data or `/v1/analytics` for historical data.

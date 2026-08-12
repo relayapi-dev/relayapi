@@ -15,21 +15,92 @@ function authorizationSelect(options: {
 	requireWorkspaceId?: boolean;
 	keyAvailable?: boolean;
 	existingWorkspaceId?: string | null;
+	principalType?: "dashboard_user" | "service";
+	userBanned?: boolean;
+	userCredentialVersion?: string;
+	keyCredentialVersion?: string;
+	sessionAvailable?: boolean;
+	sessionExpiresAt?: Date;
+	sessionOrganizationId?: string;
+	sessionImpersonatedBy?: string | null;
 }) {
+	let workspaceIdSelection = 0;
 	return (selection: Record<string, unknown> = {}) => {
 		const selected = new Set(Object.keys(selection));
 		const rows = () => {
-			if (selected.has("referenceId")) {
+			const principalType = options.principalType ?? "service";
+			const dashboard = principalType === "dashboard_user";
+			const credentialVersion = options.keyCredentialVersion ?? "generation-1";
+			if (selected.has("principalKind")) {
 				return options.keyAvailable === false
 					? []
 					: [
 							{
 								id: "key_test",
-								referenceId: null,
-								permissions: "write",
-								metadata: {
-									workspace_scope: options.workspaceScope ?? "all",
-								},
+								referenceId: dashboard ? "usr_test" : null,
+								principalId: "prn_test",
+								principalKind: dashboard ? "member" : "service",
+								principalMemberId: dashboard ? "mem_test" : null,
+							},
+						];
+			}
+			if (selected.has("banned")) {
+				return [
+					{
+						id: "usr_test",
+						banned: options.userBanned ?? false,
+						banExpires: null,
+						credentialVersion: options.userCredentialVersion ?? "generation-1",
+					},
+				];
+			}
+			if (selected.has("role")) {
+				return [
+					{
+						id: "mem_test",
+						role: "member",
+						userId: "usr_test",
+						organizationId: "org_test",
+					},
+				];
+			}
+			if (selected.has("enabled")) {
+				return [
+					{
+						id: "key_test",
+						referenceId: dashboard ? "usr_test" : null,
+						principalId: "prn_test",
+						credentialVersion,
+						enabled: true,
+						expiresAt: null,
+						permissions: dashboard ? "read,write" : "write",
+					},
+				];
+			}
+			if (selected.has("scopeMode")) {
+				const workspaceScope = options.workspaceScope ?? "all";
+				return [
+					{
+						id: "prn_test",
+						kind: dashboard ? "member" : "service",
+						memberId: dashboard ? "mem_test" : null,
+						scopeMode: workspaceScope === "all" ? "all" : "selected",
+						lifecycleStatus: "active",
+					},
+				];
+			}
+			if (selected.has("activeOrganizationId")) {
+				return options.sessionAvailable === false
+					? []
+					: [
+							{
+								id: "session_test",
+								userId: "usr_test",
+								activeOrganizationId:
+									options.sessionOrganizationId ?? "org_test",
+								impersonatedBy: options.sessionImpersonatedBy ?? null,
+								expiresAt:
+									options.sessionExpiresAt ?? new Date("2999-01-01T00:00:00Z"),
 							},
 						];
 			}
@@ -37,6 +108,13 @@ function authorizationSelect(options: {
 				return [{ requireWorkspaceId: options.requireWorkspaceId ?? false }];
 			}
 			if (selected.has("workspaceId")) {
+				workspaceIdSelection += 1;
+				if (
+					Array.isArray(options.workspaceScope) &&
+					workspaceIdSelection === 1
+				) {
+					return options.workspaceScope.map((workspaceId) => ({ workspaceId }));
+				}
 				return "existingWorkspaceId" in options
 					? [{ workspaceId: options.existingWorkspaceId ?? null }]
 					: [];
@@ -47,8 +125,12 @@ function authorizationSelect(options: {
 			from: () => chain,
 			innerJoin: () => chain,
 			where: () => chain,
+			orderBy: () => chain,
 			for: () => chain,
 			limit: async () => rows(),
+			// biome-ignore lint/suspicious/noThenProperty: intentional Drizzle thenable
+			then: (resolve: (value: ReturnType<typeof rows>) => void) =>
+				resolve(rows()),
 		};
 		return chain;
 	};
@@ -102,6 +184,7 @@ describe("connected account credential writes", () => {
 			KEY_CONFIG,
 			{
 				apiKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				insert: {
 					organizationId: "org_test",
@@ -151,11 +234,10 @@ describe("connected account credential writes", () => {
 			},
 		} as unknown as Database;
 
-		const account = await upsertConnectedAccountWithCredentials(
-			db,
-			KEY_CONFIG,
-			{
+		await expect(
+			upsertConnectedAccountWithCredentials(db, KEY_CONFIG, {
 				apiKeyId: "key_test",
+				authoritySessionId: null,
 				authorizedWorkspaceScope: "all",
 				insert: {
 					organizationId: "org_deleting",
@@ -164,10 +246,8 @@ describe("connected account credential writes", () => {
 				},
 				update: {},
 				accessToken: "new-access",
-			},
-		);
-
-		expect(account).toBeUndefined();
+			}),
+		).rejects.toBeInstanceOf(AccountWorkspaceAccessError);
 		expect(inserted).toBe(false);
 		expect(updated).toBe(false);
 	});
@@ -177,6 +257,7 @@ describe("connected account credential writes", () => {
 			select: authorizationSelect({
 				lifecycleStatus: "active",
 				workspaceScope: ["ws_a"],
+				principalType: "dashboard_user",
 			}),
 			insert: () => ({
 				values: () => ({
@@ -209,6 +290,7 @@ describe("connected account credential writes", () => {
 			KEY_CONFIG,
 			{
 				apiKeyId: "key_test",
+				authoritySessionId: "session_test",
 				authorizedWorkspaceScope: ["ws_a"],
 				insert: {
 					organizationId: "org_test",
@@ -254,6 +336,7 @@ describe("connected account credential writes", () => {
 			expect(
 				upsertConnectedAccountWithCredentials(db, KEY_CONFIG, {
 					apiKeyId: "key_test",
+					authoritySessionId: null,
 					authorizedWorkspaceScope: scopes.initial,
 					insert: {
 						organizationId: "org_test",
@@ -296,6 +379,7 @@ describe("connected account credential writes", () => {
 			expect(
 				upsertConnectedAccountWithCredentials(db, KEY_CONFIG, {
 					apiKeyId: "key_test",
+					authoritySessionId: null,
 					authorizedWorkspaceScope: authorization.workspaceScope,
 					insert: {
 						organizationId: "org_test",
@@ -309,6 +393,99 @@ describe("connected account credential writes", () => {
 			).rejects.toBeInstanceOf(AccountWorkspaceAccessError);
 			expect(identityWritten).toBe(false);
 			expect(credentialUpdated).toBe(false);
+		}
+	});
+
+	it("rejects an OAuth credential write after the initiating dashboard user is banned or rotated", async () => {
+		for (const authority of [
+			{ userBanned: true },
+			{ userCredentialVersion: "generation-2" },
+		]) {
+			let identityWritten = false;
+			const db = {
+				select: authorizationSelect({
+					lifecycleStatus: "active",
+					principalType: "dashboard_user",
+					...authority,
+				}),
+				insert: () => {
+					identityWritten = true;
+					throw new Error("revoked OAuth authority must not persist tokens");
+				},
+				update: () => {
+					throw new Error("revoked OAuth authority must not update tokens");
+				},
+			} as unknown as Database;
+
+			await expect(
+				upsertConnectedAccountWithCredentials(db, KEY_CONFIG, {
+					apiKeyId: "key_test",
+					authoritySessionId: "session_test",
+					authorizedWorkspaceScope: "all",
+					insert: {
+						organizationId: "org_test",
+						platform: "twitter",
+						platformAccountId: "provider-user",
+					},
+					update: {},
+					accessToken: "must-not-be-written",
+				}),
+			).rejects.toBeInstanceOf(AccountWorkspaceAccessError);
+			expect(identityWritten).toBe(false);
+		}
+	});
+
+	it("rejects a revoked, cross-organization, impersonated, or absent dashboard session before writing credentials", async () => {
+		for (const sessionAuthority of [
+			{ authoritySessionId: null, sessionAvailable: true },
+			{ authoritySessionId: "session_test", sessionAvailable: false },
+			{
+				authoritySessionId: "session_test",
+				sessionAvailable: true,
+				sessionOrganizationId: "org_other",
+			},
+			{
+				authoritySessionId: "session_test",
+				sessionAvailable: true,
+				sessionImpersonatedBy: "admin_user",
+			},
+			{
+				authoritySessionId: "session_test",
+				sessionAvailable: true,
+				sessionExpiresAt: new Date("2000-01-01T00:00:00Z"),
+			},
+		]) {
+			let identityWritten = false;
+			const db = {
+				select: authorizationSelect({
+					lifecycleStatus: "active",
+					principalType: "dashboard_user",
+					...sessionAuthority,
+				}),
+				insert: () => {
+					identityWritten = true;
+					throw new Error("revoked session must not persist credentials");
+				},
+				update: () => {
+					throw new Error("revoked session must not update credentials");
+				},
+			} as unknown as Database;
+
+			await expect(
+				upsertConnectedAccountWithCredentials(db, KEY_CONFIG, {
+					apiKeyId: "key_test",
+					authoritySessionId: sessionAuthority.authoritySessionId,
+					authorizedWorkspaceScope: "all",
+					insert: {
+						organizationId: "org_test",
+						platform: "twitter",
+						platformAccountId: "provider-user",
+					},
+					update: {},
+					accessToken: "must-not-be-written",
+				}),
+			).rejects.toBeInstanceOf(AccountWorkspaceAccessError);
+			expect(identityWritten).toBe(false);
 		}
 	});
 

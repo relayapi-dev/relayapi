@@ -17,19 +17,19 @@
 // Plan 2. Data shapes are unchanged — we consume the same `AutomationEntrypoint`
 // records fetched by the parent detail page.
 
-import { useCallback, useMemo, type ChangeEvent } from "react";
 import {
 	ChevronRight,
+	Copy,
 	Link2,
 	Loader2,
 	Plus,
 	Trash2,
 	Zap,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { type ChangeEvent, useCallback, useId, useMemo, useState } from "react";
 import { AccountSearchCombobox } from "@/components/dashboard/account-search-combobox";
 import { PostSearchCombobox } from "@/components/dashboard/post-search-combobox";
+import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -38,23 +38,24 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useMutation } from "@/hooks/use-api";
-import {
-	useAutomationCatalog,
-	type CatalogBindingType,
-	type CatalogEntrypointKind,
-} from "./use-catalog";
+import { cn } from "@/lib/utils";
 import {
 	bindingAccountHandle,
 	bindingLabel,
 	bindingStatusBadge,
 	type CanvasBindingRow,
 } from "../bindings-tab/display";
-import type { AutomationEntrypoint } from "./guided-flow";
-import { FilterGroupEditor, type FilterGroup } from "./filter-group-editor";
 import { INPUT_CLS } from "./field-styles";
+import { type FilterGroup, FilterGroupEditor } from "./filter-group-editor";
+import type { AutomationEntrypoint } from "./guided-flow";
 import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
+import {
+	type CatalogBindingType,
+	type CatalogEntrypointKind,
+	useAutomationCatalog,
+} from "./use-catalog";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -94,6 +95,38 @@ function humanizeKind(kind: string): string {
 		.join(" ");
 }
 
+function initialEntrypointPayload(kind: string): Record<string, unknown> {
+	switch (kind) {
+		case "schedule":
+			return {
+				config: { cron: "0 9 * * *", timezone: "UTC" },
+				status: "paused",
+			};
+		case "field_changed":
+			return { config: { field_keys: ["email"] }, status: "paused" };
+		case "tag_applied":
+		case "tag_removed":
+			return { config: { tag_ids: ["configure_me"] }, status: "paused" };
+		case "ref_link_click":
+			return { config: { ref_url_ids: ["configure_me"] }, status: "paused" };
+		case "conversion_event":
+			return { config: { event_names: ["conversion"] }, status: "paused" };
+		case "webhook_inbound":
+			return {
+				config: {
+					contact_lookup: {
+						by: "contact_id",
+						field_path: "contact_id",
+						auto_create_contact: false,
+					},
+				},
+				status: "paused",
+			};
+		default:
+			return { config: {} };
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Main panel — dispatches list vs. detail
 // ---------------------------------------------------------------------------
@@ -112,6 +145,13 @@ export function TriggerPanel({
 	onAddBinding,
 }: Props) {
 	const catalog = useAutomationCatalog();
+	const [revealedSecrets, setRevealedSecrets] = useState<
+		Record<string, string>
+	>({});
+	const [updateError, setUpdateError] = useState<{
+		id: string;
+		message: string;
+	} | null>(null);
 
 	const availableKinds = useMemo(() => {
 		if (!catalog.data) return [];
@@ -143,8 +183,20 @@ export function TriggerPanel({
 			const created = await createEntrypoint.mutate({
 				channel,
 				kind,
+				...initialEntrypointPayload(kind),
 			});
 			if (created) {
+				const secret = (
+					created as AutomationEntrypoint & {
+						webhook_secret_plaintext?: string;
+					}
+				).webhook_secret_plaintext;
+				if (secret) {
+					setRevealedSecrets((current) => ({
+						...current,
+						[created.id]: secret,
+					}));
+				}
 				onEntrypointsChanged();
 				onSelectEntrypoint(created.id);
 			}
@@ -154,6 +206,7 @@ export function TriggerPanel({
 
 	const handleUpdate = useCallback(
 		async (id: string, patch: Record<string, unknown>) => {
+			setUpdateError(null);
 			const res = await fetch(`/api/automation-entrypoints/${id}`, {
 				method: "PATCH",
 				headers: { "Content-Type": "application/json" },
@@ -161,7 +214,16 @@ export function TriggerPanel({
 			});
 			if (res.ok) {
 				onEntrypointsChanged();
+				return;
 			}
+			let message = `Could not update trigger (HTTP ${res.status}).`;
+			try {
+				const body = (await res.json()) as { error?: { message?: string } };
+				if (body.error?.message) message = body.error.message;
+			} catch {
+				// Keep the status-based fallback for non-JSON proxy errors.
+			}
+			setUpdateError({ id, message });
 		},
 		[onEntrypointsChanged],
 	);
@@ -216,6 +278,8 @@ export function TriggerPanel({
 				onUpdate={handleDetailUpdate}
 				onDelete={handleDetailDelete}
 				readOnly={readOnly}
+				revealedWebhookSecret={revealedSecrets[selected.id]}
+				error={updateError?.id === selected.id ? updateError.message : null}
 			/>
 		);
 	}
@@ -396,7 +460,11 @@ function TriggerListMode({
 									New Trigger
 								</button>
 							</DropdownMenuTrigger>
-							<DropdownMenuContent align="center" sideOffset={8} className="w-[320px]">
+							<DropdownMenuContent
+								align="center"
+								sideOffset={8}
+								className="w-[320px]"
+							>
 								{availableKinds.length > 0 && (
 									<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 										Events
@@ -411,7 +479,9 @@ function TriggerListMode({
 										}}
 									>
 										<span className="text-[13px] font-medium text-foreground">
-											{typeof k.label === "string" ? k.label : humanizeKind(k.kind)}
+											{typeof k.label === "string"
+												? k.label
+												: humanizeKind(k.kind)}
 										</span>
 									</DropdownMenuItem>
 								))}
@@ -493,6 +563,8 @@ function TriggerDetailMode({
 	onUpdate,
 	onDelete,
 	readOnly,
+	revealedWebhookSecret,
+	error,
 }: {
 	channel: string;
 	entrypoint: AutomationEntrypoint;
@@ -500,16 +572,15 @@ function TriggerDetailMode({
 	onUpdate: (patch: Record<string, unknown>) => void | Promise<void>;
 	onDelete: () => void;
 	readOnly?: boolean;
+	revealedWebhookSecret?: string;
+	error?: string | null;
 }) {
 	const config = useMemo(
 		() => (entrypoint.config ?? {}) as Record<string, unknown>,
 		[entrypoint.config],
 	);
 	const filters = useMemo(
-		() =>
-			(entrypoint.filters ?? {}) as {
-				predicates?: FilterGroup;
-			},
+		() => (entrypoint.filters ?? {}) as FilterGroup,
 		[entrypoint.filters],
 	);
 
@@ -540,12 +611,9 @@ function TriggerDetailMode({
 
 	const setPredicates = useCallback(
 		(next: FilterGroup | undefined) => {
-			const nextFilters: Record<string, unknown> = { ...filters };
-			if (next) nextFilters.predicates = next;
-			else delete nextFilters.predicates;
-			void onUpdate({ filters: nextFilters });
+			void onUpdate({ filters: next ?? {} });
 		},
-		[filters, onUpdate],
+		[onUpdate],
 	);
 
 	const togglePause = useCallback(() => {
@@ -569,6 +637,14 @@ function TriggerDetailMode({
 		[onUpdate],
 	);
 
+	const handleDailyCapChange = useCallback(
+		(e: ChangeEvent<HTMLInputElement>) => {
+			const value = e.target.value.trim();
+			void onUpdate({ daily_cap: value ? Number(value) : null });
+		},
+		[onUpdate],
+	);
+
 	return (
 		<div className={cn(PANEL_SHELL_CLS, PANEL_WIDTH_CLS)}>
 			<PanelHeader
@@ -579,6 +655,11 @@ function TriggerDetailMode({
 
 			<ScrollArea className={PANEL_BODY_CLS}>
 				<div className="space-y-4 px-3 py-4">
+					{error ? (
+						<div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+							{error}
+						</div>
+					) : null}
 					<div className="rounded-[16px] border border-[#e6e9ef] bg-white p-3">
 						<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 							Account
@@ -598,6 +679,7 @@ function TriggerDetailMode({
 						config={config}
 						socialAccountId={entrypoint.social_account_id}
 						readOnly={readOnly}
+						revealedWebhookSecret={revealedWebhookSecret}
 						onChange={setConfig}
 					/>
 
@@ -605,8 +687,17 @@ function TriggerDetailMode({
 						<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
 							Filters
 						</div>
+						{entrypoint.kind === "schedule" ? (
+							<p className="mb-2 text-[10px] leading-relaxed text-[#7e8695]">
+								Schedules must include an All/Any predicate using{" "}
+								<span className="font-mono">contact.tags</span> or{" "}
+								<span className="font-mono">contact.segments</span> with{" "}
+								<span className="font-mono">contains</span> before they can be
+								resumed.
+							</p>
+						) : null}
 						<FilterGroupEditor
-							value={filters.predicates}
+							value={filters}
 							onChange={setPredicates}
 							readOnly={readOnly}
 						/>
@@ -640,6 +731,24 @@ function TriggerDetailMode({
 								disabled={readOnly}
 								onChange={handleCooldownChange}
 								className={INPUT_CLS}
+							/>
+						</div>
+						<div className="mt-3">
+							<label
+								htmlFor="trigger-daily-cap"
+								className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+							>
+								Daily enrollment cap
+							</label>
+							<input
+								id="trigger-daily-cap"
+								type="number"
+								min={1}
+								value={entrypoint.daily_cap ?? ""}
+								disabled={readOnly}
+								onChange={handleDailyCapChange}
+								className={INPUT_CLS}
+								placeholder="Unlimited"
 							/>
 						</div>
 					</div>
@@ -680,19 +789,17 @@ function KindSpecificConfig({
 	config,
 	socialAccountId,
 	readOnly,
+	revealedWebhookSecret,
 	onChange,
 }: {
 	kind: string;
 	config: Record<string, unknown>;
 	socialAccountId: string | null;
 	readOnly?: boolean;
+	revealedWebhookSecret?: string;
 	onChange: (patch: Record<string, unknown>) => void;
 }) {
 	switch (kind) {
-		case "keyword":
-			return (
-				<KeywordConfig config={config} readOnly={readOnly} onChange={onChange} />
-			);
 		case "comment_created":
 			return (
 				<CommentConfig
@@ -706,8 +813,101 @@ function KindSpecificConfig({
 			return (
 				<DmConfig config={config} readOnly={readOnly} onChange={onChange} />
 			);
+		case "story_reply":
+		case "story_mention":
+			return (
+				<div className="space-y-4">
+					<StringListConfig
+						title="Stories"
+						label="Story IDs (optional)"
+						field="story_ids"
+						config={config}
+						readOnly={readOnly}
+						onChange={onChange}
+					/>
+					<KeywordConfig
+						config={config}
+						readOnly={readOnly}
+						onChange={onChange}
+					/>
+				</div>
+			);
+		case "live_comment":
+			return (
+				<KeywordConfig
+					config={config}
+					readOnly={readOnly}
+					onChange={onChange}
+				/>
+			);
+		case "ad_click":
+			return (
+				<StringListConfig
+					title="Ads"
+					label="Ad IDs (optional)"
+					field="ad_ids"
+					config={config}
+					readOnly={readOnly}
+					onChange={onChange}
+				/>
+			);
+		case "ref_link_click":
+			return (
+				<StringListConfig
+					title="Referral links"
+					label="Referral URL IDs"
+					field="ref_url_ids"
+					config={config}
+					readOnly={readOnly}
+					onChange={onChange}
+				/>
+			);
+		case "field_changed":
+			return (
+				<StringListConfig
+					title="Contact fields"
+					label="Field keys"
+					field="field_keys"
+					config={config}
+					readOnly={readOnly}
+					onChange={onChange}
+				/>
+			);
+		case "tag_applied":
+		case "tag_removed":
+			return (
+				<StringListConfig
+					title="Contact tags"
+					label="Tag names"
+					field="tag_ids"
+					config={config}
+					readOnly={readOnly}
+					onChange={onChange}
+				/>
+			);
+		case "conversion_event":
+			return (
+				<StringListConfig
+					title="Conversions"
+					label="Event names"
+					field="event_names"
+					config={config}
+					readOnly={readOnly}
+					onChange={onChange}
+				/>
+			);
+		case "schedule":
+			return (
+				<ScheduleConfig
+					config={config}
+					readOnly={readOnly}
+					onChange={onChange}
+				/>
+			);
 		case "webhook_inbound":
-			return <WebhookConfig config={config} />;
+			return (
+				<WebhookConfig config={config} revealedSecret={revealedWebhookSecret} />
+			);
 		default:
 			return null;
 	}
@@ -746,7 +946,7 @@ function KeywordConfig({
 				className={INPUT_CLS}
 			/>
 			<p className="mt-1 text-[10px] text-[#7e8695]">
-				Comma-separated list. Case-insensitive.
+				Leave empty to match every event of this kind.
 			</p>
 			<div className="mt-3">
 				<label
@@ -764,10 +964,20 @@ function KeywordConfig({
 				>
 					<option value="contains">Contains</option>
 					<option value="exact">Exact</option>
-					<option value="prefix">Starts with</option>
-					<option value="suffix">Ends with</option>
+					<option value="regex">Safe regular expression</option>
 				</select>
 			</div>
+			<label className="mt-3 flex items-center gap-2 text-[12px] text-[#353a44]">
+				<input
+					type="checkbox"
+					disabled={readOnly}
+					checked={config.case_sensitive === true}
+					onChange={(event) =>
+						onChange({ case_sensitive: event.target.checked })
+					}
+				/>
+				Case-sensitive matching
+			</label>
 		</div>
 	);
 }
@@ -792,6 +1002,7 @@ function CommentConfig({
 		: Array.isArray(config.keyword_filter)
 			? (config.keyword_filter as string[])
 			: [];
+	const matchMode = (config.match_mode as string | undefined) ?? "contains";
 	const selectedPostId = postIds[0] ?? null;
 
 	return (
@@ -837,6 +1048,36 @@ function CommentConfig({
 					className={INPUT_CLS}
 				/>
 			</div>
+			<div className="mt-3">
+				<label
+					htmlFor="comment-trigger-match-mode"
+					className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+				>
+					Match mode
+				</label>
+				<select
+					id="comment-trigger-match-mode"
+					value={matchMode}
+					disabled={readOnly}
+					onChange={(event) => onChange({ match_mode: event.target.value })}
+					className="h-9 w-full rounded-md border border-[#d9dde6] bg-white px-2 text-[13px]"
+				>
+					<option value="contains">Contains</option>
+					<option value="exact">Exact</option>
+					<option value="regex">Safe regular expression</option>
+				</select>
+			</div>
+			<label className="mt-3 flex items-center gap-2 text-[12px] text-[#353a44]">
+				<input
+					type="checkbox"
+					disabled={readOnly}
+					checked={config.case_sensitive === true}
+					onChange={(event) =>
+						onChange({ case_sensitive: event.target.checked })
+					}
+				/>
+				Case-sensitive matching
+			</label>
 			<label className="mt-3 flex items-center gap-2 text-[12px] text-[#353a44]">
 				<input
 					type="checkbox"
@@ -861,29 +1102,141 @@ function DmConfig({
 }) {
 	const firstOnly = config.first_message_only === true;
 	return (
+		<div className="space-y-4">
+			<div className="rounded-[16px] border border-[#e6e9ef] bg-white p-3">
+				<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
+					Direct message
+				</div>
+				<label className="flex items-center gap-2 text-[12px] text-[#353a44]">
+					<input
+						type="checkbox"
+						disabled={readOnly}
+						checked={firstOnly}
+						onChange={(e) => onChange({ first_message_only: e.target.checked })}
+					/>
+					Only trigger on this contact’s first-ever message on the channel
+				</label>
+			</div>
+			<KeywordConfig config={config} readOnly={readOnly} onChange={onChange} />
+		</div>
+	);
+}
+
+function StringListConfig({
+	title,
+	label,
+	field,
+	config,
+	readOnly,
+	onChange,
+}: {
+	title: string;
+	label: string;
+	field: string;
+	config: Record<string, unknown>;
+	readOnly?: boolean;
+	onChange: (patch: Record<string, unknown>) => void;
+}) {
+	const inputId = useId();
+	const values = Array.isArray(config[field])
+		? (config[field] as unknown[]).filter(
+				(value): value is string => typeof value === "string",
+			)
+		: [];
+	return (
 		<div className="rounded-[16px] border border-[#e6e9ef] bg-white p-3">
 			<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
-				Direct message
+				{title}
 			</div>
-			<label className="flex items-center gap-2 text-[12px] text-[#353a44]">
-				<input
-					type="checkbox"
-					disabled={readOnly}
-					checked={firstOnly}
-					onChange={(e) => onChange({ first_message_only: e.target.checked })}
-				/>
-				Only trigger on the first message of a conversation
+			<label
+				htmlFor={inputId}
+				className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+			>
+				{label}
 			</label>
+			<input
+				id={inputId}
+				key={`${field}:${values.join(",")}`}
+				type="text"
+				disabled={readOnly}
+				defaultValue={values.join(", ")}
+				onBlur={(event) => {
+					const next = event.currentTarget.value
+						.split(",")
+						.map((value) => value.trim())
+						.filter(Boolean);
+					onChange({ [field]: next });
+				}}
+				className={INPUT_CLS}
+				placeholder="Comma-separated values"
+			/>
+		</div>
+	);
+}
+
+function ScheduleConfig({
+	config,
+	readOnly,
+	onChange,
+}: {
+	config: Record<string, unknown>;
+	readOnly?: boolean;
+	onChange: (patch: Record<string, unknown>) => void;
+}) {
+	const cronInputId = useId();
+	const timezoneInputId = useId();
+
+	return (
+		<div className="rounded-[16px] border border-[#e6e9ef] bg-white p-3">
+			<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
+				Schedule
+			</div>
+			<label
+				htmlFor={cronInputId}
+				className="mb-1 block text-[11px] font-medium text-[#7e8695]"
+			>
+				Cron expression
+			</label>
+			<input
+				id={cronInputId}
+				key={`cron:${String(config.cron ?? "")}`}
+				type="text"
+				disabled={readOnly}
+				defaultValue={String(config.cron ?? "")}
+				onBlur={(event) => onChange({ cron: event.currentTarget.value.trim() })}
+				className={cn(INPUT_CLS, "font-mono")}
+				placeholder="0 9 * * *"
+			/>
+			<label
+				htmlFor={timezoneInputId}
+				className="mb-1 mt-3 block text-[11px] font-medium text-[#7e8695]"
+			>
+				IANA timezone
+			</label>
+			<input
+				id={timezoneInputId}
+				key={`timezone:${String(config.timezone ?? "UTC")}`}
+				type="text"
+				disabled={readOnly}
+				defaultValue={String(config.timezone ?? "UTC")}
+				onBlur={(event) =>
+					onChange({ timezone: event.currentTarget.value.trim() || "UTC" })
+				}
+				className={INPUT_CLS}
+				placeholder="Europe/London"
+			/>
 		</div>
 	);
 }
 
 function WebhookConfig({
 	config,
+	revealedSecret,
 }: {
 	config: Record<string, unknown>;
+	revealedSecret?: string;
 }) {
-	const slug = (config.slug as string | undefined) ?? "";
+	const slug = (config.webhook_slug as string | undefined) ?? "";
 	return (
 		<div className="rounded-[16px] border border-[#e6e9ef] bg-white p-3">
 			<div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8b92a0]">
@@ -902,9 +1255,33 @@ function WebhookConfig({
 				readOnly
 				className={cn(INPUT_CLS, "font-mono text-[12px]")}
 			/>
-			<p className="mt-2 text-[10px] text-[#7e8695]">
-				Rotate the HMAC secret from the Accounts page.
-			</p>
+			{revealedSecret ? (
+				<div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+					<div className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+						Copy this secret now
+					</div>
+					<div className="mt-2 flex items-center gap-2">
+						<code className="min-w-0 flex-1 break-all text-[10px] text-amber-900">
+							{revealedSecret}
+						</code>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="size-8 shrink-0 p-0"
+							onClick={() => void navigator.clipboard.writeText(revealedSecret)}
+							aria-label="Copy webhook secret"
+						>
+							<Copy className="size-3.5" />
+						</Button>
+					</div>
+				</div>
+			) : (
+				<p className="mt-2 text-[10px] text-[#7e8695]">
+					The HMAC secret is write-only. Rotate it through the entrypoint API if
+					it was not captured when this trigger was created.
+				</p>
+			)}
 		</div>
 	);
 }

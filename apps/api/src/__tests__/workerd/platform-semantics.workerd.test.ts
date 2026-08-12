@@ -7,8 +7,13 @@ import {
 	getQueueResult,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { BASELINE_GENERATION } from "@relayapi/config";
 import { describe, expect, it } from "vitest";
 import worker, { type RealtimeDO } from "../../index";
+import {
+	MAINTENANCE_CONTROL_KEY,
+	MAINTENANCE_SMOKE_HEADER,
+} from "../../lib/runtime-controls";
 import { replayBodyForStatus } from "../../middleware/idempotency";
 import { consumeQueueRescue } from "../../queues/queue-rescue";
 import { isMediaEventMessage } from "../../services/media-reliability";
@@ -49,6 +54,47 @@ describe("RelayAPI Worker wiring in workerd", () => {
 		);
 	});
 
+	it("enforces maintenance and the native timing-safe smoke bypass", async () => {
+		await testEnv.KV.put(
+			MAINTENANCE_CONTROL_KEY,
+			JSON.stringify({
+				schema_version: 1,
+				target_baseline_generation: BASELINE_GENERATION,
+				maintenance: true,
+			}),
+		);
+		try {
+			const blocked = await worker.fetch(
+				new Request("https://worker.test/health"),
+				testEnv,
+				createExecutionContext(),
+			);
+			expect(blocked.status).toBe(503);
+
+			const smoke = await worker.fetch(
+				new Request("https://worker.test/internal/cutover-smoke", {
+					headers: {
+						[MAINTENANCE_SMOKE_HEADER]: "workerd-smoke-token",
+					},
+				}),
+				testEnv,
+				createExecutionContext(),
+			);
+			expect(smoke.status).toBe(200);
+			expect(await smoke.json()).toEqual({
+				ok: true,
+				control: {
+					status: "maintenance",
+					target_baseline_generation: BASELINE_GENERATION,
+					application_baseline_generation: BASELINE_GENERATION,
+					configured_baseline_generation: String(BASELINE_GENERATION),
+				},
+			});
+		} finally {
+			await testEnv.KV.delete(MAINTENANCE_CONTROL_KEY);
+		}
+	});
+
 	it("constructs idempotent null-body replays with workerd Fetch semantics", () => {
 		for (const status of [204, 205, 304]) {
 			const response = new Response(replayBodyForStatus(status, ""), {
@@ -77,7 +123,7 @@ describe("RelayAPI Worker wiring in workerd", () => {
 			},
 		]);
 		const context = createExecutionContext();
-		await worker.queue?.(batch, testEnv);
+		await worker.queue(batch, testEnv, context);
 		const result = await getQueueResult(batch, context);
 
 		expect(result.explicitAcks).toEqual(["rescue-message"]);
@@ -86,10 +132,14 @@ describe("RelayAPI Worker wiring in workerd", () => {
 			"queue-rescue/by-organization/org_workerd/relayapi-publish-dlq/publish-message.json",
 		);
 		expect(object).not.toBeNull();
-		expect(await object?.json()).toMatchObject({
+		const rescueObject = (await object?.json()) as Record<string, unknown>;
+		expect(rescueObject).toMatchObject({
+			version: 3,
 			originQueue: "relayapi-publish-dlq",
 			originMessageId: "publish-message",
 		});
+		expect(rescueObject.bodyCiphertext).toEqual(expect.any(String));
+		expect(rescueObject).not.toHaveProperty("body");
 	});
 
 	it("retries instead of ACKing when the terminal R2 rescue write fails", async () => {

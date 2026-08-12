@@ -7,6 +7,7 @@ export type SchemaScopeClass =
 	| "operational_root"
 	| "scoped_child"
 	| "shared_definition"
+	| "organization_definition"
 	| "audit_evidence"
 	| "tombstone";
 
@@ -17,6 +18,11 @@ export type SchemaScopeContract = {
 	requireWorkspacePolicy: boolean;
 	/** Parent whose exact scope is authoritative for a child, when applicable. */
 	scopeParent?: string;
+	/**
+	 * Audit evidence may deliberately detach its nullable workspace locator when
+	 * that workspace is erased while retaining tenant-scoped minimized evidence.
+	 */
+	workspaceDetachOnDelete?: boolean;
 	notes?: string;
 };
 
@@ -32,6 +38,29 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		requireWorkspacePolicy: false,
 		notes:
 			"Ephemeral connection workflow state records the initiating API key and immutable grant snapshot so an unauthenticated bot event cannot choose or expand tenant scope.",
+	},
+	{
+		tableName: "external_subject_cleanup_jobs",
+		class: "tombstone",
+		requireWorkspacePolicy: false,
+		notes:
+			"Typed external-erasure intent deliberately outlives the user/contact/account/workspace/organization row and therefore carries nullable tombstone locators without ownership FKs.",
+	},
+	{
+		tableName: "principal_workspace_grants",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "organization_principals",
+		notes:
+			"Exact selected-workspace authority for a stable principal; all-scope principals have no grant rows.",
+	},
+	{
+		tableName: "invite_token_workspaces",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "invite_tokens",
+		notes:
+			"Immutable selected-workspace invitation evidence copied into durable principal grants at redemption.",
 	},
 	{
 		tableName: "post_threads",
@@ -67,6 +96,24 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		requireWorkspacePolicy: true,
 	},
 	{
+		tableName: "media_upload_sessions",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "media",
+	},
+	{
+		tableName: "media_processing_jobs",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "media",
+	},
+	{
+		tableName: "media_derivatives",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "media",
+	},
+	{
 		tableName: "webhook_endpoints",
 		class: "operational_root",
 		requireWorkspacePolicy: true,
@@ -88,6 +135,26 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
 		scopeParent: "inbox_conversations",
+	},
+	{
+		tableName: "social_mutation_operations",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "social_accounts",
+	},
+	{
+		tableName: "whatsapp_groups",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "social_accounts",
+	},
+	{
+		tableName: "whatsapp_identity_aliases",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "social_accounts",
+		notes:
+			"Conversation-linked alias projections cascade with their authoritative conversation; account-level aliases remain account-bound and webhook-recreatable.",
 	},
 	{
 		tableName: "auto_post_rules",
@@ -120,17 +187,17 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		tableName: "contact_consent_events",
 		class: "audit_evidence",
 		requireWorkspacePolicy: false,
-		notes: "Exact-scope history may outlive a later strict-mode toggle.",
+		workspaceDetachOnDelete: true,
+		notes:
+			"Exact-scope history may outlive a later strict-mode toggle; workspace erasure detaches the nullable locator while retaining minimized tenant consent evidence.",
 	},
 	{
 		tableName: "contact_consent_states",
 		class: "audit_evidence",
 		requireWorkspacePolicy: false,
-	},
-	{
-		tableName: "contact_suppressions",
-		class: "audit_evidence",
-		requireWorkspacePolicy: false,
+		workspaceDetachOnDelete: true,
+		notes:
+			"The current denial/grant authority detaches its nullable workspace locator during workspace erasure so consent enforcement survives subject deletion.",
 	},
 	{
 		tableName: "broadcasts",
@@ -144,9 +211,60 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		scopeParent: "broadcasts",
 	},
 	{
+		tableName: "ad_connections",
+		class: "operational_root",
+		requireWorkspacePolicy: true,
+		notes:
+			"Dedicated paid-media credentials are independently created and obey the same optional/required workspace policy as publishing accounts.",
+	},
+	{
 		tableName: "ad_accounts",
 		class: "operational_root",
 		requireWorkspacePolicy: true,
+	},
+	{
+		tableName: "ad_account_promotable_identities",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_lead_forms",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_leads",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_conversion_rules",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+		notes: "Future-gated conversion authority remains account-bound.",
+	},
+	{
+		tableName: "ad_conversion_events",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_conversion_rules",
+		notes: "Future-gated encrypted conversion outbox.",
+	},
+	{
+		tableName: "ad_advanced_resources",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
+	},
+	{
+		tableName: "ad_report_jobs",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "ad_accounts",
 	},
 	{
 		tableName: "ad_campaigns",
@@ -255,6 +373,12 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		scopeParent: "automations",
 	},
 	{
+		tableName: "automation_entrypoint_daily_counts",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "automation_entrypoints",
+	},
+	{
 		tableName: "automation_bindings",
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
@@ -267,6 +391,12 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		scopeParent: "automations",
 	},
 	{
+		tableName: "automation_conversion_events",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "automation_runs",
+	},
+	{
 		tableName: "automation_node_executions",
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
@@ -277,6 +407,22 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
 		scopeParent: "automation_node_executions",
+	},
+	{
+		tableName: "automation_step_runs",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "automation_runs",
+		notes:
+			"Longer-lived public timeline rows carry a composite run/automation/tenant/scope tuple so analytical denormalization cannot drift from the run.",
+	},
+	{
+		tableName: "automation_scheduled_jobs",
+		class: "scoped_child",
+		requireWorkspacePolicy: false,
+		scopeParent: "automation_runs|automation_entrypoints",
+		notes:
+			"The checked parent union selects exactly one authoritative run or entrypoint tuple; both project the same automation, tenant, and scope identity.",
 	},
 	{
 		tableName: "segments",
@@ -295,10 +441,25 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		requireWorkspacePolicy: true,
 	},
 	{
+		tableName: "queue_schedules",
+		class: "organization_definition",
+		requireWorkspacePolicy: false,
+		notes:
+			"Organization-global posting schedule authority; KV is a bounded read cache only.",
+	},
+	{
 		tableName: "contact_subscriptions",
 		class: "scoped_child",
 		requireWorkspacePolicy: false,
 		scopeParent: "subscription_lists",
+	},
+	{
+		tableName: "contact_subscription_events",
+		class: "audit_evidence",
+		requireWorkspacePolicy: false,
+		scopeParent: "subscription_lists",
+		notes:
+			"Immutable list-membership transition evidence; consent remains a separate send-time authority.",
 	},
 	{
 		tableName: "ai_knowledge_bases",
@@ -339,6 +500,13 @@ export const SCHEMA_SCOPE_CONTRACTS = [
 		requireWorkspacePolicy: true,
 	},
 	{
+		tableName: "public_growth_events",
+		class: "audit_evidence",
+		requireWorkspacePolicy: false,
+		notes:
+			"Discriminated ref/QR/landing occurrence and durable dispatch state; exact scope is constrained through the selected target.",
+	},
+	{
 		tableName: "workspace_erasure_jobs",
 		class: "audit_evidence",
 		requireWorkspacePolicy: false,
@@ -376,6 +544,9 @@ export type SchemaInvariantException = {
 	columnName: string;
 	category: SchemaInvariantCategory;
 	rationale: string;
+	owner: string;
+	reviewedAt: string;
+	reviewExpiresAt: string;
 };
 
 export const SCHEMA_INVARIANT_EXCEPTIONS = [
@@ -385,6 +556,9 @@ export const SCHEMA_INVARIANT_EXCEPTIONS = [
 		category: "workflow_state",
 		rationale:
 			"Provider account statuses are retained verbatim; closing this domain requires a normalized local lifecycle column and data migration.",
+		owner: "data-governance",
+		reviewedAt: "2026-07-28",
+		reviewExpiresAt: "2027-07-28",
 	},
 	{
 		tableName: "ad_audiences",
@@ -392,6 +566,9 @@ export const SCHEMA_INVARIANT_EXCEPTIONS = [
 		category: "workflow_state",
 		rationale:
 			"Provider audience lifecycle statuses are passthrough values and are not a RelayAPI-owned state machine.",
+		owner: "data-governance",
+		reviewedAt: "2026-07-28",
+		reviewExpiresAt: "2027-07-28",
 	},
 	{
 		tableName: "automation_entrypoints",
@@ -399,5 +576,28 @@ export const SCHEMA_INVARIANT_EXCEPTIONS = [
 		category: "high_risk_numeric",
 		rationale:
 			"Priority is intentionally signed and unbounded; lower values sort before higher values and negative priorities are valid.",
+		owner: "data-governance",
+		reviewedAt: "2026-07-28",
+		reviewExpiresAt: "2027-07-28",
+	},
+	{
+		tableName: "post_targets",
+		columnName: "provider_state",
+		category: "workflow_state",
+		rationale:
+			"Provider lifecycle strings are retained verbatim as diagnostic evidence; RelayAPI's closed lifecycle is provider_disposition.",
+		owner: "data-governance",
+		reviewedAt: "2026-07-28",
+		reviewExpiresAt: "2027-07-28",
+	},
+	{
+		tableName: "publish_attempts",
+		columnName: "provider_state",
+		category: "workflow_state",
+		rationale:
+			"Attempt evidence preserves the provider's raw status vocabulary while provider_disposition owns the constrained local lifecycle.",
+		owner: "data-governance",
+		reviewedAt: "2026-07-28",
+		reviewExpiresAt: "2027-07-28",
 	},
 ] as const satisfies readonly SchemaInvariantException[];

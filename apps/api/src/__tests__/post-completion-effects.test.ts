@@ -3,10 +3,20 @@ import { beforeEach, describe, expect, it, mock } from "bun:test";
 const streakCalls: Array<{ orgId: string; occurredAt: Date }> = [];
 const notificationCalls: Array<Record<string, unknown>> = [];
 let notificationError: Error | null = null;
+let outboxPayload: Record<string, unknown> | null = null;
+let executeCalls = 0;
 
 mock.module("@relayapi/db", () => ({
-	createDb: () => ({ kind: "test-db", execute: async () => [] }),
-	publishOutbox: {},
+	createDb: () => ({
+		kind: "test-db",
+		execute: async () => {
+			executeCalls += 1;
+			return executeCalls % 2 === 1 && outboxPayload
+				? [{ payload: outboxPayload }]
+				: [];
+		},
+	}),
+	publishOutbox: { toString: () => "publish_outbox" },
 }));
 mock.module("../services/streak", () => ({
 	updateStreak: async (
@@ -43,25 +53,30 @@ const { consumePublishQueue } = await import("../queues/publish");
 function completionMessage(attempts = 1) {
 	let acked = false;
 	let retryDelay: number | null = null;
+	outboxPayload = {
+		type: "post_completion_effects",
+		post_id: "post_1",
+		org_id: "org_1",
+		status: "published" as const,
+		occurred_at: "2026-07-13T12:00:00.000Z",
+		occurrence_id: "post:post_1:publish:lease_1:published",
+		update_streak: true,
+		notification: {
+			user_id: "user_1",
+			notification_type: "post_published" as const,
+			title: "Post published successfully",
+			body: "Your post was published",
+			data: { postId: "post_1" },
+		},
+	};
 	const message = {
 		id: "completion-message",
 		attempts,
 		timestamp: new Date(0),
 		body: {
-			type: "post_completion_effects",
-			post_id: "post_1",
+			type: "publish_outbox",
+			outbox_id: "outbox_completion_1",
 			org_id: "org_1",
-			status: "published" as const,
-			occurred_at: "2026-07-13T12:00:00.000Z",
-			occurrence_id: "post:post_1:publish:lease_1:published",
-			update_streak: true,
-			notification: {
-				user_id: "user_1",
-				notification_type: "post_published" as const,
-				title: "Post published successfully",
-				body: "Your post was published",
-				data: { postId: "post_1" },
-			},
 		},
 		ack: () => {
 			acked = true;
@@ -81,6 +96,8 @@ describe("post completion Queue effects", () => {
 		streakCalls.length = 0;
 		notificationCalls.length = 0;
 		notificationError = null;
+		outboxPayload = null;
+		executeCalls = 0;
 	});
 
 	it("applies streak and notification work before ACK", async () => {

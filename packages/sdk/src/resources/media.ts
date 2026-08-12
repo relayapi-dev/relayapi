@@ -35,8 +35,9 @@ export class Media extends APIResource {
   }
 
   /**
-   * Generate a pre-signed URL for direct upload to R2. The client can PUT the file
-   * to the returned URL.
+   * Create a pending media upload intent and generate a pre-signed R2 PUT URL. PUT
+   * the file with the exact declared Content-Type, then call confirm(); confirmation
+   * is mandatory before using the canonical media URL.
    */
   getPresignURL(
     body: MediaGetPresignURLParams,
@@ -46,7 +47,8 @@ export class Media extends APIResource {
   }
 
   /**
-   * Confirm that a presigned upload completed successfully.
+   * Mandatory final step for a presigned upload. Verifies the stored object and
+   * marks the pending media intent ready.
    */
   confirm(body: MediaConfirmParams, options?: RequestOptions): APIPromise<MediaRetrieveResponse> {
     return this._client.post('/v1/media/confirm', { body, ...options });
@@ -69,6 +71,54 @@ export class Media extends APIResource {
       headers: buildHeaders([{ 'Content-Type': content_type }, options?.headers]),
     });
   }
+
+  /** Create a direct-to-storage upload session for files up to 200 MiB. */
+  createUploadSession(
+    body: MediaCreateUploadSessionParams,
+    options?: RequestOptions,
+  ): APIPromise<MediaUploadSession> {
+    return this._client.post('/v1/media/uploads', { body, ...options });
+  }
+
+  /** Retrieve a resumable upload session and its processing projection. */
+  retrieveUploadSession(id: string, options?: RequestOptions): APIPromise<MediaUploadSession> {
+    return this._client.get(path`/v1/media/uploads/${id}`, options);
+  }
+
+  /** Mint bounded-lived URLs for selected multipart part numbers. */
+  createUploadPartURLs(
+    id: string,
+    body: MediaCreateUploadPartURLsParams,
+    options?: RequestOptions,
+  ): APIPromise<MediaUploadPartURLsResponse> {
+    return this._client.post(path`/v1/media/uploads/${id}/parts`, { body, ...options });
+  }
+
+  /** Complete a single-part or multipart upload after every byte is stored. */
+  completeUploadSession(
+    id: string,
+    body: MediaCompleteUploadSessionParams = { parts: [] },
+    options?: RequestOptions,
+  ): APIPromise<MediaRetrieveResponse> {
+    return this._client.post(path`/v1/media/uploads/${id}/complete`, { body, ...options });
+  }
+
+  /** Abort an incomplete upload session. */
+  abortUploadSession(id: string, options?: RequestOptions): APIPromise<void> {
+    return this._client.delete(path`/v1/media/uploads/${id}`, {
+      ...options,
+      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+    });
+  }
+
+  /** Request normalization, a provider-specific derivative, or a custom cover. */
+  process(
+    id: string,
+    body: MediaProcessParams,
+    options?: RequestOptions,
+  ): APIPromise<MediaRetrieveResponse> {
+    return this._client.post(path`/v1/media/${id}/process`, { body, ...options });
+  }
 }
 
 export interface MediaRetrieveResponse {
@@ -76,6 +126,16 @@ export interface MediaRetrieveResponse {
    * Media ID
    */
   id: string;
+
+  /**
+   * Whether original bytes remain available for provider delivery
+   */
+  original_available: boolean;
+
+  /**
+   * Workspace scope, or null for organization-shared media
+   */
+  workspace_id: string | null;
 
   /**
    * Upload timestamp
@@ -104,6 +164,12 @@ export interface MediaRetrieveResponse {
   url: string | null;
 
   /**
+   * Stable canonical attachment URL while the original remains available. Use
+   * this value in post media payloads instead of the expiring read URL.
+   */
+  reference_url: string | null;
+
+  /**
    * Duration in seconds (video/audio)
    */
   duration?: number | null;
@@ -117,9 +183,99 @@ export interface MediaRetrieveResponse {
    * Width in pixels
    */
   width?: number | null;
+
+  /** Asynchronous normalization/derivative state. */
+  processing_status?: 'not_requested' | 'pending' | 'processing' | 'ready' | 'failed';
+
+  processing_error?: { code: string; message: string } | null;
+
+  variants?: Array<MediaVariant>;
+
+  /** Whether additional derivative variants were omitted. */
+  variants_truncated?: boolean;
 }
 
+export interface MediaVariant {
+  id: string;
+  kind: 'normalized' | 'provider' | 'cover' | 'gif_video';
+  profile: string;
+  mime_type: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  status: 'processing' | 'ready' | 'failed' | 'deleting';
+}
+
+export interface MediaUploadSession {
+  id: string;
+  media_id: string;
+  mode: 'single' | 'multipart';
+  status:
+    | 'created'
+    | 'uploading'
+    | 'completing'
+    | 'completed'
+    | 'aborting'
+    | 'aborted'
+    | 'failed'
+    | 'expired';
+  expected_size: number;
+  content_type: string;
+  part_size: number | null;
+  part_count: number | null;
+  expires_at: string;
+  upload?: { url: string; headers: Record<string, string> } | null;
+  media?: MediaRetrieveResponse | null;
+  error?: { code: string; message: string } | null;
+}
+
+export interface MediaCreateUploadSessionParams {
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  workspace_id?: string;
+}
+
+export interface MediaCreateUploadPartURLsParams {
+  part_numbers: Array<number>;
+}
+
+export interface MediaUploadPartURLsResponse {
+  upload_id: string;
+  parts: Array<{
+    part_number: number;
+    upload_url: string;
+    upload_headers: Record<string, string>;
+    expires_at: string;
+  }>;
+}
+
+export interface MediaCompleteUploadSessionParams {
+  parts?: Array<{ part_number: number; etag: string }>;
+}
+
+export type MediaProcessParams =
+  | {
+      operation: 'normalize' | 'provider_variant';
+      profile: string;
+      options?: {
+        compression_mode?: 'balanced' | 'high_quality' | 'smaller';
+        fail_open?: boolean;
+      };
+    }
+  | {
+      operation: 'cover';
+      profile: string;
+      options?: { timestamp_seconds?: number };
+    };
+
 export interface MediaGetPresignURLResponse {
+  /**
+   * ID of the pending media upload intent
+   */
+  id: string;
+
   /**
    * Seconds until the upload URL expires
    */
@@ -131,12 +287,30 @@ export interface MediaGetPresignURLResponse {
   upload_url: string;
 
   /**
+   * Exact headers required by the pre-signed create-only PUT
+   */
+  upload_headers: MediaGetPresignURLResponse.UploadHeaders;
+
+  /**
    * Public URL after upload completes
    */
   url: string;
 }
 
+export namespace MediaGetPresignURLResponse {
+  export interface UploadHeaders {
+    'Content-Type': string;
+
+    'If-None-Match': '*';
+  }
+}
+
 export interface MediaUploadResponse {
+  /**
+   * ID of the ready media record
+   */
+  id: string;
+
   /**
    * Original filename
    */
@@ -177,7 +351,8 @@ export interface MediaGetPresignURLParams {
 
 export interface MediaConfirmParams {
   /**
-   * The storage key from the presign response URL
+   * The path portion of the canonical url returned by getPresignURL(), without the
+   * leading slash
    */
   storage_key: string;
 }
@@ -209,6 +384,11 @@ export interface MediaListParams {
    * Number of items per page
    */
   limit?: number;
+
+  /**
+   * Filter by workspace ID
+   */
+  workspace_id?: string;
 }
 
 export interface MediaListResponse {
@@ -231,6 +411,16 @@ export namespace MediaListResponse {
      * Media ID
      */
     id: string;
+
+    /**
+     * Whether original bytes remain available for provider delivery
+     */
+    original_available: boolean;
+
+    /**
+     * Workspace scope, or null for organization-shared media
+     */
+    workspace_id: string | null;
 
     /**
      * Upload timestamp
@@ -259,6 +449,12 @@ export namespace MediaListResponse {
     url: string | null;
 
     /**
+     * Stable canonical attachment URL while the original remains available. Use
+     * this value in post media payloads instead of the expiring read URL.
+     */
+    reference_url: string | null;
+
+    /**
      * Duration in seconds (video/audio)
      */
     duration?: number | null;
@@ -272,6 +468,14 @@ export namespace MediaListResponse {
      * Width in pixels
      */
     width?: number | null;
+
+    processing_status?: 'not_requested' | 'pending' | 'processing' | 'ready' | 'failed';
+
+    processing_error?: { code: string; message: string } | null;
+
+    variants?: Array<MediaVariant>;
+
+    variants_truncated?: boolean;
   }
 }
 
@@ -285,5 +489,12 @@ export declare namespace Media {
     type MediaListParams as MediaListParams,
     type MediaGetPresignURLParams as MediaGetPresignURLParams,
     type MediaUploadParams as MediaUploadParams,
+    type MediaVariant as MediaVariant,
+    type MediaUploadSession as MediaUploadSession,
+    type MediaCreateUploadSessionParams as MediaCreateUploadSessionParams,
+    type MediaCreateUploadPartURLsParams as MediaCreateUploadPartURLsParams,
+    type MediaUploadPartURLsResponse as MediaUploadPartURLsResponse,
+    type MediaCompleteUploadSessionParams as MediaCompleteUploadSessionParams,
+    type MediaProcessParams as MediaProcessParams,
   };
 }

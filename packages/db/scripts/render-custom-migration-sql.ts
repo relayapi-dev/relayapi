@@ -6,6 +6,16 @@ import {
 	WORKSPACE_REQUIREMENT_CONTRACT,
 	workspaceRequirementTriggerName,
 } from "../src/provisioning-contracts";
+import { renderAuthIdentityInvariantSql } from "./render-auth-identity-invariant-sql";
+import { renderAutomationConversionEventInvariantSql } from "./render-automation-conversion-event-invariant-sql";
+import { renderBillingPeriodInvariantSql } from "./render-billing-period-invariant-sql";
+import { renderContactSubscriptionEventInvariantSql } from "./render-contact-subscription-event-invariant-sql";
+import { renderErasureHoldInvariantSql } from "./render-erasure-hold-invariant-sql";
+import { renderFinancialRetentionReceiptInvariantSql } from "./render-financial-retention-receipt-invariant-sql";
+import { renderOperatorResolutionEvidenceInvariantSql } from "./render-operator-resolution-evidence-invariant-sql";
+import { renderStorageLocationInvariantSql } from "./render-storage-location-invariant-sql";
+import { renderStripeEventAttributionInvariantSql } from "./render-stripe-event-attribution-invariant-sql";
+import { renderUsageBucketProjectionSql } from "./render-usage-bucket-projection-sql";
 
 export const CUSTOM_MIGRATION_SQL_MARKER =
 	"-- RelayAPI non-declarative database contracts (generated).";
@@ -43,8 +53,8 @@ const sql: string[] = [
 	"\tVALUES (NEW.id)",
 	"\tON CONFLICT (organization_id) DO NOTHING;",
 	"",
-	`\tINSERT INTO public.${identifier(provisioning.workspaceTable)} (id, organization_id, name, lifecycle_status)`,
-	`\tSELECT 'ws_' || replace(gen_random_uuid()::text, '-', ''), NEW.id, ${literal(provisioning.initialWorkspaceName)}, 'active'`,
+	`\tINSERT INTO public.${identifier(provisioning.workspaceTable)} (id, organization_id, name, slug, lifecycle_status)`,
+	`\tSELECT 'ws_' || replace(gen_random_uuid()::text, '-', ''), NEW.id, ${literal(provisioning.initialWorkspaceName)}, ${literal(provisioning.initialWorkspaceSlug)}, 'active'`,
 	"\tWHERE NOT EXISTS (",
 	`\t\tSELECT 1 FROM public.${identifier(provisioning.workspaceTable)}`,
 	"\t\tWHERE organization_id = NEW.id",
@@ -72,8 +82,8 @@ const sql: string[] = [
 	"ON CONFLICT (organization_id) DO NOTHING;",
 	statementBreak,
 	"",
-	`INSERT INTO public.${identifier(provisioning.workspaceTable)} (id, organization_id, name, lifecycle_status)`,
-	`SELECT 'ws_' || replace(gen_random_uuid()::text, '-', ''), organization_row.id, ${literal(provisioning.initialWorkspaceName)}, 'active'`,
+	`INSERT INTO public.${identifier(provisioning.workspaceTable)} (id, organization_id, name, slug, lifecycle_status)`,
+	`SELECT 'ws_' || replace(gen_random_uuid()::text, '-', ''), organization_row.id, ${literal(provisioning.initialWorkspaceName)}, ${literal(provisioning.initialWorkspaceSlug)}, 'active'`,
 	`FROM ${qualified(provisioning.organizationSchema, provisioning.organizationTable)} AS organization_row`,
 	"WHERE NOT EXISTS (",
 	`\tSELECT 1 FROM public.${identifier(provisioning.workspaceTable)} AS workspace_row`,
@@ -320,7 +330,7 @@ sql.push(
 );
 
 export function renderCustomMigrationSql(): string {
-	return `${sql.join("\n")}\n`;
+	return `${sql.join("\n")}\n${renderAuthIdentityInvariantSql()}\n${renderErasureHoldInvariantSql()}\n${renderContactSubscriptionEventInvariantSql()}\n${renderOperatorResolutionEvidenceInvariantSql()}\n${renderFinancialRetentionReceiptInvariantSql()}\n${renderBillingPeriodInvariantSql()}\n${renderStorageLocationInvariantSql()}\n${renderUsageBucketProjectionSql()}\n${renderAutomationConversionEventInvariantSql()}\n${renderStripeEventAttributionInvariantSql()}`;
 }
 
 if (import.meta.main) {

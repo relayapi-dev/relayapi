@@ -794,6 +794,7 @@ export function AutomationDetailPage({ automationId }: Props) {
 								config: selectedNode.config ?? {},
 							}}
 							automationChannel={automation.channel}
+							automationWorkspaceId={automation.workspace_id}
 							onChange={(patch) => {
 								if (patch.config) {
 									graphStore.updateNodeConfig(selectedNode.key, patch.config);

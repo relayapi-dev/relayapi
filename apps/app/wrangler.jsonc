@@ -1,10 +1,12 @@
 {
 	"$schema": "../../node_modules/wrangler/config-schema.json",
 	"name": "relayapi-app",
-	"compatibility_date": "2026-03-13",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
+	"compatibility_date": "2026-07-18",
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+	"vars": {
+		"IDENTITY_DELETION_CONTRACT_VERSION": "identity-deletion-v1",
+		"BASELINE_GENERATION": "1"
+	},
 	"observability": {
 		"enabled": true,
 		"head_sampling_rate": 0.1,
@@ -15,8 +17,8 @@
 			"invocation_logs": true
 		},
 		"traces": {
-			"enabled": false,
-			"persist": false,
+			"enabled": true,
+			"persist": true,
 			"head_sampling_rate": 0.01
 		}
 	},
@@ -40,14 +42,17 @@
 		{
 			"binding": "PUBLIC_ASSETS",
 			"bucket_name": "relayapi-public-assets"
+		},
+		{
+			"binding": "QUEUE_RESCUE_BUCKET",
+			"bucket_name": "relayapi-queue-rescue-ledger"
 		}
 	],
-	"queues": {
-		"producers": [
-			{
-				"binding": "EMAIL_QUEUE",
-				"queue": "relayapi-email"
-			}
-		]
-	}
+	"services": [
+		{
+			"binding": "EMAIL_INTENTS",
+			"service": "relayapi",
+			"entrypoint": "EmailIntentEntrypoint"
+		}
+	]
 }

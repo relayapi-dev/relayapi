@@ -63,7 +63,7 @@ describe("operational workspace policy", () => {
 	});
 
 	it("returns a typed inventory containing only nonzero operational roots", async () => {
-		const values = Array.from({ length: 20 }, () => 0);
+		const values = Array.from({ length: 21 }, () => 0);
 		values[1] = 1;
 		values[2] = 2;
 		let queryIndex = 0;
@@ -79,7 +79,7 @@ describe("operational workspace policy", () => {
 			{ resource_type: "post_threads", count: 1 },
 			{ resource_type: "posts", count: 2 },
 		]);
-		expect(queryIndex).toBe(20);
+		expect(queryIndex).toBe(21);
 	});
 
 	it("creates an organization-scoped root for an all-workspace key in optional mode", () => {

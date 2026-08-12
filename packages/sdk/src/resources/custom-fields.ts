@@ -25,7 +25,7 @@ export class CustomFields extends APIResource {
   }
 
   /**
-   * Update a custom field definition.
+   * Update a custom field definition. Returns 404 if it is removed before commit.
    */
   update(
     id: string,
@@ -36,7 +36,7 @@ export class CustomFields extends APIResource {
   }
 
   /**
-   * Delete a custom field definition.
+   * Delete a custom field definition. Returns 404 if another request removes it first.
    */
   delete(id: string, options?: RequestOptions): APIPromise<void> {
     return this._client.delete(path`/v1/custom-fields/${id}`, {
@@ -45,6 +45,8 @@ export class CustomFields extends APIResource {
     });
   }
 }
+
+export type CustomFieldType = 'text' | 'number' | 'date' | 'boolean' | 'select';
 
 export interface CustomFieldResponse {
   /**
@@ -65,7 +67,7 @@ export interface CustomFieldResponse {
   /**
    * Field type
    */
-  type: 'text' | 'number' | 'date' | 'boolean' | 'select';
+  type: CustomFieldType;
 
   /**
    * Select options
@@ -101,7 +103,7 @@ export interface CustomFieldCreateParams {
   /**
    * Field type
    */
-  type: 'text' | 'number' | 'date' | 'boolean' | 'select';
+  type: CustomFieldType;
 
   /**
    * URL-safe identifier (auto-generated from name if omitted)
@@ -109,7 +111,7 @@ export interface CustomFieldCreateParams {
   slug?: string;
 
   /**
-   * Options for select type (required when type is select)
+   * Non-empty options, required only for select fields
    */
   options?: Array<string>;
 
@@ -126,7 +128,7 @@ export interface CustomFieldUpdateParams {
   name?: string;
 
   /**
-   * Options for select type
+   * Non-empty options for an existing select field
    */
   options?: Array<string>;
 }
@@ -150,6 +152,7 @@ export interface CustomFieldListParams {
 
 export declare namespace CustomFields {
   export {
+    type CustomFieldType as CustomFieldType,
     type CustomFieldResponse as CustomFieldResponse,
     type CustomFieldListResponse as CustomFieldListResponse,
     type CustomFieldCreateParams as CustomFieldCreateParams,

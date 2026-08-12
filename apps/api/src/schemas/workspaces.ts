@@ -3,6 +3,7 @@ import { z } from "@hono/zod-openapi";
 export const WorkspaceResponse = z.object({
 	id: z.string().describe("Workspace ID"),
 	name: z.string().describe("Workspace name"),
+	slug: z.string().describe("Stable public URL slug"),
 	description: z.string().nullable().describe("Workspace description"),
 	lifecycle_status: z
 		.enum(["active", "archived", "erasing"])
@@ -20,6 +21,13 @@ export const WorkspaceResponse = z.object({
 
 export const CreateWorkspaceBody = z.object({
 	name: z.string().min(1).max(255).describe("Workspace name"),
+	slug: z
+		.string()
+		.min(1)
+		.max(100)
+		.regex(/^[a-z0-9][a-z0-9_-]*$/)
+		.optional()
+		.describe("Stable public slug; derived from the name when omitted"),
 	description: z
 		.string()
 		.max(1000)
@@ -30,6 +38,13 @@ export const CreateWorkspaceBody = z.object({
 export const UpdateWorkspaceBody = z
 	.object({
 		name: z.string().min(1).max(255).optional().describe("Workspace name"),
+		slug: z
+			.string()
+			.min(1)
+			.max(100)
+			.regex(/^[a-z0-9][a-z0-9_-]*$/)
+			.optional()
+			.describe("Stable public URL slug"),
 		description: z
 			.string()
 			.max(1000)
@@ -58,6 +73,7 @@ export const WorkspaceErasureResponse = z.object({
 	status: z.enum([
 		"pending",
 		"processing",
+		"held",
 		"manual_review",
 		"failed",
 		"purged",

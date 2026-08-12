@@ -1,6 +1,6 @@
 ---
 title: ConvertKit (Kit) API
-description: Create newsletter broadcasts via ConvertKit using RelayAPI — draft email campaigns alongside social media posts.
+description: Create and schedule Kit newsletter broadcasts alongside social media posts with RelayAPI.
 ---
 
 ## Quick Reference
@@ -8,13 +8,13 @@ description: Create newsletter broadcasts via ConvertKit using RelayAPI — draf
 | Property | Value |
 |----------|-------|
 | Platform key | `convertkit` |
-| Auth method | API Key + Secret |
+| Auth method | Kit API v4 key |
 | Content format | HTML (plain text auto-wrapped) |
 | Scheduling | Yes |
 | Analytics | No |
 
 <Callout type="info">
-By default, broadcasts are **sent immediately** when published. Set `send_at` in target_options to schedule for a specific time, or omit it for instant delivery.
+Omitting `send_at` schedules the broadcast about one minute ahead, using Kit's documented scheduling contract. Set `send_at` to an ISO 8601 timestamp for an explicit provider schedule. Although Kit can represent provider drafts with `send_at: null`, RelayAPI does not yet expose that remote lifecycle: `null` fails before provider I/O. To save a RelayAPI-local draft without creating a Kit broadcast, set the post's top-level `scheduled_at` to `"draft"`.
 </Callout>
 
 ## Before You Start
@@ -60,7 +60,17 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 | `public` | boolean | No | Publish the broadcast to the Kit web feed. |
 | `published_at` | string | No | ISO 8601 web publication timestamp. |
 | `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
-| `send_at` | string | No | ISO 8601 timestamp to schedule delivery. If omitted, sends immediately. |
+| `email_template_id` | positive integer | No | Existing Kit v4 email template ID. String and zero values are rejected. |
+| `send_at` | string | No | ISO 8601 timestamp to schedule delivery; omission schedules about one minute ahead. `null` is rejected as `PROVIDER_DRAFT_UNSUPPORTED`. |
+
+Relay media attachments are not supported for Kit broadcasts. Put images in
+trusted HTML referenced by `content_html` instead of sending a post `media`
+array.
+
+If an older or unexpected Kit response reports a provider-side draft after a
+broadcast was created, RelayAPI retains the broadcast ID and terminalizes the
+target as failed with `PROVIDER_DRAFT_REQUIRES_MANUAL_ACTION`; it does not poll
+forever or retry the creation boundary.
 
 ## Automations
 

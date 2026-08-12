@@ -9,35 +9,51 @@ import {
 	ideaActivity,
 	ideas,
 	media as mediaTable,
+	ORGANIZATION_SCOPE_KEY,
 	postRecyclingConfigs,
 	posts,
+	postTags,
 	postTargets,
-	publishAttempts,
 	publishOutbox,
 	shortLinkConfigs,
 	shortLinks,
 	signatures,
 	socialAccounts,
+	tags,
 	threadExecutions,
 } from "@relayapi/db";
 import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 import type { Context } from "hono";
-import { API_VERSIONS, GRAPH_BASE } from "../config/api-versions";
+import { GRAPH_BASE } from "../config/api-versions";
 import { decryptAccountToken } from "../lib/account-token-crypto";
-import { maybeDecrypt } from "../lib/crypto";
 import { parseCsv } from "../lib/csv-parser";
+import { mediaPublicHost } from "../lib/deployment-mode";
+import { parseDiscordWebhookUrl } from "../lib/discord-webhook";
+import { fetchPublicUrl, readResponseJson } from "../lib/fetch-public-url";
 import {
 	getLinkedInRestHeaders,
 	LINKEDIN_REST_BASE,
 } from "../lib/linkedin-rest";
+import {
+	isDefinitiveProviderMutationRejection,
+	SingleUnitProviderMutationAggregate,
+	trackSingleUnitProviderMutation,
+} from "../lib/mutation-provider-boundary";
 import { notifyRealtime } from "../lib/notify-post-update";
 import {
+	decodeKeysetCursor,
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
 	INVALID_CURSOR_BODY,
 	type TimestampIdCursor,
 } from "../lib/pagination-cursor";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import { presignRelayMediaUrls, RELAY_MEDIA_HOST } from "../lib/r2-presign";
+import {
+	loadRelayMediaPolicy,
+	type RelayMediaPolicy,
+	type RelayMediaViolation,
+} from "../lib/relay-media-policy";
 import {
 	inheritOperationalCreateScope,
 	workspaceScopeKey,
@@ -49,6 +65,12 @@ import {
 	WORKSPACE_ACCESS_DENIED_BODY,
 	workspaceScopeSqlCondition,
 } from "../lib/workspace-scope";
+import {
+	markMutationInputNotApplied,
+	multipartMutationInputPreflight,
+} from "../middleware/mutation-validation";
+import { deleteBlueskyPost } from "../publishers/bluesky";
+import { resolveMastodonInstanceUrl } from "../publishers/mastodon";
 import { addToPlaylist } from "../publishers/youtube";
 import {
 	ErrorResponse,
@@ -61,6 +83,9 @@ import {
 	CreatePostBody,
 	PostListResponse,
 	PostResponse,
+	PostTagListQuery,
+	PostTagListResponse,
+	PostTagParams,
 	PostTimelineResponse,
 	RecyclingConfigResponse,
 	RecyclingInput,
@@ -68,7 +93,21 @@ import {
 	UpdateMetadataResponse,
 	UpdatePostBody,
 } from "../schemas/posts";
+import { TagResponse } from "../schemas/tags";
 import { chooseCrossPostSourceTarget } from "../services/cross-post-processor";
+import {
+	hasEffectivePostPayload,
+	injectPostSignature,
+	injectSignatureIntoTargetOptions,
+	mergePostTargetOptions,
+	renderPostTemplate,
+	renderPostTemplateOverrides,
+	resolveTemplateAccountName,
+} from "../services/post-content-resolution";
+import {
+	lockProviderReconciliationScope,
+	persistManualProviderReconciliation,
+} from "../services/provider-reconciliation-persistence";
 import {
 	dispatchPublishOutbox,
 	publishOutboxRow,
@@ -77,10 +116,12 @@ import {
 	computeNextRecycleAt,
 	validateRecyclingConfig,
 } from "../services/recycling-validator";
+import { resolveExternalShortLinkProvider } from "../services/short-link-configuration";
 import {
-	getProvider,
-	type ShortLinkProvider,
-} from "../services/short-link-providers";
+	createTrackedExternalShortLink,
+	type ExternalShortLinkProviderType,
+} from "../services/short-link-lifecycle";
+import { createRelayApiProvider } from "../services/short-link-providers";
 import { shortenUrlsInContent } from "../services/short-link-service";
 import { resolveTargets } from "../services/target-resolver";
 import { refreshTokenIfNeeded } from "../services/token-refresh-coordinator";
@@ -99,7 +140,7 @@ const PRESIGN_GET_EXPIRES = 3600;
 
 type MediaItem = {
 	url: string;
-	type?: "image" | "video" | "gif" | "document";
+	type?: "image" | "video" | "gif" | "document" | "audio";
 	thumbnail?: string;
 };
 type PostResponseBody = z.infer<typeof PostResponse>;
@@ -107,21 +148,70 @@ type PostTargetAccount = NonNullable<
 	PostResponseBody["targets"][string]["accounts"]
 >[number];
 
+function serializePostTag(
+	row: typeof tags.$inferSelect,
+): z.infer<typeof TagResponse> {
+	return {
+		id: row.id,
+		name: row.name,
+		color: row.color,
+		workspace_id: row.workspaceId,
+		created_at: row.createdAt.toISOString(),
+	};
+}
+
 function responseMediaType(value: string | null): MediaItem["type"] {
 	return value === "image" ||
 		value === "video" ||
 		value === "gif" ||
-		value === "document"
+		value === "document" ||
+		value === "audio"
 		? value
 		: undefined;
 }
 
 async function presignMediaUrls(
+	db: Database,
 	env: Env,
 	mediaArr: MediaItem[] | null,
 	orgId: string,
+	preloadedPolicy?: RelayMediaPolicy,
 ): Promise<MediaItem[] | null> {
-	return presignRelayMediaUrls(env, mediaArr, PRESIGN_GET_EXPIRES, orgId);
+	return presignRelayMediaUrls(
+		db,
+		env,
+		mediaArr,
+		PRESIGN_GET_EXPIRES,
+		orgId,
+		preloadedPolicy,
+	);
+}
+
+function mediaPolicyInput(value: {
+	media?: unknown;
+	target_options?: unknown;
+}): unknown {
+	return { media: value.media, target_options: value.target_options };
+}
+
+function mediaPolicyError(violation: RelayMediaViolation) {
+	return {
+		error: {
+			code: "MEDIA_NOT_READY",
+			message:
+				violation.reason === "invalid_relay_url"
+					? "Relay-hosted media must use its canonical HTTPS URL"
+					: "Relay-hosted media must belong to this organization and be ready before it can be used",
+			details: { url: violation.url },
+		},
+	};
+}
+
+function violationForPostInput(
+	policy: RelayMediaPolicy,
+	value: { media?: unknown; target_options?: unknown },
+): RelayMediaViolation | null {
+	return policy.violationFor(mediaPolicyInput(value));
 }
 
 /**
@@ -355,6 +445,10 @@ const listAllPostLogs = createRoute({
 				"application/json": { schema: PublishLogListResponse },
 			},
 		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -388,11 +482,15 @@ const createPostRoute = createRoute({
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
-			description: "Quota exceeded",
+			description: "Workspace access denied or quota exceeded",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		409: {
 			description: "No slot available",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Referenced content template or idea not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -1001,6 +1099,21 @@ app.openapi(listPosts, async (c) => {
 
 	const hasMore = allPosts.length > limit;
 	const data = allPosts.slice(0, limit);
+	const pageRelayMediaPolicy = includeMedia
+		? await loadRelayMediaPolicy(
+				db,
+				orgId,
+				data.map((post) => {
+					const overrides = post.platformOverrides as Record<
+						string,
+						unknown
+					> | null;
+					return overrides?._media ?? null;
+				}),
+				mediaPublicHost(c.env),
+				c.get("workspaceScope"),
+			)
+		: undefined;
 
 	const postIds = data.map((p) => p.id);
 
@@ -1142,9 +1255,11 @@ app.openapi(listPosts, async (c) => {
 				if (!mediaArr) {
 					mediaArr = includeMedia
 						? await presignMediaUrls(
+								db,
 								c.env,
 								attachThumbnails(rawMedia, thumbMap),
 								orgId,
+								pageRelayMediaPolicy,
 							)
 						: rawMedia;
 				}
@@ -1257,9 +1372,11 @@ app.openapi(listPosts, async (c) => {
 					? (overrides._media as MediaItem[])
 					: null;
 				mediaArr = await presignMediaUrls(
+					db,
 					c.env,
 					attachThumbnails(rawMedia, leanThumbMap),
 					orgId,
+					pageRelayMediaPolicy,
 				);
 			}
 			return {
@@ -1531,14 +1648,14 @@ app.openapi(listAllPostLogs, async (c) => {
 	applyWorkspaceScope(c, conditions, posts.workspaceId);
 	if (from) conditions.push(gte(postTargets.updatedAt, new Date(from)));
 	if (to) conditions.push(lte(postTargets.updatedAt, new Date(to)));
-	// Apply the incoming cursor as a keyset on updatedAt (the ORDER BY key). Previously
-	// the cursor was ignored, so following next_cursor returned page 1 forever and
-	// auto-paginating clients looped. The cursor is the previous page's last updatedAt.
 	if (cursor) {
-		const cursorDate = new Date(cursor);
-		if (!Number.isNaN(cursorDate.getTime())) {
-			conditions.push(lt(postTargets.updatedAt, cursorDate));
-		}
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			decoded.kind === "composite"
+				? sql`(${postTargets.updatedAt}, ${postTargets.id}) < (${decoded.timestamp}::timestamptz, ${decoded.id})`
+				: lt(postTargets.updatedAt, new Date(decoded.timestamp)),
+		);
 	}
 
 	const rows = await db
@@ -1557,11 +1674,12 @@ app.openapi(listAllPostLogs, async (c) => {
 			deliveryState: postTargets.deliveryState,
 			publishedAt: postTargets.publishedAt,
 			updatedAt: postTargets.updatedAt,
+			cursorTimestamp: sql<string>`to_char(${postTargets.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(postTargets)
 		.innerJoin(posts, eq(postTargets.postId, posts.id))
 		.where(and(...conditions))
-		.orderBy(desc(postTargets.updatedAt))
+		.orderBy(desc(postTargets.updatedAt), desc(postTargets.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -1570,10 +1688,13 @@ app.openapi(listAllPostLogs, async (c) => {
 	return c.json(
 		{
 			data: data.map(formatLogEntry),
-			// Emit the last row's updatedAt as the keyset cursor (matches the ORDER BY key);
-			// the previous id-based cursor could never be applied as a keyset on updatedAt.
 			next_cursor: hasMore
-				? (data.at(-1)?.updatedAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},
@@ -1585,6 +1706,18 @@ app.openapi(createPostRoute, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const relayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		mediaPolicyInput(body),
+		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
+	);
+	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
+	if (mediaViolation) {
+		markMutationInputNotApplied(c);
+		return c.json(mediaPolicyError(mediaViolation), 400 as never);
+	}
 
 	const isDraft = body.scheduled_at === "draft";
 	const isAuto = body.scheduled_at === "auto";
@@ -1604,7 +1737,10 @@ app.openapi(createPostRoute, async (c) => {
 		targetResolution.workspaceIds,
 		"post",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) {
+		markMutationInputNotApplied(c);
+		return scope.response as never;
+	}
 	const workspaceId = scope.workspaceId;
 	const { resolved, failed } = targetResolution;
 	const noResolved = resolved.length === 0;
@@ -1621,11 +1757,15 @@ app.openapi(createPostRoute, async (c) => {
 	} else if (isAuto) {
 		const { findBestSlot } = await import("../services/slot-finder");
 		const slot = await findBestSlot(c.env, orgId, {
+			db,
+			workspaceScope: c.get("workspaceScope"),
+			workspaceId,
 			accountId: resolved[0]?.accounts[0]?.id,
 			after: new Date(),
 			strategy: "smart",
 		});
 		if (!slot) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1654,42 +1794,94 @@ app.openapi(createPostRoute, async (c) => {
 
 	// --- Template resolution ---
 	let finalContent = body.content ?? null;
+	const templateTargetOptions: Record<string, Record<string, unknown>> = {};
 
-	if (body.template_id && !finalContent) {
-		try {
-			const [tmpl] = await db
-				.select()
-				.from(contentTemplates)
-				.where(
-					and(
-						eq(contentTemplates.id, body.template_id),
-						eq(contentTemplates.organizationId, orgId),
-					),
-				)
-				.limit(1);
+	if (body.template_id) {
+		const [tmpl] = await db
+			.select()
+			.from(contentTemplates)
+			.where(
+				and(
+					eq(contentTemplates.id, body.template_id),
+					eq(contentTemplates.organizationId, orgId),
+				),
+			)
+			.limit(1);
 
-			if (tmpl) {
-				let rendered = tmpl.content;
-				// Built-in variables
-				rendered = rendered.replace(
-					/\{\{date\}\}/g,
-					new Date().toISOString().split("T")[0] ?? "",
+		if (!tmpl) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "TEMPLATE_NOT_FOUND",
+						message: "Content template not found in this organization.",
+					},
+				},
+				404,
+			);
+		}
+		const templateAccessDenied = assertWorkspaceScope(c, tmpl.workspaceId);
+		if (templateAccessDenied) {
+			markMutationInputNotApplied(c);
+			return templateAccessDenied as never;
+		}
+
+		if (!finalContent) {
+			const accountName = resolveTemplateAccountName(resolved);
+			const renderedAt = new Date();
+			const rendered = renderPostTemplate(
+				tmpl.content,
+				body.template_variables,
+				accountName,
+				renderedAt,
+			);
+			if (!rendered.ok) {
+				markMutationInputNotApplied(c);
+				return c.json(
+					{
+						error: {
+							code: rendered.code,
+							message:
+								"{{account_name}} requires one unambiguous account name or an explicit template_variables.account_name value.",
+							details: { variable: rendered.variable },
+						},
+					},
+					400,
 				);
-				// Custom variables from request
-				if (body.template_variables) {
-					for (const [key, value] of Object.entries(body.template_variables)) {
-						// SECURITY: Escape regex metacharacters to prevent ReDoS via user-controlled keys
-						const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-						rendered = rendered.replace(
-							new RegExp(`\\{\\{${escapedKey}\\}\\}`, "g"),
-							value,
-						);
-					}
-				}
-				finalContent = rendered;
 			}
-		} catch {
-			// Template resolution failure should not block post creation
+			finalContent = rendered.content;
+
+			const renderedOverrides = renderPostTemplateOverrides(
+				tmpl.platformOverrides,
+				body.template_variables,
+				accountName,
+				renderedAt,
+				new Set(resolved.map((target) => target.platform)),
+			);
+			if (!renderedOverrides.ok) {
+				markMutationInputNotApplied(c);
+				return c.json(
+					{
+						error: {
+							code: renderedOverrides.code,
+							message: `The ${renderedOverrides.platform} template override requires one unambiguous account name or an explicit template_variables.account_name value.`,
+							details: {
+								variable: renderedOverrides.variable,
+								platform: renderedOverrides.platform,
+							},
+						},
+					},
+					400,
+				);
+			}
+			for (const target of resolved) {
+				const override = renderedOverrides.overrides[target.platform];
+				// A blank override means "inherit the shared content", not "publish
+				// nothing to this platform" — that is what omitting the target does.
+				if (override?.trim()) {
+					templateTargetOptions[target.platform] = { content: override };
+				}
+			}
 		}
 	}
 
@@ -1701,17 +1893,50 @@ app.openapi(createPostRoute, async (c) => {
 			.from(ideas)
 			.where(and(eq(ideas.id, body.idea_id), eq(ideas.organizationId, orgId)))
 			.limit(1);
-		if (idea) {
-			ideaSource = idea;
-			// Use idea content as fallback — explicit content takes precedence
-			if (!finalContent) {
-				finalContent = idea.content;
-			}
+		if (!idea) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "IDEA_NOT_FOUND",
+						message: "Idea not found in this organization.",
+					},
+				},
+				404,
+			);
+		}
+		ideaSource = idea;
+		// Use idea content as fallback — explicit content takes precedence
+		if (!finalContent) {
+			finalContent = idea.content;
 		}
 	}
 
+	let effectiveTargetOptions = mergePostTargetOptions(
+		templateTargetOptions,
+		body.target_options,
+	);
+	// A draft is explicitly a placeholder to fill in later, so it is exempt from
+	// the payload requirement; everything that can publish is not.
+	if (
+		!isDraft &&
+		!hasEffectivePostPayload(finalContent, body.media, effectiveTargetOptions)
+	) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "CONTENT_REQUIRED",
+					message:
+						"Post creation requires non-empty content, media, or per-target content after resolving template and idea references.",
+				},
+			},
+			400,
+		);
+	}
+
 	// --- Signature injection ---
-	if (finalContent && !body.skip_signature) {
+	if (!body.skip_signature) {
 		try {
 			const [defaultSig] = await db
 				.select()
@@ -1725,10 +1950,13 @@ app.openapi(createPostRoute, async (c) => {
 				.limit(1);
 
 			if (defaultSig) {
-				finalContent =
-					defaultSig.position === "prepend"
-						? `${defaultSig.content}\n\n${finalContent}`
-						: `${finalContent}\n\n${defaultSig.content}`;
+				if (finalContent?.trim()) {
+					finalContent = injectPostSignature(finalContent, defaultSig);
+				}
+				effectiveTargetOptions = injectSignatureIntoTargetOptions(
+					effectiveTargetOptions,
+					defaultSig,
+				);
 			}
 		} catch {
 			// Signature injection failure should not block post creation
@@ -1740,6 +1968,7 @@ app.openapi(createPostRoute, async (c) => {
 		original: string;
 		short: string;
 		provider: string;
+		shortLinkId?: string;
 	}> = [];
 
 	if (finalContent && !isDraft && c.get("plan") === "pro") {
@@ -1756,40 +1985,82 @@ app.openapi(createPostRoute, async (c) => {
 				shouldShorten = true;
 
 			if (shouldShorten && slConfig?.provider) {
-				let provider: ShortLinkProvider | null | undefined;
-				let apiKey: string | null = null;
-
 				if (slConfig.provider === "relayapi") {
-					const { createRelayApiProvider } = await import(
-						"../services/short-link-providers/relayapi"
-					);
-					const baseUrl = c.env.API_BASE_URL || "https://api.relayapi.dev";
-					provider = createRelayApiProvider({
+					const baseUrl =
+						c.env.PUBLIC_LINK_BASE_URL ||
+						c.env.API_BASE_URL ||
+						"https://api.relayapi.dev";
+					const provider = createRelayApiProvider({
 						db,
 						kv: c.env.KV,
 						baseUrl,
 						organizationId: orgId,
 						workspaceId,
+						providerConfigVersion: slConfig.providerConfigVersion,
 					});
-					apiKey = "builtin"; // not used by relayapi provider
-				} else if (slConfig.apiKey) {
-					provider = getProvider(
-						slConfig.provider as "dub" | "short_io" | "bitly",
-					);
-					apiKey = await maybeDecrypt(slConfig.apiKey, c.env.ENCRYPTION_KEY);
-				}
-
-				if (provider && apiKey) {
 					const result = await shortenUrlsInContent(
-						provider,
-						apiKey,
+						provider.shortLinkDomain,
 						slConfig.domain,
 						finalContent,
+						async (url) => {
+							const created = await provider.shorten(
+								"builtin",
+								slConfig.domain,
+								url,
+								crypto.randomUUID(),
+							);
+							return { shortUrl: created.shortUrl };
+						},
 					);
 					finalContent = result.content;
 					shortenedUrls = result.shortenedUrls.map((url) => ({
 						...url,
-						provider: slConfig.provider ?? "relayapi",
+						provider: "relayapi",
+					}));
+				} else if (slConfig.credentialVersion) {
+					const resolvedProvider = await resolveExternalShortLinkProvider({
+						db,
+						organizationId: orgId,
+						provider: slConfig.provider as ExternalShortLinkProviderType,
+						credentialVersion: slConfig.credentialVersion,
+						encryptionKey: c.env.ENCRYPTION_KEY,
+					});
+					if (!resolvedProvider) {
+						throw new Error(
+							"Short-link provider credential version is unavailable",
+						);
+					}
+					const result = await shortenUrlsInContent(
+						resolvedProvider.provider.shortLinkDomain,
+						slConfig.domain,
+						finalContent,
+						async (url) => {
+							const created = await createTrackedExternalShortLink({
+								db,
+								organizationId: orgId,
+								workspaceId,
+								originalUrl: url,
+								providerType:
+									slConfig.provider as ExternalShortLinkProviderType,
+								providerConfigVersion: slConfig.providerConfigVersion,
+								credentialVersion: slConfig.credentialVersion as number,
+								domain: slConfig.domain,
+								apiKey: resolvedProvider.apiKey,
+								provider: resolvedProvider.provider,
+							});
+							if (!created.shortUrl) {
+								throw new Error("Short-link provider returned no active URL");
+							}
+							return {
+								shortUrl: created.shortUrl,
+								shortLinkId: created.id,
+							};
+						},
+					);
+					finalContent = result.content;
+					shortenedUrls = result.shortenedUrls.map((url) => ({
+						...url,
+						provider: slConfig.provider as ExternalShortLinkProviderType,
 					}));
 				}
 			}
@@ -1802,7 +2073,7 @@ app.openapi(createPostRoute, async (c) => {
 	// Insert post — persist media in platformOverrides._media so that
 	// scheduled/queued publishes can retrieve attachments later.
 	const platformOverrides: Record<string, unknown> = {
-		...(body.target_options ?? {}),
+		...effectiveTargetOptions,
 		...(body.media && body.media.length > 0 ? { _media: body.media } : {}),
 	};
 
@@ -1854,7 +2125,9 @@ app.openapi(createPostRoute, async (c) => {
 							link.short,
 					);
 				const externalLinks = shortenedUrls.filter(
-					(link) => link.provider !== "relayapi",
+					(link) =>
+						link.provider !== "relayapi" &&
+						typeof link.shortLinkId === "string",
 				);
 
 				if (relayApiCodes.length > 0) {
@@ -1872,19 +2145,20 @@ app.openapi(createPostRoute, async (c) => {
 				}
 
 				if (externalLinks.length > 0) {
-					await tx.insert(shortLinks).values(
-						externalLinks.map((sl) => ({
-							organizationId: orgId,
-							workspaceId: txPost.workspaceId,
-							originalUrl: sl.original,
-							provider: sl.provider,
-							shortCode:
-								new URL(sl.short).pathname.split("/").filter(Boolean).at(-1) ??
-								sl.short,
-							shortUrl: sl.short,
-							postId: txPost.id,
-						})),
-					);
+					await tx
+						.update(shortLinks)
+						.set({ postId: txPost.id })
+						.where(
+							and(
+								eq(shortLinks.organizationId, orgId),
+								eq(shortLinks.scopeKey, workspaceScopeKey(txPost.workspaceId)),
+								inArray(
+									shortLinks.id,
+									externalLinks.map((link) => link.shortLinkId as string),
+								),
+								eq(shortLinks.creationStatus, "active"),
+							),
+						);
 				}
 			}
 
@@ -2074,6 +2348,9 @@ app.openapi(createPostRoute, async (c) => {
 						} as TxEarlyReturn;
 					}
 					const id = generateId("cpa_");
+					const scheduledFor = new Date(
+						publishDate.getTime() + action.delay_minutes * 60 * 1000,
+					);
 					return {
 						id,
 						operationId: `cross-post:${id}`,
@@ -2087,9 +2364,8 @@ app.openapi(createPostRoute, async (c) => {
 						targetPlatform: targetAccount.platform,
 						content: action.content ?? null,
 						delayMinutes: action.delay_minutes,
-						executeAt: new Date(
-							publishDate.getTime() + action.delay_minutes * 60 * 1000,
-						),
+						scheduledFor,
+						nextAttemptAt: scheduledFor,
 					};
 				});
 				await tx.insert(crossPostActions).values(actionValues);
@@ -2140,19 +2416,23 @@ app.openapi(createPostRoute, async (c) => {
 	// --- Update idea reference if created from an idea ---
 	if (ideaSource) {
 		const ideaSourceId = ideaSource.id;
+		const attributionPrincipalId = c.get("principalId");
 		c.executionCtx.waitUntil(
-			(async () => {
-				await db
+			db.transaction(async (tx) => {
+				await tx
 					.update(ideas)
 					.set({ convertedToPostId: post.id, updatedAt: new Date() })
-					.where(eq(ideas.id, ideaSourceId));
-				await db.insert(ideaActivity).values({
+					.where(
+						and(eq(ideas.id, ideaSourceId), eq(ideas.organizationId, orgId)),
+					);
+				await tx.insert(ideaActivity).values({
 					ideaId: ideaSourceId,
-					actorId: c.get("keyId"),
+					organizationId: orgId,
+					actorPrincipalId: attributionPrincipalId,
 					action: "converted",
 					metadata: { post_id: post.id },
 				});
-			})(),
+			}),
 		);
 	}
 
@@ -2172,6 +2452,7 @@ app.openapi(createPostRoute, async (c) => {
 		);
 
 		const presignedMedia = await presignMediaUrls(
+			db,
 			c.env,
 			body.media ?? null,
 			orgId,
@@ -2207,6 +2488,7 @@ app.openapi(createPostRoute, async (c) => {
 	);
 
 	const presignedMedia = await presignMediaUrls(
+		db,
 		c.env,
 		body.media ?? null,
 		orgId,
@@ -2352,6 +2634,7 @@ app.openapi(getPost, async (c) => {
 	// Fall back to presigned R2 URLs, attaching durable thumbnails first.
 	if (!mediaArr) {
 		mediaArr = await presignMediaUrls(
+			db,
 			c.env,
 			attachThumbnails(rawMedia, thumbMap),
 			orgId,
@@ -2400,6 +2683,7 @@ app.openapi(updatePostRoute, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -2407,9 +2691,13 @@ app.openapi(updatePostRoute, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied as never;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied as never;
+	}
 
 	if (!["draft", "scheduled", "failed"].includes(post.status)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2419,6 +2707,18 @@ app.openapi(updatePostRoute, async (c) => {
 			},
 			400,
 		);
+	}
+	const relayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		mediaPolicyInput(body),
+		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
+	);
+	const mediaViolation = violationForPostInput(relayMediaPolicy, body);
+	if (mediaViolation) {
+		markMutationInputNotApplied(c);
+		return c.json(mediaPolicyError(mediaViolation), 400 as never);
 	}
 
 	const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -2466,10 +2766,14 @@ app.openapi(updatePostRoute, async (c) => {
 			// → 500 when serialized.
 			const { findBestSlot } = await import("../services/slot-finder");
 			const slot = await findBestSlot(c.env, orgId, {
+				db,
+				workspaceScope: c.get("workspaceScope"),
+				workspaceId: post.workspaceId,
 				after: new Date(),
 				strategy: "smart",
 			});
 			if (!slot) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -2496,6 +2800,34 @@ app.openapi(updatePostRoute, async (c) => {
 	const projectedStatus =
 		(updates.status as typeof posts.$inferSelect.status | undefined) ??
 		post.status;
+
+	// Drafts are exempt from the payload requirement at creation because they are
+	// placeholders. That exemption has to be re-checked here: leaving draft is the
+	// point where an empty post becomes publishable, and nothing downstream in the
+	// publish queue re-validates content.
+	if (projectedStatus !== "draft") {
+		const { _media: projectedMedia, ...projectedTargetOptions } = newOverrides;
+		if (
+			!hasEffectivePostPayload(
+				body.content !== undefined ? body.content : post.content,
+				Array.isArray(projectedMedia) ? projectedMedia : undefined,
+				projectedTargetOptions as Record<string, Record<string, unknown>>,
+			)
+		) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "CONTENT_REQUIRED",
+						message:
+							"A post must have non-empty content, media, or per-target content before it can leave draft.",
+					},
+				},
+				400 as never,
+			);
+		}
+	}
+
 	let replacementTargets: Array<typeof postTargets.$inferInsert> | null = null;
 
 	// Resolve every related ID before mutating the parent. A validation failure now
@@ -2514,6 +2846,7 @@ app.openapi(updatePostRoute, async (c) => {
 		// leave the post with zero targets (it would publish to nothing, or get stuck).
 		// Reject with NO_VALID_TARGETS, mirroring createThread.
 		if (resolved.length === 0) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -2598,6 +2931,31 @@ app.openapi(updatePostRoute, async (c) => {
 				}),
 			);
 		}
+
+		// Re-anchor never-attempted actions atomically with the post schedule.
+		// Provider/readiness retries update only nextAttemptAt later, preserving
+		// scheduledFor as the product schedule that was actually requested.
+		if (body.scheduled_at !== undefined && body.scheduled_at !== "draft") {
+			const anchor =
+				txUpdated.status === "publishing"
+					? txUpdated.updatedAt
+					: txUpdated.scheduledAt;
+			if (anchor) {
+				await tx
+					.update(crossPostActions)
+					.set({
+						scheduledFor: sql`${anchor.toISOString()}::timestamptz + (${crossPostActions.delayMinutes} * interval '1 minute')`,
+						nextAttemptAt: sql`${anchor.toISOString()}::timestamptz + (${crossPostActions.delayMinutes} * interval '1 minute')`,
+					})
+					.where(
+						and(
+							eq(crossPostActions.postId, id),
+							eq(crossPostActions.status, "pending"),
+						),
+					);
+			}
+		}
+
 		const webhook = scheduleOccurrenceId
 			? await persistWebhookEventInTransaction(
 					tx,
@@ -2635,33 +2993,6 @@ app.openapi(updatePostRoute, async (c) => {
 		c.executionCtx.waitUntil(
 			enqueuePersistedWebhookEvent(c.env, db, updatedScheduledWebhook),
 		);
-	}
-
-	// Re-anchor pending cross-post actions when the schedule moves. Their executeAt is
-	// computed from the post's scheduledAt at creation; if the post is rescheduled (or
-	// moved to "now"/"draft") the actions otherwise fire at the stale time or fail
-	// terminally ("No published post target found") before the post ever publishes.
-	if (body.scheduled_at !== undefined && body.scheduled_at !== "draft") {
-		// Anchor = the post's new publish time. For "now"/"publishing" use now().
-		const anchor =
-			updates.status === "publishing"
-				? new Date()
-				: ((updates.scheduledAt as Date | null | undefined) ?? null);
-		if (anchor) {
-			c.executionCtx.waitUntil(
-				db
-					.update(crossPostActions)
-					.set({
-						executeAt: sql`${anchor.toISOString()}::timestamptz + (${crossPostActions.delayMinutes} * interval '1 minute')`,
-					})
-					.where(
-						and(
-							eq(crossPostActions.postId, id),
-							eq(crossPostActions.status, "pending"),
-						),
-					),
-			);
-		}
 	}
 
 	// Enqueue for publishing if status changed to "publishing". Usage is billed by
@@ -2705,6 +3036,7 @@ app.openapi(updatePostRoute, async (c) => {
 	const finalOverrides =
 		(updated.platformOverrides as Record<string, unknown>) ?? {};
 	const responseMedia = await presignMediaUrls(
+		db,
 		c.env,
 		finalOverrides._media ? (finalOverrides._media as MediaItem[]) : null,
 		orgId,
@@ -2762,6 +3094,7 @@ app.openapi(deletePost, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -2769,7 +3102,10 @@ app.openapi(deletePost, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	// Once provider execution has started, retain the durable attempts and result
 	// graph for reconciliation/audit. A draft or never-attempted schedule can be
@@ -2778,6 +3114,7 @@ app.openapi(deletePost, async (c) => {
 		!(["draft", "scheduled"] as string[]).includes(post.status) ||
 		post.publishAttempts > 0
 	) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2802,6 +3139,7 @@ app.openapi(deletePost, async (c) => {
 		)
 		.returning({ id: posts.id });
 	if (deleted.length === 0) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2833,6 +3171,7 @@ app.openapi(retryPost, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -2840,9 +3179,13 @@ app.openapi(retryPost, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied as never;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied as never;
+	}
 
 	if (!["failed", "partial"].includes(post.status)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3020,8 +3363,26 @@ app.openapi(reconcilePublishTarget, async (c) => {
 
 	const now = new Date();
 	const result = await db.transaction(async (tx) => {
+		const scope = await lockProviderReconciliationScope(tx, {
+			postId: id,
+			organizationId: orgId,
+			threadGroupId: post.threadGroupId,
+		});
+		if (!scope.locked) {
+			return {
+				conflict:
+					scope.conflict === "thread"
+						? ("thread" as const)
+						: ("target" as const),
+			};
+		}
+		const lockedPost = scope.post;
+		if (!lockedPost.threadGroupId && lockedPost.publishLeaseId !== null) {
+			return { conflict: "target" as const };
+		}
+
 		const threadLeaseId = `reconcile:${crypto.randomUUID()}`;
-		if (post.threadGroupId) {
+		if (lockedPost.threadGroupId) {
 			// Serialize reconciliation for every unknown target in a thread. Two
 			// operators may resolve different targets concurrently; without a row
 			// fence both transactions can observe the other target as unresolved and
@@ -3037,7 +3398,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				})
 				.where(
 					and(
-						eq(threadExecutions.threadGroupId, post.threadGroupId),
+						eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 						eq(threadExecutions.organizationId, orgId),
 						eq(threadExecutions.status, "unknown"),
 					),
@@ -3047,46 +3408,26 @@ app.openapi(reconcilePublishTarget, async (c) => {
 		}
 
 		const succeeded = body.outcome === "succeeded";
-		const standaloneExecutionFence = post.threadGroupId
-			? sql`TRUE`
-			: sql`EXISTS (
-				SELECT 1 FROM posts AS reconcile_parent
-				WHERE reconcile_parent.id = ${id}
-					AND reconcile_parent.organization_id = ${orgId}
-					AND reconcile_parent.publish_lease_id IS NULL
-			)`;
-		const [target] = await tx
-			.update(postTargets)
-			.set({
-				status: succeeded ? "published" : "failed",
-				deliveryState: succeeded ? "succeeded" : "failed",
-				platformPostId: succeeded ? body.provider_post_id : null,
-				platformUrl: succeeded ? (body.provider_url ?? null) : null,
-				publishedAt: succeeded ? now : null,
-				error: succeeded ? null : body.error_message,
-				errorCode: succeeded ? null : body.error_code,
-				errorDetail: null,
-				leaseExpiresAt: null,
-				updatedAt: now,
-			})
-			.where(
-				and(
-					eq(postTargets.id, targetId),
-					eq(postTargets.postId, id),
-					eq(postTargets.publishOperationId, body.publish_operation_id),
-					eq(postTargets.deliveryState, "unknown"),
-					standaloneExecutionFence,
-				),
-			)
-			.returning({ id: postTargets.id });
-		if (!target) {
-			if (post.threadGroupId) {
+		const saved = await persistManualProviderReconciliation(tx, {
+			targetId,
+			postId: id,
+			organizationId: orgId,
+			publishOperationId: body.publish_operation_id,
+			succeeded,
+			providerPostId: succeeded ? body.provider_post_id : null,
+			providerUrl: succeeded ? (body.provider_url ?? null) : null,
+			errorCode: succeeded ? null : body.error_code,
+			errorMessage: succeeded ? null : body.error_message,
+			observedAt: now,
+		});
+		if (!saved) {
+			if (lockedPost.threadGroupId) {
 				await tx
 					.update(threadExecutions)
 					.set({ leaseId: null, leaseExpiresAt: null, updatedAt: now })
 					.where(
 						and(
-							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 							eq(threadExecutions.organizationId, orgId),
 							eq(threadExecutions.status, "unknown"),
 							eq(threadExecutions.leaseId, threadLeaseId),
@@ -3095,23 +3436,6 @@ app.openapi(reconcilePublishTarget, async (c) => {
 			}
 			return { conflict: "target" as const };
 		}
-
-		await tx
-			.update(publishAttempts)
-			.set({
-				state: succeeded ? "succeeded" : "failed",
-				providerPostId: succeeded ? body.provider_post_id : null,
-				error: succeeded ? null : body.error_message,
-				completedAt: now,
-				leaseExpiresAt: now,
-			})
-			.where(
-				and(
-					eq(publishAttempts.postTargetId, targetId),
-					eq(publishAttempts.publishOperationId, body.publish_operation_id),
-					eq(publishAttempts.state, "unknown"),
-				),
-			);
 
 		const targetStates = await tx
 			.select({
@@ -3141,11 +3465,11 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				publishedAt:
 					postStatus === "published" ||
 					(postStatus === "partial" && hasPublishedTarget)
-						? (post.publishedAt ?? now)
+						? (lockedPost.publishedAt ?? now)
 						: postStatus === "failed"
 							? null
-							: post.publishedAt,
-				terminalReason: hasNonterminal ? post.terminalReason : null,
+							: lockedPost.publishedAt,
+				terminalReason: hasNonterminal ? lockedPost.terminalReason : null,
 				revision: sql`${posts.revision} + 1`,
 				updatedAt: now,
 			})
@@ -3154,7 +3478,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 		let threadStatus: "queued" | "completed" | "failed" | "unknown" | null =
 			null;
 		let threadCompleted = false;
-		if (post.threadGroupId) {
+		if (lockedPost.threadGroupId) {
 			const groupPosts = await tx
 				.select({
 					id: posts.id,
@@ -3163,7 +3487,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				.from(posts)
 				.where(
 					and(
-						eq(posts.threadGroupId, post.threadGroupId),
+						eq(posts.threadGroupId, lockedPost.threadGroupId),
 						eq(posts.organizationId, orgId),
 					),
 				);
@@ -3187,7 +3511,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 					.set({ leaseId: null, leaseExpiresAt: null, updatedAt: now })
 					.where(
 						and(
-							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 							eq(threadExecutions.organizationId, orgId),
 							eq(threadExecutions.status, "unknown"),
 							eq(threadExecutions.leaseId, threadLeaseId),
@@ -3196,12 +3520,14 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				threadStatus = "unknown";
 			} else if (postStatus === "failed") {
 				const downstreamIds = groupPosts
-					.filter((item) => (item.position ?? 0) > (post.threadPosition ?? 0))
+					.filter(
+						(item) => (item.position ?? 0) > (lockedPost.threadPosition ?? 0),
+					)
 					.map((item) => item.id);
 				if (downstreamIds.length > 0) {
 					const failure = {
 						code: "THREAD_ANCESTOR_FAILED",
-						message: `Thread position ${post.threadPosition ?? 0} was reconciled as failed`,
+						message: `Thread position ${lockedPost.threadPosition ?? 0} was reconciled as failed`,
 					};
 					await tx
 						.update(posts)
@@ -3237,7 +3563,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 					.update(threadExecutions)
 					.set({
 						status: "failed",
-						failedPosition: post.threadPosition ?? 0,
+						failedPosition: lockedPost.threadPosition ?? 0,
 						failure: {
 							code: "THREAD_ANCESTOR_FAILED",
 							message: "Reconciled provider outcome was failed",
@@ -3248,7 +3574,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 					})
 					.where(
 						and(
-							eq(threadExecutions.threadGroupId, post.threadGroupId),
+							eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 							eq(threadExecutions.organizationId, orgId),
 							eq(threadExecutions.status, "unknown"),
 							eq(threadExecutions.leaseId, threadLeaseId),
@@ -3258,7 +3584,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 			} else {
 				const nextPosition = groupPosts
 					.map((item) => item.position ?? 0)
-					.filter((position) => position > (post.threadPosition ?? 0))
+					.filter((position) => position > (lockedPost.threadPosition ?? 0))
 					.sort((a, b) => a - b)[0];
 				if (nextPosition === undefined) {
 					await tx
@@ -3273,7 +3599,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 						})
 						.where(
 							and(
-								eq(threadExecutions.threadGroupId, post.threadGroupId),
+								eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 								eq(threadExecutions.organizationId, orgId),
 								eq(threadExecutions.status, "unknown"),
 								eq(threadExecutions.leaseId, threadLeaseId),
@@ -3295,7 +3621,7 @@ app.openapi(reconcilePublishTarget, async (c) => {
 						})
 						.where(
 							and(
-								eq(threadExecutions.threadGroupId, post.threadGroupId),
+								eq(threadExecutions.threadGroupId, lockedPost.threadGroupId),
 								eq(threadExecutions.organizationId, orgId),
 								eq(threadExecutions.status, "unknown"),
 								eq(threadExecutions.leaseId, threadLeaseId),
@@ -3306,9 +3632,9 @@ app.openapi(reconcilePublishTarget, async (c) => {
 						.values(
 							publishOutboxRow({
 								organizationId: orgId,
-								threadGroupId: post.threadGroupId,
+								threadGroupId: lockedPost.threadGroupId,
 								threadPosition: nextPosition,
-								operationId: `thread:${post.threadGroupId}:reconcile:${body.publish_operation_id}:${nextPosition}`,
+								operationId: `thread:${lockedPost.threadGroupId}:reconcile:${body.publish_operation_id}:${nextPosition}`,
 							}),
 						)
 						.onConflictDoNothing();
@@ -3337,16 +3663,16 @@ app.openapi(reconcilePublishTarget, async (c) => {
 				),
 			);
 		}
-		if (threadCompleted && post.threadGroupId) {
+		if (threadCompleted && lockedPost.threadGroupId) {
 			persistedEvents.push(
 				await persistWebhookEventInTransaction(
 					tx,
 					orgId,
 					"thread.published",
-					{ thread_group_id: post.threadGroupId },
+					{ thread_group_id: lockedPost.threadGroupId },
 					{
-						workspaceId: post.workspaceId,
-						occurrenceId: `thread:${post.threadGroupId}:published`,
+						workspaceId: lockedPost.workspaceId,
+						occurrenceId: `thread:${lockedPost.threadGroupId}:published`,
 					},
 				),
 			);
@@ -3410,12 +3736,46 @@ app.openapi(reconcilePublishTarget, async (c) => {
 // Bulk create
 // ---------------------------------------------------------------------------
 
+async function bulkItemErrorFromResponse(response: Response): Promise<{
+	code: string;
+	message: string;
+}> {
+	try {
+		const payload = (await readProviderJson(response)) as {
+			error?: { code?: unknown; message?: unknown };
+		};
+		if (
+			typeof payload.error?.code === "string" &&
+			typeof payload.error.message === "string"
+		) {
+			return {
+				code: payload.error.code,
+				message: payload.error.message,
+			};
+		}
+	} catch {
+		// Fall through to a stable per-item error. The synthesized response is
+		// internal and should always carry the standard error envelope.
+	}
+	return {
+		code: "WORKSPACE_ACCESS_DENIED",
+		message: "The post could not be authorized for the requested workspace.",
+	};
+}
+
 // @ts-expect-error — hono-zod-openapi strict typing vs runtime response shape
 app.openapi(bulkCreatePosts, async (c) => {
 	const orgId = c.get("orgId");
 	const { posts: postItems } = c.req.valid("json");
 	const db = c.get("db");
 	const wsScope = c.get("workspaceScope");
+	const bulkRelayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		postItems.map(mediaPolicyInput),
+		mediaPublicHost(c.env),
+		wsScope,
+	);
 
 	// Pre-fetch org accounts once for all items (resolveTargets fetches them each time)
 	const prefetchConditions = [
@@ -3441,6 +3801,15 @@ app.openapi(bulkCreatePosts, async (c) => {
 	const autoScheduledTimes: Date[] = []; // Accumulate auto-scheduled times to avoid collisions within batch
 	for (const item of postItems) {
 		try {
+			const mediaViolation = violationForPostInput(bulkRelayMediaPolicy, item);
+			if (mediaViolation) {
+				results.push({
+					status: "error",
+					error: mediaPolicyError(mediaViolation).error,
+				});
+				failed++;
+				continue;
+			}
 			const targetResolution = await resolveTargets(
 				db,
 				orgId,
@@ -3455,7 +3824,14 @@ app.openapi(bulkCreatePosts, async (c) => {
 				targetResolution.workspaceIds,
 				"post",
 			);
-			if (!itemScope.ok) return itemScope.response as never;
+			if (!itemScope.ok) {
+				results.push({
+					status: "error",
+					error: await bulkItemErrorFromResponse(itemScope.response),
+				});
+				failed++;
+				continue;
+			}
 			const workspaceId = itemScope.workspaceId;
 			const { resolved, failed: _failedTargets } = targetResolution;
 
@@ -3471,6 +3847,9 @@ app.openapi(bulkCreatePosts, async (c) => {
 			} else if (isAuto) {
 				const { findBestSlot } = await import("../services/slot-finder");
 				const slot = await findBestSlot(c.env, orgId, {
+					db,
+					workspaceScope: c.get("workspaceScope"),
+					workspaceId,
 					accountId: resolved[0]?.accounts[0]?.id,
 					after: new Date(),
 					strategy: "smart",
@@ -3625,6 +4004,7 @@ app.openapi(unpublishPost, async (c) => {
 		.limit(1);
 
 	if (!post) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Post not found" } },
 			404,
@@ -3635,9 +4015,13 @@ app.openapi(unpublishPost, async (c) => {
 	// and flips the post status, so a workspace-scoped key must not be able to unpublish
 	// a post in another workspace of the same org. Mirrors every other post mutation.
 	const denied = assertWorkspaceScope(c, post.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	if (!["published", "partial"].includes(post.status)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3676,6 +4060,8 @@ app.openapi(unpublishPost, async (c) => {
 						accessToken: socialAccounts.accessToken,
 						refreshToken: socialAccounts.refreshToken,
 						tokenExpiresAt: socialAccounts.tokenExpiresAt,
+						platformAccountId: socialAccounts.platformAccountId,
+						metadata: socialAccounts.metadata,
 					})
 					.from(socialAccounts)
 					.where(
@@ -3711,106 +4097,378 @@ app.openapi(unpublishPost, async (c) => {
 
 	// Delete from all platforms in parallel
 	const FETCH_TIMEOUT = 10_000;
+	const unpublishMutation = new SingleUnitProviderMutationAggregate(
+		c.get("mutationEffectTracker"),
+	);
 	const deleteResults = await Promise.allSettled(
 		publishedTargets
 			.filter((t) => t.platformPostId)
 			.map(async (target) => {
 				const account = accountMap.get(target.socialAccountId);
-				if (!account?.accessToken)
-					return { targetId: target.id, success: false };
-				if (!target.platformPostId)
-					return { targetId: target.id, success: false };
+				if (!account) {
+					return {
+						targetId: target.id,
+						success: false,
+						error: "Connected account is unavailable",
+					};
+				}
+				const accessToken =
+					account.accessToken ??
+					(target.platform === "telegram" ? c.env.TELEGRAM_BOT_TOKEN : null);
+				if (!accessToken) {
+					return {
+						targetId: target.id,
+						success: false,
+						error: "Connected account credentials are unavailable",
+					};
+				}
+				if (!target.platformPostId) {
+					return {
+						targetId: target.id,
+						success: false,
+						error: "Provider post ID is unavailable",
+					};
+				}
 				const platformPostId = target.platformPostId;
 
 				let deleteSuccess = false;
+				let attempted = false;
 				try {
 					const signal = AbortSignal.timeout(FETCH_TIMEOUT);
 					switch (target.platform) {
 						case "twitter":
+							attempted = true;
 							deleteSuccess = (
-								await fetch(
-									`https://api.twitter.com/2/tweets/${target.platformPostId}`,
-									{
-										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
-										signal,
-									},
+								await unpublishMutation.track("twitter.post.delete", () =>
+									fetch(
+										`https://api.twitter.com/2/tweets/${target.platformPostId}`,
+										{
+											method: "DELETE",
+											headers: {
+												Authorization: `Bearer ${accessToken}`,
+											},
+											signal,
+										},
+									),
 								)
 							).ok;
 							break;
 						// Facebook Graph API: DELETE a Page post
 						// Docs: https://developers.facebook.com/docs/graph-api/reference/post/#deleting
 						case "facebook":
+							attempted = true;
 							deleteSuccess = (
-								await fetch(`${GRAPH_BASE.facebook}/${target.platformPostId}`, {
-									method: "DELETE",
-									headers: { Authorization: `Bearer ${account.accessToken}` },
-									signal,
-								})
-							).ok;
-							break;
-						// Instagram Graph API: DELETE an IG Media object
-						// Docs: https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/#deleting
-						// Host: graph.instagram.com (Instagram Login) or graph.facebook.com (Facebook Login)
-						case "instagram": {
-							const igHost = account.accessToken.startsWith("IGAA")
-								? "graph.instagram.com"
-								: "graph.facebook.com";
-							deleteSuccess = (
-								await fetch(
-									`https://${igHost}/${API_VERSIONS.meta_graph}/${target.platformPostId}`,
-									{
+								await unpublishMutation.track("facebook.post.delete", () =>
+									fetch(`${GRAPH_BASE.facebook}/${target.platformPostId}`, {
 										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
+										headers: { Authorization: `Bearer ${accessToken}` },
 										signal,
-									},
+									}),
 								)
 							).ok;
 							break;
-						}
 						case "linkedin":
+							attempted = true;
 							deleteSuccess = (
-								await fetch(
-									`${LINKEDIN_REST_BASE}/posts/${encodeURIComponent(platformPostId)}`,
-									{
-										method: "DELETE",
-										headers: getLinkedInRestHeaders(account.accessToken),
-										signal,
-									},
+								await unpublishMutation.track("linkedin.post.delete", () =>
+									fetch(
+										`${LINKEDIN_REST_BASE}/posts/${encodeURIComponent(platformPostId)}`,
+										{
+											method: "DELETE",
+											headers: getLinkedInRestHeaders(accessToken),
+											signal,
+										},
+									),
 								)
 							).ok;
 							break;
 						case "reddit":
+							attempted = true;
 							deleteSuccess = (
-								await fetch("https://oauth.reddit.com/api/del", {
-									method: "POST",
-									headers: {
-										Authorization: `Bearer ${account.accessToken}`,
-										"Content-Type": "application/x-www-form-urlencoded",
-										"User-Agent": "RelayAPI/1.0",
-									},
-									body: `id=${target.platformPostId}`,
-									signal,
-								})
-							).ok;
-							break;
-						case "pinterest":
-							deleteSuccess = (
-								await fetch(
-									`https://api.pinterest.com/v5/pins/${target.platformPostId}`,
-									{
-										method: "DELETE",
-										headers: { Authorization: `Bearer ${account.accessToken}` },
+								await unpublishMutation.track("reddit.post.delete", () =>
+									fetch("https://oauth.reddit.com/api/del", {
+										method: "POST",
+										headers: {
+											Authorization: `Bearer ${accessToken}`,
+											"Content-Type": "application/x-www-form-urlencoded",
+											"User-Agent": "RelayAPI/1.0",
+										},
+										body: new URLSearchParams({ id: platformPostId }),
 										signal,
-									},
+									}),
 								)
 							).ok;
 							break;
+						case "pinterest":
+							attempted = true;
+							deleteSuccess = (
+								await unpublishMutation.track("pinterest.post.delete", () =>
+									fetch(
+										`https://api.pinterest.com/v5/pins/${target.platformPostId}`,
+										{
+											method: "DELETE",
+											headers: {
+												Authorization: `Bearer ${accessToken}`,
+											},
+											signal,
+										},
+									),
+								)
+							).ok;
+							break;
+						// Threads API official Meta collection, "Delete Threads Media
+						// Objects" -> DELETE /{thread_id}.
+						// https://www.postman.com/meta/threads/documentation/dht3nzz/threads-api
+						case "threads":
+							attempted = true;
+							deleteSuccess = (
+								await unpublishMutation.track("threads.post.delete", () =>
+									fetch(
+										`${GRAPH_BASE.threads}/${encodeURIComponent(platformPostId)}`,
+										{
+											method: "DELETE",
+											headers: { Authorization: `Bearer ${accessToken}` },
+											signal,
+										},
+									),
+								)
+							).ok;
+							break;
+						// YouTube Data API v3, videos.delete:
+						// DELETE /youtube/v3/videos?id={videoId}; success is 204.
+						// https://developers.google.com/youtube/v3/docs/videos/delete
+						case "youtube": {
+							attempted = true;
+							const url = new URL(
+								"https://www.googleapis.com/youtube/v3/videos",
+							);
+							url.searchParams.set("id", platformPostId);
+							deleteSuccess = (
+								await unpublishMutation.track("youtube.video.delete", () =>
+									fetch(url, {
+										method: "DELETE",
+										headers: { Authorization: `Bearer ${accessToken}` },
+										signal,
+									}),
+								)
+							).ok;
+							break;
+						}
+						// AT Protocol canonical deleteRecord Lexicon:
+						// POST com.atproto.repo.deleteRecord with repo/collection/rkey.
+						// https://github.com/bluesky-social/atproto/blob/main/lexicons/com/atproto/repo/deleteRecord.json
+						case "bluesky":
+							attempted = true;
+							deleteSuccess = (
+								await unpublishMutation.track("bluesky.post.delete", () =>
+									deleteBlueskyPost(
+										{
+											id: account.id,
+											platform: "bluesky",
+											access_token: accessToken,
+											refresh_token: null,
+											platform_account_id: account.platformAccountId,
+											username: null,
+											metadata: account.metadata as Record<
+												string,
+												unknown
+											> | null,
+										},
+										platformPostId,
+										signal,
+									),
+								)
+							).ok;
+							break;
+						// Google Business Profile Local Posts delete:
+						// DELETE /v4/{name=accounts/*/locations/*/localPosts/*}.
+						// https://developers.google.com/my-business/reference/rest/v4/accounts.locations.localPosts/delete
+						case "googlebusiness": {
+							attempted = true;
+							const resourceName = platformPostId.replace(/^\/+/, "");
+							if (
+								!/^accounts\/[^/]+\/locations\/[^/]+\/localPosts\/[^/]+$/u.test(
+									resourceName,
+								)
+							) {
+								break;
+							}
+							const connectedLocation = account.platformAccountId.replace(
+								/\/+$/u,
+								"",
+							);
+							const defaultLocation =
+								typeof (account.metadata as Record<string, unknown> | null)
+									?.default_location_id === "string"
+									? String(
+											(account.metadata as Record<string, unknown>)
+												.default_location_id,
+										).replace(/^\/+|\/+$/gu, "")
+									: null;
+							const connectedAccount = /^accounts\/[^/]+/u.exec(
+								connectedLocation,
+							)?.[0];
+							const allowedParents = new Set([connectedLocation]);
+							if (connectedAccount && defaultLocation) {
+								allowedParents.add(
+									`${connectedAccount}/${
+										defaultLocation.startsWith("locations/")
+											? defaultLocation
+											: `locations/${defaultLocation}`
+									}`,
+								);
+							}
+							const resourceParent = resourceName.replace(
+								/\/localPosts\/[^/]+$/u,
+								"",
+							);
+							if (!allowedParents.has(resourceParent)) break;
+							deleteSuccess = (
+								await unpublishMutation.track(
+									"googlebusiness.post.delete",
+									() =>
+										fetch(
+											`https://mybusiness.googleapis.com/v4/${resourceName}`,
+											{
+												method: "DELETE",
+												headers: { Authorization: `Bearer ${accessToken}` },
+												signal,
+											},
+										),
+								)
+							).ok;
+							break;
+						}
+						// Telegram Bot API deleteMessage (subject to the provider's
+						// documented 48-hour and chat-permission limits).
+						// https://core.telegram.org/bots/api#deletemessage
+						case "telegram": {
+							attempted = true;
+							const messageIds = new Set<number>();
+							for (const rawId of [
+								platformPostId,
+								...(target.providerEffects ?? [])
+									.filter(
+										(effect) =>
+											effect.status === "succeeded" &&
+											effect.name.startsWith("telegram_message_") &&
+											effect.provider_id,
+									)
+									.map((effect) => effect.provider_id as string),
+							]) {
+								const messageId = Number(rawId);
+								if (Number.isSafeInteger(messageId) && messageId > 0) {
+									messageIds.add(messageId);
+								}
+							}
+							if (messageIds.size === 0) {
+								break;
+							}
+							const outcomes = await Promise.all(
+								[...messageIds].map(async (messageId, index) => {
+									const response = await unpublishMutation.track(
+										`telegram.message.delete.${index}`,
+										() =>
+											fetchPublicUrl(
+												`https://api.telegram.org/bot${accessToken}/deleteMessage`,
+												{
+													method: "POST",
+													redirect: "error",
+													timeout: FETCH_TIMEOUT,
+													timeoutThroughBody: true,
+													headers: { "Content-Type": "application/json" },
+													body: JSON.stringify({
+														chat_id: account.platformAccountId,
+														message_id: messageId,
+													}),
+													signal,
+												},
+											),
+									);
+									type TelegramDeleteResponse = {
+										ok?: boolean;
+										result?: boolean;
+										description?: string;
+									};
+									const payload =
+										await readResponseJson<TelegramDeleteResponse>(
+											response,
+											64 * 1024,
+										).catch((): TelegramDeleteResponse => ({}));
+									return (
+										(response.ok &&
+											payload.ok === true &&
+											payload.result === true) ||
+										(response.status === 400 &&
+											payload.description
+												?.toLowerCase()
+												.includes("message to delete not found"))
+									);
+								}),
+							);
+							deleteSuccess = outcomes.every(Boolean);
+							break;
+						}
+						// Mastodon statuses API, "Delete a status":
+						// DELETE /api/v1/statuses/:id with write:statuses.
+						// https://docs.joinmastodon.org/methods/statuses/#delete
+						case "mastodon": {
+							attempted = true;
+							const instanceUrl = resolveMastodonInstanceUrl(
+								account.metadata as Record<string, unknown> | null,
+							);
+							const url = new URL(
+								`/api/v1/statuses/${encodeURIComponent(platformPostId)}`,
+								instanceUrl,
+							);
+							url.searchParams.set("delete_media", "true");
+							deleteSuccess = (
+								await unpublishMutation.track("mastodon.status.delete", () =>
+									fetchPublicUrl(url, {
+										method: "DELETE",
+										redirect: "error",
+										timeout: FETCH_TIMEOUT,
+										headers: { Authorization: `Bearer ${accessToken}` },
+										signal,
+									}),
+								)
+							).ok;
+							break;
+						}
+						// Discord Webhook API, "Delete Webhook Message":
+						// DELETE /webhooks/{webhook.id}/{webhook.token}/messages/{message.id}.
+						// https://docs.discord.com/developers/resources/webhook#delete-webhook-message
+						case "discord": {
+							attempted = true;
+							const webhook = parseDiscordWebhookUrl(accessToken);
+							deleteSuccess = (
+								await unpublishMutation.track("discord.message.delete", () =>
+									fetchPublicUrl(
+										`${webhook.url}/messages/${encodeURIComponent(platformPostId)}`,
+										{
+											method: "DELETE",
+											redirect: "error",
+											timeout: FETCH_TIMEOUT,
+											signal,
+										},
+									),
+								)
+							).ok;
+							break;
+						}
 					}
 				} catch {
 					/* timeout or network error */
 				}
-				return { targetId: target.id, success: deleteSuccess };
+				return {
+					targetId: target.id,
+					success: deleteSuccess,
+					error: deleteSuccess
+						? null
+						: attempted
+							? "Platform deletion failed"
+							: "Unpublish is not supported by this platform",
+				};
 			}),
 	);
 
@@ -3822,12 +4480,13 @@ app.openapi(unpublishPost, async (c) => {
 	const updatePromises: Promise<unknown>[] = [];
 	const processedTargetIds = new Set<string>();
 	let anySuccessfullyRemoved = false;
+	let hasLocalUnpublishEffect = false;
 
 	for (const result of deleteResults) {
 		const val =
 			result.status === "fulfilled"
 				? result.value
-				: { targetId: "", success: false };
+				: { targetId: "", success: false, error: "Platform deletion failed" };
 		if (!val.targetId) continue;
 		processedTargetIds.add(val.targetId);
 		if (val.success) {
@@ -3842,7 +4501,7 @@ app.openapi(unpublishPost, async (c) => {
 			updatePromises.push(
 				db
 					.update(postTargets)
-					.set({ error: "Platform deletion failed" })
+					.set({ error: val.error })
 					.where(eq(postTargets.id, val.targetId)),
 			);
 		}
@@ -3853,6 +4512,7 @@ app.openapi(unpublishPost, async (c) => {
 	for (const target of publishedTargets) {
 		if (!processedTargetIds.has(target.id)) {
 			anySuccessfullyRemoved = true;
+			hasLocalUnpublishEffect = true;
 			updatePromises.push(
 				db
 					.update(postTargets)
@@ -3863,6 +4523,10 @@ app.openapi(unpublishPost, async (c) => {
 	}
 
 	await Promise.all(updatePromises);
+	if (hasLocalUnpublishEffect || anySuccessfullyRemoved) {
+		unpublishMutation.markCommitted();
+	}
+	unpublishMutation.finalize();
 
 	// Re-fetch all targets and derive the post status from the ACTUAL outcome rather
 	// than hardcoding "draft". If any target is still "published" (a subset was filtered
@@ -4041,6 +4705,7 @@ app.openapi(updateMetadata, async (c) => {
 	if (id === "_") {
 		// Direct mode: video_id + account_id required
 		if (!body.video_id || !body.account_id) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -4075,6 +4740,7 @@ app.openapi(updateMetadata, async (c) => {
 
 		const target = targets[0];
 		if (!target?.platformPostId) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -4108,6 +4774,7 @@ app.openapi(updateMetadata, async (c) => {
 		.limit(1);
 
 	if (!account?.accessToken) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4120,7 +4787,10 @@ app.openapi(updateMetadata, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const token = await decryptAccountToken(
 		account.accessToken,
@@ -4129,6 +4799,7 @@ app.openapi(updateMetadata, async (c) => {
 		"access_token",
 	);
 	if (!token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4147,6 +4818,7 @@ app.openapi(updateMetadata, async (c) => {
 	);
 
 	if (!listRes.ok) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4158,7 +4830,7 @@ app.openapi(updateMetadata, async (c) => {
 		);
 	}
 
-	const listData = (await listRes.json()) as {
+	const listData = (await readProviderJson(listRes)) as {
 		items?: Array<{
 			snippet: {
 				title: string;
@@ -4175,6 +4847,7 @@ app.openapi(updateMetadata, async (c) => {
 
 	const video = listData.items?.[0];
 	if (!video) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4217,6 +4890,7 @@ app.openapi(updateMetadata, async (c) => {
 	}
 
 	if (updatedFields.length === 0 && !body.playlist_id) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4229,26 +4903,36 @@ app.openapi(updateMetadata, async (c) => {
 		);
 	}
 
-	// Call YouTube Data API v3 videos.update (only if metadata fields changed)
+	let providerMutationCommitted = false;
+	// Call YouTube Data API v3 videos.update (only if metadata fields changed).
+	// The boundary records the provider response before later parsing/error
+	// projection can obscure whether YouTube accepted the mutation.
 	if (updatedFields.length > 0) {
-		const updateRes = await fetch(
-			"https://www.googleapis.com/youtube/v3/videos?part=snippet,status",
-			{
-				method: "PUT",
-				headers: {
-					Authorization: `Bearer ${token}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					id: videoId,
-					snippet,
-					status,
-				}),
-			},
+		const updateRes = await trackSingleUnitProviderMutation(
+			c.get("mutationEffectTracker"),
+			"youtube.video.metadata.update",
+			() =>
+				fetch(
+					"https://www.googleapis.com/youtube/v3/videos?part=snippet,status",
+					{
+						method: "PUT",
+						headers: {
+							Authorization: `Bearer ${token}`,
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({
+							id: videoId,
+							snippet,
+							status,
+						}),
+					},
+				),
 		);
 
 		if (!updateRes.ok) {
-			const errText = await updateRes.text().catch(() => "Unknown error");
+			const errText = await readProviderText(updateRes).catch(
+				() => "Unknown error",
+			);
 			return c.json(
 				{
 					error: {
@@ -4259,17 +4943,48 @@ app.openapi(updateMetadata, async (c) => {
 				400,
 			);
 		}
+		providerMutationCommitted = true;
 	}
 
 	// Add to playlist if requested
 	if (body.playlist_id) {
+		const tracker = c.get("mutationEffectTracker");
+		const attempt = tracker?.begin("youtube.playlist.item.create");
 		try {
 			await addToPlaylist({ access_token: token }, body.playlist_id, videoId);
+			attempt?.committed();
+			tracker?.setAuthoritativeOutcome({ kind: "committed", units: 1 });
+			providerMutationCommitted = true;
 			updatedFields.push("playlist_id");
 		} catch (err) {
-			console.warn(
-				`Failed to add video ${videoId} to playlist ${body.playlist_id}:`,
-				err,
+			const statusCode =
+				typeof err === "object" &&
+				err !== null &&
+				"statusCode" in err &&
+				typeof err.statusCode === "number"
+					? err.statusCode
+					: null;
+			const definitive =
+				statusCode !== null &&
+				isDefinitiveProviderMutationRejection(statusCode);
+			if (definitive) attempt?.notApplied();
+			else attempt?.unknown();
+			if (!providerMutationCommitted) {
+				tracker?.setAuthoritativeOutcome(
+					definitive ? { kind: "not_applied" } : { kind: "unknown" },
+				);
+			}
+			return c.json(
+				{
+					error: {
+						code: "YOUTUBE_API_ERROR",
+						message:
+							err instanceof Error
+								? err.message
+								: "Failed to add video to playlist.",
+					},
+				},
+				502 as never,
 			);
 		}
 	}
@@ -4300,6 +5015,7 @@ const bulkCsvUpload = createRoute({
 		"CSV columns: content, targets (semicolon-separated), scheduled_at, media_urls (semicolon-separated), timezone, target_options (JSON string). " +
 		"Max 500 rows, max 1 MB file size.",
 	security: [{ Bearer: [] }],
+	middleware: multipartMutationInputPreflight,
 	request: {
 		query: z.object({
 			dry_run: z
@@ -4354,6 +5070,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	try {
 		formData = await c.req.formData();
 	} catch {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4367,6 +5084,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 	const file = formData.get("file");
 	if (!file || !(file instanceof File)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4382,6 +5100,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	// --- Validate file ---
 	const MAX_FILE_SIZE = 1_048_576; // 1 MB
 	if (file.size > MAX_FILE_SIZE) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4395,6 +5114,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 	const csvText = await file.text();
 	if (!csvText.trim()) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: { code: "BAD_REQUEST", message: "CSV file is empty." },
@@ -4407,6 +5127,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	const rows = parseCsv(csvText);
 
 	if (rows.length === 0) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4420,6 +5141,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 
 	const MAX_ROWS = 500;
 	if (rows.length > MAX_ROWS) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4434,6 +5156,7 @@ app.openapi(bulkCsvUpload, async (c) => {
 	// --- Validate required columns ---
 	const firstRow = rows[0];
 	if (!firstRow || !("targets" in firstRow) || !("scheduled_at" in firstRow)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -4444,6 +5167,34 @@ app.openapi(bulkCsvUpload, async (c) => {
 			400,
 		);
 	}
+	// Build one request-wide readiness snapshot before the row loop. Invalid JSON
+	// remains a normal per-row validation error; valid nested target options are
+	// included so a Relay URL cannot bypass the media column policy.
+	const csvRelayMediaPolicy = await loadRelayMediaPolicy(
+		db,
+		orgId,
+		rows.map((row) => {
+			const mediaUrls = (row.media_urls ?? "")
+				.split(";")
+				.map((url) => url.trim())
+				.filter(Boolean)
+				.map((url) => ({ url }));
+			let targetOptions: unknown;
+			try {
+				targetOptions = row.target_options
+					? JSON.parse(row.target_options)
+					: undefined;
+			} catch {
+				targetOptions = undefined;
+			}
+			return mediaPolicyInput({
+				media: mediaUrls,
+				target_options: targetOptions,
+			});
+		}),
+		mediaPublicHost(c.env),
+		c.get("workspaceScope"),
+	);
 
 	// Pre-fetch org accounts once, filtered by workspace scope
 	const csvPrefetchConditions = [eq(socialAccounts.organizationId, orgId)];
@@ -4569,6 +5320,16 @@ app.openapi(bulkCsvUpload, async (c) => {
 			}
 
 			const item = parsed.data;
+			const mediaViolation = violationForPostInput(csvRelayMediaPolicy, item);
+			if (mediaViolation) {
+				results.push({
+					row: rowNum,
+					status: "error",
+					error: mediaPolicyError(mediaViolation).error,
+				});
+				failed++;
+				continue;
+			}
 
 			// Resolve targets
 			const targetResolution = await resolveTargets(
@@ -4585,7 +5346,15 @@ app.openapi(bulkCsvUpload, async (c) => {
 				targetResolution.workspaceIds,
 				"post",
 			);
-			if (!rowScope.ok) return rowScope.response as never;
+			if (!rowScope.ok) {
+				results.push({
+					row: rowNum,
+					status: "error",
+					error: await bulkItemErrorFromResponse(rowScope.response),
+				});
+				failed++;
+				continue;
+			}
 			const resolvedWorkspaceId = rowScope.workspaceId;
 			const { resolved, failed: failedTargets } = targetResolution;
 
@@ -4627,6 +5396,9 @@ app.openapi(bulkCsvUpload, async (c) => {
 			} else if (isAutoCSV) {
 				const { findBestSlot } = await import("../services/slot-finder");
 				const slot = await findBestSlot(c.env, orgId, {
+					db,
+					workspaceScope: c.get("workspaceScope"),
+					workspaceId: resolvedWorkspaceId,
 					accountId: resolved[0]?.accounts[0]?.id,
 					after: new Date(),
 					strategy: "smart",
@@ -4957,7 +5729,8 @@ app.openapi(deleteRecyclingConfig, async (c) => {
 				eq(postRecyclingConfigs.sourcePostId, id),
 				eq(postRecyclingConfigs.organizationId, orgId),
 			),
-		);
+		)
+		.returning({ id: postRecyclingConfigs.id });
 
 	return c.body(null, 204);
 });
@@ -5018,6 +5791,245 @@ app.openapi(listRecycledCopies, async (c) => {
 		},
 		200,
 	);
+});
+
+// --- Post Tags ---
+
+const listPostTags = createRoute({
+	operationId: "listPostTags",
+	method: "get",
+	path: "/{id}/tags",
+	tags: ["Posts"],
+	summary: "List tags attached to a post",
+	security: [{ Bearer: [] }],
+	request: { params: IdParam, query: PostTagListQuery },
+	responses: {
+		200: {
+			description: "Attached tags",
+			content: { "application/json": { schema: PostTagListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(listPostTags, async (c) => {
+	const organizationId = c.get("orgId");
+	const { id } = c.req.valid("param");
+	const { cursor, limit } = c.req.valid("query");
+	const db = c.get("db");
+	let decodedCursor: TimestampIdCursor | null = null;
+	if (cursor) {
+		try {
+			decodedCursor = decodeTimestampIdCursor(cursor);
+		} catch {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+	}
+
+	const [post] = await db
+		.select({ id: posts.id, workspaceId: posts.workspaceId })
+		.from(posts)
+		.where(and(eq(posts.id, id), eq(posts.organizationId, organizationId)))
+		.limit(1);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
+
+	const conditions = [
+		eq(postTags.organizationId, organizationId),
+		eq(postTags.postId, id),
+	];
+	if (decodedCursor) {
+		conditions.push(
+			sql`(${tags.createdAt}, ${tags.id})
+				< (${decodedCursor.timestamp}::timestamptz, ${decodedCursor.id})`,
+		);
+	}
+	const rows = await db
+		.select({
+			tag: tags,
+			cursorTimestamp: sql<string>`to_char(${tags.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
+		.from(postTags)
+		.innerJoin(
+			tags,
+			and(
+				eq(tags.id, postTags.tagId),
+				eq(tags.organizationId, postTags.organizationId),
+				eq(tags.scopeKey, postTags.tagScopeKey),
+			),
+		)
+		.where(and(...conditions))
+		.orderBy(desc(tags.createdAt), desc(tags.id))
+		.limit(limit + 1);
+
+	const hasMore = rows.length > limit;
+	const page = rows.slice(0, limit);
+	const last = page.at(-1);
+	return c.json(
+		{
+			data: page.map(({ tag }) => serializePostTag(tag)),
+			next_cursor:
+				hasMore && last
+					? encodeTimestampIdCursor(last.cursorTimestamp, last.tag.id)
+					: null,
+			has_more: hasMore,
+		},
+		200,
+	);
+});
+
+const attachPostTag = createRoute({
+	operationId: "attachPostTag",
+	method: "put",
+	path: "/{id}/tags/{tag_id}",
+	tags: ["Posts"],
+	summary: "Attach a tag to a post",
+	description:
+		"Idempotently attaches an organization-shared tag or a tag from the post's exact workspace.",
+	security: [{ Bearer: [] }],
+	request: { params: PostTagParams },
+	responses: {
+		200: {
+			description: "Attached tag",
+			content: { "application/json": { schema: TagResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Post or visible tag not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(attachPostTag, async (c) => {
+	const organizationId = c.get("orgId");
+	const { id, tag_id } = c.req.valid("param");
+	const db = c.get("db");
+	const [[post], [tag]] = await Promise.all([
+		db
+			.select({
+				id: posts.id,
+				workspaceId: posts.workspaceId,
+				scopeKey: posts.scopeKey,
+			})
+			.from(posts)
+			.where(and(eq(posts.id, id), eq(posts.organizationId, organizationId)))
+			.limit(1),
+		db
+			.select()
+			.from(tags)
+			.where(and(eq(tags.id, tag_id), eq(tags.organizationId, organizationId)))
+			.limit(1),
+	]);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
+	if (
+		!tag ||
+		(tag.scopeKey !== ORGANIZATION_SCOPE_KEY && tag.scopeKey !== post.scopeKey)
+	) {
+		return c.json(
+			{
+				error: {
+					code: "NOT_FOUND",
+					message: "Tag not found in the post scope",
+				},
+			},
+			404,
+		);
+	}
+
+	await db
+		.insert(postTags)
+		.values({
+			organizationId,
+			postId: post.id,
+			scopeKey: post.scopeKey,
+			tagId: tag.id,
+			tagScopeKey: tag.scopeKey,
+		})
+		.onConflictDoNothing({
+			target: [postTags.organizationId, postTags.tagId, postTags.postId],
+		})
+		.returning({ postId: postTags.postId });
+	return c.json(serializePostTag(tag), 200);
+});
+
+const detachPostTag = createRoute({
+	operationId: "detachPostTag",
+	method: "delete",
+	path: "/{id}/tags/{tag_id}",
+	tags: ["Posts"],
+	summary: "Detach a tag from a post",
+	security: [{ Bearer: [] }],
+	request: { params: PostTagParams },
+	responses: {
+		204: { description: "Tag detached" },
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Post not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+app.openapi(detachPostTag, async (c) => {
+	const organizationId = c.get("orgId");
+	const { id, tag_id } = c.req.valid("param");
+	const db = c.get("db");
+	const [post] = await db
+		.select({ id: posts.id, workspaceId: posts.workspaceId })
+		.from(posts)
+		.where(and(eq(posts.id, id), eq(posts.organizationId, organizationId)))
+		.limit(1);
+	if (!post) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Post not found" } },
+			404,
+		);
+	}
+	const denied = assertWorkspaceScope(c, post.workspaceId);
+	if (denied) return denied as never;
+
+	await db
+		.delete(postTags)
+		.where(
+			and(
+				eq(postTags.organizationId, organizationId),
+				eq(postTags.postId, id),
+				eq(postTags.tagId, tag_id),
+			),
+		)
+		.returning({ postId: postTags.postId });
+	return c.body(null, 204);
 });
 
 // --- Post Notes (works for both internal and external posts) ---

@@ -36,7 +36,11 @@ export async function consumeDeadLetterQueue(
 						: String(databaseError),
 			});
 
-			const envelope = createQueueRescueEnvelope(batch.queue, message);
+			const envelope = await createQueueRescueEnvelope(
+				env,
+				batch.queue,
+				message,
+			);
 			try {
 				await persistQueueRescue(env, envelope);
 				console.error("[Queue DLQ] failure copied to R2 rescue ledger", {

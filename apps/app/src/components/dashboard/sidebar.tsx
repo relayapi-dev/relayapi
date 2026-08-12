@@ -52,6 +52,7 @@ import {
 	reconcileOrganizationMenuItems,
 } from "@/lib/organization-menu";
 import { cn } from "@/lib/utils";
+import { IS_SELF_HOSTED_BUILD } from "@/lib/deployment-mode";
 
 async function loadAuthClient() {
 	return import("@/lib/auth-client");
@@ -144,7 +145,9 @@ const navSections: NavItem[][] = [
 				{ label: "Settings", href: "settings" },
 				{ label: "Members", href: "team" },
 				{ label: "Usage", href: "usage" },
-				{ label: "Billing & Invoices", href: "billing" },
+				...(!IS_SELF_HOSTED_BUILD
+					? [{ label: "Billing & Invoices", href: "billing" }]
+					: []),
 			],
 		},
 	],
@@ -803,7 +806,7 @@ export function Sidebar({
 												<span>Create organization</span>
 											</button>
 
-											{plan !== "pro" && (
+											{!IS_SELF_HOSTED_BUILD && plan !== "pro" && (
 												<button
 													type="button"
 													onClick={() => {

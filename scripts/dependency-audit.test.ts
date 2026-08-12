@@ -186,4 +186,30 @@ describe("Bun lock graph attribution", () => {
 			version: "1.0.0",
 		});
 	});
+
+	test("rejects repeated escape input without regex backtracking", () => {
+		const repeatedEscapes = "\\".repeat(128 * 1024);
+		const lockfile = `{
+  "packages": {
+    "${repeatedEscapes}
+  }
+}`;
+
+		expect(() => parseLockfile(lockfile)).toThrow(
+			"Cannot parse bun.lock entry at line 3.",
+		);
+	});
+
+	test("bounds oversized package-entry lines", () => {
+		const repeatedEscapes = "\\".repeat(256 * 1024);
+		const lockfile = `{
+  "packages": {
+    "${repeatedEscapes}
+  }
+}`;
+
+		expect(() => parseLockfile(lockfile)).toThrow(
+			"bun.lock package entry at line 3 exceeds 262144 characters.",
+		);
+	});
 });

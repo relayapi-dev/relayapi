@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { generateId, queueFailures } from "@relayapi/db";
+import { queueFailures } from "@relayapi/db";
 import { and, desc, inArray, sql } from "drizzle-orm";
 import {
 	decodeTimestampIdCursor,
@@ -20,40 +20,17 @@ import {
 	UpdateQueueBody,
 } from "../schemas/queue";
 import { replayQueueFailure } from "../services/queue-replay";
+import {
+	createQueueSchedule,
+	deleteQueueSchedules,
+	listQueueSchedules,
+	type StoredQueueSchedule as StoredSchedule,
+	updateDefaultQueueSchedule,
+} from "../services/queue-schedules";
 import { findBestSlots } from "../services/slot-finder";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
-
-// --- KV helpers ---
-
-interface StoredSchedule {
-	id: string;
-	name: string;
-	slots: Array<{ day_of_week: number; time: string; timezone: string }>;
-	is_default: boolean;
-	created_at: string;
-	updated_at: string;
-}
-
-async function getSchedules(
-	kv: KVNamespace,
-	orgId: string,
-): Promise<StoredSchedule[]> {
-	const data = await kv.get<StoredSchedule[]>(
-		`queue-schedule:${orgId}`,
-		"json",
-	);
-	return data ?? [];
-}
-
-async function saveSchedules(
-	kv: KVNamespace,
-	orgId: string,
-	schedules: StoredSchedule[],
-): Promise<void> {
-	await kv.put(`queue-schedule:${orgId}`, JSON.stringify(schedules));
-}
 
 /**
  * Calculate the next N upcoming slot times from a schedule's slots.
@@ -398,7 +375,7 @@ const replayQueueFailureRoute = createRoute({
 
 app.openapi(listSlots, async (c) => {
 	const orgId = c.get("orgId");
-	const schedules = await getSchedules(c.env.KV, orgId);
+	const schedules = await listQueueSchedules(c.get("db"), c.env.KV, orgId);
 
 	return c.json({ data: schedules }, 200);
 });
@@ -406,26 +383,15 @@ app.openapi(listSlots, async (c) => {
 app.openapi(createSlots, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const schedules = await getSchedules(c.env.KV, orgId);
-
-	const now = new Date().toISOString();
-	const isFirst = schedules.length === 0;
-
-	const schedule: StoredSchedule = {
-		id: generateId("qs_"),
+	const schedule = await createQueueSchedule(c.get("db"), c.env.KV, {
+		organizationId: orgId,
 		name: body.name ?? "Default Schedule",
 		slots: body.slots.map((s) => ({
 			day_of_week: s.day_of_week,
 			time: s.time,
 			timezone: s.timezone ?? body.timezone,
 		})),
-		is_default: isFirst,
-		created_at: now,
-		updated_at: now,
-	};
-
-	schedules.push(schedule);
-	await saveSchedules(c.env.KV, orgId, schedules);
+	});
 
 	return c.json(schedule, 201);
 });
@@ -433,11 +399,15 @@ app.openapi(createSlots, async (c) => {
 app.openapi(updateSlots, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
-	const schedules = await getSchedules(c.env.KV, orgId);
-
-	// Find the default schedule to update (since this route has no ID param)
-	const idx = schedules.findIndex((s) => s.is_default);
-	if (idx === -1) {
+	const updated = await updateDefaultQueueSchedule(c.get("db"), c.env.KV, {
+		organizationId: orgId,
+		...(body.name !== undefined ? { name: body.name } : {}),
+		...(body.slots !== undefined ? { slots: body.slots } : {}),
+		...(body.set_as_default !== undefined
+			? { setAsDefault: body.set_as_default }
+			: {}),
+	});
+	if (!updated) {
 		return c.json(
 			{
 				error: {
@@ -449,40 +419,19 @@ app.openapi(updateSlots, async (c) => {
 		);
 	}
 
-	const existing = schedules[idx] as StoredSchedule;
-	// Never let set_as_default:false demote the only default schedule without
-	// promoting another — otherwise findIndex(is_default) returns -1 on every
-	// subsequent update and this endpoint 404s forever. With no other schedule to
-	// promote, the sole schedule must stay the default.
-	const hasOtherSchedule = schedules.some((_s, i) => i !== idx);
-	const nextIsDefault = hasOtherSchedule
-		? (body.set_as_default ?? existing.is_default)
-		: true;
-	const updated: StoredSchedule = {
-		id: existing.id,
-		name: body.name ?? existing.name,
-		slots: body.slots ?? existing.slots,
-		is_default: nextIsDefault,
-		created_at: existing.created_at,
-		updated_at: new Date().toISOString(),
-	};
-
-	schedules[idx] = updated;
-	await saveSchedules(c.env.KV, orgId, schedules);
-
 	return c.json(updated, 200);
 });
 
 app.openapi(deleteSlots, async (c) => {
 	const orgId = c.get("orgId");
-	await c.env.KV.delete(`queue-schedule:${orgId}`);
+	await deleteQueueSchedules(c.get("db"), c.env.KV, orgId);
 
 	return c.body(null, 204);
 });
 
 app.openapi(getNextSlot, async (c) => {
 	const orgId = c.get("orgId");
-	const schedules = await getSchedules(c.env.KV, orgId);
+	const schedules = await listQueueSchedules(c.get("db"), c.env.KV, orgId);
 
 	// Use the default schedule, or fall back to the first one
 	const schedule =
@@ -528,7 +477,7 @@ app.openapi(getNextSlot, async (c) => {
 app.openapi(previewSlots, async (c) => {
 	const orgId = c.get("orgId");
 	const { count } = c.req.valid("query");
-	const schedules = await getSchedules(c.env.KV, orgId);
+	const schedules = await listQueueSchedules(c.get("db"), c.env.KV, orgId);
 
 	// Use the default schedule, or fall back to the first one
 	const schedule =
@@ -609,13 +558,21 @@ app.openapi(listQueueFailures, async (c) => {
 
 app.openapi(replayQueueFailureRoute, async (c) => {
 	const denied = assertAllWorkspaceScope(c);
-	if (denied) return denied as never;
+	if (denied) {
+		c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+			kind: "not_applied",
+		});
+		return denied as never;
+	}
 	const result = await replayQueueFailure(
 		c.env,
 		c.req.valid("param").id,
 		c.get("orgId"),
 	);
 	if (!result.replayed) {
+		c.get("mutationEffectTracker")?.setAuthoritativeOutcome(
+			result.outcomeUnknown ? { kind: "unknown" } : { kind: "not_applied" },
+		);
 		return c.json(
 			{
 				error: {
@@ -626,6 +583,10 @@ app.openapi(replayQueueFailureRoute, async (c) => {
 			409,
 		);
 	}
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "committed",
+		units: 1,
+	});
 	return c.json({ replayed: true }, 200);
 });
 
@@ -658,6 +619,8 @@ app.openapi(findSlot, async (c) => {
 	const { account_id, after, strategy, count } = c.req.valid("query");
 
 	const result = await findBestSlots(c.env, orgId, {
+		db: c.get("db"),
+		workspaceScope: c.get("workspaceScope"),
 		accountId: account_id,
 		after: after ? new Date(after) : new Date(),
 		strategy,

@@ -188,7 +188,8 @@ cat > /etc/apt/sources.list.d/pgdg.list <<EOF
 deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main
 EOF
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-18 postgresql-client-18
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+	postgresql-18 postgresql-client-18 postgresql-contrib-18 postgresql-18-pgvector
 pg_ctlcluster 18 main start 2>/dev/null || true
 
 PG_CONF=/etc/postgresql/18/main/postgresql.conf
@@ -310,6 +311,20 @@ SELECT format('ALTER SCHEMA auth OWNER TO %I', :'owner_role') \gexec
 SELECT format('GRANT USAGE, CREATE ON SCHEMA public, auth TO %I', :'migrator_role') \gexec
 SELECT format('GRANT USAGE ON SCHEMA public, auth TO %I', :'runtime_role') \gexec
 
+-- pgvector is not a trusted extension. Provision it and the two contrib
+-- extensions under the NOLOGIN owner in one transaction, so a failure cannot
+-- leave that role with transient superuser authority. The migration role is a
+-- member of the owner and can therefore verify/manage the installed extensions.
+BEGIN;
+SELECT format('ALTER ROLE %I SUPERUSER', :'owner_role') \gexec
+SELECT format('SET LOCAL ROLE %I', :'owner_role') \gexec
+CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+RESET ROLE;
+SELECT format('ALTER ROLE %I NOSUPERUSER', :'owner_role') \gexec
+COMMIT;
+
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', :'migrator_role', :'runtime_role') \gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA auth GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', :'migrator_role', :'runtime_role') \gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO %I', :'migrator_role', :'runtime_role') \gexec
@@ -329,6 +344,50 @@ PGPASSWORD="$PG_RUNTIME_PASS" PGSSLROOTCERT="$PG_TLS_CA_SOURCE" \
 	psql "host=$PG_TLS_HOSTNAME port=5432 dbname=$PG_DB user=$PG_RUNTIME_ROLE sslmode=verify-full" \
 	-c 'SELECT current_database(), current_user;' >/dev/null
 log "Runtime TLS connection verified with hostname and CA validation."
+
+info "Proving PostgreSQL extension semantics and the no-DDL runtime boundary"
+PGPASSWORD="$PG_MIGRATOR_PASS" PGSSLROOTCERT="$PG_TLS_CA_SOURCE" \
+	psql "host=$PG_TLS_HOSTNAME port=5432 dbname=$PG_DB user=$PG_MIGRATOR_ROLE sslmode=verify-full" \
+	--set=ON_ERROR_STOP=1 >/dev/null <<'SQL'
+BEGIN;
+CREATE TEMP TABLE relayapi_vector_semantic_probe (
+	embedding public.vector(1536) NOT NULL
+) ON COMMIT DROP;
+INSERT INTO relayapi_vector_semantic_probe (embedding)
+VALUES (array_fill(0::real, ARRAY[1536])::public.vector);
+CREATE INDEX relayapi_vector_semantic_probe_hnsw
+	ON relayapi_vector_semantic_probe
+	USING hnsw (embedding public.vector_cosine_ops);
+CREATE TEMP TABLE relayapi_trgm_semantic_probe (
+	body text NOT NULL
+) ON COMMIT DROP;
+CREATE INDEX relayapi_trgm_semantic_probe_gin
+	ON relayapi_trgm_semantic_probe
+	USING gin (body public.gin_trgm_ops);
+SELECT public.similarity('relayapi', 'relay api');
+CREATE TEMP TABLE relayapi_btree_gist_semantic_probe (
+	resource_key text NOT NULL,
+	active_during tstzrange NOT NULL
+) ON COMMIT DROP;
+ALTER TABLE relayapi_btree_gist_semantic_probe
+	ADD CONSTRAINT relayapi_btree_gist_semantic_probe_exclusion
+	EXCLUDE USING gist (
+		resource_key WITH =,
+		active_during WITH &&
+	);
+ROLLBACK;
+SQL
+
+RUNTIME_DDL_PROBE="relayapi_runtime_ddl_probe_${RANDOM}_$$"
+if PGPASSWORD="$PG_RUNTIME_PASS" PGSSLROOTCERT="$PG_TLS_CA_SOURCE" \
+	psql "host=$PG_TLS_HOSTNAME port=5432 dbname=$PG_DB user=$PG_RUNTIME_ROLE sslmode=verify-full" \
+	--set=ON_ERROR_STOP=1 \
+	-c "CREATE TABLE public.${RUNTIME_DDL_PROBE} (id integer);" >/dev/null 2>&1; then
+	sudo -u postgres psql --set=ON_ERROR_STOP=1 --dbname="$PG_DB" \
+		-c "DROP TABLE public.${RUNTIME_DDL_PROBE};" >/dev/null
+	die "Runtime role unexpectedly created a table in public."
+fi
+log "pgvector/HNSW/pg_trgm semantics and runtime no-DDL boundary verified."
 
 info "Installing the Cloudflare Tunnel connector"
 curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \

@@ -1,15 +1,24 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { socialAccounts, generateId } from "@relayapi/db";
+import { generateId, socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
+import type { Context } from "hono";
+import { countChars, PLATFORM_LIMITS } from "../config/platform-limits";
 import { decryptAccountToken } from "../lib/account-token-crypto";
 import { fetchPublicUrl } from "../lib/fetch-public-url";
-import { getLinkedInRestHeaders, LINKEDIN_REST_BASE } from "../lib/linkedin-rest";
-import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
-import { PLATFORM_LIMITS, countChars } from "../config/platform-limits";
-import { PLATFORMS, ErrorResponse } from "../schemas/common";
-import { callDownloaderService } from "../services/tool-service";
-import { createToolJob, getToolJob } from "../services/tool-jobs";
 import {
+	getLinkedInRestHeaders,
+	LINKEDIN_REST_BASE,
+} from "../lib/linkedin-rest";
+import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
+import { assertWorkspaceScope } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
+import { escapeLinkedInCommentary } from "../publishers/linkedin";
+import type { MediaAttachment } from "../publishers/types";
+import { ErrorResponse, PLATFORMS } from "../schemas/common";
+import {
+	DownloadBody,
+	DownloadSyncResponse,
 	HashtagCheckBody,
 	HashtagCheckResponse,
 	PostLengthBody,
@@ -18,21 +27,32 @@ import {
 	ResolveMentionResponse,
 	SubredditCheckQuery,
 	SubredditCheckResponse,
-	ValidateMediaBody,
-	ValidateMediaResponse,
-	ValidatePostBody,
-	ValidatePostResponse,
-	DownloadBody,
-	DownloadSyncResponse,
 	ToolJobAcceptedResponse,
 	ToolJobStatusResponse,
 	TranscriptBody,
 	TranscriptResult,
+	ValidateMediaBody,
+	ValidateMediaResponse,
+	ValidatePostBody,
+	ValidatePostResponse,
 } from "../schemas/tools";
-import { escapeLinkedInCommentary } from "../publishers/linkedin";
+import {
+	getPlatformContentLimit,
+	getPlatformMediaFileLimit,
+	resolvePlatformMediaForValidation,
+	validatePlatformPostInput,
+} from "../services/platform-post-validation";
+import {
+	hasEffectivePostPayload,
+	resolvePostTargetOptions,
+} from "../services/post-content-resolution";
 import { resolveTargets } from "../services/target-resolver";
-import { assertWorkspaceScope } from "../lib/workspace-scope";
-import type { Context } from "hono";
+import {
+	createToolJob,
+	getToolJob,
+	pollToolJobUntilTerminal,
+	type ToolJob,
+} from "../services/tool-jobs";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -48,6 +68,26 @@ type DownloadContext = Context<
 		out: { json: z.output<typeof DownloadBody> };
 	}
 >;
+
+async function pollDurableToolJobForHttp(
+	env: Env,
+	jobId: string,
+	organizationId: string,
+): Promise<ToolJob | null> {
+	try {
+		return await pollToolJobUntilTerminal(env, jobId, organizationId);
+	} catch (error) {
+		// The Queue-owned row remains pollable. A transient read failure must not
+		// discard its identifier or turn into a second provider attempt.
+		console.warn("[tools] fast-result polling deferred", {
+			event: "tool_job_fast_poll_deferred",
+			organizationId,
+			jobId,
+			error,
+		});
+		return null;
+	}
+}
 
 // --- Route definitions ---
 
@@ -184,7 +224,12 @@ app.openapi(validatePost, async (c) => {
 	const warnings: Array<{ target: string; code: string; message: string }> = [];
 
 	// Validate targets resolve correctly
-	const { resolved, failed } = await resolveTargets(db, orgId, body.targets, c.get("workspaceScope"));
+	const { resolved, failed } = await resolveTargets(
+		db,
+		orgId,
+		body.targets,
+		c.get("workspaceScope"),
+	);
 
 	for (const f of failed) {
 		errors.push({
@@ -194,22 +239,41 @@ app.openapi(validatePost, async (c) => {
 		});
 	}
 
-	// Validate content length per platform
-	const content = body.content ?? "";
+	const targetOptions = body.target_options as
+		| Record<string, Record<string, unknown>>
+		| undefined;
+	const sharedContent = body.content ?? "";
+	const sharedMedia = (body.media ?? []) as MediaAttachment[];
 	for (const target of resolved) {
-		const limits = PLATFORM_LIMITS[target.platform];
-		if (!limits) continue;
+		const options = resolvePostTargetOptions(
+			targetOptions ?? null,
+			target.platform,
+			target.key,
+		);
+		const content =
+			typeof options.content === "string" && options.content.trim()
+				? options.content
+				: sharedContent;
+		const media = resolvePlatformMediaForValidation(sharedMedia, options);
+		const targetErrors = validatePlatformPostInput(
+			target.platform,
+			content,
+			media,
+			options,
+		);
+		for (const error of targetErrors) {
+			errors.push({ target: target.key, ...error });
+		}
 
-		const charCount = countChars(content, target.platform);
-		const maxChars = limits.chars.maxChars;
-
-		if (charCount > maxChars) {
-			errors.push({
-				target: target.key,
-				code: "CONTENT_TOO_LONG",
-				message: `Content is ${charCount}/${maxChars} characters for ${target.platform}.`,
-			});
-		} else if (charCount > maxChars * 0.9) {
+		const lengthContent =
+			typeof options.content_html === "string" ? options.content_html : content;
+		const maxChars = getPlatformContentLimit(
+			target.platform,
+			media.length > 0,
+			options,
+		);
+		const charCount = countChars(lengthContent, target.platform);
+		if (charCount <= maxChars && charCount > maxChars * 0.9) {
 			warnings.push({
 				target: target.key,
 				code: "CONTENT_NEAR_LIMIT",
@@ -218,60 +282,16 @@ app.openapi(validatePost, async (c) => {
 		}
 	}
 
-	// Validate media count per platform
-	const mediaItems = body.media ?? [];
-	if (mediaItems.length > 0) {
-		const images = mediaItems.filter(
-			(m) => !m.type || m.type === "image" || m.type === "gif",
-		);
-		const videos = mediaItems.filter((m) => m.type === "video");
-
-		for (const target of resolved) {
-			const limits = PLATFORM_LIMITS[target.platform];
-			if (!limits) continue;
-
-			if (images.length > limits.media.maxImages && limits.media.maxImages > 0) {
-				errors.push({
-					target: target.key,
-					code: "TOO_MANY_IMAGES",
-					message: `${target.platform} allows max ${limits.media.maxImages} images, got ${images.length}.`,
-				});
-			}
-
-			if (videos.length > limits.media.maxVideos) {
-				errors.push({
-					target: target.key,
-					code: "TOO_MANY_VIDEOS",
-					message: `${target.platform} allows max ${limits.media.maxVideos} videos, got ${videos.length}.`,
-				});
-			}
-
-			if (limits.media.maxImages === 0 && images.length > 0 && videos.length === 0) {
-				errors.push({
-					target: target.key,
-					code: "IMAGES_NOT_SUPPORTED",
-					message: `${target.platform} requires video content.`,
-				});
-			}
-		}
-	}
-
 	// Validate no content and no media
-	if (!body.content && mediaItems.length === 0) {
-		const hasTargetContent = body.target_options
-			? Object.values(body.target_options).some(
-					(opts) => "content" in (opts as Record<string, unknown>),
-				)
-			: false;
-
-		if (!hasTargetContent) {
-			errors.push({
-				target: "_post",
-				code: "EMPTY_POST",
-				message:
-					"Post must have content, media, or per-target content in target_options.",
-			});
-		}
+	if (
+		!hasEffectivePostPayload(body.content ?? null, body.media, targetOptions)
+	) {
+		errors.push({
+			target: "_post",
+			code: "EMPTY_POST",
+			message:
+				"Post must have content, media, or a supported per-target payload in target_options.",
+		});
 	}
 
 	return c.json(
@@ -334,29 +354,11 @@ app.openapi(validateMedia, async (c) => {
 	> = {};
 
 	if (accessible && size !== null) {
-		const isVideo = contentType?.startsWith("video/") ?? false;
-		const isGif = contentType === "image/gif";
-
 		for (const platform of PLATFORMS) {
-			const limits = PLATFORM_LIMITS[platform];
-
-			// Use GIF-specific limit when available, otherwise fall back to image limit
-			const maxSize = isVideo
-				? limits.media.maxVideoSize
-				: isGif && limits.media.maxGifSize
-					? limits.media.maxGifSize
-					: limits.media.maxImageSize;
-
-			// Check MIME type support
-			let mimeTypeSupported: boolean | undefined;
-			if (contentType) {
-				const allowedTypes = isVideo
-					? limits.media.allowedVideoTypes
-					: limits.media.allowedImageTypes;
-				mimeTypeSupported = allowedTypes.length > 0
-					? allowedTypes.includes(contentType)
-					: undefined;
-			}
+			const { maxSize, mimeTypeSupported } = getPlatformMediaFileLimit(
+				platform,
+				contentType,
+			);
 
 			platformLimits[platform] = {
 				within_limit: size <= maxSize,
@@ -428,7 +430,7 @@ app.openapi(checkSubreddit, async (c) => {
 			);
 		}
 
-		const json = (await response.json()) as {
+		const json = (await readProviderJson(response)) as {
 			data: {
 				display_name: string;
 				title: string;
@@ -570,7 +572,10 @@ app.openapi(resolveMention, async (c) => {
 
 	if (!account?.accessToken) {
 		return c.json(
-			{ resolved: false, error: "LinkedIn account not found or missing access token" },
+			{
+				resolved: false,
+				error: "LinkedIn account not found or missing access token",
+			},
 			200,
 		);
 	}
@@ -591,10 +596,7 @@ app.openapi(resolveMention, async (c) => {
 				vanityName = segments[1];
 			}
 		} catch {
-			return c.json(
-				{ resolved: false, error: "Invalid LinkedIn URL" },
-				200,
-			);
+			return c.json({ resolved: false, error: "Invalid LinkedIn URL" }, 200);
 		}
 	}
 
@@ -624,7 +626,10 @@ app.openapi(resolveMention, async (c) => {
 	);
 	if (!accessToken) {
 		return c.json(
-			{ resolved: false, error: "LinkedIn account not found or missing access token" },
+			{
+				resolved: false,
+				error: "LinkedIn account not found or missing access token",
+			},
 			200,
 		);
 	}
@@ -649,7 +654,7 @@ app.openapi(resolveMention, async (c) => {
 			);
 		}
 
-		const data = (await res.json()) as {
+		const data = (await readProviderJson(res)) as {
 			elements?: Array<{
 				id: number;
 				localizedName?: string;
@@ -659,7 +664,10 @@ app.openapi(resolveMention, async (c) => {
 		const org = data.elements?.[0];
 		if (!org) {
 			return c.json(
-				{ resolved: false, error: `Organization "${resolvedVanityName}" not found` },
+				{
+					resolved: false,
+					error: `Organization "${resolvedVanityName}" not found`,
+				},
 				200,
 			);
 		}
@@ -689,11 +697,23 @@ app.openapi(resolveMention, async (c) => {
 // --- Platform domain allowlists for download endpoints ---
 
 const PLATFORM_DOMAINS: Record<string, string[]> = {
-	youtube: ["youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com", "music.youtube.com"],
+	youtube: [
+		"youtube.com",
+		"www.youtube.com",
+		"youtu.be",
+		"m.youtube.com",
+		"music.youtube.com",
+	],
 	tiktok: ["tiktok.com", "www.tiktok.com", "vm.tiktok.com", "m.tiktok.com"],
 	instagram: ["instagram.com", "www.instagram.com"],
 	twitter: ["twitter.com", "www.twitter.com", "x.com", "www.x.com"],
-	facebook: ["facebook.com", "www.facebook.com", "fb.watch", "m.facebook.com", "web.facebook.com"],
+	facebook: [
+		"facebook.com",
+		"www.facebook.com",
+		"fb.watch",
+		"m.facebook.com",
+		"web.facebook.com",
+	],
 	linkedin: ["linkedin.com", "www.linkedin.com"],
 	bluesky: ["bsky.app", "bsky.social"],
 };
@@ -744,6 +764,14 @@ function createDownloadRoute(platform: string, summary: string) {
 				description: "Daily tool limit exceeded",
 				content: { "application/json": { schema: ErrorResponse } },
 			},
+			502: {
+				description: "Downloader provider failed after request start",
+				content: { "application/json": { schema: ErrorResponse } },
+			},
+			504: {
+				description: "Downloader provider outcome is unknown",
+				content: { "application/json": { schema: ErrorResponse } },
+			},
 		},
 	});
 }
@@ -756,13 +784,20 @@ async function handleDownload(
 	const orgId = c.get("orgId");
 
 	if (await isBlockedUrlWithDns(url)) {
+		markMutationInputNotApplied(c);
 		return c.json(
-			{ error: { code: "INVALID_URL", message: "Private or localhost URLs are not allowed" } },
+			{
+				error: {
+					code: "INVALID_URL",
+					message: "Private or localhost URLs are not allowed",
+				},
+			},
 			400,
 		) as never;
 	}
 
 	if (!isAllowedDomain(url, platform)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -774,41 +809,62 @@ async function handleDownload(
 		) as never;
 	}
 
-	// Try sync path: call Python VPS with 20s timeout
-	const result = await callDownloaderService(
-		c.env,
-		"/download",
-		{ url, platform, format },
-		20_000,
-	);
-
-	if (result.ok) {
-		return c.json({ success: true as const, ...result.data }, 200) as never;
+	// Every cost-bearing call becomes durable before Queue handoff. The HTTP
+	// request only polls PostgreSQL for a fast result; it never performs a
+	// second provider attempt or depends on waitUntil after returning 202.
+	const usageReservation = c.get("toolUsageReservation");
+	if (!usageReservation) {
+		throw new Error("Tool usage reservation is unavailable");
 	}
+	const jobId = generateId("tj_");
+	await createToolJob(c.env, jobId, orgId, "download", usageReservation.id, {
+		url,
+		platform,
+		format,
+	});
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "committed",
+		units: 1,
+	});
+	c.set("toolUsageDisposition", "deferred");
+	const job = await pollDurableToolJobForHttp(c.env, jobId, orgId);
 
-	// If it was a real error (not timeout), return the error directly
-	if (!("timedOut" in result) || !result.timedOut) {
-		// Non-timeout failure — check if it's a content error vs service error
-		if (result.error.includes("private") || result.error.includes("unavailable")) {
+	if (job?.status === "completed") {
+		return c.json(
+			{ success: true as const, ...(job.result ?? {}) },
+			200,
+		) as never;
+	}
+	if (job?.status === "failed") {
+		const error = job.error ?? "Tool processing failed";
+		if (job.error_code === "PROVIDER_OUTCOME_UNKNOWN") {
 			return c.json(
-				{ error: { code: "CONTENT_UNAVAILABLE", message: result.error } },
+				{
+					error: {
+						code: "PROVIDER_OUTCOME_UNKNOWN",
+						message:
+							"The downloader request timed out after it started. Retry explicitly if no result becomes available.",
+					},
+				},
+				504,
+			) as never;
+		}
+		if (error.includes("private") || error.includes("unavailable")) {
+			return c.json(
+				{ error: { code: "CONTENT_UNAVAILABLE", message: error } },
 				404,
 			) as never;
 		}
-		// Service not configured or down — fall through to queue
+		return c.json(
+			{
+				error: {
+					code: "DOWNLOADER_PROVIDER_ERROR",
+					message: error,
+				},
+			},
+			502,
+		) as never;
 	}
-
-	// Async fallback: enqueue to CF Queue
-	const jobId = generateId("tj_");
-	await createToolJob(c.env.KV, jobId, orgId, "download");
-
-	await c.env.TOOLS_QUEUE.send({
-		type: "tool_download",
-		job_id: jobId,
-		org_id: orgId,
-		endpoint: "/download",
-		payload: { url, platform, format },
-	});
 
 	return c.json(
 		{
@@ -822,13 +878,31 @@ async function handleDownload(
 
 // --- Download endpoints (7 platforms) ---
 
-const downloadYoutube = createDownloadRoute("youtube", "Download YouTube video");
+const downloadYoutube = createDownloadRoute(
+	"youtube",
+	"Download YouTube video",
+);
 const downloadTiktok = createDownloadRoute("tiktok", "Download TikTok video");
-const downloadInstagram = createDownloadRoute("instagram", "Download Instagram media");
-const downloadTwitter = createDownloadRoute("twitter", "Download Twitter/X media");
-const downloadFacebook = createDownloadRoute("facebook", "Download Facebook video");
-const downloadLinkedin = createDownloadRoute("linkedin", "Download LinkedIn video");
-const downloadBluesky = createDownloadRoute("bluesky", "Download Bluesky media");
+const downloadInstagram = createDownloadRoute(
+	"instagram",
+	"Download Instagram media",
+);
+const downloadTwitter = createDownloadRoute(
+	"twitter",
+	"Download Twitter/X media",
+);
+const downloadFacebook = createDownloadRoute(
+	"facebook",
+	"Download Facebook video",
+);
+const downloadLinkedin = createDownloadRoute(
+	"linkedin",
+	"Download LinkedIn video",
+);
+const downloadBluesky = createDownloadRoute(
+	"bluesky",
+	"Download Bluesky media",
+);
 
 app.openapi(downloadYoutube, (c) => handleDownload(c, "youtube"));
 app.openapi(downloadTiktok, (c) => handleDownload(c, "tiktok"));
@@ -873,6 +947,14 @@ const getTranscript = createRoute({
 			description: "Daily tool limit exceeded",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		502: {
+			description: "Transcript provider failed after request start",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		504: {
+			description: "Transcript provider outcome is unknown",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -897,38 +979,55 @@ app.openapi(getTranscript, async (c) => {
 		// Not a URL — treat as bare video ID
 	}
 
-	// Try sync
-	const result = await callDownloaderService(
-		c.env,
-		"/transcript",
-		{ video_id: videoId, lang },
-		20_000,
-	);
-
-	if (result.ok) {
-		return c.json({ success: true as const, ...result.data }, 200);
+	const usageReservation = c.get("toolUsageReservation");
+	if (!usageReservation) {
+		throw new Error("Tool usage reservation is unavailable");
 	}
+	const jobId = generateId("tj_");
+	await createToolJob(c.env, jobId, orgId, "transcript", usageReservation.id, {
+		video_id: videoId,
+		lang,
+	});
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "committed",
+		units: 1,
+	});
+	c.set("toolUsageDisposition", "deferred");
+	const job = await pollDurableToolJobForHttp(c.env, jobId, orgId);
 
-	if (!("timedOut" in result) || !result.timedOut) {
-		if (result.error.includes("disabled") || result.error.includes("unavailable")) {
+	if (job?.status === "completed") {
+		return c.json({ success: true as const, ...(job.result ?? {}) }, 200);
+	}
+	if (job?.status === "failed") {
+		const error = job.error ?? "Transcript processing failed";
+		if (job.error_code === "PROVIDER_OUTCOME_UNKNOWN") {
 			return c.json(
-				{ error: { code: "TRANSCRIPT_UNAVAILABLE", message: result.error } },
+				{
+					error: {
+						code: "PROVIDER_OUTCOME_UNKNOWN",
+						message:
+							"The transcript request timed out after it started. Retry explicitly if no result becomes available.",
+					},
+				},
+				504,
+			);
+		}
+		if (error.includes("disabled") || error.includes("unavailable")) {
+			return c.json(
+				{ error: { code: "TRANSCRIPT_UNAVAILABLE", message: error } },
 				404,
 			);
 		}
+		return c.json(
+			{
+				error: {
+					code: "TRANSCRIPT_PROVIDER_ERROR",
+					message: error,
+				},
+			},
+			502,
+		);
 	}
-
-	// Async fallback
-	const jobId = generateId("tj_");
-	await createToolJob(c.env.KV, jobId, orgId, "transcript");
-
-	await c.env.TOOLS_QUEUE.send({
-		type: "tool_transcript",
-		job_id: jobId,
-		org_id: orgId,
-		endpoint: "/transcript",
-		payload: { video_id: videoId, lang },
-	});
 
 	return c.json(
 		{
@@ -953,7 +1052,9 @@ const getToolJobStatus = createRoute({
 	security: [{ Bearer: [] }],
 	request: {
 		params: z.object({
-			job_id: z.string().describe("Job ID returned from a download or transcript request"),
+			job_id: z
+				.string()
+				.describe("Job ID returned from a download or transcript request"),
 		}),
 	},
 	responses: {
@@ -970,65 +1071,67 @@ const getToolJobStatus = createRoute({
 
 app.openapi(getToolJobStatus, async (c) => {
 	const { job_id } = c.req.valid("param");
-	const job = await getToolJob(c.env.KV, job_id);
+	const orgId = c.get("orgId");
+	const job = await getToolJob(c.env, job_id, orgId);
 
 	if (!job) {
 		return c.json(
 			{
 				error: {
 					code: "NOT_FOUND",
-					message: "Job not found or expired. Jobs are available for 1 hour after creation.",
+					message:
+						"Job not found or expired. Terminal results are available for 1 hour.",
 				},
 			},
 			404,
 		);
 	}
 
-	// Verify the job belongs to this org
-	const orgId = c.get("orgId");
-	if (job.org_id !== orgId) {
+	if (job.status === "completed") {
 		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Job not found" } },
-			404,
+			{
+				job_id: job.job_id,
+				status: job.status,
+				type: job.type,
+				created_at: job.created_at,
+				completed_at: job.completed_at ?? null,
+				result: job.result ?? null,
+				error: null,
+				error_code: null,
+			},
+			200,
 		);
 	}
 
-	if (job.status === "completed") {
-		return c.json({
+	if (job.status === "failed") {
+		return c.json(
+			{
+				job_id: job.job_id,
+				status: job.status,
+				type: job.type,
+				created_at: job.created_at,
+				completed_at: job.completed_at ?? null,
+				result: null,
+				error: job.error ?? null,
+				error_code: job.error_code ?? null,
+			},
+			200,
+		);
+	}
+
+	return c.json(
+		{
 			job_id: job.job_id,
 			status: job.status,
 			type: job.type,
 			created_at: job.created_at,
-			completed_at: job.completed_at ?? null,
-			result: job.result ?? null,
+			completed_at: null,
+			result: null,
 			error: null,
 			error_code: null,
-		}, 200);
-	}
-
-	if (job.status === "failed") {
-		return c.json({
-			job_id: job.job_id,
-			status: job.status,
-			type: job.type,
-			created_at: job.created_at,
-			completed_at: job.completed_at ?? null,
-			result: null,
-			error: job.error ?? null,
-			error_code: job.error_code ?? null,
-		}, 200);
-	}
-
-	return c.json({
-		job_id: job.job_id,
-		status: job.status,
-		type: job.type,
-		created_at: job.created_at,
-		completed_at: null,
-		result: null,
-		error: null,
-		error_code: null,
-	}, 200);
+		},
+		200,
+	);
 });
 
 export default app;

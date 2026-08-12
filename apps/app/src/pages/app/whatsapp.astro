@@ -10,7 +10,7 @@ const dashboard = getDashboardRouteContext(Astro.locals, Astro.url);
 const initialTab = getSearchParamValue(
 	Astro.url,
 	"tab",
-	["templates", "groups", "settings"] as const,
+	["templates", "settings"] as const,
 	"templates",
 );
 ---

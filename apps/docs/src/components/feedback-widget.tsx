@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 const GITHUB_REPO = "relayapi-dev/relayapi";
 
@@ -11,19 +11,66 @@ export function FeedbackWidget() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [type, setType] = useState<"bug" | "enhancement" | "question">("bug");
-  const panelRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogId = useId();
+  const dialogTitleId = useId();
+
+  const closeDialog = useCallback((restoreFocus = true) => {
+    setOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() => triggerRef.current?.focus());
+    }
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        closeDialog(false);
       }
     }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeDialog();
+        return;
+      }
+
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
     if (open) {
       document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKeyDown);
+      const focusFrame = requestAnimationFrame(() =>
+        titleInputRef.current?.focus(),
+      );
+      return () => {
+        cancelAnimationFrame(focusFrame);
+        document.removeEventListener("mousedown", handleClickOutside);
+        document.removeEventListener("keydown", handleKeyDown);
+      };
     }
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
+  }, [closeDialog, open]);
 
   const handleSubmit = () => {
     if (!title.trim()) return;
@@ -42,19 +89,21 @@ export function FeedbackWidget() {
     setTitle("");
     setBody("");
     setType("bug");
-    setOpen(false);
+    closeDialog();
   };
 
   return (
-    <div className="fixed bottom-4 right-7 z-50" ref={panelRef}>
+    <div className="fixed bottom-4 right-7 z-50" ref={rootRef}>
       {/* Popup panel */}
-      <div
-        className={`absolute bottom-14 right-0 w-[calc(100vw-2rem)] sm:w-[360px] max-w-[360px] rounded-xl border border-fd-border bg-fd-card shadow-xl transition-all duration-150 origin-bottom-right ${
-          open
-            ? "opacity-100 scale-100 translate-y-0 pointer-events-auto"
-            : "opacity-0 scale-95 translate-y-2 pointer-events-none"
-        }`}
-      >
+      {open && (
+        <div
+          id={dialogId}
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={dialogTitleId}
+          className="absolute bottom-14 right-0 w-[calc(100vw-2rem)] sm:w-[360px] max-w-[360px] origin-bottom-right rounded-xl border border-fd-border bg-fd-card shadow-xl"
+        >
         {/* Header */}
         <div className="flex items-center gap-2 border-b border-fd-border px-4 py-3">
           <svg
@@ -65,12 +114,14 @@ export function FeedbackWidget() {
           >
             <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
           </svg>
-          <span className="text-sm font-semibold">Submit an Issue</span>
+          <h2 id={dialogTitleId} className="text-sm font-semibold">
+            Submit an Issue
+          </h2>
           <button
             type="button"
-            onClick={() => setOpen(false)}
+            onClick={() => closeDialog()}
             className="ml-auto text-fd-muted-foreground hover:text-fd-foreground transition-colors"
-            aria-label="Close"
+            aria-label="Close feedback dialog"
           >
             <svg
               className="size-4"
@@ -91,12 +142,14 @@ export function FeedbackWidget() {
         {/* Body */}
         <div className="space-y-3 p-4">
           {/* Type selector */}
-          <div className="flex gap-1.5">
+          <fieldset className="flex gap-1.5">
+            <legend className="sr-only">Issue type</legend>
             {labels.map((label) => (
               <button
                 type="button"
                 key={label}
                 onClick={() => setType(label as typeof type)}
+                aria-pressed={type === label}
                 className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                   type === label
                     ? "bg-fd-primary text-fd-primary-foreground"
@@ -110,10 +163,15 @@ export function FeedbackWidget() {
                     : "Question"}
               </button>
             ))}
-          </div>
+          </fieldset>
 
           {/* Title */}
+          <label className="sr-only" htmlFor={`${dialogId}-title`}>
+            Issue title
+          </label>
           <input
+            ref={titleInputRef}
+            id={`${dialogId}-title`}
             type="text"
             placeholder="Title"
             value={title}
@@ -125,7 +183,11 @@ export function FeedbackWidget() {
           />
 
           {/* Description */}
+          <label className="sr-only" htmlFor={`${dialogId}-description`}>
+            Issue description
+          </label>
           <textarea
+            id={`${dialogId}-description`}
             placeholder="Describe the issue..."
             value={body}
             onChange={(e) => setBody(e.target.value)}
@@ -183,14 +245,20 @@ export function FeedbackWidget() {
             </a>
           </div>
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Floating button */}
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(!open)}
         className="flex size-9 items-center justify-center rounded-full bg-black text-white shadow-lg transition-transform hover:scale-105 active:scale-95 dark:bg-white dark:text-black"
         title="Report an issue"
+        aria-label={open ? "Close feedback dialog" : "Report an issue"}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={dialogId}
       >
         <svg
           className="size-4"

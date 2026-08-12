@@ -15,31 +15,32 @@ const ROOT_WRITERS: Record<string, string[]> = {
 		"services/recycling-processor.ts",
 		"services/rss-generator.ts",
 	],
-	media: ["routes/ideas.ts", "routes/media.ts"],
+	media: ["routes/ideas.ts", "routes/media-uploads.ts", "routes/media.ts"],
 	webhookEndpoints: ["routes/webhooks.ts"],
 	inboxConversations: ["services/inbox-persistence.ts"],
 	autoPostRules: ["routes/auto-post-rules.ts"],
 	contacts: [
 		"routes/contacts.ts",
+		"services/ad-advanced-store.ts",
 		"services/automations/webhook-receiver.ts",
 		"services/contact-linker.ts",
+		"services/public-growth-events.ts",
 	],
 	broadcasts: ["routes/broadcasts.ts", "routes/whatsapp.ts"],
-	adAccounts: ["services/ad-service.ts"],
+	adAccounts: ["services/ad-connection-service.ts", "services/ad-service.ts"],
 	adAudiences: ["services/ad-audience.ts"],
 	shortLinks: [
-		"routes/posts.ts",
-		"routes/short-links.ts",
+		"services/short-link-lifecycle.ts",
 		"services/short-link-providers/relayapi.ts",
 	],
 	ideas: ["routes/ideas.ts"],
 	automations: ["routes/automations.ts"],
 	segments: ["routes/segments.ts"],
-	subscriptionLists: [],
+	subscriptionLists: ["routes/subscription-lists.ts"],
 	aiKnowledgeBases: ["routes/ai-knowledge.ts"],
-	aiAgents: [],
+	aiAgents: ["routes/ai-agents.ts"],
 	refUrls: ["routes/ref-urls.ts"],
-	landingPages: [],
+	landingPages: ["routes/landing-pages.ts"],
 };
 
 async function source(relativePath: string): Promise<string> {
@@ -136,13 +137,21 @@ describe("Require Workspace ID root writer inventory", () => {
 	});
 
 	it("bounds provider discovery writes to the caller's authorized scope", async () => {
-		const [adsRoute, adService] = await Promise.all([
+		const [adsRoute, adConnectionService, adService] = await Promise.all([
 			source("routes/ads.ts"),
+			source("services/ad-connection-service.ts"),
 			source("services/ad-service.ts"),
 		]);
 		expect(adsRoute).toContain('c.get("workspaceScope")');
+		expect(adsRoute).toContain("resolveOperationalCreateScope(");
 		expect(adsRoute).toContain(
 			"const denied = await authorizeAdAccount(c, ad_account_id);",
+		);
+		expect(adConnectionService).toContain(
+			"workspaceId: connection.workspaceId",
+		);
+		expect(adConnectionService).toContain(
+			"adAccounts.workspaceId} IS NOT DISTINCT FROM",
 		);
 		expect(adService).toContain(
 			"canAccessWorkspaceScope(workspaceScope, socialAcc.workspaceId)",

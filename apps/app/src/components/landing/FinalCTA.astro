@@ -1,6 +1,9 @@
 ---
+import {
+	PUBLIC_ACCESS_HREF,
+	PUBLIC_ACCESS_LABEL,
+} from "../../lib/public-access";
 import Container from "./Container.astro";
-import { LANDING_LINKS } from "./data";
 ---
 
 <!-- ================= FINAL CTA ================= -->
@@ -8,16 +11,16 @@ import { LANDING_LINKS } from "./data";
 	<h2
 		class="mb-9 text-[clamp(40px,6vw,84px)] font-medium tracking-[-0.04em] text-landing-ink"
 	>
-		Try RelayAPI now.
+		Build with RelayAPI.
 	</h2>
 	<div class="flex flex-wrap justify-center gap-[14px]">
 		<a
-			href={LANDING_LINKS.signup}
+			href={PUBLIC_ACCESS_HREF}
 			class="rounded-full bg-landing-ink px-[30px] py-[15px] text-[17px] font-medium text-[#f3f1ea]! transition-opacity duration-150 hover:opacity-[0.88]"
-			>Get started</a
+			>{PUBLIC_ACCESS_LABEL}</a
 		>
 		<a
-			href={LANDING_LINKS.signup}
+			href="mailto:support@relayapi.dev?subject=RelayAPI%20demo"
 			class="rounded-full bg-[#e4e1d9] px-[30px] py-[15px] text-[17px] font-medium text-landing-ink! transition-colors duration-150 hover:bg-[#dbd7cc]"
 			>Request a demo</a
 		>

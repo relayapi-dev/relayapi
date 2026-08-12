@@ -1,137 +1,221 @@
 # Database migration and forward-recovery runbook
 
 RelayAPI deploys application code and PostgreSQL schema independently. Production
-migrations therefore follow an expand/contract discipline: every migration applied
-before a Worker deploy must remain compatible with the currently running Worker.
+migrations therefore use expand/contract compatibility: a migration that runs
+before a Worker deployment must remain compatible with the Worker already serving
+traffic.
 
-## Current baseline boundary
+## Current state: fresh pre-live baseline
 
-The `0000_baseline` migration is a destructive, pre-launch PostgreSQL 18 baseline.
-It supports a virgin database only. The superseded development migration chain is
-not an upgrade path. Do not apply this baseline over an existing RelayAPI catalog.
+The pre-live development migration chain has been reset. The authoritative
+migration directory now contains exactly:
 
-Before the first production initialization, independently inventory and preserve
-any environment that might contain data. Backup storage, retention, and restore
-rehearsal are operator responsibilities outside this repository.
+- `0000_baseline.sql`
+- `meta/0000_snapshot.json`
+- `meta/_journal.json`
+- `migration-manifest.json`
+- `migration-policy.json`
 
-## One-time virgin baseline build (completed)
+The baseline is generated from the complete current Drizzle schema plus the
+source-owned database preamble and non-declarative SQL renderers. It includes the
+credential-containment work that had previously existed as pending `0008`, along
+with every table, constraint, index, extension, function, and trigger required by
+the current code.
 
-The checked-in baseline completed its one-time build on 2026-07-15 and
-`packages/db/baseline-build-policy.json` is now `sealed`. The baseline was rebuilt
-only from an empty Drizzle staging directory. The builder
-requires exactly one reviewed `baseline` policy entry, exactly one existing
-`0000_baseline` history entry, and no unexpected migration files. It generates the
-declarative schema, appends the generated non-declarative contracts exactly once,
-normalizes the journal/tag/snapshot identity, writes a manifest that hashes the SQL
-and Drizzle snapshot/journal metadata, and runs the static manifest, policy, and
-schema-contract verifiers. It does not use shell redirection. Write mode takes an
-exclusive local lock and refuses stale crash backups; if post-write verification
-throws, it restores the prior directory. Once a replacement is verified, a backup
-cleanup failure leaves the verified target installed for manual cleanup rather than
-rolling back from a potentially partial backup.
-Portable directory rename is not power-loss atomic: a terminated process can leave
-a `.baseline-backup-*` directory or `.drizzle-baseline-rebuild.lock`. Treat either
-as a stop condition, confirm that no writer is live, and manually inspect/restore
-the backup before removing the marker and retrying.
+`packages/db/baseline-generation.json` and
+`packages/db/baseline-build-policy.json` declare sealed initial generation 1.
+Hosted API, dashboard, and self-host Worker configuration also declare generation
+1. The active manifest contains one migration with these fingerprints:
 
-Drizzle does not emit the required database prerequisites. The builder therefore
-prepends one generated preamble before any declarative SQL: `CREATE SCHEMA IF NOT
-EXISTS "auth"` for Better Auth tables and `CREATE EXTENSION IF NOT EXISTS
-"pg_trgm" WITH SCHEMA "public"` for the `gin_trgm_ops` inbox-search index,
-followed by a fail-closed namespace assertion for a pre-existing extension. Both
-the builder and the static verifier reject missing or duplicate preamble
-markers/statements. If a future Drizzle release starts generating either
-prerequisite, rebuilding fails closed instead of appending it twice.
+```text
+0000 SQL SHA-256:     31420f76c33c6803473ed806219cd6f69847d14e6e160fb71b92ff507cbeaf28
+0000 snapshot SHA-256: 7609b706f901baf909966ca3be56f9163a1ef8220fb3a085769a020277eaa35d
+```
 
-The read-only reproducibility modes remain available from the repository root:
+This baseline supports only a virgin database. It is not an upgrade migration for
+any database that contains the former `0000`–`0008` development ledger.
+
+The historical PostgreSQL 18 old-chain catalog fingerprint remains audit evidence
+for the discarded development chain. It is deliberately not treated as evidence
+for the new baseline because its manifest binding is different. Until a new
+reviewed fingerprint is captured from a PostgreSQL 18 replay, live catalog checks
+use the complete schema-derived verifier.
+
+## What the repository reset did not do
+
+No database was connected to, dropped, truncated, migrated, or recreated. No
+Cloudflare Worker, Queue, KV namespace, or R2 bucket was changed. No Git state was
+written. The operator remains responsible for recreating the pre-live database
+and deciding whether any existing data needs a backup first.
+
+## One-time Git protection bootstrap
+
+The protected comparison base currently predates
+`packages/db/baseline-generation.json`. CI therefore has one deliberately narrow
+bootstrap rule for the commit that introduces the reset:
+
+- the authorization must equal the exact `base-sha:HEAD-sha` edge;
+- the base must be `HEAD`'s first parent;
+- the result must be sealed generation 1;
+- generation, build policy, manifest, and journal baseline identities must agree;
+- the replacement history must contain exactly one baseline migration.
+
+The CI workflows construct that exact authorization from their checked-out Git
+edge. Once generation metadata is present on protected `main`, the bootstrap branch
+is permanently unreachable and normal append-only prefix verification applies.
+
+For a manual reproduction of that one transition:
 
 ```bash
-bun run --cwd packages/db baseline:rebuild:dry-run
+MIGRATION_BASE_SHA=<full-base-sha> \
+MIGRATION_PROTECTED_REF=<protected-ref-containing-base> \
+RELAYAPI_PRELIVE_BASELINE_RESET=<full-base-sha>:<full-head-sha> \
+  bun run --cwd packages/db migration:append-only
+```
+
+Do not reuse this environment variable for later schema work. It has no effect
+after the protected base contains generation metadata.
+
+## Repository verification before database recreation
+
+Use the repository-pinned Bun version and run:
+
+```bash
 bun run --cwd packages/db baseline:rebuild:check
-```
-
-The following command was the explicit one-time pre-launch write operation:
-
-```bash
-bun run --cwd packages/db baseline:rebuild --confirm-pre-launch-virgin-reset
-```
-
-It is intentionally refused now that the lifecycle is sealed. Do not change the
-lifecycle back to `pre-launch`; all later schema changes must be new, append-only
-expand/contract migrations. Dry-run and check modes remain read-only.
-
-This builder is not an upgrade, rebaseline, or data-preservation mechanism. Never
-run write mode after any persistent database has applied `0000_baseline`.
-
-## Required release phases
-
-1. **Expand** — add nullable columns, tables, indexes, constraints, or dual-write
-   support. Do not drop or rename objects read by the live Worker.
-2. **Verify migration artifacts** — run the manifest, append-only, policy, schema
-   contract, and PostgreSQL 18 replay checks.
-3. **Apply the compatible migration** — use the migration role through Workers VPC
-   or the Access-protected TCP administration path. The runtime role must not own
-   schema objects or have DDL privileges.
-4. **Deploy compatible code** — the new Worker must tolerate both pre-backfill and
-   post-backfill rows. Observe error rate, queue retries, database locks, and the
-   deployment smoke checks.
-5. **Backfill and reconcile** — run bounded, resumable work with durable progress.
-   Verify counts and invariants before changing reads to the new representation.
-6. **Contract in a later release** — only after the old Worker version can no longer
-   receive traffic and the backfill is verified may a separate migration make new
-   fields required or remove obsolete objects.
-
-## Commands
-
-From the repository root:
-
-```bash
+bun run --cwd packages/db baseline:sealed:check
 bun run --cwd packages/db migration:manifest:check
-bun run --cwd packages/db migration:append-only
 bun run --cwd packages/db migration:policy:check
+bun run --cwd packages/db migration:source-ownership
 bun run --cwd packages/db verify:schema-contracts
-bun run --cwd packages/db verify:migrations
+bun run --cwd packages/db test:migration-contracts
+bun run --cwd packages/db test:schema-invariants
 ```
 
-`verify:migrations` must replay the complete migration directory on PostgreSQL 18,
-run it a second time to prove there is no unapplied migration, and compare the live
-catalog with the expected schema contracts. A local disposable PostgreSQL 18
-container is appropriate for this gate; it is not production evidence.
+`baseline:rebuild:check` independently regenerates the baseline from `schema.ts`
+and the SQL renderers and requires byte-identical artifacts. It does not connect
+to a database.
 
-## Failure and forward recovery
+CI additionally starts the digest-pinned PostgreSQL 18 + pgvector service, applies
+the one migration twice, verifies the complete live schema and non-declarative
+catalog, and checks the exact Drizzle ledger hashes.
 
-Never automatically roll a database backward after a migration has reached a live
-catalog. Instead:
+## Operator database recreation
 
-- **Migration fails before commit:** preserve the exact error and migration ledger.
-  For the one-time virgin baseline, recreate the disposable database from scratch;
-  Drizzle may have created an empty ledger outside the rolled-back migration, and
-  the history guard intentionally refuses that ambiguous state. For a persistent
-  environment, stop for reviewed forward recovery—never delete or rewrite its
-  ledger merely to make a retry start.
-- **Migration succeeds but Worker deploy fails:** keep the old Worker serving. The
-  expand migration must be old-code compatible. Fix or roll forward the Worker.
-- **New Worker is unhealthy:** direct traffic back to the previous compatible Worker
-  version without reverting schema, then prepare a forward application fix.
-- **Backfill is interrupted:** resume from its durable checkpoint. Never restart an
-  unfenced external effect or an unbounded table rewrite blindly.
-- **Contract migration causes an incident:** stop further deploys and ship the
-  smallest forward repair that restores the required object/compatibility surface.
-  Restore from backup only under the separate disaster-recovery procedure, with an
-  explicit data-loss decision.
+This section is intentionally an operator checklist, not an automated destructive
+command.
 
-Record migration identifier, catalog checksum, operator, start/end time, affected
-environment, validation output, deploy version, and any recovery action in the
-release record.
+1. Confirm the target is the disposable pre-live environment. Record its exact
+   account, host, database name, and current Worker versions.
+2. Decide whether anything must be retained. If yes, create a backup and verify
+   that it can be restored before continuing.
+3. Stop or contain every writer: API, dashboard auth writes, scheduled jobs,
+   Queue consumers, and any self-host runner using the target.
+4. Recreate the database, or remove the old database and create a genuinely
+   virgin replacement. Do not leave an empty `drizzle.__drizzle_migrations`
+   ledger or old user objects in `auth`/`public`; the migration guard rejects
+   those ambiguous states.
+5. Provision separate migration and runtime roles. The migration role owns DDL.
+   The runtime role must not own schema objects or have schema-creation rights.
+6. Confirm PostgreSQL 18 and availability of `btree_gist`, `pg_trgm`, and `vector`.
+   The baseline creates them in `public` and fails closed if a preinstalled
+   extension is in the wrong schema.
+7. Apply the baseline with the migration connection:
+
+   ```bash
+   bun run --cwd packages/db migrate
+   bun run --cwd packages/db migrate
+   bun run --cwd packages/db verify:migrations
+   bun run --cwd packages/db migration:history:current
+   ```
+
+   The first run applies `0000`; the second proves idempotence. The remaining
+   commands verify the full live catalog and exact ledger bytes.
+
+8. Grant the runtime role only its reviewed runtime privileges, then verify that
+   a rolled-back DDL probe fails for that role.
+9. Deploy API and dashboard builds that both declare
+   `BASELINE_GENERATION=1`, run their health/smoke checks, and only then resume
+   scheduled work and Queue consumers.
+10. Record the database identity, baseline hash, Worker version IDs, operator,
+    timestamps, verification output, and backup/restore decision.
+
+For hosted production, `.github/workflows/deploy-api.yml` applies production
+migrations only on a reviewed `workflow_dispatch`; push deployments are code-only
+and require the database to be current. The manual API workflow runs migration
+and catalog verification before deploying the Worker. The required compatible
+dashboard version ID remains an explicit input.
+
+The user has chosen to recreate the database manually. Do not run
+`packages/db/scripts/prelive-reset.ts` for this initial-baseline reset: that tool
+belongs to the separately protected future generation-collapse procedure and can
+also coordinate destructive Cloudflare state.
+
+## Rules after the first persistent initialization
+
+After any persistent environment has applied this `0000`, migration history is
+append-only:
+
+- never reopen `baseline-build-policy.json` to `pre-launch`;
+- never rerun `--pre-live-reset`;
+- never edit `0000_baseline.sql`, its snapshot, journal entry, or manifest hash;
+- never delete or rewrite an applied Drizzle ledger row;
+- add a new numbered expand or contract migration for every schema change;
+- update the migration policy and manifest together;
+- keep self-host compatibility notes/tests with API, auth, app, or database
+  changes intended for operators.
+
+The reset builder itself is fail-closed. `--pre-live-reset` requires both a
+`pre-launch` policy and `--confirm-pre-launch-virgin-reset`; the policy is now
+sealed, so another reset is refused. Its directory replacement is staged,
+verified, and rollback-protected. A leftover `.baseline-backup-*` directory or
+`.drizzle-baseline-rebuild.lock` is a stop condition requiring manual inspection.
+
+## Ordinary release phases
+
+1. **Expand** — add compatible nullable columns, tables, indexes, constraints,
+   or dual-write support. Do not drop or rename objects read by the live Worker.
+2. **Verify artifacts** — run manifest, append-only, policy, source-ownership,
+   schema-contract, and PostgreSQL 18 replay checks.
+3. **Apply the compatible migration** — use the migration role, never the
+   runtime role.
+4. **Deploy compatible code** — the new Worker must tolerate the full migration
+   compatibility window.
+5. **Backfill and reconcile** — use bounded, resumable, fenced work and verify
+   invariants before switching reads.
+6. **Contract later** — remove obsolete objects only after old code cannot
+   receive traffic and the compatible-release prerequisite has been proven.
+
+## Forward recovery
+
+Never automatically roll a persistent database backward after a migration has
+reached its catalog.
+
+- **Initial baseline fails:** because this is still pre-live, preserve the exact
+  error, recreate the disposable database, correct the repository or platform
+  prerequisite, and replay from the beginning. Do not massage an empty or partial
+  ledger into appearing current.
+- **Later migration fails before commit:** preserve the error and ledger, stop
+  releases, and prepare a reviewed forward fix.
+- **Migration succeeds but Worker deploy fails:** keep or restore compatible code
+  traffic and fix the Worker forward. Do not revert schema automatically.
+- **New Worker is unhealthy:** direct traffic to a previously compatible Worker
+  only when its compatibility with the applied schema is proven.
+- **Backfill is interrupted:** resume from its durable checkpoint. Never blindly
+  repeat an unfenced external effect or unbounded rewrite.
+- **Contract migration incident:** stop further deploys and ship the smallest
+  forward repair. Restore from backup only through the disaster-recovery process
+  with an explicit data-loss decision.
 
 ## Stop conditions
 
 Do not migrate when any of these are true:
 
-- the manifest or append-only verifier fails;
-- the SQL contains an unapproved destructive or contract-phase operation;
-- the database is not confirmed as PostgreSQL 18 with TLS verification;
-- the active connection is using the runtime role for DDL;
-- a production catalog would receive the virgin baseline;
-- a required backup/restore rehearsal has not been accepted by the operator;
-- the old and new Worker compatibility window has not been demonstrated.
+- the target is not confirmed disposable/virgin for this reset;
+- a required backup or restore rehearsal has not been accepted;
+- the manifest, sealed-generation, append-only, policy, source-ownership, or
+  schema verifier fails;
+- PostgreSQL is not the reviewed major or required extensions are unavailable;
+- the migration connection is actually the runtime role;
+- writers are still active against a database being recreated;
+- API and dashboard generation bindings disagree with repository generation;
+- the old/new code compatibility window has not been demonstrated.

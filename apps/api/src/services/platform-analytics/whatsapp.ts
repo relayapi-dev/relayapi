@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import { GRAPH_BASE } from "../../config/api-versions";
 import { fetchWithTimeout } from "../../lib/fetch-timeout";
 import {
@@ -56,7 +60,7 @@ async function waFetch<T = unknown>(
 	try {
 		const res = await fetchWithTimeout(url.toString());
 		if (!res.ok) {
-			const errorBody = await res.text();
+			const errorBody = await readProviderText(res);
 			console.error(
 				`[whatsapp-analytics] API error ${res.status} for ${path}: ${errorBody}`,
 			);
@@ -76,7 +80,7 @@ async function waFetch<T = unknown>(
 				fbError?.message ?? `HTTP ${res.status}`,
 			);
 		}
-		return (await res.json()) as T;
+		return (await readProviderJson(res)) as T;
 	} catch (err) {
 		if (err instanceof PlatformAnalyticsError) throw err;
 		console.error(`[whatsapp-analytics] Network error for ${path}:`, err);
@@ -149,13 +153,9 @@ async function fetchConversationAnalytics(
 	const startUnix = toUnix(dateRange.from);
 	const endUnix = toUnix(dateRange.to) + 86400; // include the entire "to" day
 
-	const data = await waFetch<WabaAnalyticsResponse>(
-		`/${wabaId}`,
-		accessToken,
-		{
-			fields: `analytics.start(${startUnix}).end(${endUnix}).granularity(DAY)`,
-		},
-	);
+	const data = await waFetch<WabaAnalyticsResponse>(`/${wabaId}`, accessToken, {
+		fields: `analytics.start(${startUnix}).end(${endUnix}).granularity(DAY)`,
+	});
 
 	return data.analytics?.data_points ?? [];
 }
@@ -199,14 +199,9 @@ export const whatsappAnalytics: PlatformAnalyticsFetcher = {
 			0,
 		);
 		const deliveryRate =
-			curSent > 0
-				? Math.round((curDelivered / curSent) * 10000) / 100
-				: null;
+			curSent > 0 ? Math.round((curDelivered / curSent) * 10000) / 100 : null;
 
-		const prevSent = previousPoints.reduce(
-			(sum, p) => sum + (p.sent ?? 0),
-			0,
-		);
+		const prevSent = previousPoints.reduce((sum, p) => sum + (p.sent ?? 0), 0);
 		const prevDelivered = previousPoints.reduce(
 			(sum, p) => sum + (p.delivered ?? 0),
 			0,

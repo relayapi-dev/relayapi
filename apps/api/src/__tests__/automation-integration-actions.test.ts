@@ -35,13 +35,18 @@ import {
 	customFieldDefinitions,
 	customFieldValues,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import type { Graph } from "../schemas/automation-graph";
 import { enrollContact } from "../services/automations/runner";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -60,7 +65,7 @@ let fieldDefinitionId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "integration-actions-org",
 		slug: `int-actions-${orgId.slice(-8)}`,
@@ -90,13 +95,13 @@ async function seedFixture() {
 	// than replaces.
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "Alice Example",
 			email: "alice@example.com",
 			tags: ["lead"],
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	contactId = ct.id;
@@ -141,8 +146,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 beforeAll(async () => {
@@ -264,7 +269,8 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 			where: eq(contacts.id, contactId),
 		});
 		expect(refreshedContact).toBeTruthy();
-		if (!refreshedContact) throw new Error("expected refreshedContact to exist");
+		if (!refreshedContact)
+			throw new Error("expected refreshedContact to exist");
 		expect(refreshedContact.tags).toContain("lead");
 		expect(refreshedContact.tags).toContain("qualified");
 
@@ -320,12 +326,12 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 		// interference from earlier tests.
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "Same-run tag refresh contact",
 				tags: [],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 
@@ -508,12 +514,12 @@ describe("automation integration — ctx.db wiring + context hydration", () => {
 
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "Same-run field refresh contact",
 				tags: [],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 

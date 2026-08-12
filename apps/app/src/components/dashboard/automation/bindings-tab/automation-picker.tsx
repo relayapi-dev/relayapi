@@ -21,6 +21,7 @@ interface ListResponse {
 }
 
 interface Props {
+	id?: string;
 	channel: BindingChannel;
 	value: string | null;
 	onChange: (automationId: string | null) => void;
@@ -33,6 +34,7 @@ interface Props {
 }
 
 export function AutomationPicker({
+	id,
 	channel,
 	value,
 	onChange,
@@ -62,9 +64,7 @@ export function AutomationPicker({
 					const body = await res.json().catch(() => null);
 					if (!cancelled)
 						setError(
-							body?.error?.message ||
-								body?.message ||
-								`Error ${res.status}`,
+							body?.error?.message || body?.message || `Error ${res.status}`,
 						);
 					return;
 				}
@@ -102,9 +102,12 @@ export function AutomationPicker({
 	return (
 		<div className={className}>
 			<select
+				id={id}
 				value={value ?? ""}
 				disabled={disabled || loading}
-				onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
+				onChange={(e) =>
+					onChange(e.target.value === "" ? null : e.target.value)
+				}
 				className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
 			>
 				{allowClear && <option value="">— None —</option>}

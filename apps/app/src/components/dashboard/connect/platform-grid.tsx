@@ -11,7 +11,9 @@ import {
 } from "@/lib/platform-maps";
 import { cn } from "@/lib/utils";
 import { BlueskyDialog } from "./bluesky-dialog";
+import { CredentialDialog } from "./credential-dialog";
 import { InstagramDialog } from "./instagram-dialog";
+import { MastodonDialog } from "./mastodon-dialog";
 import { OnDemandDialog } from "./on-demand-dialog";
 import { TelegramDialog } from "./telegram-dialog";
 
@@ -28,7 +30,7 @@ const fadeUp = {
 	},
 };
 
-const PLATFORMS = [
+export const CONNECTABLE_PLATFORMS = [
 	"instagram",
 	"facebook",
 	"linkedin",
@@ -45,6 +47,11 @@ const PLATFORMS = [
 	"discord",
 	"whatsapp",
 	"sms",
+	"slack",
+	"beehiiv",
+	"convertkit",
+	"mailchimp",
+	"listmonk",
 	"twitter",
 ];
 
@@ -58,6 +65,18 @@ export function PlatformGrid({ onConnected, workspaceId }: PlatformGridProps) {
 	const [blueskyOpen, setBlueskyOpen] = useState(false);
 	const [telegramOpen, setTelegramOpen] = useState(false);
 	const [instagramOpen, setInstagramOpen] = useState(false);
+	const [mastodonOpen, setMastodonOpen] = useState(false);
+	const [credentialPlatform, setCredentialPlatform] = useState<
+		| "discord"
+		| "sms"
+		| "whatsapp"
+		| "slack"
+		| "beehiiv"
+		| "convertkit"
+		| "mailchimp"
+		| "listmonk"
+		| null
+	>(null);
 	const [onDemandOpen, setOnDemandOpen] = useState(false);
 	const [onDemandPlatform, setOnDemandPlatform] = useState("");
 
@@ -72,8 +91,26 @@ export function PlatformGrid({ onConnected, workspaceId }: PlatformGridProps) {
 			setInstagramOpen(true);
 			return;
 		}
+		if (type === "instance_oauth" && platform === "mastodon") {
+			setMastodonOpen(true);
+			return;
+		}
 		if (type === "credentials" && platform === "bluesky") {
 			setBlueskyOpen(true);
+			return;
+		}
+		if (
+			type === "credentials" &&
+			(platform === "discord" ||
+				platform === "sms" ||
+				platform === "whatsapp" ||
+				platform === "slack" ||
+				platform === "beehiiv" ||
+				platform === "convertkit" ||
+				platform === "mailchimp" ||
+				platform === "listmonk")
+		) {
+			setCredentialPlatform(platform);
 			return;
 		}
 		if (type === "bot" && platform === "telegram") {
@@ -90,7 +127,7 @@ export function PlatformGrid({ onConnected, workspaceId }: PlatformGridProps) {
 				initial="hidden"
 				animate="visible"
 			>
-				{PLATFORMS.map((platform) => {
+				{CONNECTABLE_PLATFORMS.map((platform) => {
 					const type = platformConnectionType[platform];
 					const isComingSoon = type === "coming_soon";
 					const isOAuth = type === "oauth";
@@ -161,12 +198,28 @@ export function PlatformGrid({ onConnected, workspaceId }: PlatformGridProps) {
 				onOpenChange={setInstagramOpen}
 				workspaceId={workspaceId}
 			/>
+			<MastodonDialog
+				open={mastodonOpen}
+				onOpenChange={setMastodonOpen}
+				workspaceId={workspaceId}
+			/>
 			<BlueskyDialog
 				open={blueskyOpen}
 				onOpenChange={setBlueskyOpen}
 				onConnected={onConnected}
 				workspaceId={workspaceId}
 			/>
+			{credentialPlatform && (
+				<CredentialDialog
+					open
+					onOpenChange={(next) => {
+						if (!next) setCredentialPlatform(null);
+					}}
+					onConnected={onConnected}
+					platform={credentialPlatform}
+					workspaceId={workspaceId}
+				/>
+			)}
 			<TelegramDialog
 				open={telegramOpen}
 				onOpenChange={setTelegramOpen}

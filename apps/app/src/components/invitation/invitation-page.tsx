@@ -139,26 +139,17 @@ export function InvitationPage({ invitationId, user }: InvitationPageProps) {
         email: invite?.email || email,
         password,
         name,
+		callbackURL: `/invite/${invitationId}`,
       });
       if (authError) {
         setSignupError(authError.message || "Failed to create account");
         setSignupLoading(false);
         return;
       }
-      // Account created — now accept the invitation
-      const acceptResult = await organization.acceptInvitation({ invitationId });
-      if (acceptResult.error) {
-        // Account was created but invitation accept failed — redirect to login
-        window.location.href = `/invite/${invitationId}`;
-        return;
-      }
-      const orgId = (
-        acceptResult.data as { member?: { organizationId?: string } } | null
-      )?.member?.organizationId;
-      if (orgId) {
-        await organization.setActive({ organizationId: orgId });
-      }
-      window.location.href = "/app";
+      // Email/password accounts do not receive a session until their address is
+      // verified. The verification callback returns here so the invitation can
+      // then be accepted by the authenticated user.
+      window.location.href = `/login?verification=sent&redirect=${encodeURIComponent(`/invite/${invitationId}`)}`;
     } catch {
       setSignupError("Something went wrong. Please try again.");
       setSignupLoading(false);

@@ -191,22 +191,21 @@ export interface IdeaConvertResponse {
   media_copied: number;
 }
 
+export interface IdeaActorResponse {
+  /** Stable organization principal ID. */
+  id: string;
+  kind: 'member' | 'service';
+  /** Current user ID for a live member principal. */
+  user_id: string | null;
+  name: string | null;
+  image: string | null;
+}
+
 export interface IdeaCommentResponse {
   id: string;
-  /**
-   * Actor ID who authored the comment. May be an API key ID (prefix 'key_')
-   * or a user ID.
-   */
+  /** Stable organization principal that authored the comment. */
   author_id: string;
-  /**
-   * Resolved user info for the author. Null if the actor cannot be mapped
-   * to a user.
-   */
-  author: {
-    id: string;
-    name: string | null;
-    image: string | null;
-  } | null;
+  author: IdeaActorResponse | null;
   content: string;
   parent_id: string | null;
   created_at: string;
@@ -221,7 +220,9 @@ export interface IdeaCommentListResponse {
 
 export interface IdeaActivityResponse {
   id: string;
+  /** Stable organization principal that performed the action. */
   actor_id: string;
+  actor: IdeaActorResponse | null;
   action:
     | 'created'
     | 'moved'
@@ -315,6 +316,7 @@ export declare namespace Ideas {
     type IdeaResponse as IdeaResponse,
     type IdeaListResponse as IdeaListResponse,
     type IdeaConvertResponse as IdeaConvertResponse,
+    type IdeaActorResponse as IdeaActorResponse,
     type IdeaCommentResponse as IdeaCommentResponse,
     type IdeaCommentListResponse as IdeaCommentListResponse,
     type IdeaActivityResponse as IdeaActivityResponse,

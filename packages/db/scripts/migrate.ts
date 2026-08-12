@@ -1,11 +1,25 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import {
+	assertSupportedPostgres,
+	verifyDatabaseSemanticCapabilities,
+} from "../src/database-contract";
+import {
+	auditBaselineGeneration,
+	type BaselineGeneration,
+} from "./baseline-generation-contract";
+import {
 	verifyLiveMigrationHistory,
 	verifyTrackedMigrationManifest,
 } from "./verify-migration-history";
+import {
+	databaseExtensionContractForGeneration,
+	verifyPendingDatabaseExtensionLifecycle,
+} from "./verify-pending-database-extensions";
 
 const connectionString =
 	process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE;
@@ -25,6 +39,12 @@ if (decodeURIComponent(parsed.username) === runtimeRole) {
 
 const loopbackHosts = new Set(["127.0.0.1", "::1", "localhost"]);
 if (
+	process.env.RELAYAPI_CANDIDATE_REPLAY === "1" &&
+	!loopbackHosts.has(parsed.hostname)
+) {
+	throw new Error("Candidate baseline replay is restricted to a loopback database");
+}
+if (
 	!loopbackHosts.has(parsed.hostname) &&
 	parsed.searchParams.get("sslmode") !== "verify-full"
 ) {
@@ -33,8 +53,25 @@ if (
 	);
 }
 
-const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
-const expectedHistory = verifyTrackedMigrationManifest();
+const migrationsFolder = process.env.RELAYAPI_MIGRATION_DIRECTORY
+	? resolve(process.env.RELAYAPI_MIGRATION_DIRECTORY)
+	: fileURLToPath(new URL("../drizzle", import.meta.url));
+const generationPath = process.env.RELAYAPI_MIGRATION_GENERATION
+	? resolve(process.env.RELAYAPI_MIGRATION_GENERATION)
+	: fileURLToPath(new URL("../baseline-generation.json", import.meta.url));
+const baselineGeneration = JSON.parse(
+	readFileSync(generationPath, "utf8"),
+) as BaselineGeneration;
+const generationFailures = auditBaselineGeneration(baselineGeneration);
+if (generationFailures.length > 0) {
+	throw new Error(
+		`Invalid baseline generation metadata:\n- ${generationFailures.join("\n- ")}`,
+	);
+}
+const extensionContract = databaseExtensionContractForGeneration(
+	baselineGeneration.generation,
+);
+const expectedHistory = verifyTrackedMigrationManifest({ migrationsFolder });
 const sql = postgres(connectionString, {
 	max: 1,
 	prepare: false,
@@ -45,6 +82,12 @@ const sql = postgres(connectionString, {
 
 let locked = false;
 try {
+	await assertSupportedPostgres(sql);
+	await verifyDatabaseSemanticCapabilities(sql, {
+		installMissing: true,
+		requiredExtensions: extensionContract.activeExtensions,
+		requiredSchemas: extensionContract.activeSchemas,
+	});
 	// One global session lock makes concurrent deploy jobs serialize before they
 	// inspect or mutate Drizzle's migration ledger. The lock lives on the sole
 	// connection in this client until explicitly released below. Bound this
@@ -68,10 +111,25 @@ try {
 	// This check must run under the same session advisory lock as the mutation.
 	// Drizzle only compares its newest timestamp, so an unlocked preflight cannot
 	// protect against an edited older hash or a concurrent deployment race.
-	await verifyLiveMigrationHistory(sql, expectedHistory);
+	const appliedMigrationCount = await verifyLiveMigrationHistory(
+		sql,
+		expectedHistory,
+	);
+	await verifyPendingDatabaseExtensionLifecycle(
+		sql,
+		expectedHistory,
+		appliedMigrationCount,
+		migrationsFolder,
+		baselineGeneration.generation,
+	);
 	await migrate(drizzle(sql), { migrationsFolder });
 	await verifyLiveMigrationHistory(sql, expectedHistory, {
 		requireCurrent: true,
+	});
+	await verifyDatabaseSemanticCapabilities(sql, {
+		installMissing: false,
+		requiredExtensions: extensionContract.activeExtensions,
+		requiredSchemas: extensionContract.activeSchemas,
 	});
 	console.log(`Applied reviewed migrations as ${identity.current_user}.`);
 } finally {

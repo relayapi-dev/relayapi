@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
@@ -50,11 +50,11 @@ type UserDatabaseObject = {
 	object_identity: string;
 };
 
-type MigrationSql = ReturnType<typeof postgres>;
+export type MigrationSql = ReturnType<typeof postgres>;
 
-const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
-const manifestPath = join(migrationsFolder, "migration-manifest.json");
-
+const migrationsFolder = process.env.RELAYAPI_VERIFY_MIGRATION_DIRECTORY
+	? resolve(process.env.RELAYAPI_VERIFY_MIGRATION_DIRECTORY)
+	: fileURLToPath(new URL("../drizzle", import.meta.url));
 function sha256(source: string): string {
 	return createHash("sha256").update(source).digest("hex");
 }
@@ -65,11 +65,13 @@ function sha256(source: string): string {
  * prevents an edited historical snapshot from silently poisoning future
  * generation while leaving today's clean replay unchanged.
  */
-export function buildExpectedMigrationManifest(): MigrationManifest {
+export function buildExpectedMigrationManifest(
+	directory = migrationsFolder,
+): MigrationManifest {
 	const journal = JSON.parse(
-		readFileSync(join(migrationsFolder, "meta", "_journal.json"), "utf8"),
+		readFileSync(join(directory, "meta", "_journal.json"), "utf8"),
 	) as Journal;
-	const migrationFiles = readMigrationFiles({ migrationsFolder });
+	const migrationFiles = readMigrationFiles({ migrationsFolder: directory });
 
 	assertOrderedMigrationHistory(journal.entries, migrationFiles);
 	if (journal.dialect !== "postgresql") {
@@ -91,7 +93,7 @@ export function buildExpectedMigrationManifest(): MigrationManifest {
 				throw new Error(`Migration file missing at index ${entry.idx}`);
 			}
 			const snapshotPath = join(
-				migrationsFolder,
+				directory,
 				"meta",
 				`${String(entry.idx).padStart(4, "0")}_snapshot.json`,
 			);
@@ -110,8 +112,11 @@ export function buildExpectedMigrationManifest(): MigrationManifest {
 
 export function verifyTrackedMigrationManifest(options?: {
 	write?: boolean;
+	migrationsFolder?: string;
 }): MigrationManifest {
-	const expected = buildExpectedMigrationManifest();
+	const directory = options?.migrationsFolder ?? migrationsFolder;
+	const manifestPath = join(directory, "migration-manifest.json");
+	const expected = buildExpectedMigrationManifest(directory);
 	const serialized = `${JSON.stringify(expected, null, 2)}\n`;
 
 	if (options?.write) {

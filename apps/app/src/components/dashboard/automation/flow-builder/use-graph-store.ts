@@ -65,10 +65,7 @@ export interface GraphStoreActions {
 	removeEdge(index: number): void;
 	reconnectEdge(index: number, newEnd: Partial<AutomationEdge>): void;
 	setSelection(keys: string[]): void;
-	setValidation(
-		errors: ValidationIssue[],
-		warnings: ValidationIssue[],
-	): void;
+	setValidation(errors: ValidationIssue[], warnings: ValidationIssue[]): void;
 	undo(): void;
 	redo(): void;
 	markSaved(): void;
@@ -80,8 +77,7 @@ export type UseGraphStore = GraphStoreState & GraphStoreActions;
 // Helpers
 // ---------------------------------------------------------------------------
 
-const ID_ALPHABET =
-	"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const ID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 export function generateNodeKey(): string {
 	if (
@@ -245,8 +241,7 @@ function reducer(state: GraphStoreState, action: Action): GraphStoreState {
 					nodes,
 					edges,
 					root_node_key:
-						state.graph.root_node_key &&
-						removed.has(state.graph.root_node_key)
+						state.graph.root_node_key && removed.has(state.graph.root_node_key)
 							? null
 							: state.graph.root_node_key,
 				},
@@ -442,9 +437,41 @@ function initialState(initialGraph?: AutomationGraph): GraphStoreState {
 	};
 }
 
-function singleOutputPortKey(node: Pick<AutomationNode, "kind" | "config">): string | null {
+function singleOutputPortKey(
+	node: Pick<AutomationNode, "kind" | "config">,
+): string | null {
 	const outputs = derivePorts(node).filter((p) => p.direction === "output");
-	return outputs.length === 1 ? outputs[0]?.key ?? null : null;
+	return outputs.length === 1 ? (outputs[0]?.key ?? null) : null;
+}
+
+function initialNodeConfig(kind: string): Record<string, unknown> {
+	switch (kind) {
+		case "message":
+			return { blocks: [] };
+		case "input":
+			return { field: "response", input_type: "text" };
+		case "delay":
+			return { minutes: 1 };
+		case "condition":
+			return { predicates: {} };
+		case "randomizer":
+			return {
+				variants: [
+					{ key: "a", label: "A", weight: 50 },
+					{ key: "b", label: "B", weight: 50 },
+				],
+			};
+		case "action_group":
+			return { actions: [] };
+		case "wait_event":
+			return { event_kinds: ["dm_received"] };
+		case "social_profile_check":
+			return { field: "is_user_follow_business" };
+		case "end":
+			return { reason: "completed" };
+		default:
+			return {};
+	}
 }
 
 function planAddNode(
@@ -459,7 +486,7 @@ function planAddNode(
 		kind,
 		canvas_x: position.x,
 		canvas_y: position.y,
-		config: {},
+		config: initialNodeConfig(kind),
 		ports: [],
 	};
 
@@ -500,11 +527,14 @@ function planAddNode(
 		};
 	}
 
-	const existingTarget = graph.nodes.find((n) => n.key === existingEdge.to_node);
+	const existingTarget = graph.nodes.find(
+		(n) => n.key === existingEdge.to_node,
+	);
 	const removeNodeKeys =
 		existingTarget?.kind === "end" &&
 		!graph.edges.some(
-			(e, index) => index !== replaceEdgeIndex && e.to_node === existingTarget.key,
+			(e, index) =>
+				index !== replaceEdgeIndex && e.to_node === existingTarget.key,
 		)
 			? [existingTarget.key]
 			: undefined;
@@ -519,11 +549,7 @@ function planAddNode(
 }
 
 export function useGraphStore(initialGraph?: AutomationGraph): UseGraphStore {
-	const [state, dispatch] = useReducer(
-		reducer,
-		initialGraph,
-		initialState,
-	);
+	const [state, dispatch] = useReducer(reducer, initialGraph, initialState);
 
 	// Stable refs to the latest dispatch — used inside actions that need to
 	// read the current state (e.g. `addNode` returning the generated key).
@@ -562,17 +588,19 @@ export function useGraphStore(initialGraph?: AutomationGraph): UseGraphStore {
 		[],
 	);
 
-	const updateNodeConfig = useCallback<
-		GraphStoreActions["updateNodeConfig"]
-	>((key, config) => {
-		dispatch({ type: "UPDATE_NODE_CONFIG", key, config });
-	}, []);
+	const updateNodeConfig = useCallback<GraphStoreActions["updateNodeConfig"]>(
+		(key, config) => {
+			dispatch({ type: "UPDATE_NODE_CONFIG", key, config });
+		},
+		[],
+	);
 
-	const updateNodeTitle = useCallback<
-		GraphStoreActions["updateNodeTitle"]
-	>((key, title) => {
-		dispatch({ type: "UPDATE_NODE_TITLE", key, title });
-	}, []);
+	const updateNodeTitle = useCallback<GraphStoreActions["updateNodeTitle"]>(
+		(key, title) => {
+			dispatch({ type: "UPDATE_NODE_TITLE", key, title });
+		},
+		[],
+	);
 
 	const addEdge = useCallback<GraphStoreActions["addEdge"]>(
 		(fromNode, fromPort, toNode, toPort) => {
@@ -593,11 +621,12 @@ export function useGraphStore(initialGraph?: AutomationGraph): UseGraphStore {
 		dispatch({ type: "REMOVE_EDGE", index });
 	}, []);
 
-	const reconnectEdge = useCallback<
-		GraphStoreActions["reconnectEdge"]
-	>((index, patch) => {
-		dispatch({ type: "RECONNECT_EDGE", index, patch });
-	}, []);
+	const reconnectEdge = useCallback<GraphStoreActions["reconnectEdge"]>(
+		(index, patch) => {
+			dispatch({ type: "RECONNECT_EDGE", index, patch });
+		},
+		[],
+	);
 
 	const setSelection = useCallback((keys: string[]) => {
 		dispatch({ type: "SET_SELECTION", keys });

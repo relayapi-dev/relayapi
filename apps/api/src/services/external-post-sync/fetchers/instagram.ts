@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../../lib/provider-response";
 // ---------------------------------------------------------------------------
 // Instagram Business/Creator Posts Fetcher
 // Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing
@@ -56,10 +60,10 @@ async function igFetch<T = unknown>(
 		);
 	}
 	if (!res.ok) {
-		const body = await res.text();
+		const body = await readProviderText(res);
 		throw new Error(`Instagram API ${res.status}: ${body}`);
 	}
-	return { data: (await res.json()) as T, headers: res.headers };
+	return { data: (await readProviderJson(res)) as T, headers: res.headers };
 }
 
 function parseMediaType(raw: string | undefined): string | null {

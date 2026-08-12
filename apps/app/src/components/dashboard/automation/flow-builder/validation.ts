@@ -13,7 +13,7 @@
 //   3. Every edge references existing `(node, port)` pairs on both ends; the
 //      port direction must match (output on the from side, input on the to
 //      side).
-//   5. No cycles — unless the cycle contains an `input`, `delay`, or `goto`
+//   5. No cycles — unless the cycle contains an `input`, `delay`, or `wait_event`
 //      node that naturally pauses the run.
 //   Warnings (advisory, never block save/activation):
 //   - Non-root nodes with no incoming edge (orphan / unreachable).
@@ -53,10 +53,11 @@ const ENTRY_KINDS = new Set([
 	"condition",
 	"http_request",
 	"start_automation",
+	"social_profile_check",
 	"end",
 ]);
 
-const LOOP_PAUSE_KINDS = new Set(["input", "delay", "goto"]);
+const LOOP_PAUSE_KINDS = new Set(["input", "delay", "wait_event"]);
 
 export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 	const errors: ValidationIssue[] = [];
@@ -109,6 +110,19 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 
 	// 3. Edge references.
 	const nodeByKey = new Map(canonicalNodes.map((n) => [n.key, n]));
+	for (const node of canonicalNodes) {
+		if (node.kind !== "goto") continue;
+		const target = (node.config as { target_node_key?: unknown })
+			?.target_node_key;
+		if (typeof target !== "string" || !nodeByKey.has(target)) {
+			errors.push({
+				code: "goto_missing_target",
+				message: `goto node "${node.key}" must reference an existing target_node_key`,
+				severity: "error",
+				nodeKey: node.key,
+			});
+		}
+	}
 	for (let i = 0; i < graph.edges.length; i++) {
 		const e = graph.edges[i];
 		if (!e) continue;
@@ -133,9 +147,7 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 			continue;
 		}
 		if (
-			!from.ports.some(
-				(p) => p.key === e.from_port && p.direction === "output",
-			)
+			!from.ports.some((p) => p.key === e.from_port && p.direction === "output")
 		) {
 			errors.push({
 				code: "edge_missing_from_port",
@@ -164,6 +176,12 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 	// not-yet-wired node mid-edit. Mirrors the server validator.
 	const incoming = new Set<string>();
 	for (const e of graph.edges) incoming.add(e.to_node);
+	for (const node of canonicalNodes) {
+		if (node.kind !== "goto") continue;
+		const target = (node.config as { target_node_key?: unknown })
+			?.target_node_key;
+		if (typeof target === "string") incoming.add(target);
+	}
 	for (const n of canonicalNodes) {
 		if (n.key === graph.root_node_key) continue;
 		if (!incoming.has(n.key)) {
@@ -186,7 +204,7 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 		if (!hasPause) {
 			errors.push({
 				code: "cycle_without_pause",
-				message: `cycle without input/delay/goto pause point: ${cycle.join(" → ")}`,
+				message: `cycle without input/delay/wait-event pause point: ${cycle.join(" → ")}`,
 				severity: "error",
 				nodeKey: cycle[0],
 			});
@@ -221,7 +239,10 @@ export function validateGraph(graph: AutomationGraph): GraphValidationResult {
 	return { valid: errors.length === 0, errors, warnings };
 }
 
-function findCycles(nodes: AutomationNode[], edges: AutomationEdge[]): string[][] {
+function findCycles(
+	nodes: AutomationNode[],
+	edges: AutomationEdge[],
+): string[][] {
 	const adj = new Map<string, string[]>();
 	for (const e of edges) {
 		let list = adj.get(e.from_node);
@@ -230,6 +251,18 @@ function findCycles(nodes: AutomationNode[], edges: AutomationEdge[]): string[][
 			adj.set(e.from_node, list);
 		}
 		list.push(e.to_node);
+	}
+	for (const node of nodes) {
+		if (node.kind !== "goto") continue;
+		const target = (node.config as { target_node_key?: unknown })
+			?.target_node_key;
+		if (typeof target !== "string") continue;
+		let list = adj.get(node.key);
+		if (!list) {
+			list = [];
+			adj.set(node.key, list);
+		}
+		list.push(target);
 	}
 	const cycles: string[][] = [];
 	const color = new Map<string, 0 | 1 | 2>();

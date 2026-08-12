@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
 	allocateRelayApiShortLink,
+	extractRelayApiShortCode,
+	invalidateRelayApiShortLinkCaches,
+	RELAY_API_SHORT_LINK_CACHE_TTL_SECONDS,
 	type RelayApiShortLinkCache,
 	type RelayApiShortLinkCandidate,
 	type RelayApiShortLinkStore,
@@ -40,15 +43,27 @@ class MemoryStore implements RelayApiShortLinkStore {
 class MemoryCache implements RelayApiShortLinkCache {
 	readonly values = new Map<string, string>();
 	readonly operations: string[] = [];
+	readonly expirationTtls = new Map<string, number>();
 
 	async get(key: string): Promise<string | null> {
 		this.operations.push(`get:${key}`);
 		return this.values.get(key) ?? null;
 	}
 
-	async put(key: string, value: string): Promise<void> {
+	async put(
+		key: string,
+		value: string,
+		options: { expirationTtl: number },
+	): Promise<void> {
 		this.operations.push(`put:${key}:${value}`);
 		this.values.set(key, value);
+		this.expirationTtls.set(key, options.expirationTtl);
+	}
+
+	async delete(key: string): Promise<void> {
+		this.operations.push(`delete:${key}`);
+		this.values.delete(key);
+		this.expirationTtls.delete(key);
 	}
 }
 
@@ -87,10 +102,16 @@ describe("RelayAPI short-link allocation", () => {
 		expect(store.links.size).toBe(2);
 		expect(store.insertAttempts).toBe(3);
 		expect(cache.values.size).toBe(2);
-		expect(cache.values.has("sl:same001")).toBe(true);
+		expect(first.shortUrl).toMatch(/^https:\/\/api\.relayapi\.dev\/s\//);
+		expect(second.shortUrl).toMatch(/^https:\/\/api\.relayapi\.dev\/s\//);
+		expect(cache.values.has("short-link:same001")).toBe(true);
 		expect(
 			cache.operations.filter((operation) => operation.startsWith("put:")),
 		).toHaveLength(2);
+		expect([...cache.expirationTtls.values()]).toEqual([
+			RELAY_API_SHORT_LINK_CACHE_TTL_SECONDS,
+			RELAY_API_SHORT_LINK_CACHE_TTL_SECONDS,
+		]);
 	});
 
 	it("does not write KV for a database-rejected candidate", async () => {
@@ -114,6 +135,7 @@ describe("RelayAPI short-link allocation", () => {
 			async put(key) {
 				operations.push(`kv:${key}`);
 			},
+			async delete() {},
 		};
 
 		await allocateRelayApiShortLink({
@@ -127,7 +149,23 @@ describe("RelayAPI short-link allocation", () => {
 			generateCode: sequence("loser01", "winner1"),
 		});
 
-		expect(operations).toEqual(["db:loser01", "db:winner1", "kv:sl:winner1"]);
+		expect(operations).toEqual([
+			"db:loser01",
+			"db:winner1",
+			"kv:short-link:winner1",
+		]);
+	});
+
+	it("reads canonical /s links and the intentional /r compatibility alias", () => {
+		expect(extractRelayApiShortCode("https://go.relayapi.dev/s/current1")).toBe(
+			"current1",
+		);
+		expect(
+			extractRelayApiShortCode("https://api.relayapi.dev/r/legacy01"),
+		).toBe("legacy01");
+		expect(
+			extractRelayApiShortCode("https://go.relayapi.dev/q/not-a-short-link"),
+		).toBeNull();
 	});
 });
 
@@ -140,7 +178,7 @@ describe("RelayAPI redirect resolution", () => {
 			workspaceId: null,
 			originalUrl: "https://example.com/durable",
 			shortCode: "durable1",
-			shortUrl: "https://api.relayapi.dev/r/durable1",
+			shortUrl: "https://api.relayapi.dev/s/durable1",
 		});
 
 		const resolved = await resolveRelayApiRedirect({
@@ -153,13 +191,18 @@ describe("RelayAPI redirect resolution", () => {
 			originalUrl: "https://example.com/durable",
 			clickCount: 1,
 		});
-		expect(cache.values.get("sl:durable1")).toBe("https://example.com/durable");
+		expect(cache.values.get("short-link:durable1")).toBe(
+			"https://example.com/durable",
+		);
+		expect(cache.expirationTtls.get("short-link:durable1")).toBe(
+			RELAY_API_SHORT_LINK_CACHE_TTL_SECONDS,
+		);
 	});
 
 	it("ignores a KV ghost when PostgreSQL has no matching provider/code row", async () => {
 		const store = new MemoryStore();
 		const cache = new MemoryCache();
-		cache.values.set("sl:ghost01", "https://attacker.example");
+		cache.values.set("short-link:ghost01", "https://attacker.example");
 
 		expect(
 			await resolveRelayApiRedirect({
@@ -180,7 +223,7 @@ describe("RelayAPI redirect resolution", () => {
 				workspaceId: null,
 				originalUrl: `https://example.com/${code}`,
 				shortCode: code,
-				shortUrl: `https://api.relayapi.dev/r/${code}`,
+				shortUrl: `https://api.relayapi.dev/s/${code}`,
 			});
 		}
 
@@ -193,6 +236,28 @@ describe("RelayAPI redirect resolution", () => {
 		expect(await store.getClickCount("target01")).toBe(20);
 		expect(await store.getClickCount("other001")).toBe(0);
 	});
+
+	it("best-effort invalidates each unique durable link cache key", async () => {
+		const cache = new MemoryCache();
+		await cache.put("short-link:one0001", "https://example.com/one", {
+			expirationTtl: RELAY_API_SHORT_LINK_CACHE_TTL_SECONDS,
+		});
+		await cache.put("short-link:two0002", "https://example.com/two", {
+			expirationTtl: RELAY_API_SHORT_LINK_CACHE_TTL_SECONDS,
+		});
+
+		expect(
+			await invalidateRelayApiShortLinkCaches(cache, [
+				"one0001",
+				"two0002",
+				"one0001",
+			]),
+		).toEqual({ deleted: 2, failed: 0 });
+		expect(cache.values.size).toBe(0);
+		expect(
+			cache.operations.filter((operation) => operation.startsWith("delete:")),
+		).toEqual(["delete:short-link:one0001", "delete:short-link:two0002"]);
+	});
 });
 
 describe("PostgreSQL store contract", () => {
@@ -204,5 +269,17 @@ describe("PostgreSQL store contract", () => {
 		expect(source).toContain('eq(shortLinks.provider, "relayapi")');
 		expect(source).toContain("eq(shortLinks.shortCode, shortCode)");
 		expect(source).not.toContain("shortLinks.shortUrl} LIKE");
+	});
+
+	it("invalidates bounded owner-erasure batches after deleting durable rows", async () => {
+		const repoRoot = new URL("../../../../", import.meta.url).pathname;
+		const [tenantDeletion, workspaceErasure] = await Promise.all([
+			Bun.file(`${repoRoot}apps/api/src/services/tenant-deletion.ts`).text(),
+			Bun.file(`${repoRoot}apps/api/src/services/workspace-erasure.ts`).text(),
+		]);
+		for (const source of [tenantDeletion, workspaceErasure]) {
+			expect(source).toContain("invalidateRelayApiShortLinkCaches(");
+			expect(source).toContain('row.provider === "relayapi"');
+		}
 	});
 });

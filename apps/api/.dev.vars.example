@@ -1,0 +1,33 @@
+# Copy with `bun run secrets:init development`, then replace non-empty placeholders.
+# Provider groups are optional, but each configured group must be complete.
+
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://<credentials>@localhost:5433/relayapi"
+RELAYAPI_DB_SSH_TARGET="relayapi-db"
+ENCRYPTION_KEY="active=<64-hex-characters>,identity=<retained-64-hex-characters>"
+BETTER_AUTH_SECRET=""
+STRIPE_SECRET_KEY=""
+STRIPE_PRO_PRICE_ID=""
+STRIPE_WEBHOOK_SECRET=""
+STRIPE_PORTAL_CONFIGURATION_ID=""
+OPERATIONS_ALERT_WEBHOOK_URL=""
+OPERATIONS_ALERT_EMAIL=""
+
+FACEBOOK_APP_ID=""
+FACEBOOK_APP_SECRET=""
+GOOGLE_ADS_DEVELOPER_TOKEN=""
+TIKTOK_ADS_APP_ID=""
+TIKTOK_ADS_APP_SECRET=""
+# Non-secret. Use only TikTok-verified HTTPS domain/path prefixes ending in `/`.
+TIKTOK_VERIFIED_URL_PREFIXES=""
+TWITTER_ADS_CONSUMER_KEY=""
+TWITTER_ADS_CONSUMER_SECRET=""
+INSTAGRAM_APP_ID=""
+INSTAGRAM_APP_SECRET=""
+THREADS_APP_ID=""
+THREADS_APP_SECRET=""
+WHATSAPP_APP_ID=""
+WHATSAPP_APP_SECRET=""
+
+# Phone provider group.
+TELNYX_API_KEY=""
+STRIPE_WA_PHONE_PRICE_ID=""

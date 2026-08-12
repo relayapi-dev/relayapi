@@ -397,13 +397,18 @@ export function QueuePostCard({
                 onClick={() => onEdit(card._post)}
                 className="rounded p-1.5 hover:bg-accent transition-colors"
                 title="Edit"
+                aria-label="Edit post"
               >
                 <Pencil className="size-3.5 text-muted-foreground" />
               </button>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className="rounded p-1.5 hover:bg-accent transition-colors">
+                <button
+                  type="button"
+                  aria-label="Post actions"
+                  className="rounded p-1.5 hover:bg-accent transition-colors"
+                >
                   <MoreVertical className="size-3.5 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>
@@ -458,4 +463,3 @@ export function QueuePostCard({
     </div>
   );
 }
-

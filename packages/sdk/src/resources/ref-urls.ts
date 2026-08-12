@@ -57,12 +57,14 @@ export interface RefUrlCreateParams {
   /** Omission inherits the automation workspace in either policy mode. Without an automation parent, strict mode requires an explicit value. */
   workspace_id?: string;
   automation_id?: string | null;
+  destination: RefUrlDestination;
   enabled?: boolean;
 }
 
 export interface RefUrlUpdateParams {
   slug?: string;
   automation_id?: string | null;
+  destination?: RefUrlDestination;
   enabled?: boolean;
 }
 
@@ -79,9 +81,12 @@ export interface RefUrlResponse {
   workspace_id: string | null;
   slug: string;
   automation_id: string | null;
+  destination: RefUrlDestination;
+  public_url: string;
   uses: number;
   enabled: boolean;
   created_at: string;
+  updated_at: string;
 }
 
 export interface RefUrlListResponse {
@@ -92,4 +97,9 @@ export interface RefUrlListResponse {
 
 export interface RefUrlClickParams {
   contact_id: string;
+  idempotency_key: string;
 }
+
+export type RefUrlDestination =
+  | { type: 'https_url'; url: string }
+  | { type: 'landing_page'; landing_page_id: string };

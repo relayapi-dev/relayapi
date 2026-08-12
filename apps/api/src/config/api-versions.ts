@@ -8,6 +8,8 @@
 
 export const API_VERSIONS = {
 	// https://developers.facebook.com/docs/graph-api/changelog/versions/
+	// v26.0 is newest as of 2026-08-03. v25.0 remains supported through
+	// 2028-07-29 and is retained until the compatibility review is complete.
 	meta_graph: "v25.0",
 	// https://developers.facebook.com/docs/threads/
 	threads_graph: "v1.0",
@@ -22,12 +24,23 @@ export const API_VERSIONS = {
 	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning
 	// 202604 remains supported; latest verified 2026-07-15 is 202607.
 	linkedin: "202604",
+	// https://developers.google.com/google-ads/api/docs/release-notes
+	google_ads: "v25",
+	// https://business-api.tiktok.com/gateway/docs/index
+	tiktok_business: "v1.3",
+	// https://learn.microsoft.com/en-us/linkedin/marketing/versioning
+	linkedin_marketing: "202607",
+	// https://github.com/pinterest/api-description/tree/main/v5
+	pinterest_ads: "v5",
+	// https://docs.x.com/x-ads-api/campaign-management/reference
+	twitter_ads: "12",
 } as const;
 
 export const GRAPH_BASE = {
 	facebook: `https://graph.facebook.com/${API_VERSIONS.meta_graph}`,
 	instagram: `https://graph.instagram.com/${API_VERSIONS.meta_graph}`,
 	// https://developers.facebook.com/docs/threads/posts
-	// Current publishing examples use https://graph.threads.com/v1.0/...
-	threads: `https://graph.threads.com/${API_VERSIONS.threads_graph}`,
+	// Section "Create a Threads media container": current publishing examples
+	// use https://graph.threads.net/v1.0/... (verified 2026-08-03).
+	threads: `https://graph.threads.net/${API_VERSIONS.threads_graph}`,
 } as const;

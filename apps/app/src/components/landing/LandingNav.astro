@@ -2,6 +2,10 @@
 import { apis } from "../../lib/api-data";
 import { platforms } from "../../lib/platform-data";
 import { apiIconPaths, platformGlyph } from "../../lib/product-glyphs";
+import {
+	PUBLIC_ACCESS_HREF,
+	PUBLIC_ACCESS_LABEL,
+} from "../../lib/public-access";
 import Container from "./Container.astro";
 import { LANDING_LINKS } from "./data";
 
@@ -16,7 +20,7 @@ import { LANDING_LINKS } from "./data";
 
 // Short taglines for the Product mega menu (heroDescription is too long here).
 const API_TAGLINES: Record<string, string> = {
-	"posting-api": "Publish to 21 platforms in one call",
+	"posting-api": "Publish to 22 channels in one call",
 	"media-api": "Upload once — auto-formatted per platform",
 	"analytics-api": "Cross-platform metrics in one call",
 	"webhooks-api": "Real-time delivery notifications",
@@ -73,9 +77,9 @@ const panelFooter =
 				rel="noopener noreferrer">GitHub</a
 			>
 			<a
-				href={LANDING_LINKS.signup}
+				href={PUBLIC_ACCESS_HREF}
 				class="whitespace-nowrap rounded-full border border-landing-ink bg-landing-ink px-3.5 py-[7px] text-[14px] font-medium leading-none text-[#f3f1ea]! transition-[background-color,border-color,opacity] duration-150 hover:bg-landing-ink hover:opacity-[0.88]"
-				>Get started</a
+				>{PUBLIC_ACCESS_LABEL}</a
 			>
 			<button
 				type="button"
@@ -197,7 +201,7 @@ const panelFooter =
 						<p
 							class="px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[#9a968c]"
 						>
-							Publish to 21 platforms
+							Featured platform guides
 						</p>
 						<div class="grid grid-cols-4 gap-0.5">
 							{
@@ -222,8 +226,8 @@ const panelFooter =
 							}
 						</div>
 					</div>
-					<a href={LANDING_LINKS.pricing} class={panelFooter}>
-						One price for every platform — see pricing
+					<a href="https://docs.relayapi.dev/platforms" class={panelFooter}>
+						See all 22 publishing channels
 						<span aria-hidden="true">→</span>
 					</a>
 				</div>
@@ -280,7 +284,7 @@ const panelFooter =
 		<p
 			class="px-1 pb-2 pt-5 text-[11px] font-medium uppercase tracking-[0.14em] text-[#9a968c]"
 		>
-			Platforms
+			Platform guides
 		</p>
 		<div class="grid grid-cols-2 gap-0.5">
 			{

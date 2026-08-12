@@ -1,12 +1,14 @@
 import { z } from "@hono/zod-openapi";
+import { INBOX_CONVERSATION_TYPES, INBOX_DIRECTIONS } from "@relayapi/db";
 import { PlatformEnum } from "./common";
 
 // =====================
 // Conversation Feed
 // =====================
 
-export const ConversationTypeEnum = z.enum(["comment_thread", "dm", "review"]);
+export const ConversationTypeEnum = z.enum(INBOX_CONVERSATION_TYPES);
 export const ConversationStatusEnum = z.enum(["open", "archived", "snoozed"]);
+export const InboxDirectionEnum = z.enum(INBOX_DIRECTIONS);
 
 export const FeedConversationItem = z.object({
 	id: z.string().describe("Conversation ID"),
@@ -15,16 +17,25 @@ export const FeedConversationItem = z.object({
 	account_id: z.string().describe("Social account ID"),
 	participant_name: z.string().nullable().describe("Participant display name"),
 	participant_avatar: z.string().nullable().describe("Participant avatar URL"),
-	participant_metadata: z.any().nullable().optional().describe("Platform-specific participant data (e.g. Instagram profile)"),
+	participant_metadata: z
+		.any()
+		.nullable()
+		.optional()
+		.describe("Platform-specific participant data (e.g. Instagram profile)"),
 	status: ConversationStatusEnum.describe("Conversation status"),
-	assigned_user_id: z.string().nullable().describe("Assigned organization user ID"),
+	assigned_user_id: z
+		.string()
+		.nullable()
+		.describe("Assigned organization user ID"),
 	priority: z.string().nullable().describe("Priority level"),
 	labels: z.array(z.string()).describe("Labels"),
 	unread_count: z.number().describe("Unread message count"),
 	message_count: z.number().describe("Total message count"),
 	last_message_text: z.string().nullable().describe("Last message text"),
 	last_message_at: z.string().nullable().describe("Last message timestamp"),
-	last_message_direction: z.string().nullable().describe("Last message direction"),
+	last_message_direction: InboxDirectionEnum.nullable().describe(
+		"Last message direction",
+	),
 	created_at: z.string().describe("Created timestamp"),
 	updated_at: z.string().describe("Updated timestamp"),
 });
@@ -33,7 +44,9 @@ export const FeedQuery = z.object({
 	type: ConversationTypeEnum.optional().describe("Filter by conversation type"),
 	platform: PlatformEnum.optional().describe("Filter by platform"),
 	account_id: z.string().optional().describe("Filter by account ID"),
-	status: ConversationStatusEnum.optional().default("open").describe("Filter by status (defaults to open)"),
+	status: ConversationStatusEnum.optional()
+		.default("open")
+		.describe("Filter by status (defaults to open)"),
 	labels: z.string().optional().describe("Comma-separated list of labels"),
 	cursor: z.string().optional().describe("Pagination cursor"),
 	limit: z.coerce
@@ -73,8 +86,14 @@ export const BulkActionBody = z.object({
 		.describe("Conversation IDs (max 100)"),
 	params: z
 		.object({
-			labels: z.array(z.string()).optional().describe("Labels for label/unlabel actions"),
-			priority: z.string().optional().describe("Priority for set_priority action"),
+			labels: z
+				.array(z.string())
+				.optional()
+				.describe("Labels for label/unlabel actions"),
+			priority: z
+				.string()
+				.optional()
+				.describe("Priority for set_priority action"),
 		})
 		.optional()
 		.describe("Action-specific parameters"),
@@ -111,7 +130,9 @@ export const SearchMessageItem = z.object({
 	author_name: z.string().nullable().describe("Author name"),
 	author_avatar_url: z.string().nullable().describe("Author avatar URL"),
 	text: z.string().nullable().describe("Message text"),
-	direction: z.string().describe("Message direction (inbound/outbound)"),
+	direction: InboxDirectionEnum.describe(
+		"Message direction (inbound/outbound)",
+	),
 	attachments: z.any().describe("Message attachments"),
 	created_at: z.string().describe("Message timestamp"),
 });
@@ -140,7 +161,9 @@ export const StatsResponse = z.object({
 	total_conversations: z.number().describe("Total conversations"),
 	open_conversations: z.number().describe("Open conversations"),
 	unread_messages: z.number().describe("Unread messages"),
-	by_platform: z.record(z.string(), PlatformStats).describe("Stats per platform"),
+	by_platform: z
+		.record(z.string(), PlatformStats)
+		.describe("Stats per platform"),
 });
 
 // =====================
@@ -151,6 +174,23 @@ export const ConversationIdParam = z.object({
 	id: z.string().describe("Conversation ID"),
 });
 
+export const InboxMessagePlatformData = z
+	.object({
+		message_type: z
+			.enum(["story_mention", "post_mention", "story_reply", "share"])
+			.optional(),
+		story_id: z.string().optional(),
+		story_url: z.string().optional(),
+		whatsapp_group_id: z.string().optional(),
+		whatsapp_flow: z
+			.object({
+				name: z.string().optional(),
+				has_response: z.boolean(),
+			})
+			.optional(),
+	})
+	.passthrough();
+
 export const ConversationDetailMessage = z.object({
 	id: z.string().describe("Message ID"),
 	conversation_id: z.string().describe("Conversation ID"),
@@ -159,13 +199,18 @@ export const ConversationDetailMessage = z.object({
 	author_platform_id: z.string().nullable().describe("Author platform ID"),
 	author_avatar_url: z.string().nullable().describe("Author avatar URL"),
 	text: z.string().nullable().describe("Message text"),
-	direction: z.string().describe("Message direction"),
+	direction: InboxDirectionEnum.describe("Message direction"),
 	attachments: z.any().describe("Attachments"),
 	sentiment_score: z.number().nullable().describe("Sentiment score"),
 	classification: z.string().nullable().describe("Message classification"),
-	platform_data: z.any().describe("Platform-specific data"),
+	platform_data: InboxMessagePlatformData.nullable().describe(
+		"Platform-specific metadata. WhatsApp Flow submissions expose only response presence/name here; response values remain in the automation event.",
+	),
 	is_hidden: z.boolean().describe("Whether message is hidden"),
 	is_liked: z.boolean().describe("Whether message is liked"),
+	edit_revision: z.number().int().nonnegative(),
+	edited_at: z.string().datetime().nullable(),
+	provider_read_at: z.string().datetime().nullable(),
 	created_at: z.string().describe("Message timestamp"),
 });
 

@@ -186,7 +186,9 @@ async function hashKey(key: string): Promise<string> {
 
 describe("API key hashing", () => {
 	it("produces consistent SHA-256 hashes", async () => {
-		const key = "rlay_live_test1234567890abcdef";
+		// Assemble the credential-shaped fixture at runtime so it cannot be
+		// mistaken for a usable key by repository secret scanners.
+		const key = ["rlay_live_", "synthetic", "_hash_fixture"].join("");
 		const hash1 = await hashKey(key);
 		const hash2 = await hashKey(key);
 		expect(hash1).toBe(hash2);

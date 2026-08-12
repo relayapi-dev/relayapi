@@ -155,31 +155,64 @@ describe("ad-access-token", () => {
 		);
 	});
 
-	it("strips reserved Facebook ads metadata from API responses", () => {
+	it("strips reserved provider metadata from API responses", () => {
 		expect(
 			sanitizeSocialAccountMetadata({
 				meta_ads_user_access_token: "enc_user_token",
 				meta_ads_user_access_token_expires_at: "2026-06-01T12:00:00.000Z",
 				facebook_user_id: "user_123",
+				tiktok_verified_url_prefixes: ["https://media.example/"],
+				instance_url: "https://social.example",
+				pds_url: "https://pds.example",
+				waba_id: "waba_123",
+				publication_id: "publication_123",
+				default_location_id: "locations/connected",
 				default_page_id: "page_123",
 			}),
 		).toEqual({
+			instance_url: "https://social.example",
+			pds_url: "https://pds.example",
+			waba_id: "waba_123",
+			publication_id: "publication_123",
+			default_location_id: "locations/connected",
 			default_page_id: "page_123",
 		});
 	});
 
-	it("ignores reserved Facebook ads metadata keys in public metadata updates", () => {
+	it("ignores reserved provider metadata keys in public metadata updates", () => {
 		const metadata = mergePublicSocialAccountMetadata(
 			{
 				meta_ads_user_access_token: "enc_user_token",
 				meta_ads_user_access_token_expires_at: "2026-06-01T12:00:00.000Z",
 				facebook_user_id: "user_123",
+				tiktok_verified_url_prefixes: ["https://media.example/"],
+				instance_url: "https://social.example",
+				pds_url: "https://pds.example",
+				waba_id: "waba_123",
+				publication_id: "publication_123",
+				default_location_id: "locations/connected",
+				webhook_id: "discord_webhook_123",
+				guild_id: "discord_guild_123",
+				channel_id: "discord_channel_123",
+				team_id: "T123",
+				service_id: "B123",
 				default_page_id: "page_123",
 			},
 			{
 				meta_ads_user_access_token: "malicious_override",
 				meta_ads_user_access_token_expires_at: "2030-01-01T00:00:00.000Z",
 				facebook_user_id: "override",
+				tiktok_verified_url_prefixes: ["https://attacker.example/"],
+				instance_url: "https://attacker.example",
+				pds_url: "https://attacker.example",
+				waba_id: "waba_attacker",
+				publication_id: "publication_attacker",
+				default_location_id: "locations/other",
+				webhook_id: "discord_webhook_attacker",
+				guild_id: "discord_guild_attacker",
+				channel_id: "discord_channel_attacker",
+				team_id: "TATTACKER",
+				service_id: "BATTACKER",
 				default_page_id: "page_456",
 			},
 		);
@@ -188,6 +221,17 @@ describe("ad-access-token", () => {
 			meta_ads_user_access_token: "enc_user_token",
 			meta_ads_user_access_token_expires_at: "2026-06-01T12:00:00.000Z",
 			facebook_user_id: "user_123",
+			tiktok_verified_url_prefixes: ["https://media.example/"],
+			instance_url: "https://social.example",
+			pds_url: "https://pds.example",
+			waba_id: "waba_123",
+			publication_id: "publication_123",
+			default_location_id: "locations/connected",
+			webhook_id: "discord_webhook_123",
+			guild_id: "discord_guild_123",
+			channel_id: "discord_channel_123",
+			team_id: "T123",
+			service_id: "B123",
 			default_page_id: "page_456",
 		});
 	});

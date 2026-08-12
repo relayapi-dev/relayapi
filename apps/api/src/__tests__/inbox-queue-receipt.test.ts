@@ -60,7 +60,6 @@ function rawReceiptMessage() {
 		body: {
 			type: "raw_platform_webhook",
 			receipt_id: "iwe_missing",
-			received_at: "2026-07-13T00:00:00.000Z",
 		},
 		ack: () => {
 			acknowledgements++;

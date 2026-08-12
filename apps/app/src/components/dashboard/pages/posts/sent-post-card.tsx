@@ -341,7 +341,11 @@ export function SentPostCard({
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className="rounded p-1.5 hover:bg-accent transition-colors">
+                <button
+                  type="button"
+                  aria-label={`Actions for ${platformLabel} post`}
+                  className="rounded p-1.5 hover:bg-accent transition-colors"
+                >
                   <MoreVertical className="size-3.5 text-muted-foreground" />
                 </button>
               </DropdownMenuTrigger>

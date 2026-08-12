@@ -1,5 +1,7 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
+export * from './admin';
+
 export {
   BusinessProfile,
   type BusinessProfileRetrieveResponse,
@@ -37,13 +39,6 @@ export {
   type FlowUploadJsonParams,
   type FlowSendParams,
 } from './flows';
-export {
-  Groups,
-  type GroupCreateResponse,
-  type GroupListResponse,
-  type GroupCreateParams,
-  type GroupListParams,
-} from './groups';
 export {
   Templates,
   type TemplateCreateResponse,

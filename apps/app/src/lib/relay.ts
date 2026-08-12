@@ -3,14 +3,40 @@
  * Caches clients per org to avoid re-creating on every API route call.
  */
 
+import { LEGACY_CREDENTIAL_VERSION } from "@relayapi/db";
 import Relay from "@relayapi/sdk";
+import {
+	decryptDashboardCredential,
+	type DashboardCredentialPointer,
+} from "./dashboard-key-envelope";
+import {
+	cacheRelayClient,
+	getCachedRelayClient,
+} from "./relay-client-cache";
 
-// Cache SDK clients per organization member (survives across requests in the
-// same worker/process). Dashboard credentials are principal-bound, never shared
-// across every member of an organization.
-const clientCache = new Map<string, { client: Relay; expiresAt: number }>();
-const CACHE_TTL_MS = 60_000; // 1 minute
-const MAX_CACHED_CLIENTS = 256;
+export { clearClientCache } from "./relay-client-cache";
+
+function credentialVersionForUser(user: Record<string, unknown>): string {
+	return typeof user.credentialVersion === "string" && user.credentialVersion
+		? user.credentialVersion
+		: LEGACY_CREDENTIAL_VERSION;
+}
+
+export async function getDashboardCredentialPointer(
+	kv: { get: (key: string) => Promise<string | null> },
+	orgId: string,
+	userId: string,
+	secret: string,
+): Promise<DashboardCredentialPointer | null> {
+	const pointerName = `dashboard-key:${orgId}:${userId}`;
+	const envelope = await kv.get(pointerName);
+	if (!envelope) return null;
+	try {
+		return await decryptDashboardCredential(envelope, secret, pointerName);
+	} catch {
+		return null;
+	}
+}
 
 /**
  * Read the raw dashboard API key from KV for a given org.
@@ -19,12 +45,11 @@ export async function getDashboardApiKey(
 	kv: { get: (key: string) => Promise<string | null> },
 	orgId: string,
 	userId: string,
+	secret: string,
 ): Promise<string | null> {
-	return kv.get(`dashboard-key:${orgId}:${userId}`);
-}
-
-function clientCacheKey(orgId: string, userId: string): string {
-	return `${orgId}:${userId}`;
+	return (
+		await getDashboardCredentialPointer(kv, orgId, userId, secret)
+	)?.apiKey ?? null;
 }
 
 /**
@@ -44,7 +69,7 @@ export function createRelayClient(apiKey: string, baseURL?: string): Relay {
  * Returns null if no dashboard key is available.
  */
 export async function getRelayClient(
-  locals: App.Locals,
+	locals: App.Locals,
 	apiBaseURL?: string,
 ): Promise<Relay | null> {
 	const org = locals.organization;
@@ -53,46 +78,29 @@ export async function getRelayClient(
 
 	const orgId = org.id as string;
 	const userId = user.id as string;
+	const credentialVersion = credentialVersionForUser(user);
 	const now = Date.now();
-	const cacheKey = clientCacheKey(orgId, userId);
 
-	const cached = clientCache.get(cacheKey);
-	if (cached && cached.expiresAt > now) return cached.client;
-	if (cached) clientCache.delete(cacheKey);
+	const cached = getCachedRelayClient(
+		orgId,
+		userId,
+		credentialVersion,
+		now,
+	);
+	if (cached) return cached;
 
 	const kv = locals.kv;
 	if (!kv) return null;
 
-	const apiKey = await getDashboardApiKey(kv, orgId, userId);
-	if (!apiKey) return null;
+	const pointer = await getDashboardCredentialPointer(
+		kv,
+		orgId,
+		userId,
+		locals.dashboardCredentialSecret,
+	);
+	if (!pointer || pointer.credentialVersion !== credentialVersion) return null;
 
-	const client = createRelayClient(apiKey, apiBaseURL);
-	// Worker isolates can serve many principals over their lifetime. Prune only
-	// on a cache miss so the hot path remains a single Map lookup, then cap the
-	// remaining live entries to keep module-global memory bounded.
-	if (clientCache.size >= MAX_CACHED_CLIENTS) {
-		for (const [key, entry] of clientCache) {
-			if (entry.expiresAt <= now) clientCache.delete(key);
-		}
-	}
-	while (clientCache.size >= MAX_CACHED_CLIENTS) {
-		const oldestKey = clientCache.keys().next().value;
-		if (oldestKey === undefined) break;
-		clientCache.delete(oldestKey);
-	}
-	clientCache.set(cacheKey, { client, expiresAt: now + CACHE_TTL_MS });
+	const client = createRelayClient(pointer.apiKey, apiBaseURL);
+	cacheRelayClient(orgId, userId, credentialVersion, client, now);
 	return client;
-}
-
-/**
- * Clear the cached SDK client for an org (e.g. after dashboard key rotation).
- */
-export function clearClientCache(orgId: string, userId?: string): void {
-	if (userId) {
-		clientCache.delete(clientCacheKey(orgId, userId));
-		return;
-	}
-	for (const key of clientCache.keys()) {
-		if (key.startsWith(`${orgId}:`)) clientCache.delete(key);
-	}
 }

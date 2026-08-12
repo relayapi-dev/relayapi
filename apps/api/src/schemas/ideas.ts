@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { IDEA_MEDIA_TYPES } from "@relayapi/db";
 import { paginatedResponse } from "./common";
 import { TagResponse } from "./tags";
 
@@ -17,7 +18,7 @@ export const IdeaMediaResponse = z.object({
 		.url()
 		.nullable()
 		.describe("Durable preview URL when available"),
-	type: z.enum(["image", "video", "gif", "document"]).describe("Media type"),
+	type: z.enum(IDEA_MEDIA_TYPES).describe("Media type"),
 	alt: z.string().nullable().describe("Alt text"),
 	position: z.number().int().describe("Ordering position"),
 	status: z
@@ -187,9 +188,29 @@ export const IdeaListResponse = paginatedResponse(IdeaResponse);
 
 // ── Activity ─────────────────────────────────────────────────────────────────
 
+export const IdeaActorResponse = z.object({
+	id: z.string().describe("Stable organization principal ID"),
+	kind: z.enum(["member", "service"]).describe("Principal kind"),
+	user_id: z
+		.string()
+		.nullable()
+		.describe("Current user ID for a live member principal"),
+	name: z
+		.string()
+		.nullable()
+		.describe("Current member or service display name"),
+	image: z
+		.string()
+		.nullable()
+		.describe("Current member avatar URL, if retained"),
+});
+
 export const IdeaActivityResponse = z.object({
 	id: z.string().describe("Activity ID"),
-	actor_id: z.string().describe("User who performed the action"),
+	actor_id: z.string().describe("Stable principal that performed the action"),
+	actor: IdeaActorResponse.nullable().describe(
+		"Resolved principal display data; null after exceptional redaction",
+	),
 	action: z
 		.enum([
 			"created",
@@ -230,19 +251,10 @@ export const IdeaCommentResponse = z.object({
 	id: z.string().describe("Comment ID"),
 	author_id: z
 		.string()
-		.describe(
-			"Actor ID who authored the comment. May be an API key ID (prefix 'key_') or a user ID.",
-		),
-	author: z
-		.object({
-			id: z.string().describe("User ID"),
-			name: z.string().nullable().describe("Display name"),
-			image: z.string().nullable().describe("Avatar URL"),
-		})
-		.nullable()
-		.describe(
-			"Resolved user info for the author. Null if the actor cannot be mapped to a user.",
-		),
+		.describe("Stable organization principal that authored the comment"),
+	author: IdeaActorResponse.nullable().describe(
+		"Resolved principal display data; null after exceptional redaction",
+	),
 	content: z.string().describe("Comment body"),
 	parent_id: z.string().nullable().describe("Parent comment ID (for replies)"),
 	created_at: z.string().datetime().describe("Creation timestamp"),

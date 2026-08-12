@@ -1,3 +1,5 @@
+import { fetchPublicUrl } from "../lib/fetch-public-url";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 // =============================================================================
 // IMPORTANT: Before modifying ANY config in this file, you MUST:
 //
@@ -13,6 +15,10 @@
 // 5. Verify every platform config, not just the one being changed.
 //
 // See CLAUDE.md "OAuth System Rules" for full details.
+// Full config table and centralized API-version pins reverified against each
+// platform's official documentation on 2026-08-12. TikTok draft uploads,
+// Threads location tagging, and the least-privilege social-action scopes were
+// added during this review.
 // =============================================================================
 
 import type { Platform } from "../schemas/common";
@@ -35,8 +41,12 @@ export interface OAuthConfig {
 	tokenExchangeUsesBasicAuth?: boolean;
 	/** Provider-specific OAuth client identifier field (TikTok uses client_key). */
 	clientIdParam?: "client_id" | "client_key";
-	/** Extra query parameters to include in the authorization URL */
+	/** Extra query parameters to include in the authorization URL. */
 	extraAuthParams?: Record<string, string>;
+	/** Extra form fields required by the provider during authorization-code exchange. */
+	extraTokenParams?: Record<string, string>;
+	/** Revalidate public DNS and reject redirects for state-derived endpoints. */
+	requiresPublicEndpointValidation?: boolean;
 }
 
 export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
@@ -49,6 +59,15 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// redirect_uri, code_verifier (confidential clients authenticate with Basic Auth).
 	// Requires PKCE (code_challenge S256) and HTTP Basic Auth for token exchange.
 	// offline.access scope required for refresh tokens (access tokens expire in 2h without it).
+	// Social action contracts:
+	// https://docs.x.com/x-api/posts/likes/quickstart/manage-likes
+	// Sections: "Like a Post" and "Unlike a Post". Like: POST
+	// https://api.x.com/2/users/{id}/likes with JSON field tweet_id. Unlike:
+	// DELETE https://api.x.com/2/users/{id}/likes/{tweet_id}. Requires like.write.
+	// https://docs.x.com/x-api/posts/hide-replies/quickstart
+	// Sections: "Hide a reply" and "Unhide a reply". PUT
+	// https://api.x.com/2/tweets/{tweet_id}/hidden with JSON field hidden.
+	// Requires tweet.moderate.write (plus existing tweet.read and users.read).
 	twitter: {
 		authUrl: "https://x.com/i/oauth2/authorize",
 		tokenUrl: "https://api.x.com/2/oauth2/token",
@@ -56,9 +75,11 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		scopes: [
 			"tweet.read",
 			"tweet.write",
+			"tweet.moderate.write",
 			"users.read",
 			"offline.access",
 			"bookmark.write",
+			"like.write",
 			"follows.write",
 			"media.write",
 			"dm.read",
@@ -71,14 +92,16 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	},
 	// Facebook — Manual Login Flow (OAuth 2.0)
 	// https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow
-	// Section: "Manually Build a Login Flow"
+	// Sections: "Invoking the Login Dialog and Setting the Redirect URL" and
+	// "Exchanging Code for an Access Token" (reverified 2026-08-03).
 	// Auth: GET https://www.facebook.com/v{version}/dialog/oauth with client_id,
 	// redirect_uri, state, scope, response_type=code.
 	// Token: GET https://graph.facebook.com/v{version}/oauth/access_token with
 	// client_id, redirect_uri, client_secret, code.
 	// Permissions reference: https://developers.facebook.com/docs/permissions
 	// Graph API versions: https://developers.facebook.com/docs/graph-api/changelog/versions/
-	// Current table verified 2026-07-15: v25.0 is the newest listed stable version.
+	// Current table verified 2026-08-03: v26.0 is newest. Runtime remains on
+	// supported v25.0 (supported through 2028-07-29) pending compatibility review.
 	// Long-lived token exchange: https://developers.facebook.com/docs/facebook-login/guides/access-tokens/get-long-lived
 	// Uses fb_exchange_token grant type. Tokens last 60 days.
 	// Note: read_insights requires App Review approval.
@@ -88,6 +111,17 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// ads_read: read ad insights/metrics, Conversions API access
 	// pages_manage_ads: page-level ad management, boosting posts as ads (requires App Review)
 	// pages_messaging: page conversations in Messenger (requires App Review)
+	// Page engagement: https://developers.facebook.com/docs/pages-api/posts/
+	// Sections: "Permissions" and "Update Page Posts". Update: POST
+	// https://graph.facebook.com/v{version}/{page-post-id} with field message.
+	// Likes: https://developers.facebook.com/docs/graph-api/reference/object/likes/
+	// Sections: "Creating" and "Delete". POST or DELETE
+	// https://graph.facebook.com/v{version}/{object-id}/likes; requires a Page
+	// access token and pages_manage_engagement.
+	// Comments: https://developers.facebook.com/docs/graph-api/reference/comment/
+	// Section: "Updating". POST https://graph.facebook.com/v{version}/{comment-id}
+	// with field message or is_hidden. Page comment engagement uses
+	// pages_manage_engagement.
 	// All three require App Review + Advanced Access for production use.
 	facebook: {
 		authUrl: `https://www.facebook.com/${FB_V}/dialog/oauth`,
@@ -98,6 +132,7 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 			"pages_read_engagement",
 			"pages_show_list",
 			"pages_read_user_content",
+			"pages_manage_engagement",
 			"read_insights",
 			"pages_messaging",
 			"pages_manage_metadata",
@@ -177,7 +212,13 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// client_secret, code, grant_type=authorization_code, redirect_uri.
 	// Uses client_key (not client_id) as the parameter name.
 	// Scopes: https://developers.tiktok.com/doc/tiktok-api-scopes
-	// video.publish = direct post; video.upload = draft upload. Access tokens expire in 24h, refresh in 365 days.
+	// Draft upload: https://developers.tiktok.com/doc/content-posting-api-reference-upload-video/
+	// Section: "Initialize Video Upload"
+	// Draft: POST https://open.tiktokapis.com/v2/post/publish/inbox/video/init/
+	// with Authorization, Content-Type, and source_info fields source, video_size,
+	// chunk_size, total_chunk_count, or video_url. Requires scope video.upload.
+	// video.publish = direct post; video.upload = inbox draft upload. Access tokens
+	// expire in 24h, refresh in 365 days.
 	tiktok: {
 		authUrl: "https://www.tiktok.com/v2/auth/authorize/",
 		tokenUrl: "https://open.tiktokapis.com/v2/oauth/token/",
@@ -185,6 +226,7 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		scopes: [
 			"user.info.basic",
 			"video.publish",
+			"video.upload",
 			"video.list",
 			"user.info.stats",
 		],
@@ -234,6 +276,10 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		getClientId: (env) => env.PINTEREST_APP_ID,
 		getClientSecret: (env) => env.PINTEREST_APP_SECRET,
 		tokenExchangeUsesBasicAuth: true,
+		// Official docs require this for apps created before 2025-09-25 and
+		// instruct newer apps to disregard it. Sending it keeps both app cohorts on
+		// Pinterest's indefinitely refreshable 60-day token rotation.
+		extraTokenParams: { continuous_refresh: "true" },
 	},
 	// Reddit — OAuth2 Authorization Code Flow
 	// https://github.com/reddit-archive/reddit/wiki/OAuth2
@@ -244,54 +290,79 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 	// grant_type=authorization_code, code, redirect_uri.
 	// Token exchange requires HTTP Basic Auth (username=client_id, password=client_secret).
 	// duration=permanent for refresh tokens. Scopes: https://www.reddit.com/api/v1/scopes
+	// Social actions: https://www.reddit.com/dev/api/oauth#POST_api_editusertext
+	// and https://www.reddit.com/dev/api/oauth#POST_api_vote
+	// Edit: POST https://oauth.reddit.com/api/editusertext with api_type=json,
+	// thing_id, and text; requires edit. Vote: POST
+	// https://oauth.reddit.com/api/vote with id and dir; requires vote.
 	reddit: {
 		authUrl: "https://www.reddit.com/api/v1/authorize",
 		tokenUrl: "https://www.reddit.com/api/v1/access_token",
 		profileUrl: "https://oauth.reddit.com/api/v1/me",
-		scopes: ["identity", "submit", "read", "mysubreddits", "flair"],
+		scopes: [
+			"identity",
+			"submit",
+			"edit",
+			"vote",
+			"read",
+			"mysubreddits",
+			"flair",
+		],
 		getClientId: (env) => env.REDDIT_CLIENT_ID,
 		getClientSecret: (env) => env.REDDIT_CLIENT_SECRET,
 		tokenExchangeUsesBasicAuth: true,
 		extraAuthParams: { duration: "permanent" },
 	},
-	// Threads — Threads API OAuth (verified 2026-07-15)
+	// Threads — Threads API OAuth (reverified 2026-08-10)
 	// https://developers.facebook.com/docs/threads/get-started/get-access-tokens-and-permissions
 	// Sections: "Authorization Window" and "Short-Lived Token Exchange"
-	// Auth: GET https://threads.com/oauth/authorize with client_id, redirect_uri,
+	// Auth: GET https://threads.net/oauth/authorize with client_id, redirect_uri,
 	// scope, response_type=code, state.
-	// Token: POST https://graph.threads.com/oauth/access_token with client_id,
+	// Token: POST https://graph.threads.net/oauth/access_token with client_id,
 	// client_secret, grant_type=authorization_code, redirect_uri, code.
 	// Long-lived token exchange: https://developers.facebook.com/docs/threads/get-started/long-lived-tokens
 	// Section "Get a Long-Lived Token" still documents GET
 	// https://graph.threads.net/access_token with grant_type=th_exchange_token,
 	// client_secret, and access_token. Tokens last 60 days.
-	// Scopes: threads_basic (required), threads_content_publish, threads_read_replies, threads_manage_replies, threads_manage_insights
+	// Location tagging: https://developers.facebook.com/documentation/threads/create-posts/location-tagging
+	// Sections: "Permissions", "Search", and "Tagging"
+	// Search: GET https://graph.threads.net/v1.0/location_search with access_token
+	// and q, or latitude and longitude. Tag: POST
+	// https://graph.threads.net/v1.0/{threads-user-id}/threads with media_type,
+	// text, access_token, and location_id. Both require threads_location_tagging.
+	// Scopes: threads_basic (required), threads_content_publish,
+	// threads_manage_insights, threads_location_tagging.
 	threads: {
-		authUrl: "https://threads.com/oauth/authorize",
-		tokenUrl: "https://graph.threads.com/oauth/access_token",
+		authUrl: "https://threads.net/oauth/authorize",
+		tokenUrl: "https://graph.threads.net/oauth/access_token",
 		profileUrl: `${GRAPH_BASE.threads}/me?fields=id,username,name,threads_profile_picture_url`,
 		scopes: [
 			"threads_basic",
 			"threads_content_publish",
 			"threads_manage_insights",
+			"threads_location_tagging",
 		],
 		getClientId: (env) => env.THREADS_APP_ID,
 		getClientSecret: (env) => env.THREADS_APP_SECRET,
 	},
-	// Snapchat — Marketing API OAuth 2.0
-	// https://developers.snap.com/api/marketing-api/Ads-API/authentication
-	// Section: "Authentication"
+	// Snapchat — Public Profile API Creator OAuth (reverified 2026-08-09)
+	// https://developers.snap.com/marketing-api/Public-Profile-API/GetStarted
+	// Sections: "OAuth Set Up Steps" and "Generating an Access Token"
 	// Auth: GET https://accounts.snapchat.com/login/oauth2/authorize with
-	// client_id, redirect_uri, response_type=code, scope, state.
+	// response_type=code, client_id, redirect_uri, scope=snapchat-profile-api,
+	// and state.
 	// Token: POST https://accounts.snapchat.com/login/oauth2/access_token with
 	// grant_type, client_id, client_secret, code, redirect_uri.
+	// Profile: GET https://businessapi.snapchat.com/v1/public_profiles/my_profile
+	// with Authorization: Bearer <ACCESS_TOKEN>.
 	// Access tokens expire in 3600s (60 min). Refresh tokens available.
-	// Scopes: snapchat-marketing-api, snapchat-offline-conversions-api, snapchat-profile-api
+	// Public Profile API is allowlist-only; client IDs must be approved by Snap.
 	snapchat: {
 		authUrl: "https://accounts.snapchat.com/login/oauth2/authorize",
 		tokenUrl: "https://accounts.snapchat.com/login/oauth2/access_token",
-		profileUrl: "https://adsapi.snapchat.com/v1/me",
-		scopes: ["snapchat-marketing-api"],
+		profileUrl:
+			"https://businessapi.snapchat.com/v1/public_profiles/my_profile",
+		scopes: ["snapchat-profile-api"],
 		getClientId: (env) => env.SNAPCHAT_CLIENT_ID,
 		getClientSecret: (env) => env.SNAPCHAT_CLIENT_SECRET,
 	},
@@ -312,14 +383,22 @@ export const OAUTH_CONFIGS: Partial<Record<Platform, OAuthConfig>> = {
 		getClientSecret: (env) => env.GOOGLE_CLIENT_SECRET,
 		extraAuthParams: { access_type: "offline", prompt: "consent" },
 	},
-	// Mastodon — Standard OAuth 2.0 (instance-specific endpoints)
-	// https://docs.joinmastodon.org/client/authorized/
-	// Section: "Logging in with an account" → "Authorize the user" and "Obtain the token"
+	// Mastodon — Standard OAuth 2.0 (instance-specific endpoints; reverified 2026-08-12)
+	// https://docs.joinmastodon.org/methods/oauth/
+	// Sections: "Authorize a user", "Obtain a token", and
+	// "Discover OAuth Server Configuration"
 	// Auth: GET {instance}/oauth/authorize with client_id, scope, redirect_uri,
-	// response_type=code. Token: POST {instance}/oauth/token with grant_type,
+	// response_type=code, and state. Token: POST {instance}/oauth/token with grant_type,
 	// client_id, client_secret, redirect_uri, code (multipart form in official curl).
-	// The URLs below use mastodon.social as the default; the connect flow
-	// should replace the base URL with the user's chosen instance.
+	// Registration: https://docs.joinmastodon.org/methods/apps/#create-an-application
+	// POST {instance}/api/v1/apps with client_name, redirect_uris, scopes, website.
+	// The connect flow requires instance_url, validates public HTTPS resolution,
+	// discovers same-origin endpoints, and dynamically registers a client. The
+	// callback repeats public-DNS validation for both the token and profile URLs
+	// and rejects redirects so registration-time validation cannot be bypassed by
+	// rebinding or a cross-origin 3xx. The values below are retained only for
+	// legacy test/config compatibility and are never selected by the public
+	// Mastodon start flow.
 	// Scopes: https://docs.joinmastodon.org/api/oauth-scopes/
 	// Granular scopes recommended: read:accounts, write:statuses, write:media, etc.
 	mastodon: {
@@ -470,6 +549,7 @@ export async function exchangeCode(
 		code,
 		redirect_uri: redirectUrl,
 		grant_type: "authorization_code",
+		...config.extraTokenParams,
 	};
 
 	// PKCE: include code_verifier
@@ -496,18 +576,26 @@ export async function exchangeCode(
 
 	// OAuth 2.0 Token Exchange: Exchange authorization code for access/refresh tokens
 	// Each platform's token endpoint is defined in OAUTH_CONFIGS above
-	const response = await fetch(config.tokenUrl, {
+	const tokenRequest = {
 		method: "POST",
 		headers,
 		body: body.toString(),
-	});
+	};
+	const response = config.requiresPublicEndpointValidation
+		? await fetchPublicUrl(config.tokenUrl, {
+				...tokenRequest,
+				timeout: 10_000,
+				timeoutThroughBody: true,
+				maxBytes: 256 * 1024,
+			})
+		: await fetch(config.tokenUrl, tokenRequest);
 
 	if (!response.ok) {
-		const errorText = await response.text();
+		const errorText = await readProviderText(response);
 		throw new Error(`Token exchange failed: ${response.status} ${errorText}`);
 	}
 
-	return response.json() as Promise<{
+	return readProviderJson(response) as Promise<{
 		access_token: string;
 		refresh_token?: string;
 		expires_in?: number;

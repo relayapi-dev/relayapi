@@ -354,13 +354,18 @@ export function TeamPage() {
                   href={`mailto:${user.email}`}
                   className="rounded-md p-1.5 hover:bg-accent transition-colors"
                   title={`Email ${user.email}`}
+                  aria-label={`Email ${user.email}`}
                 >
                   <Mail className="size-4 text-muted-foreground" />
                 </a>
                 {member.role !== "owner" && canManageMembers && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button type="button" className="rounded-md p-1.5 hover:bg-accent transition-colors">
+                      <button
+                        type="button"
+                        aria-label={`Manage ${user.name || user.email}`}
+                        className="rounded-md p-1.5 hover:bg-accent transition-colors"
+                      >
                         {(removingMemberId === member.id || updatingRoleId === member.id) ? (
                           <Loader2 className="size-4 animate-spin text-muted-foreground" />
                         ) : (

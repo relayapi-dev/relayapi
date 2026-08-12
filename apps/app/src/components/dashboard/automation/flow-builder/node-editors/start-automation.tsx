@@ -24,6 +24,8 @@ interface AutomationRow {
 	id: string;
 	name: string;
 	status: string;
+	channel: string;
+	workspace_id: string | null;
 }
 
 interface ListResponse {
@@ -34,10 +36,14 @@ export function StartAutomationEditor({
 	config,
 	onChange,
 	automationId,
+	automationChannel,
+	automationWorkspaceId,
 }: {
 	config: Record<string, unknown>;
 	onChange: (next: Record<string, unknown>) => void;
 	automationId: string;
+	automationChannel: string;
+	automationWorkspaceId: string | null;
 }) {
 	const cfg = config as StartAutomationConfig;
 	const patch = (p: Partial<StartAutomationConfig>) =>
@@ -69,7 +75,12 @@ export function StartAutomationEditor({
 		};
 	}, []);
 
-	const options = rows.filter((r) => r.id !== automationId);
+	const options = rows.filter(
+		(row) =>
+			row.id !== automationId &&
+			row.channel === automationChannel &&
+			row.workspace_id === automationWorkspaceId,
+	);
 	const selectedMissing =
 		!!cfg.target_automation_id &&
 		!options.some((r) => r.id === cfg.target_automation_id);
@@ -149,7 +160,7 @@ export function StartAutomationEditor({
 			<AdvancedDisclosure>
 				<Field
 					label="Entrypoint ID"
-					description="Optional — start at a specific entrypoint of the target automation."
+					description="Optional attribution for the child run. The target still starts at its graph root."
 				>
 					<input
 						type="text"

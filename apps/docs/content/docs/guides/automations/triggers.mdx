@@ -7,13 +7,13 @@ icon: Zap
 An automation reacts to two kinds of inputs:
 
 - **Entrypoints** — per-flow triggers. Each flow can have many. An event on the channel is matched against all active entrypoints for that channel and the most specific one enrolls the contact.
-- **Bindings** — per-account attachments. One flow gets bound to a channel surface (default reply, welcome message, main menu, etc.). Bindings fire when no entrypoint matches, filling in the "otherwise" slot.
+- **Bindings** — per-account runtime attachments. Default and welcome bindings provide fallback inbound behavior; Get Started, persistent menus, and ice breakers synchronize provider profile surfaces and route their postbacks into a flow.
 
 Entrypoints live under an automation and are managed in the flow builder. Bindings live under a social account and are managed in the account detail page.
 
 ## Entrypoints
 
-### The 15 kinds
+### The 14 kinds
 
 | Kind | IG | FB | WA | TG |
 |---|:-:|:-:|:-:|:-:|
@@ -23,9 +23,8 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
 | `story_mention` | ✓ | ✓ | — | — |
 | `live_comment` | ✓ | ✓ | — | — |
 | `ad_click` | ✓ | ✓ | — | — |
-| `ref_link_click` | ✓ | ✓ | — | — |
+| `ref_link_click` | ✓ | ✓ | ✓ | ✓ |
 | `share_to_dm` | ✓ | — | — | — |
-| `follow` | ✓ | — | — | — |
 | `schedule` | ✓ | ✓ | ✓ | ✓ |
 | `field_changed` | ✓ | ✓ | ✓ | ✓ |
 | `tag_applied` | ✓ | ✓ | ✓ | ✓ |
@@ -49,6 +48,7 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
   "filters": { "all": [{ "field": "contact.tags", "op": "contains", "value": "vip" }] },
   "allow_reentry": true,
   "reentry_cooldown_min": 60,
+  "daily_cap": 500,
   "priority": 100,
   "specificity": 30
 }
@@ -56,13 +56,14 @@ Entrypoints live under an automation and are managed in the flow builder. Bindin
 
 Fields:
 
-- **kind** — one of the 15 above.
+- **kind** — one of the 14 above.
 - **channel** — must match the parent automation's channel.
 - **social_account_id** — scopes the entrypoint to a specific account; leave null for all accounts on the channel.
 - **config** — kind-specific (see below).
 - **filters** — segment / tag / field predicates evaluated against the contact before enrolling.
 - **allow_reentry** (default `true`) — whether the same contact can re-enter.
 - **reentry_cooldown_min** (default `60`) — cooldown after run completion before a re-entry is allowed.
+- **daily_cap** (default unlimited) — maximum atomic admissions for this entrypoint per UTC day.
 - **priority** (default `100`, lower wins in ties).
 - **specificity** — auto-derived from the kind + config; higher wins.
 
@@ -73,16 +74,19 @@ Fields:
 // Omit `keywords` to match any inbound DM on the channel/account. Specify
 // `keywords` with `match_mode: "exact"` or `"regex"` for a specificity=30
 // match — the canonical replacement for the retired `keyword` kind.
-{ "keywords": ["pizza", "order"], "match_mode": "exact | contains | regex", "case_sensitive": false }
+{ "keywords": ["pizza", "order"], "match_mode": "exact", "case_sensitive": false, "first_message_only": false }
 
 // comment_created
-{ "post_ids": ["17895..."], "keywords": ["link"], "include_replies": false }
+{ "post_ids": ["17895..."], "keywords": ["link"], "match_mode": "contains", "case_sensitive": false, "include_replies": false }
 
-// story_reply
-{ "story_ids": ["17895..."], "keywords": ["promo"] }
+// story_reply / story_mention
+{ "story_ids": ["17895..."], "keywords": ["promo"], "match_mode": "contains", "case_sensitive": false }
 
-// schedule
-{ "cron": "0 9 * * 1", "timezone": "Europe/Rome" }
+// live_comment
+{ "keywords": ["question"], "match_mode": "contains", "case_sensitive": false }
+
+// schedule — supported forms: daily M H, hourly, or every N minutes
+{ "cron": "0 9 * * *", "timezone": "Europe/Rome" }
 
 // field_changed
 { "field_keys": ["stage"], "from": "new", "to": "qualified" }
@@ -96,8 +100,13 @@ Fields:
 // conversion_event
 { "event_names": ["purchase"] }
 
+// share_to_dm
+{}
+
 // webhook_inbound — see dedicated section below
 ```
+
+An active schedule entrypoint requires at least one enumerable filter in `all` or `any`: `contact.tags` or `contact.segments` with `op: "contains"`. You may save a paused schedule while configuring it, but activation rejects `none` groups and arbitrary contact fields instead of creating a job that can only fail at runtime.
 
 ### Conflict resolution
 
@@ -130,6 +139,8 @@ For every incoming match, the matcher checks:
 
 The cooldown clock starts at the prior run's `completed_at`.
 
+Admission is transactional: active-run, re-entry, cooldown, daily-cap, and run creation checks execute under one contact/automation lock, so concurrent deliveries cannot bypass them.
+
 ### Contact pause
 
 A contact can be paused per-automation or globally via `automation_contact_controls`. If any matching pause row exists (with `paused_until IS NULL` or still in the future), enrollment is skipped. See [Runs](./runs) for the contact-controls API.
@@ -147,15 +158,15 @@ A contact can be paused per-automation or globally via `automation_contact_contr
 
 ## Bindings
 
-Bindings attach a flow to a "channel surface" on a specific social account. There are 5 types.
+Bindings attach a flow to a runtime or provider-owned surface on a specific social account. There are five supported types.
 
-| Type | Channels | v1 status |
+| Type | Channels | Availability |
 |---|---|---|
-| `default_reply` | IG, FB, WA, TG | **Wired live** — fires when an inbound event matches no entrypoint |
-| `welcome_message` | IG, FB, WA, TG | **Wired live** — fires on the contact's first-ever inbound on the channel |
-| `conversation_starter` | FB only | **Stubbed** — storage + UI only; platform sync via `messenger_profile.ice_breakers` ships in v1.1 |
-| `main_menu` | FB, IG | **Stubbed** — storage + UI only; platform sync via `messenger_profile.persistent_menu` ships in v1.1 |
-| `ice_breaker` | WA only | **Stubbed** — storage + UI only; WhatsApp platform sync ships in v1.1 |
+| `default_reply` | IG, FB, WA, TG | Fires when an inbound event matches no entrypoint |
+| `welcome_message` | IG, FB, WA, TG | Fires on the contact's first-ever inbound on the channel |
+| `get_started` | FB | Synchronizes the Messenger Get Started payload; its postback starts the flow |
+| `main_menu` | IG, FB | Synchronizes the provider persistent menu; postback items start the flow |
+| `ice_breaker` | IG | Synchronizes up to four Instagram ice-breaker questions; postbacks start the flow |
 
 ### Shape
 
@@ -168,35 +179,46 @@ Bindings attach a flow to a "channel surface" on a specific social account. Ther
   "automation_id": "auto_...",
   "config": {},
   "status": "active",
-  "last_synced_at": null,
+  "desired_active": true,
+  "sync_revision": 3,
+  "last_synced_revision": 3,
+  "sync_attempts": 1,
+  "last_synced_at": "2026-07-18T10:00:00.000Z",
   "sync_error": null
 }
 ```
 
 Constraint: **one binding per `(social_account_id, binding_type)`**. Binding the same flow to multiple surfaces means creating multiple binding rows.
 
-### Config per type
+### Config
 
 ```json
 // default_reply / welcome_message
 {}
-// automation_id alone is sufficient
 
-// conversation_starter
-{ "starters": [{ "label": "Get started", "payload": "start" }] }  // max 4
+// get_started (Facebook)
+{ "payload": "GET_STARTED" }
 
-// main_menu
+// main_menu (Instagram/Facebook)
 {
   "items": [
-    { "label": "Shop", "action": "url", "payload": "https://…" },
-    { "label": "Contact", "action": "postback", "payload": "contact" }
+    { "label": "Help", "action": "postback", "payload": "HELP" },
+    { "label": "Website", "action": "url", "url": "https://example.com" }
+  ],
+  "composer_input_disabled": false
+}
+
+// ice_breaker (Instagram; maximum four)
+{
+  "questions": [
+    { "question": "What are your hours?", "payload": "HOURS" }
   ]
 }
-// max 3 levels deep, supports sub_items
-
-// ice_breaker
-{ "questions": [{ "question": "How do I order?", "payload": "faq_order" }] }
 ```
+
+Provider-synchronized bindings move through `pending_sync` before becoming `active` or `paused`. Writes increment `sync_revision`; queue workers apply only that exact revision, and a reconciler re-enqueues revisions that have not been acknowledged. `sync_failed` retains the provider error for repair. Deleting a provider binding first removes its provider profile field and only then removes the local row.
+
+Facebook requires an active, synchronized `get_started` binding before a `main_menu` can synchronize. Facebook menus support at most three top-level items; Instagram menus support up to 20.
 
 ### Endpoints
 
@@ -208,7 +230,7 @@ Constraint: **one binding per `(social_account_id, binding_type)`**. Binding the
 | `PATCH` | `/v1/automation-bindings/{id}` | Update |
 | `DELETE` | `/v1/automation-bindings/{id}` | Remove |
 
-Stubbed binding types default to `status = "pending_sync"` at create time — they're stored but not yet pushed to the platform.
+Create and update requests accept only `status = "active" | "paused"`.
 
 ## Runtime match algorithm
 
@@ -225,6 +247,8 @@ If step 5 yielded nothing, the matcher falls through to bindings:
 
 - **welcome_message** — fires only on the contact's first-ever inbound on this channel (checked against `inbox_messages`).
 - **default_reply** — fires otherwise, if a binding exists on `(social_account_id, "default_reply")` and is `active`.
+
+Interactive provider postbacks are matched against the synchronized Get Started, main-menu, or ice-breaker payload on that exact account. A matching active binding enrolls its automation with the same atomic admission protections as an entrypoint.
 
 ## Webhook entrypoints
 
@@ -251,7 +275,7 @@ POST /v1/automations/{id}/entrypoints
 }
 ```
 
-The create response includes `config.webhook_slug` and the plaintext `config.webhook_secret` **exactly once**. Store it — subsequent reads return only the slug. Rotate with:
+The create response includes `config.webhook_slug` plus top-level `webhook_secret_plaintext` **exactly once**. Store the plaintext—subsequent reads return a masked config value. Rotation returns a new `webhook_secret_plaintext`:
 
 ```bash
 POST /v1/automation-entrypoints/{id}/rotate-secret
@@ -305,9 +329,10 @@ curl -X POST https://api.relayapi.dev/v1/webhooks/automation-trigger/auto-xyz123
 | `202 { run_id }` | Enrolled successfully |
 | `401` | Missing or invalid signature |
 | `404` | Unknown `webhook_slug` |
+| `409` | Enrollment was blocked by the entrypoint's active-run, re-entry, cooldown, daily-cap, pause, or filter policy |
 | `422` | Contact lookup failed (`auto_create_contact` is false or required fields are missing) |
 
-The webhook endpoint is **account-agnostic** — the slug alone identifies the entrypoint, so you can use `webhook_inbound` without attaching a `social_account_id`.
+The webhook endpoint is **account-agnostic** for email, phone, contact-ID, and custom-field lookup — the slug alone identifies the entrypoint, so those modes do not require a `social_account_id`. A `platform_id` is only unique within a connected account, so that lookup mode requires the entrypoint to be attached to the matching social account.
 
 ## Filters
 

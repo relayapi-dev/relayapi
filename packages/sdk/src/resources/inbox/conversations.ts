@@ -2,6 +2,7 @@
 
 import { APIResource } from '../../core/resource';
 import { APIPromise } from '../../core/api-promise';
+import { buildHeaders } from '../../internal/headers';
 import { RequestOptions } from '../../internal/request-options';
 import { path } from '../../internal/utils/path';
 
@@ -56,6 +57,47 @@ export class Conversations extends APIResource {
     options?: RequestOptions,
   ): APIPromise<MessageSendResponse> {
     return this._client.post(path`/v1/inbox/conversations/${conversationID}/messages`, { body, ...options });
+  }
+
+  /** Edit a provider-authored outbound Telegram or Discord message. */
+  editMessage(
+    conversationID: string,
+    messageID: string,
+    params: MessageEditParams,
+    options?: RequestOptions,
+  ): APIPromise<InboxSocialMutationOperation> {
+    const { idempotency_key, ...body } = params;
+    return this._client.patch(
+      path`/v1/inbox/conversations/${conversationID}/messages/${messageID}`,
+      {
+        body,
+        ...options,
+        headers: buildHeaders([
+          { 'Idempotency-Key': idempotency_key },
+          options?.headers,
+        ]),
+      },
+    );
+  }
+
+  /** Send the provider-native read receipt for one inbound message. */
+  sendReadReceipt(
+    conversationID: string,
+    params: MessageReadReceiptParams,
+    options?: RequestOptions,
+  ): APIPromise<InboxSocialMutationOperation> {
+    const { idempotency_key, ...body } = params;
+    return this._client.post(
+      path`/v1/inbox/conversations/${conversationID}/read-receipts`,
+      {
+        body,
+        ...options,
+        headers: buildHeaders([
+          { 'Idempotency-Key': idempotency_key },
+          options?.headers,
+        ]),
+      },
+    );
   }
 
   /**
@@ -203,7 +245,12 @@ export namespace ConversationGetResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     /**
      * Conversation status
@@ -267,6 +314,12 @@ export namespace ConversationGetResponse {
      */
     author_name: string | null;
 
+    /** Provider-scoped author identifier. */
+    author_platform_id: string | null;
+
+    /** Rehosted author avatar URL when available. */
+    author_avatar_url: string | null;
+
     /**
      * Message text
      */
@@ -286,13 +339,64 @@ export namespace ConversationGetResponse {
      * Platform-specific data — e.g. `{ message_type: "story_mention", story_id,
      * story_url }` for Instagram story mentions/replies and shared posts.
      */
-    platform_data?: unknown;
+    platform_data: InboxMessagePlatformData | null;
+
+    sentiment_score: number | null;
+
+    classification: string | null;
+
+    is_hidden: boolean;
+
+    is_liked: boolean;
 
     /**
      * Message timestamp
      */
     created_at: string;
+
+    edit_revision: number;
+
+    edited_at: string | null;
+
+    provider_read_at: string | null;
   }
+}
+
+export interface InboxMessagePlatformData extends Record<string, unknown> {
+  message_type?: 'story_mention' | 'post_mention' | 'story_reply' | 'share';
+  story_id?: string;
+  story_url?: string;
+  whatsapp_group_id?: string;
+  whatsapp_flow?: {
+    name?: string;
+    has_response: boolean;
+  };
+}
+
+export interface InboxSocialMutationOperation {
+  id: string;
+  target_id: string;
+  account_id: string;
+  platform: string;
+  kind: string;
+  status: 'pending' | 'processing' | 'request_may_have_been_sent' | 'unknown' | 'completed' | 'failed';
+  provider_operation_id: string | null;
+  provider_post_id: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface MessageEditParams {
+  idempotency_key: string;
+  text: string;
+}
+
+export interface MessageReadReceiptParams {
+  idempotency_key: string;
+  message_id: string;
 }
 
 export interface ConversationListResponse {
@@ -343,7 +447,12 @@ export namespace ConversationListResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     /**
      * Conversation status
@@ -491,7 +600,12 @@ export interface ConversationListParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   /**
    * Filter by conversation status
@@ -771,6 +885,8 @@ export declare namespace Conversations {
     type ConversationMarkReadResponse as ConversationMarkReadResponse,
     type MessageSendResponse as MessageSendResponse,
     type MessageActionResponse as MessageActionResponse,
+    type InboxSocialMutationOperation as InboxSocialMutationOperation,
+    type InboxMessagePlatformData as InboxMessagePlatformData,
     type InboxNote as InboxNote,
     type NoteListResponse as NoteListResponse,
     type NoteResponse as NoteResponse,
@@ -779,6 +895,8 @@ export declare namespace Conversations {
     type ConversationUpdateParams as ConversationUpdateParams,
     type ConversationMarkReadParams as ConversationMarkReadParams,
     type MessageSendParams as MessageSendParams,
+    type MessageEditParams as MessageEditParams,
+    type MessageReadReceiptParams as MessageReadReceiptParams,
     type MessageSendTypingParams as MessageSendTypingParams,
     type MessageAddReactionParams as MessageAddReactionParams,
     type MessageRemoveReactionParams as MessageRemoveReactionParams,

@@ -10,14 +10,18 @@
 // entrypoints listening for custom-field changes fire.
 
 import {
+	contacts,
 	customFieldDefinitions,
 	customFieldValues,
 	type Database,
 	generateId,
 } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
-import { emitInternalEvent } from "../internal-events";
+import {
+	resolveTriggeringSocialAccountId,
+	stageInternalEvent,
+} from "../internal-events";
 import { applyMergeTags } from "../merge-tags";
 import type { InboundEvent } from "../trigger-matcher";
 import type { RunContext } from "../types";
@@ -49,7 +53,7 @@ function internalFieldEvent(
 		kind: "field_changed",
 		channel: (ctx.channel ?? "instagram") as InboundEvent["channel"],
 		organizationId: ctx.organizationId,
-		socialAccountId: null,
+		socialAccountId: resolveTriggeringSocialAccountId(ctx),
 		contactId: ctx.contactId,
 		conversationId: ctx.conversationId ?? null,
 		fieldKey,
@@ -65,53 +69,114 @@ function internalFieldEvent(
 	};
 }
 
-async function resolveDefinitionId(
+async function resolveDefinition(
 	db: Database,
 	organizationId: string,
+	workspaceId: string | null | undefined,
 	slug: string,
-): Promise<string | null> {
-	const row = await db.query.customFieldDefinitions.findFirst({
-		where: and(
-			eq(customFieldDefinitions.organizationId, organizationId),
-			eq(customFieldDefinitions.slug, slug),
-		),
-	});
-	return row?.id ?? null;
+): Promise<{ id: string; scopeKey: string } | null> {
+	const [row] = await db
+		.select({
+			id: customFieldDefinitions.id,
+			scopeKey: customFieldDefinitions.scopeKey,
+		})
+		.from(customFieldDefinitions)
+		.where(
+			and(
+				eq(customFieldDefinitions.organizationId, organizationId),
+				eq(customFieldDefinitions.slug, slug),
+				workspaceId
+					? or(
+							eq(customFieldDefinitions.workspaceId, workspaceId),
+							isNull(customFieldDefinitions.workspaceId),
+						)
+					: isNull(customFieldDefinitions.workspaceId),
+			),
+		)
+		// Prefer an exact workspace definition over the organization fallback.
+		.orderBy(desc(customFieldDefinitions.workspaceId))
+		.limit(1);
+	return row ?? null;
 }
 
 const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 	const db = ctx.db;
 	if (!db) throw new Error("field_set: db binding missing");
-	const definitionId = await resolveDefinitionId(
+	const definition = await resolveDefinition(
 		db,
 		ctx.organizationId,
+		ctx.workspaceId,
 		action.field,
 	);
-	if (!definitionId) {
+	if (!definition) {
 		throw new Error(`field_set: custom field "${action.field}" not found`);
 	}
 	const value = applyMergeTags(action.value, buildMergeCtx(ctx));
-	const existing = await db.query.customFieldValues.findFirst({
-		where: and(
-			eq(customFieldValues.definitionId, definitionId),
-			eq(customFieldValues.contactId, ctx.contactId),
-		),
+	const scopeKey = ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org";
+	const changed = await db.transaction(async (tx) => {
+		// The contact row is the stable serialization point for values that do
+		// not exist yet; locking only custom_field_values cannot protect two
+		// concurrent first writes.
+		const [contact] = await tx
+			.select({ id: contacts.id })
+			.from(contacts)
+			.where(
+				and(
+					eq(contacts.id, ctx.contactId),
+					eq(contacts.organizationId, ctx.organizationId),
+					eq(contacts.scopeKey, scopeKey),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!contact) throw new Error("field_set: contact not found in run scope");
+		const [existing] = await tx
+			.select({
+				id: customFieldValues.id,
+				value: customFieldValues.value,
+			})
+			.from(customFieldValues)
+			.where(
+				and(
+					eq(customFieldValues.definitionId, definition.id),
+					eq(customFieldValues.contactId, ctx.contactId),
+					eq(customFieldValues.organizationId, ctx.organizationId),
+					eq(customFieldValues.scopeKey, scopeKey),
+				),
+			)
+			.limit(1);
+		const before = existing?.value ?? null;
+		if (before === value) return false;
+		if (existing) {
+			await tx
+				.update(customFieldValues)
+				.set({ value, updatedAt: ctx.now })
+				.where(
+					and(
+						eq(customFieldValues.id, existing.id),
+						eq(customFieldValues.organizationId, ctx.organizationId),
+						eq(customFieldValues.scopeKey, scopeKey),
+					),
+				);
+		} else {
+			await tx.insert(customFieldValues).values({
+				id: generateId("cfv_"),
+				definitionId: definition.id,
+				contactId: ctx.contactId,
+				organizationId: ctx.organizationId,
+				scopeKey,
+				definitionScopeKey: definition.scopeKey,
+				value,
+			});
+		}
+		await stageInternalEvent(
+			tx,
+			ctx,
+			internalFieldEvent(ctx, action.field, before, value, action.id),
+			action.id,
+		);
+		return true;
 	});
-	const before = existing?.value ?? null;
-	if (existing) {
-		await db
-			.update(customFieldValues)
-			.set({ value, updatedAt: new Date() })
-			.where(eq(customFieldValues.id, existing.id));
-	} else {
-		await db.insert(customFieldValues).values({
-			id: generateId("cfv_"),
-			definitionId,
-			contactId: ctx.contactId,
-			organizationId: ctx.organizationId,
-			value,
-		});
-	}
 
 	// Mirror the mutation into ctx.context.fields so same-run condition nodes
 	// can branch on the freshly written value. Plan 6 Unit RR11 / Task 5
@@ -123,46 +188,71 @@ const fieldSet: ActionHandler<FieldSetAction> = async (action, ctx) => {
 			? (ctx.context.fields as Record<string, unknown>)
 			: {};
 	ctx.context.fields = { ...currentFields, [action.field]: value };
-
-	// Skip the internal event if the value did not actually change — prevents
-	// spurious `field_changed` re-enrollments when an action_group re-applies
-	// the same value.
-	if (before === value) return;
-
-	await emitInternalEvent(
-		db,
-		internalFieldEvent(ctx, action.field, before, value, action.id),
-		ctx.env,
-	);
+	if (!changed) return;
 };
 
 const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
 	const db = ctx.db;
 	if (!db) throw new Error("field_clear: db binding missing");
-	const definitionId = await resolveDefinitionId(
+	const definition = await resolveDefinition(
 		db,
 		ctx.organizationId,
+		ctx.workspaceId,
 		action.field,
 	);
-	if (!definitionId) {
+	if (!definition) {
 		// Treat unknown field as a no-op on clear: nothing to erase.
 		return;
 	}
-	const existing = await db.query.customFieldValues.findFirst({
-		where: and(
-			eq(customFieldValues.definitionId, definitionId),
-			eq(customFieldValues.contactId, ctx.contactId),
-		),
-	});
-	const before = existing?.value ?? null;
-	await db
-		.delete(customFieldValues)
-		.where(
-			and(
-				eq(customFieldValues.definitionId, definitionId),
-				eq(customFieldValues.contactId, ctx.contactId),
-			),
+	const scopeKey = ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org";
+	const changed = await db.transaction(async (tx) => {
+		const [contact] = await tx
+			.select({ id: contacts.id })
+			.from(contacts)
+			.where(
+				and(
+					eq(contacts.id, ctx.contactId),
+					eq(contacts.organizationId, ctx.organizationId),
+					eq(contacts.scopeKey, scopeKey),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!contact)
+			throw new Error("field_clear: contact not found in run scope");
+		const [existing] = await tx
+			.select({
+				id: customFieldValues.id,
+				value: customFieldValues.value,
+			})
+			.from(customFieldValues)
+			.where(
+				and(
+					eq(customFieldValues.definitionId, definition.id),
+					eq(customFieldValues.contactId, ctx.contactId),
+					eq(customFieldValues.organizationId, ctx.organizationId),
+					eq(customFieldValues.scopeKey, scopeKey),
+				),
+			)
+			.limit(1);
+		if (!existing) return false;
+		await tx
+			.delete(customFieldValues)
+			.where(
+				and(
+					eq(customFieldValues.id, existing.id),
+					eq(customFieldValues.organizationId, ctx.organizationId),
+					eq(customFieldValues.scopeKey, scopeKey),
+				),
+			);
+		await stageInternalEvent(
+			tx,
+			ctx,
+			internalFieldEvent(ctx, action.field, existing.value, null, action.id),
+			action.id,
 		);
+		return true;
+	});
 
 	// Drop the key from ctx.context.fields if it was present. Plan 6 Unit RR11
 	// / Task 5 (F6): keep same-run condition evaluation consistent with DB.
@@ -172,15 +262,7 @@ const fieldClear: ActionHandler<FieldClearAction> = async (action, ctx) => {
 		ctx.context.fields = next;
 	}
 
-	// Only emit if there was actually a non-null prior value — deleting a row
-	// that stored `null` (or that never existed) is a no-op for listeners.
-	if (existing && before !== null) {
-		await emitInternalEvent(
-			db,
-			internalFieldEvent(ctx, action.field, before, null, action.id),
-			ctx.env,
-		);
-	}
+	if (!changed) return;
 };
 
 export const fieldHandlers: ActionRegistry = {

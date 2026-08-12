@@ -1,12 +1,16 @@
 ---
 title: Java SDK
-description: Official Java client library for RelayAPI. Post to 21 platforms from any JVM application.
+description: Official Java client library for RelayAPI. Post to 22 platforms from any JVM application.
 icon: Package
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-Official Java SDK for RelayAPI. Post to 21 platforms, manage accounts, upload media, and track analytics. Works with any JVM language and ships both synchronous and asynchronous clients.
+Official Java SDK for RelayAPI. Post to 22 platforms, manage accounts, upload media, and track analytics. Works with any JVM language and ships both synchronous and asynchronous clients.
+
+<Callout type="info">
+The Java client is generated and released separately from the RelayAPI monorepo. Check the [relay-java repository](https://github.com/relayapi-dev/relay-java) for the surface, coordinates, and version in the release you install.
+</Callout>
 
 ## Setup
 
@@ -107,6 +111,13 @@ accounts.data().forEach(acc ->
 ```java
 import dev.relayapi.models.media.MediaGetPresignUrlParams;
 import dev.relayapi.models.media.MediaGetPresignUrlResponse;
+import dev.relayapi.models.media.MediaConfirmParams;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 // Get a presigned upload URL
 MediaGetPresignUrlResponse presign = client.media().getPresignUrl(
@@ -115,7 +126,26 @@ MediaGetPresignUrlResponse presign = client.media().getPresignUrl(
         .contentType("image/jpeg")
         .build());
 
-// PUT the file to presign.uploadUrl(), then reference presign.url() in a post
+// PUT the bytes once using both headers required by the presign contract
+HttpURLConnection upload = (HttpURLConnection) new URL(presign.uploadUrl()).openConnection();
+upload.setRequestMethod("PUT");
+upload.setRequestProperty("Content-Type", "image/jpeg");
+upload.setRequestProperty("If-None-Match", "*");
+upload.setDoOutput(true);
+try (OutputStream body = upload.getOutputStream()) {
+    body.write(Files.readAllBytes(Paths.get("photo.jpg")));
+}
+if (upload.getResponseCode() < 200 || upload.getResponseCode() >= 300) {
+    throw new IllegalStateException("Media upload failed: " + upload.getResponseCode());
+}
+
+// Confirm the object so the pending upload becomes ready
+String storageKey = URI.create(presign.url()).getPath().replaceFirst("^/", "");
+client.media().confirm(MediaConfirmParams.builder()
+    .storageKey(storageKey)
+    .build());
+
+// Posts take a media object with the canonical URL, not the media ID
 PostCreateResponse post = client.posts().create(PostCreateParams.builder()
     .content("Check out this photo!")
     .addTarget("instagram")

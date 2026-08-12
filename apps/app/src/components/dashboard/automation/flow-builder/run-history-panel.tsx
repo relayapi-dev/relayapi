@@ -1,9 +1,9 @@
 // Run history panel (Plan 3 — Unit C1, Task R2).
 //
 // Lists automation runs via the new `/v1/automations/{id}/runs` endpoint.
-// Emits `onSelectRun(runId)` when a row is clicked; the full run inspector is
-// built in Unit C2. Until then we surface the current node / waiting state /
-// exit reason inline so operators can see the status of each run.
+// Emits `onSelectRun(runId)` when a row is clicked so the full run inspector can
+// show the selected timeline. Legacy callers without that callback still get a
+// compact current-node / waiting-state / exit-reason preview inline.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { History, Loader2, RefreshCw } from "lucide-react";
@@ -366,7 +366,7 @@ export function RunHistoryPanel({
 									</div>
 								)}
 								<div className="text-muted-foreground/70 text-[10px]">
-									Full run inspector coming soon.
+									Open the Runs tab for the complete event timeline.
 								</div>
 							</div>
 						)}

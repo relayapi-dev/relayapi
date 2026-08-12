@@ -1,25 +1,37 @@
 import {
+	DISCORD_THREAD_CONTEXT_EFFECT,
+	isDiscordSnowflake,
+} from "../lib/discord-message-context";
+import { parseDiscordWebhookUrl } from "../lib/discord-webhook";
+import {
 	ensureResponseContentLength,
 	fetchPublicUrl,
+	readResponseJson,
 } from "../lib/fetch-public-url";
+import { fetchWithTimeout } from "../lib/fetch-timeout";
 import {
 	createStreamingMultipartFilesBody,
 	type StreamingMultipartFile,
 } from "../lib/multipart-stream";
+import { DiscordTargetOptions } from "../schemas/publisher-options";
 import {
 	classifyPublishError,
+	mergeProviderEffects,
+	type ProviderEffect,
 	PublishError,
 	type Publisher,
 	type PublishRequest,
 	type PublishResult,
+	recordProviderEffect,
 } from "./types";
 
 // Official docs: https://docs.discord.com/developers/reference#uploading-files
 // Section "Uploading Files" says the limit is per attachment, defaults to
 // 10 MiB, and may be higher by user/server tier. Discord does not expose that
-// tier through an incoming webhook, so this is only a defensive streaming cap;
-// Discord remains authoritative for the actual per-attachment allowance.
-const DISCORD_FILE_MAX_BYTES = 500 * 1024 * 1024;
+// tier through an incoming webhook, so Relay must enforce the documented default
+// rather than download hundreds of megabytes that the webhook will reject.
+const DISCORD_FILE_MAX_BYTES = 10 * 1024 * 1024;
+const DISCORD_RESPONSE_MAX_BYTES = 256 * 1024;
 
 /**
  * Discord publisher.
@@ -41,6 +53,125 @@ interface DiscordEmbed {
 	author?: { name: string };
 	fields?: Array<{ name: string; value: string }>;
 	timestamp?: string;
+}
+
+function normalizeDiscordPoll(
+	value: unknown,
+): Record<string, unknown> | undefined {
+	if (value === undefined) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error("CONTENT_ERROR: Discord poll must be an object.");
+	}
+	const poll = value as Record<string, unknown>;
+	const rawQuestion = poll.question;
+	if (
+		!rawQuestion ||
+		typeof rawQuestion !== "object" ||
+		Array.isArray(rawQuestion) ||
+		typeof (rawQuestion as Record<string, unknown>).text !== "string" ||
+		((rawQuestion as Record<string, unknown>).text as string).length < 1 ||
+		((rawQuestion as Record<string, unknown>).text as string).length > 300
+	) {
+		throw new Error(
+			"CONTENT_ERROR: Discord poll question.text must be 1-300 characters.",
+		);
+	}
+	if (
+		!Array.isArray(poll.answers) ||
+		poll.answers.length < 2 ||
+		poll.answers.length > 10
+	) {
+		throw new Error("CONTENT_ERROR: Discord polls require 2-10 answers.");
+	}
+	const answers = poll.answers.map((rawAnswer, index) => {
+		if (
+			!rawAnswer ||
+			typeof rawAnswer !== "object" ||
+			Array.isArray(rawAnswer)
+		) {
+			throw new Error(
+				`CONTENT_ERROR: Discord poll answer ${index + 1} must be an object.`,
+			);
+		}
+		const rawMedia = (rawAnswer as Record<string, unknown>).poll_media;
+		if (!rawMedia || typeof rawMedia !== "object" || Array.isArray(rawMedia)) {
+			throw new Error(
+				`CONTENT_ERROR: Discord poll answer ${index + 1}.poll_media must be an object.`,
+			);
+		}
+		const media = rawMedia as Record<string, unknown>;
+		if (
+			typeof media.text !== "string" ||
+			media.text.length < 1 ||
+			media.text.length > 55
+		) {
+			throw new Error(
+				`CONTENT_ERROR: Discord poll answer ${index + 1} text must be 1-55 characters.`,
+			);
+		}
+		const normalizedMedia: Record<string, unknown> = { text: media.text };
+		if (media.emoji !== undefined) {
+			if (
+				!media.emoji ||
+				typeof media.emoji !== "object" ||
+				Array.isArray(media.emoji)
+			) {
+				throw new Error(
+					`CONTENT_ERROR: Discord poll answer ${index + 1} emoji must be an object.`,
+				);
+			}
+			const emoji = media.emoji as Record<string, unknown>;
+			const id =
+				typeof emoji.id === "string" && emoji.id ? emoji.id : undefined;
+			const name =
+				typeof emoji.name === "string" && emoji.name ? emoji.name : undefined;
+			if (Boolean(id) === Boolean(name) || (id && !isDiscordSnowflake(id))) {
+				throw new Error(
+					`CONTENT_ERROR: Discord poll answer ${index + 1} emoji requires exactly one valid id or name.`,
+				);
+			}
+			normalizedMedia.emoji = {
+				...(id ? { id } : {}),
+				...(name ? { name } : {}),
+			};
+		}
+		return { poll_media: normalizedMedia };
+	});
+
+	const normalized: Record<string, unknown> = {
+		question: { text: (rawQuestion as Record<string, unknown>).text },
+		answers,
+	};
+	if (poll.duration !== undefined) {
+		if (
+			typeof poll.duration !== "number" ||
+			!Number.isInteger(poll.duration) ||
+			poll.duration < 1 ||
+			poll.duration > 768
+		) {
+			throw new Error(
+				"CONTENT_ERROR: Discord poll duration must be 1-768 whole hours.",
+			);
+		}
+		normalized.duration = poll.duration;
+	}
+	if (poll.allow_multiselect !== undefined) {
+		if (typeof poll.allow_multiselect !== "boolean") {
+			throw new Error(
+				"CONTENT_ERROR: Discord poll allow_multiselect must be boolean.",
+			);
+		}
+		normalized.allow_multiselect = poll.allow_multiselect;
+	}
+	if (poll.layout_type !== undefined) {
+		if (poll.layout_type !== 1) {
+			throw new Error(
+				"CONTENT_ERROR: Discord poll layout_type currently supports only 1.",
+			);
+		}
+		normalized.layout_type = 1;
+	}
+	return normalized;
 }
 
 function discordEmbedText(
@@ -170,17 +301,42 @@ export const discordPublisher: Publisher = {
 			pendingFileResponses.length = 0;
 		};
 		try {
-			const webhookUrl = request.account.access_token;
-			if (!webhookUrl?.includes("discord.com/api/webhooks")) {
+			const webhookUrl = parseDiscordWebhookUrl(
+				request.account.access_token,
+			).url;
+
+			const parsedOptions = DiscordTargetOptions.safeParse(
+				request.target_options,
+			);
+			if (!parsedOptions.success) {
+				const issue = parsedOptions.error.issues[0];
+				const path = issue?.path.length ? ` ${issue.path.join(".")}` : "";
 				throw new Error(
-					"Invalid Discord webhook URL. Expected format: https://discord.com/api/webhooks/{id}/{token}",
+					`CONTENT_ERROR: Invalid Discord target option${path}: ${issue?.message ?? "validation failed"}.`,
 				);
 			}
-
-			const opts = request.target_options;
+			const opts = parsedOptions.data;
 			const content = (opts.content as string) ?? request.content ?? "";
 			const username = opts.username as string | undefined;
 			const avatarUrl = opts.avatar_url as string | undefined;
+			const threadId =
+				typeof opts.thread_id === "string" && opts.thread_id.trim()
+					? opts.thread_id.trim()
+					: undefined;
+			const threadName =
+				typeof opts.thread_name === "string" && opts.thread_name.trim()
+					? opts.thread_name.trim()
+					: undefined;
+			if (threadId && threadName) {
+				throw new Error(
+					"CONTENT_ERROR: Discord thread_id and thread_name are mutually exclusive.",
+				);
+			}
+			if (opts.thread_id !== undefined && !isDiscordSnowflake(threadId)) {
+				throw new Error(
+					"CONTENT_ERROR: Discord thread_id must be a 17-20 digit snowflake.",
+				);
+			}
 
 			// Build request body
 			// Discord Webhook API: Execute Webhook
@@ -206,6 +362,41 @@ export const discordPublisher: Publisher = {
 			if (avatarUrl) {
 				body.avatar_url = avatarUrl;
 			}
+			if (opts.tts !== undefined) {
+				if (typeof opts.tts !== "boolean") {
+					throw new Error("CONTENT_ERROR: Discord tts must be boolean.");
+				}
+				if (opts.tts && !content) {
+					throw new Error(
+						"CONTENT_ERROR: Discord TTS messages require text content.",
+					);
+				}
+				body.tts = opts.tts;
+			}
+			if (threadName) body.thread_name = threadName;
+			if (opts.applied_tags !== undefined) {
+				if (
+					!Array.isArray(opts.applied_tags) ||
+					opts.applied_tags.length > 5 ||
+					opts.applied_tags.some(
+						(tag) => typeof tag !== "string" || !isDiscordSnowflake(tag),
+					)
+				) {
+					throw new Error(
+						"CONTENT_ERROR: Discord applied_tags must contain at most five snowflake tag IDs.",
+					);
+				}
+				if (opts.applied_tags.length > 0 && !threadName) {
+					throw new Error(
+						"CONTENT_ERROR: Discord applied_tags require thread_name for a new forum/media thread.",
+					);
+				}
+				body.applied_tags = opts.applied_tags.map((tag) =>
+					(tag as string).trim(),
+				);
+			}
+			const poll = normalizeDiscordPoll(opts.poll);
+			if (poll) body.poll = poll;
 
 			// Handle media — prefer file uploads via multipart form-data for reliability
 			// Discord Webhook API: Execute Webhook with file attachments
@@ -219,9 +410,7 @@ export const discordPublisher: Publisher = {
 			if (media.length > 0) {
 				if (media.length > 10) {
 					// Official docs: https://docs.discord.com/developers/resources/webhook#execute-webhook
-					// Section "Execute Webhook" permits up to 10 embed objects. Media
-					// fetch failures fall back to one embed per item, so cap the input
-					// instead of silently losing attachments in that documented path.
+					// Section "Execute Webhook" permits at most 10 attachments.
 					return {
 						success: false,
 						error: {
@@ -286,12 +475,18 @@ export const discordPublisher: Publisher = {
 								pendingFileResponses.push(mediaRes);
 							} else {
 								void mediaRes.body?.cancel().catch(() => {});
-								// Fallback to embed URL
-								embeds.push({ image: { url: item.url } });
+								throw new PublishError(
+									`Discord attachment fetch failed (${mediaRes.status})`,
+									{
+										statusCode: mediaRes.status,
+										detail: `HTTP ${mediaRes.status} ${mediaRes.statusText}`,
+									},
+								);
 							}
-						} catch {
-							// Fallback to embed URL
-							embeds.push({ image: { url: item.url } });
+						} catch (error) {
+							throw error instanceof Error
+								? error
+								: new Error("Discord attachment fetch failed");
 						}
 					}
 				}
@@ -335,12 +530,16 @@ export const discordPublisher: Publisher = {
 				}
 			}
 
-			// Must have at least one of content, embeds, or files
-			if (!body.content && !body.embeds && files.length === 0) {
+			// Must have at least one of content, embeds, poll, or files.
+			// Official Execute Webhook docs: https://docs.discord.com/developers/resources/webhook#execute-webhook
+			if (!body.content && !body.embeds && !body.poll && files.length === 0) {
 				throw new Error(
-					"Discord requires at least content, embeds, or files in the message.",
+					"Discord requires at least content, embeds, poll, or files in the message.",
 				);
 			}
+			const executeUrl = new URL(webhookUrl);
+			executeUrl.searchParams.set("wait", "true");
+			if (threadId) executeUrl.searchParams.set("thread_id", threadId);
 
 			// Send request — use multipart if files are present, JSON otherwise
 			let res: Response;
@@ -351,8 +550,11 @@ export const discordPublisher: Publisher = {
 				);
 				pendingFileResponses.length = 0;
 				const [responseOutcome, completionOutcome] = await Promise.allSettled([
-					fetch(`${webhookUrl}?wait=true`, {
+					fetchWithTimeout(executeUrl, {
 						method: "POST",
+						redirect: "error",
+						timeout: 30_000,
+						timeoutThroughBody: true,
 						headers: {
 							"Content-Type": multipart.contentType,
 							"Content-Length": multipart.contentLength.toString(),
@@ -373,8 +575,11 @@ export const discordPublisher: Publisher = {
 			} else {
 				// Discord Webhook API: Execute Webhook
 				// Docs: https://docs.discord.com/developers/resources/webhook#execute-webhook
-				res = await fetch(`${webhookUrl}?wait=true`, {
+				res = await fetchWithTimeout(executeUrl, {
 					method: "POST",
+					redirect: "error",
+					timeout: 30_000,
+					timeoutThroughBody: true,
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(body),
 				});
@@ -382,6 +587,7 @@ export const discordPublisher: Publisher = {
 
 			if (res.status === 429) {
 				const retryAfter = res.headers.get("retry-after");
+				await res.body?.cancel().catch(() => {});
 				const retryAfterSeconds = retryAfter
 					? Number.parseFloat(retryAfter)
 					: Number.NaN;
@@ -399,7 +605,10 @@ export const discordPublisher: Publisher = {
 			}
 
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readResponseJson<{ message?: string }>(
+					res,
+					DISCORD_RESPONSE_MAX_BYTES,
+				).catch(() => ({}));
 				const detail = (err as { message?: string }).message ?? res.statusText;
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 				throw new PublishError(`Discord webhook failed: ${detail}`, {
@@ -408,10 +617,40 @@ export const discordPublisher: Publisher = {
 				});
 			}
 
-			const result = (await res.json()) as {
-				id: string;
-				channel_id: string;
-			};
+			const result = await readResponseJson<{
+				id?: string;
+				channel_id?: string;
+			}>(res, DISCORD_RESPONSE_MAX_BYTES);
+			if (!result.id?.trim()) {
+				throw new Error(
+					"Discord returned a successful webhook response without a message ID.",
+				);
+			}
+
+			let threadContextEffect: ProviderEffect | undefined;
+			if (threadId || threadName) {
+				const returnedChannelId = result.channel_id?.trim();
+				const resolvedThreadId = returnedChannelId || threadId;
+				const responseMatchesRequestedThread =
+					!threadId || !returnedChannelId || returnedChannelId === threadId;
+				threadContextEffect =
+					responseMatchesRequestedThread && isDiscordSnowflake(resolvedThreadId)
+						? {
+								name: DISCORD_THREAD_CONTEXT_EFFECT,
+								status: "succeeded",
+								provider_id: resolvedThreadId.trim(),
+							}
+						: {
+								name: DISCORD_THREAD_CONTEXT_EFFECT,
+								status: "outcome_unknown",
+								error: {
+									code: "DISCORD_THREAD_CONTEXT_UNKNOWN",
+									message:
+										"Discord created the message without a trustworthy thread channel ID.",
+								},
+							};
+				await recordProviderEffect(request, threadContextEffect);
+			}
 
 			// Try to get guild_id from the webhook info to build a jump URL
 			// The unauthenticated endpoint requires both webhook ID and token in the URL
@@ -421,15 +660,26 @@ export const discordPublisher: Publisher = {
 				const webhookId = webhookParts?.[0];
 				const webhookToken = webhookParts?.[1];
 				if (webhookId && webhookToken) {
-					const webhookInfo = await fetch(
+					const webhookInfo = await fetchWithTimeout(
 						`https://discord.com/api/webhooks/${webhookId}/${webhookToken}`,
-						{ headers: { "Content-Type": "application/json" } },
+						{
+							redirect: "error",
+							timeout: 10_000,
+							timeoutThroughBody: true,
+						},
 					);
 					if (webhookInfo.ok) {
-						const info = (await webhookInfo.json()) as { guild_id?: string };
+						const info = await readResponseJson<{ guild_id?: string }>(
+							webhookInfo,
+							DISCORD_RESPONSE_MAX_BYTES,
+						);
 						if (info.guild_id) {
-							platformUrl = `https://discord.com/channels/${info.guild_id}/${result.channel_id}/${result.id}`;
+							if (result.channel_id) {
+								platformUrl = `https://discord.com/channels/${info.guild_id}/${result.channel_id}/${result.id}`;
+							}
 						}
+					} else {
+						await webhookInfo.body?.cancel().catch(() => {});
 					}
 				}
 			} catch {
@@ -440,6 +690,16 @@ export const discordPublisher: Publisher = {
 				success: true,
 				platform_post_id: result.id,
 				platform_url: platformUrl,
+				provider_outcome: {
+					disposition: "published",
+					platform_post_id: result.id,
+					platform_url: platformUrl,
+					provider_state: "created",
+					effects: mergeProviderEffects(
+						request.effect_recorder?.effects,
+						threadContextEffect ? [threadContextEffect] : undefined,
+					),
+				},
 			};
 		} catch (err) {
 			await cancelPendingFiles();

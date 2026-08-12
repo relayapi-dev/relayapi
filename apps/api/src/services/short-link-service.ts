@@ -1,10 +1,9 @@
-import type { ShortLinkProvider } from "./short-link-providers";
-
 const URL_REGEX = /https?:\/\/[^\s"'<>()]+/g;
 
 export interface ShortenedUrl {
 	original: string;
 	short: string;
+	shortLinkId?: string;
 }
 
 /**
@@ -12,20 +11,24 @@ export interface ShortenedUrl {
  * Uses Promise.allSettled — failed URLs are left as-is (graceful degradation).
  */
 export async function shortenUrlsInContent(
-	provider: ShortLinkProvider,
-	apiKey: string,
+	providerDomain: string,
 	domain: string | null,
 	content: string,
+	createShortLink: (
+		url: string,
+	) => Promise<{ shortUrl: string; shortLinkId?: string }>,
 ): Promise<{ content: string; shortenedUrls: ShortenedUrl[] }> {
 	const rawMatches = content.match(URL_REGEX) || [];
 	// Strip trailing punctuation that may follow a URL in natural language
-	const urls = [...new Set(rawMatches.map((u) => u.replace(/[.,!?;:'")\]>]+$/, "")))];
+	const urls = [
+		...new Set(rawMatches.map((u) => u.replace(/[.,!?;:'")\]>]+$/, ""))),
+	];
 
 	// Skip URLs already on the provider's short link domain
-	const providerDomain = domain ?? provider.shortLinkDomain;
+	const effectiveProviderDomain = domain ?? providerDomain;
 	const toShorten = urls.filter((url) => {
 		try {
-			return !new URL(url).hostname.endsWith(providerDomain);
+			return !new URL(url).hostname.endsWith(effectiveProviderDomain);
 		} catch {
 			return true;
 		}
@@ -37,8 +40,12 @@ export async function shortenUrlsInContent(
 
 	const results = await Promise.allSettled(
 		toShorten.map(async (url) => {
-			const short = await provider.shorten(apiKey, domain, url);
-			return { original: url, short };
+			const created = await createShortLink(url);
+			return {
+				original: url,
+				short: created.shortUrl,
+				...(created.shortLinkId ? { shortLinkId: created.shortLinkId } : {}),
+			};
 		}),
 	);
 
@@ -48,7 +55,10 @@ export async function shortenUrlsInContent(
 	// Sort by descending original URL length to avoid substring collisions
 	// (e.g. replacing "https://example.com" before "https://example.com/blog")
 	const fulfilled = results
-		.filter((r): r is PromiseFulfilledResult<ShortenedUrl> => r.status === "fulfilled")
+		.filter(
+			(r): r is PromiseFulfilledResult<ShortenedUrl> =>
+				r.status === "fulfilled",
+		)
 		.sort((a, b) => b.value.original.length - a.value.original.length);
 
 	for (const result of fulfilled) {

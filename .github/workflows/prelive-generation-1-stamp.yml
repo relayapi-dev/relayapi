@@ -1,0 +1,530 @@
+name: Pre-live Generation-1 Worker Stamp
+
+# Run this protected workflow while the exact generation-1 preparation commit is
+# still the head of main. It deploys no migration and cannot run from generation
+# 2. Its immutable artifact supplies the source SHA and exact API/App Worker
+# version IDs required by the later destructive baseline cutover.
+#
+# Required protected `production` environment secrets:
+# - PRODUCTION_DATABASE_URL
+# - PRODUCTION_RUNTIME_DATABASE_URL
+# - PRODUCTION_DATABASE_HOSTNAME
+# - PRODUCTION_DATABASE_CA_CERT
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_ID
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET
+# - MAINTENANCE_SMOKE_BYPASS_TOKEN
+# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_ACCOUNT_ID
+# - DOTENVX_ARMOR_TOKEN
+
+on:
+  workflow_dispatch:
+    inputs:
+      stamp_commit_sha:
+        description: Exact protected main HEAD containing the schema-compatible generation-1 Workers
+        required: true
+        type: string
+      expected_database_name:
+        description: Exact disposable pre-live PostgreSQL database name
+        required: true
+        type: string
+      confirmation:
+        description: Type CREATE_SCHEMA_COMPATIBLE_GENERATION_1_STAMP
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prelive-generation-1-worker-stamp
+  cancel-in-progress: false
+
+jobs:
+  stamp:
+    name: Verify generation 1 and stamp both Workers
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Pin stamping to the exact protected generation-1 main head
+        env:
+          STAMP_COMMIT_SHA: ${{ inputs.stamp_commit_sha }}
+          STAMP_CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          DISPATCH_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          database_name_pattern='^[A-Za-z_][-A-Za-z0-9_$]{0,62}$'
+          [[ "$STAMP_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DATABASE_NAME" =~ $database_name_pattern ]]
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$REF_PROTECTED" = "true"
+          test "$STAMP_CONFIRMATION" = "CREATE_SCHEMA_COMPATIBLE_GENERATION_1_STAMP"
+          test "$(git rev-parse HEAD)" = "$STAMP_COMMIT_SHA"
+          test "$DISPATCH_COMMIT_SHA" = "$STAMP_COMMIT_SHA"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install exact locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Require the sealed schema-compatible generation-1 source
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schemaVersion == 1 and
+            .generation == 1 and
+            .lifecycle == "sealed" and
+            .transition.kind == "initial-baseline"
+          ' packages/db/baseline-generation.json >/dev/null
+          jq -e '
+            .schemaVersion == 2 and
+            .lifecycle == "sealed" and
+            .authorizedCollapse.fromGeneration == 1 and
+            .authorizedCollapse.toGeneration == 2
+          ' packages/db/baseline-build-policy.json >/dev/null
+          grep -Eq '^export const BASELINE_GENERATION = 1;$' \
+            packages/config/src/index.ts
+          bun -e '
+            import {
+              BASELINE_GENERATION,
+              MAINTENANCE_SMOKE_HASH_DOMAIN,
+              PRELIVE_CONTROL_CONVERGENCE_SECONDS,
+              PRELIVE_CUTOVER_HOLD_SECONDS,
+              PRELIVE_R2_EVENT_SETTLE_SECONDS,
+              RUNTIME_CONTROL_CACHE_TTL_SECONDS,
+            } from "./packages/config/src/index.ts";
+            if (BASELINE_GENERATION !== 1) throw new Error("source is not generation 1");
+            if (MAINTENANCE_SMOKE_HASH_DOMAIN !== "relayapi:maintenance-smoke:cutover:v1:") {
+              throw new Error("generation-independent smoke domain is absent");
+            }
+            if (PRELIVE_CUTOVER_HOLD_SECONDS !== 3900) {
+              throw new Error("cutover hold contract drifted");
+            }
+            if (RUNTIME_CONTROL_CACHE_TTL_SECONDS !== 30) {
+              throw new Error("runtime control cache contract drifted");
+            }
+            if (PRELIVE_CONTROL_CONVERGENCE_SECONDS !== 120) {
+              throw new Error("control convergence contract drifted");
+            }
+            if (PRELIVE_R2_EVENT_SETTLE_SECONDS !== 60) {
+              throw new Error("R2 event settle contract drifted");
+            }
+          '
+          grep -Fq '"/health/control"' apps/api/src/lib/runtime-controls.ts
+          grep -Fq '"/internal/cutover-smoke"' apps/api/src/lib/runtime-controls.ts
+          grep -Fq 'state.status === "open" || state.status === "draining"' \
+            apps/api/src/lib/runtime-controls.ts
+          grep -Fq '"/health/control"' apps/app/src/lib/runtime-control.ts
+          grep -Fq '"/internal/cutover-smoke"' apps/app/src/lib/runtime-control.ts
+          grep -Fq '| { status: "draining" }' apps/app/src/lib/runtime-control.ts
+          jq -e '.workerBindings.BASELINE_GENERATION.text == "1"' \
+            apps/api/production-resources.json >/dev/null
+          api_types="$RUNNER_TEMP/api-generation-1-stamp-env.d.ts"
+          app_types="$RUNNER_TEMP/app-generation-1-stamp-env.d.ts"
+          bun run --cwd apps/api wrangler types "$api_types" \
+            --config wrangler.jsonc \
+            --env-file=/dev/null \
+            --env-interface=GenerationOneStampApiEnv \
+            --include-runtime=false
+          bun run --cwd apps/app wrangler types "$app_types" \
+            --config wrangler.jsonc \
+            --env-file=/dev/null \
+            --env-interface=GenerationOneStampAppEnv \
+            --include-runtime=false
+          test "$(grep -Fc 'BASELINE_GENERATION: "1";' "$api_types")" -eq 1
+          test "$(grep -Fc 'BASELINE_GENERATION: "1";' "$app_types")" -eq 1
+
+      - name: Test the source and generation-1 stamp controls
+        run: |
+          set -euo pipefail
+          bun test \
+            scripts/check-live-baseline-generation.test.ts \
+            scripts/generation-1-stamp-record.test.ts \
+            scripts/prelive-generation-1-stamp-workflow.test.ts \
+            apps/api/src/__tests__/runtime-controls.test.ts \
+            apps/app/src/__tests__/runtime-control.test.ts
+          bun run typecheck
+          bun run --cwd apps/api test
+          bun run --cwd apps/api test:workerd
+          bun run --cwd apps/app test
+        working-directory: .
+
+      - name: Verify generation-1 migration source contracts
+        run: |
+          set -euo pipefail
+          bun run --cwd packages/db migration:generation:check
+          bun run --cwd packages/db migration:manifest:check
+          bun run --cwd packages/db migration:policy:check
+          bun run --cwd packages/db migration:source-ownership
+          bun run --cwd packages/db verify:schema-contracts
+
+      - name: Verify both currently active Workers are still generation 1
+        run: bun scripts/check-live-baseline-generation.ts --require-live-generation-one
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify Cloudflare resources and both secret intents before stamping
+        run: |
+          set -euo pipefail
+          bun run --cwd apps/api cloudflare:verify-prerequisites
+          bun run secrets:cf:preflight -- api
+          bun run secrets:cf:preflight -- app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+
+      - name: Start the read-only generation-1 database verification tunnel
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRODUCTION_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+          PRODUCTION_DATABASE_HOSTNAME: ${{ secrets.PRODUCTION_DATABASE_HOSTNAME }}
+          PRODUCTION_DATABASE_CA_CERT: ${{ secrets.PRODUCTION_DATABASE_CA_CERT }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DATABASE_URL"
+          test -n "$PRODUCTION_RUNTIME_DATABASE_URL"
+          test -n "$PRODUCTION_DATABASE_HOSTNAME"
+          test -n "$PRODUCTION_DATABASE_CA_CERT"
+          test -n "$TUNNEL_SERVICE_TOKEN_ID"
+          test -n "$TUNNEL_SERVICE_TOKEN_SECRET"
+          bun -e '
+            const migrationUrl = new URL(process.env.PRODUCTION_DATABASE_URL);
+            const runtimeUrl = new URL(process.env.PRODUCTION_RUNTIME_DATABASE_URL);
+            if (!["postgres:", "postgresql:"].includes(migrationUrl.protocol)) {
+              throw new Error("PRODUCTION_DATABASE_URL must use PostgreSQL");
+            }
+            if (!["postgres:", "postgresql:"].includes(runtimeUrl.protocol)) {
+              throw new Error("PRODUCTION_RUNTIME_DATABASE_URL must use PostgreSQL");
+            }
+            if (
+              migrationUrl.hostname !== process.env.PRODUCTION_DATABASE_HOSTNAME ||
+              runtimeUrl.hostname !== process.env.PRODUCTION_DATABASE_HOSTNAME
+            ) {
+              throw new Error("Migration DSN hostname must match the protected Access hostname");
+            }
+            if (migrationUrl.port !== "5433" || runtimeUrl.port !== "5433") {
+              throw new Error("Both database DSNs must target local cloudflared port 5433");
+            }
+            if (
+              migrationUrl.searchParams.get("sslmode") !== "verify-full" ||
+              runtimeUrl.searchParams.get("sslmode") !== "verify-full"
+            ) {
+              throw new Error("Both database DSNs must require sslmode=verify-full");
+            }
+            if (decodeURIComponent(migrationUrl.username) === "relayapi_runtime") {
+              throw new Error("The no-DDL runtime role cannot verify migration history");
+            }
+            if (decodeURIComponent(runtimeUrl.username) !== "relayapi_runtime") {
+              throw new Error("The runtime DSN must authenticate as relayapi_runtime");
+            }
+            if (migrationUrl.pathname !== runtimeUrl.pathname) {
+              throw new Error("Migration and runtime DSNs must name the same database");
+            }
+          '
+          printf '%s\n' "$PRODUCTION_DATABASE_CA_CERT" > "$RUNNER_TEMP/relayapi-postgres-ca.crt"
+          sudo install -m 0644 "$RUNNER_TEMP/relayapi-postgres-ca.crt" \
+            /usr/local/share/ca-certificates/relayapi-postgres-ca.crt
+          sudo update-ca-certificates
+          docker run --detach --rm --pull always --network host \
+            --name "relayapi-generation-1-stamp-db-${GITHUB_RUN_ID}" \
+            --env TUNNEL_SERVICE_TOKEN_ID \
+            --env TUNNEL_SERVICE_TOKEN_SECRET \
+            cloudflare/cloudflared:2026.6.0@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f \
+            access tcp \
+            --hostname "$PRODUCTION_DATABASE_HOSTNAME" \
+            --url 127.0.0.1:5433 \
+            --loglevel warn
+          printf '127.0.0.1\t%s\n' "$PRODUCTION_DATABASE_HOSTNAME" | \
+            sudo tee -a /etc/hosts >/dev/null
+          ready=false
+          for _ in $(seq 1 30); do
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/5433' 2>/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "true"
+
+      - name: Prove the exact generation-1 database identity, ledger, and catalog
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRELIVE_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+          PRELIVE_EXPECTED_DATABASE: ${{ inputs.expected_database_name }}
+        run: |
+          set -euo pipefail
+          bun -e '
+            import postgres from "postgres";
+            import {
+              assertDatabaseIdentity,
+              assertRuntimeConnectionCannotDdl,
+              assertSupportedPostgres,
+            } from "./packages/db/src/database-contract.ts";
+            const sql = postgres(
+              process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE,
+              { max: 1 },
+            );
+            try {
+              await assertDatabaseIdentity(sql, process.env.PRELIVE_EXPECTED_DATABASE);
+              await assertSupportedPostgres(sql);
+              await assertRuntimeConnectionCannotDdl(
+                process.env.PRELIVE_RUNTIME_DATABASE_URL,
+                "relayapi_runtime",
+                process.env.PRELIVE_EXPECTED_DATABASE,
+              );
+            } finally {
+              await sql.end();
+            }
+          '
+          bun run --cwd packages/db verify:migrations
+          bun run --cwd packages/db catalog:fingerprint:verify-active
+          bun run --cwd packages/db migration:history:current
+
+      - name: Build the exact dashboard stamp bundle
+        run: |
+          set -euo pipefail
+          bun run build:sdk
+          bun run --cwd apps/app build
+          bun run --cwd apps/app deploy:dry-run
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+          BETTER_AUTH_SECRET: "github-actions-build-secret"
+          BETTER_AUTH_URL: "https://relayapi.dev"
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: "postgres://x:x@localhost:5433/x"
+
+      - name: Capture the currently active App version
+        id: previous_app
+        run: |
+          set -euo pipefail
+          version_id="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one App version at 100% traffic")
+            end
+          ')"
+          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+        working-directory: apps/app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy the source-pinned generation-1 App stamp
+        id: stamped_app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+          STAMP_COMMIT_SHA: ${{ inputs.stamp_commit_sha }}
+          PREVIOUS_VERSION_ID: ${{ steps.previous_app.outputs.version_id }}
+        working-directory: apps/app
+        run: |
+          set -euo pipefail
+          output_file="$RUNNER_TEMP/relayapi-generation-1-stamp-app.jsonl"
+          : > "$output_file"
+          set +e
+          WRANGLER_OUTPUT_FILE_PATH="$output_file" \
+            bun run secrets:cf:deploy -- app -- \
+              --config dist/server/wrangler.json --keep-vars --strict \
+              --tag "baseline-1-stamp-${STAMP_COMMIT_SHA}" \
+              --message "Generation 1 stamp ${STAMP_COMMIT_SHA}"
+          deploy_exit_code=$?
+          set -e
+          active_version="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one App version at 100% traffic")
+            end
+          ')"
+          test "$active_version" != "$PREVIOUS_VERSION_ID"
+          version_json="$(bunx wrangler versions view "$active_version" --json)"
+          test "$(printf '%s' "$version_json" | jq -er '.annotations["workers/tag"]')" = \
+            "baseline-1-stamp-${STAMP_COMMIT_SHA}"
+          test "$(printf '%s' "$version_json" | jq -er '.annotations["workers/message"]')" = \
+            "Generation 1 stamp ${STAMP_COMMIT_SHA}"
+          output_version_id="$(jq -sr '
+            [.[] | select(.type == "deploy" and .worker_name == "relayapi-app") | .version_id]
+            | if length == 0 then ""
+              elif length == 1 and .[0] != null then .[0]
+              else error("expected at most one relayapi-app deploy event")
+              end
+          ' "$output_file")"
+          if [ -n "$output_version_id" ] && [ "$output_version_id" != "$active_version" ]; then
+            echo "::error::Wrangler output disagrees with the active App stamp"
+            exit 1
+          fi
+          if [ "$deploy_exit_code" != "0" ]; then
+            echo "::warning::Wrangler exited nonzero after promoting the exact App stamp"
+          fi
+          printf 'version_id=%s\n' "$active_version" >> "$GITHUB_OUTPUT"
+
+      - name: Capture the currently active API version
+        id: previous_api
+        run: |
+          set -euo pipefail
+          version_id="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one API version at 100% traffic")
+            end
+          ')"
+          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+        working-directory: apps/api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy the source-pinned generation-1 API stamp
+        id: stamped_api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+          STAMP_COMMIT_SHA: ${{ inputs.stamp_commit_sha }}
+          PREVIOUS_VERSION_ID: ${{ steps.previous_api.outputs.version_id }}
+        working-directory: apps/api
+        run: |
+          set -euo pipefail
+          output_file="$RUNNER_TEMP/relayapi-generation-1-stamp-api.jsonl"
+          : > "$output_file"
+          set +e
+          WRANGLER_OUTPUT_FILE_PATH="$output_file" \
+            bun run secrets:cf:deploy -- api -- \
+              --keep-vars --strict \
+              --tag "baseline-1-stamp-${STAMP_COMMIT_SHA}" \
+              --message "Generation 1 stamp ${STAMP_COMMIT_SHA}"
+          deploy_exit_code=$?
+          set -e
+          active_version="$(bunx wrangler deployments status --json | jq -er '
+            if (.versions | length) == 1 and .versions[0].percentage == 100
+            then .versions[0].version_id
+            else error("expected one API version at 100% traffic")
+            end
+          ')"
+          test "$active_version" != "$PREVIOUS_VERSION_ID"
+          version_json="$(bunx wrangler versions view "$active_version" --json)"
+          test "$(printf '%s' "$version_json" | jq -er '.annotations["workers/tag"]')" = \
+            "baseline-1-stamp-${STAMP_COMMIT_SHA}"
+          test "$(printf '%s' "$version_json" | jq -er '.annotations["workers/message"]')" = \
+            "Generation 1 stamp ${STAMP_COMMIT_SHA}"
+          output_version_id="$(jq -sr '
+            [.[] | select(.type == "deploy" and .worker_name == "relayapi") | .version_id]
+            | if length == 0 then ""
+              elif length == 1 and .[0] != null then .[0]
+              else error("expected at most one relayapi deploy event")
+              end
+          ' "$output_file")"
+          if [ -n "$output_version_id" ] && [ "$output_version_id" != "$active_version" ]; then
+            echo "::error::Wrangler output disagrees with the active API stamp"
+            exit 1
+          fi
+          if [ "$deploy_exit_code" != "0" ]; then
+            echo "::warning::Wrangler exited nonzero after promoting the exact API stamp"
+          fi
+          printf 'version_id=%s\n' "$active_version" >> "$GITHUB_OUTPUT"
+
+      - name: Re-verify exact Worker versions, configuration, and secret intent
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+          EXPECTED_WORKER_VERSION_ID: ${{ steps.stamped_api.outputs.version_id }}
+          APP_WORKER_VERSION_ID: ${{ steps.stamped_app.outputs.version_id }}
+        run: |
+          set -euo pipefail
+          bun run --cwd apps/api cloudflare:verify-production
+          EXPECTED_WORKER_VERSION_ID="$APP_WORKER_VERSION_ID" \
+            bun scripts/verify-cloudflare-worker-deployment.ts app
+          bun run secrets:cf:verify -- api
+          bun run secrets:cf:verify -- app
+
+      - name: Attest both active generation-1 versions and their exact source
+        run: bun scripts/check-live-baseline-generation.ts --attest-cutover-stamp
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECTED_GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.stamp_commit_sha }}
+          EXPECTED_GENERATION_1_API_VERSION_ID: ${{ steps.stamped_api.outputs.version_id }}
+          EXPECTED_GENERATION_1_APP_VERSION_ID: ${{ steps.stamped_app.outputs.version_id }}
+
+      - name: Prove both stamped Workers are open and expose only the narrow smoke
+        env:
+          MAINTENANCE_SMOKE_BYPASS_TOKEN: ${{ secrets.MAINTENANCE_SMOKE_BYPASS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$MAINTENANCE_SMOKE_BYPASS_TOKEN"
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            https://api.relayapi.dev/health/control |
+            jq -e '.status == "open"'
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            https://relayapi.dev/health/control |
+            jq -e '.status == "open"'
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            -H "x-relayapi-maintenance-smoke-bypass: $MAINTENANCE_SMOKE_BYPASS_TOKEN" \
+            https://api.relayapi.dev/internal/cutover-smoke |
+            jq -e '.ok == true and .control.status == "open"'
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            -H "x-relayapi-maintenance-smoke-bypass: $MAINTENANCE_SMOKE_BYPASS_TOKEN" \
+            https://relayapi.dev/internal/cutover-smoke |
+            jq -e '.ok == true and .control.status == "open"'
+
+      - name: Create the exact generation-1 stamp release record
+        env:
+          ACTUAL_GENERATION_1_STAMP_RUN_ID: ${{ github.run_id }}
+          ACTUAL_GENERATION_1_STAMP_COMMIT_SHA: ${{ inputs.stamp_commit_sha }}
+          ACTUAL_GENERATION_1_API_VERSION_ID: ${{ steps.stamped_api.outputs.version_id }}
+          ACTUAL_GENERATION_1_APP_VERSION_ID: ${{ steps.stamped_app.outputs.version_id }}
+        run: >-
+          bun scripts/generation-1-stamp-record.ts
+          --write="$RUNNER_TEMP/generation-1-stamp-record.json"
+
+      - name: Preserve the immutable generation-1 stamp release record
+        id: stamp_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: generation-1-stamp-${{ inputs.stamp_commit_sha }}
+          path: ${{ runner.temp }}/generation-1-stamp-record.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record exact cutover inputs in the protected workflow summary
+        env:
+          STAMP_COMMIT_SHA: ${{ inputs.stamp_commit_sha }}
+          API_VERSION_ID: ${{ steps.stamped_api.outputs.version_id }}
+          APP_VERSION_ID: ${{ steps.stamped_app.outputs.version_id }}
+          ARTIFACT_DIGEST: ${{ steps.stamp_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Generation-1 cutover stamp"
+            echo
+            echo "- Workflow run ID: \`$GITHUB_RUN_ID\`"
+            echo "- Source commit SHA: \`$STAMP_COMMIT_SHA\`"
+            echo "- API Worker version ID: \`$API_VERSION_ID\`"
+            echo "- App Worker version ID: \`$APP_VERSION_ID\`"
+            echo "- Artifact SHA-256: \`$ARTIFACT_DIGEST\`"
+            echo
+            echo "Pass these exact values to the protected generation-2 cutover."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop the generation-1 database verification tunnel
+        if: ${{ always() }}
+        run: >-
+          docker rm --force
+          "relayapi-generation-1-stamp-db-${GITHUB_RUN_ID}"
+          >/dev/null 2>&1 || true

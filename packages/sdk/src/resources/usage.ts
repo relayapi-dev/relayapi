@@ -7,6 +7,10 @@ import { RequestOptions } from '../internal/request-options';
 export class Usage extends APIResource {
   /**
    * Returns current plan details and API call usage statistics for the organization.
+   *
+   * If Stripe authority is temporarily unavailable, the API returns
+   * `BILLING_AUTHORITY_PENDING` with HTTP 503 and a `Retry-After` header instead of
+   * returning a mixed or provisional billing snapshot.
    */
   retrieve(options?: RequestOptions): APIPromise<UsageRetrieveResponse> {
     return this._client.get('/v1/usage', options);
@@ -50,12 +54,14 @@ export namespace UsageRetrieveResponse {
     /**
      * API calls included per billing cycle
      */
-    api_calls_limit: number;
+    api_calls_limit: string | null;
 
     /**
      * API calls allowed per minute
      */
     api_calls_per_min: number;
+
+    quota_mode: 'hard' | 'metered' | 'unlimited';
 
     features: Plan.Features;
 
@@ -81,11 +87,6 @@ export namespace UsageRetrieveResponse {
 
   export interface RateLimit {
     /**
-     * API calls in the current rate-limit window
-     */
-    current_minute: number;
-
-    /**
      * Max API calls per rate-limit window
      */
     limit_per_minute: number;
@@ -110,14 +111,15 @@ export namespace UsageRetrieveResponse {
 
   export interface Usage {
     /**
-     * API calls remaining this cycle. Null for pro plan (unlimited, overage billed).
+     * Decimal API calls remaining this cycle. Metered plans may be negative after
+     * the included allowance is exhausted; null only means unlimited.
      */
-    api_calls_remaining: number | null;
+    api_calls_remaining: string | null;
 
     /**
      * API calls used this cycle
      */
-    api_calls_used: number;
+    api_calls_used: string;
 
     /**
      * Current billing cycle end
@@ -132,12 +134,16 @@ export namespace UsageRetrieveResponse {
     /**
      * API calls exceeding included amount
      */
-    overage_calls: number;
+    overage_calls: string;
 
     /**
      * Overage cost in cents
      */
     overage_cost_cents: number;
+
+    included_units: string | null;
+
+    quota_mode: 'hard' | 'metered' | 'unlimited';
   }
 }
 

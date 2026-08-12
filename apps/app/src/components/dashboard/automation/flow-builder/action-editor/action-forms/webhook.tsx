@@ -98,13 +98,13 @@ export function WebhookOutForm({ action, onChange, errors }: Props) {
 				</select>
 			</Field>
 
-			<Field label="Headers" description="Key-value pairs sent with the request.">
+			<Field
+				label="Headers"
+				description="Key-value pairs sent with the request."
+			>
 				<div className="space-y-1.5">
 					{headerRows.map(([k, v], idx) => (
-						<div
-							key={`${idx}-${k}`}
-							className="flex items-center gap-1.5"
-						>
+						<div key={`${idx}-${k}`} className="flex items-center gap-1.5">
 							<input
 								type="text"
 								value={k}
@@ -152,7 +152,7 @@ export function WebhookOutForm({ action, onChange, errors }: Props) {
 						onChange({ ...action, body: e.target.value || undefined })
 					}
 					rows={4}
-					placeholder='{"event": "tagged", "tag": "{{contact.first_name}}"}'
+					placeholder='{"event": "tagged", "name": "{{contact.name}}"}'
 					className="w-full resize-y rounded-xl border border-[#d9dde6] bg-white px-3 py-2 font-mono text-[12px] outline-none focus:border-[#c0c6d0]"
 				/>
 			</Field>

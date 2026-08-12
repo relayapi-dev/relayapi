@@ -1,15 +1,13 @@
+import {
+	BEARER_INVITE_SIGNUP_HEADER,
+	isBearerInviteToken,
+} from "@relayapi/auth/bearer-invite-contract";
 import { Eye, EyeOff } from "lucide-react";
 import { motion } from "motion/react";
-import { useMemo, useState } from "react";
-import { signIn, signUp } from "../../lib/auth-client";
-import {
-	AuthDivider,
-	AuthShell,
-	LAST_AUTH_KEY,
-	ProviderButton,
-} from "./auth-shell";
-
-const SIGNUP_ENABLED = false;
+import { useState } from "react";
+import { signUp } from "../../lib/auth-client";
+import { PUBLIC_ACCESS_HREF } from "../../lib/public-access";
+import { AuthShell, LAST_AUTH_KEY } from "./auth-shell";
 
 const INPUT =
 	"h-11 w-full rounded-[12px] border border-[#1a1815]/12 bg-white text-base text-[#1a1815] outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-[#9a968c] focus:border-[#1a1815]/35 focus:ring-[3px] focus:ring-[#1a1815]/10";
@@ -20,7 +18,11 @@ const fade = {
 	transition: { duration: 0.45, ease: [0.32, 0.72, 0, 1] as const },
 };
 
-export function SignupForm() {
+interface SignupFormProps {
+	inviteToken?: string | null;
+}
+
+export function SignupForm({ inviteToken }: SignupFormProps) {
 	const [name, setName] = useState("");
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
@@ -28,10 +30,12 @@ export function SignupForm() {
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const inviteId = useMemo(() => {
-		if (typeof window === "undefined") return null;
-		return new URLSearchParams(window.location.search).get("invite");
-	}, []);
+	const bearerInviteToken = isBearerInviteToken(inviteToken)
+		? inviteToken
+		: null;
+	const invitedLoginHref = bearerInviteToken
+		? `/login?redirect=${encodeURIComponent(`/invite/${bearerInviteToken}`)}`
+		: "/login";
 
 	const rememberMethod = (method: string) => {
 		try {
@@ -44,6 +48,10 @@ export function SignupForm() {
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 		setError(null);
+		if (!bearerInviteToken) {
+			setError("A valid invitation is required to create an account.");
+			return;
+		}
 
 		if (password.length < 8) {
 			setError("Password must be at least 8 characters");
@@ -53,10 +61,16 @@ export function SignupForm() {
 		setLoading(true);
 
 		try {
-			const { error: authError } = await signUp.email({
+			const { data, error: authError } = await signUp.email({
 				email,
 				password,
 				name,
+				callbackURL: `/invite/${bearerInviteToken}`,
+				fetchOptions: {
+					headers: {
+						[BEARER_INVITE_SIGNUP_HEADER]: bearerInviteToken,
+					},
+				},
 			});
 
 			if (authError) {
@@ -75,33 +89,44 @@ export function SignupForm() {
 			}
 
 			rememberMethod("email");
-			window.location.href = inviteId ? `/invite/${inviteId}` : "/app";
+			const destination = `/invite/${bearerInviteToken}`;
+			if (data?.token) {
+				window.location.href = destination;
+				return;
+			}
+			window.location.href = `/login?verification=sent&redirect=${encodeURIComponent(destination)}`;
 		} catch {
 			setError("Something went wrong. Please try again.");
 			setLoading(false);
 		}
 	};
 
-	const handleGoogleSignUp = async () => {
-		rememberMethod("google");
-		await signIn.social({
-			provider: "google",
-			callbackURL: inviteId ? `/invite/${inviteId}` : "/app",
-		});
-	};
-
-	if (!SIGNUP_ENABLED) {
+	if (!bearerInviteToken) {
 		return (
 			<AuthShell>
 				<motion.div {...fade} className="text-center">
 					<h1 className="text-[1.7rem] font-semibold tracking-[-0.02em] text-[#1a1815]">
-						Coming soon
+						Hosted signup is invite-only
 					</h1>
 					<p className="mx-auto mt-2 max-w-[20rem] text-[0.95rem] text-[#6e6a62]">
-						RelayAPI is still in development and will be released soon. Thanks
-						for your interest.
+						Public account creation is not open yet. Request early access or use
+						the self-hosted distribution today.
 					</p>
-					<p className="mt-7 text-sm text-[#6e6a62]">
+					<div className="mt-7 flex flex-col gap-2.5">
+						<a
+							href={PUBLIC_ACCESS_HREF}
+							className="flex h-11 items-center justify-center rounded-[12px] bg-[#1a1815] px-4 text-sm font-semibold text-[#f3f1ea] transition-opacity hover:opacity-90"
+						>
+							Request early access
+						</a>
+						<a
+							href="https://docs.relayapi.dev/guides/self-hosting"
+							className="flex h-11 items-center justify-center rounded-[12px] border border-[#1a1815]/15 px-4 text-sm font-medium text-[#1a1815] transition-colors hover:bg-[#1a1815]/5"
+						>
+							View self-hosting guide
+						</a>
+					</div>
+					<p className="mt-6 text-sm text-[#6e6a62]">
 						Already have an account?{" "}
 						<a
 							href="/login"
@@ -119,19 +144,13 @@ export function SignupForm() {
 		<AuthShell>
 			<motion.div {...fade}>
 				<h1 className="text-[1.7rem] font-semibold tracking-[-0.02em] text-[#1a1815]">
-					Create your account
+					Create your invited account
 				</h1>
 				<p className="mt-1.5 text-[0.95rem] text-[#6e6a62]">
-					One API for 21 social platforms
+					Your invitation will be verified securely when you continue.
 				</p>
 
-				<div className="mt-7 flex flex-col gap-2.5">
-					<ProviderButton label="Google" onClick={handleGoogleSignUp} />
-				</div>
-
-				<AuthDivider />
-
-				<form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
+				<form onSubmit={handleSubmit} className="mt-7 flex flex-col gap-3.5">
 					{error && (
 						<motion.div
 							initial={{ opacity: 0, y: -8 }}
@@ -142,7 +161,7 @@ export function SignupForm() {
 								<span>
 									An account with this email already exists.{" "}
 									<a
-										href="/login"
+										href={invitedLoginHref}
 										className="font-medium underline underline-offset-2 hover:opacity-80"
 									>
 										Sign in instead
@@ -253,7 +272,7 @@ export function SignupForm() {
 				<p className="mt-6 text-center text-sm text-[#6e6a62]">
 					Already have an account?{" "}
 					<a
-						href="/login"
+						href={invitedLoginHref}
 						className="font-medium text-[#1a1815] hover:underline"
 					>
 						Sign in

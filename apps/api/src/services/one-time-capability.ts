@@ -1,8 +1,12 @@
-import { type Database, oneTimeCapabilities } from "@relayapi/db";
+import {
+	type Database,
+	type OneTimeCapabilityKind,
+	oneTimeCapabilities,
+} from "@relayapi/db";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { decryptToken, encryptToken } from "../lib/crypto";
 
-export type OneTimeCapabilityKind = "oauth_state" | "websocket_ticket";
+export type { OneTimeCapabilityKind } from "@relayapi/db";
 
 async function capabilityId(
 	kind: OneTimeCapabilityKind,

@@ -2,10 +2,10 @@
  * Inbox AI service — AI-powered classification, reply suggestions, and
  * conversation summarization using Cloudflare Workers AI.
  *
- * Model: @cf/meta/llama-3.1-8b-instruct
+ * Model: @cf/zai-org/glm-4.7-flash
  */
 
-import type { Database } from "@relayapi/db";
+import { AI_INFERENCE_MODEL, type Database } from "@relayapi/db";
 import { getConversationWithMessages } from "./inbox-persistence";
 
 // ---------------------------------------------------------------------------
@@ -67,16 +67,14 @@ interface MessageForPriority {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// The base model may not be in the generated runtime types yet — cast to satisfy the Ai interface.
-const MODEL =
-	"@cf/meta/llama-3.1-8b-instruct" as "@cf/meta/llama-3.1-8b-instruct-fp8";
+const MODEL = AI_INFERENCE_MODEL;
 
-const DEFAULT_CLASSIFICATION: Omit<ClassifyResult, "id"> = {
-	sentiment: { score: 0, label: "neutral" },
-	intent: "general",
-	urgency: "low",
-	requires_response: false,
-};
+export class InboxAiProviderError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "InboxAiProviderError";
+	}
+}
 
 function extractJson(raw: string): unknown {
 	// Try to find a JSON array or object in the response
@@ -115,58 +113,59 @@ Respond ONLY with a JSON array.`;
 			messages: [{ role: "user", content: prompt }],
 		});
 
-		const responseText = (result as { response?: string }).response ?? "";
+		const responseText = (result as { response?: unknown }).response;
+		if (typeof responseText !== "string") {
+			throw new Error("Workers AI returned no text response");
+		}
 		const parsed = extractJson(responseText) as Array<
 			Partial<Omit<ClassifyResult, "id">>
 		>;
 
-		if (!Array.isArray(parsed)) {
-			return messages.map((m) => ({ ...DEFAULT_CLASSIFICATION, id: m.id }));
+		if (!Array.isArray(parsed) || parsed.length !== messages.length) {
+			throw new Error("Workers AI returned an incomplete classification");
 		}
 
 		return messages.map((m, i) => {
 			const item = parsed[i];
-			if (!item) {
-				return { ...DEFAULT_CLASSIFICATION, id: m.id };
+			if (
+				!item ||
+				typeof item.sentiment?.score !== "number" ||
+				!Number.isFinite(item.sentiment.score) ||
+				!["positive", "neutral", "negative"].includes(
+					item.sentiment.label ?? "",
+				) ||
+				![
+					"question",
+					"complaint",
+					"compliment",
+					"spam",
+					"feedback",
+					"general",
+				].includes(item.intent ?? "") ||
+				!["high", "medium", "low"].includes(item.urgency ?? "") ||
+				typeof item.requires_response !== "boolean"
+			) {
+				throw new Error("Workers AI returned an invalid classification");
 			}
 
 			return {
 				id: m.id,
 				sentiment: {
-					score:
-						typeof item.sentiment?.score === "number"
-							? Math.max(-1, Math.min(1, item.sentiment.score))
-							: 0,
-					label:
-						item.sentiment?.label &&
-						["positive", "neutral", "negative"].includes(item.sentiment.label)
-							? (item.sentiment.label as "positive" | "neutral" | "negative")
-							: "neutral",
+					score: Math.max(-1, Math.min(1, item.sentiment.score)),
+					label: item.sentiment.label as
+						| "positive"
+						| "neutral"
+						| "negative",
 				},
-				intent:
-					item.intent &&
-					[
-						"question",
-						"complaint",
-						"compliment",
-						"spam",
-						"feedback",
-						"general",
-					].includes(item.intent)
-						? (item.intent as ClassifyResult["intent"])
-						: "general",
-				urgency:
-					item.urgency && ["high", "medium", "low"].includes(item.urgency)
-						? (item.urgency as "high" | "medium" | "low")
-						: "low",
-				requires_response:
-					typeof item.requires_response === "boolean"
-						? item.requires_response
-						: false,
+				intent: item.intent as ClassifyResult["intent"],
+				urgency: item.urgency as "high" | "medium" | "low",
+				requires_response: item.requires_response,
 			};
 		});
-	} catch {
-		return messages.map((m) => ({ ...DEFAULT_CLASSIFICATION, id: m.id }));
+	} catch (error) {
+		throw new InboxAiProviderError(
+			error instanceof Error ? error.message : "Workers AI classification failed",
+		);
 	}
 }
 
@@ -221,26 +220,36 @@ Respond ONLY with a JSON array.`;
 			messages: [{ role: "user", content: prompt }],
 		});
 
-		const responseText = (result as { response?: string }).response ?? "";
+		const responseText = (result as { response?: unknown }).response;
+		if (typeof responseText !== "string") {
+			throw new Error("Workers AI returned no text response");
+		}
 		const parsed = extractJson(responseText) as SuggestReplyResult[];
 
 		if (!Array.isArray(parsed)) {
-			return [];
+			throw new Error("Workers AI returned invalid reply suggestions");
 		}
 
-		return parsed
-			.slice(0, maxSuggestions)
-			.map((item) => ({
-				text: typeof item.text === "string" ? item.text : "",
-				tone: typeof item.tone === "string" ? item.tone : tone,
-				confidence:
-					typeof item.confidence === "number"
-						? Math.max(0, Math.min(1, item.confidence))
-						: 0.5,
-			}))
-			.filter((s) => s.text.length > 0);
-	} catch {
-		return [];
+		return parsed.slice(0, maxSuggestions).map((item) => {
+			if (
+				typeof item.text !== "string" ||
+				item.text.trim().length === 0 ||
+				typeof item.tone !== "string" ||
+				typeof item.confidence !== "number" ||
+				!Number.isFinite(item.confidence)
+			) {
+				throw new Error("Workers AI returned an invalid reply suggestion");
+			}
+			return {
+				text: item.text,
+				tone: item.tone,
+				confidence: Math.max(0, Math.min(1, item.confidence)),
+			};
+		});
+	} catch (error) {
+		throw new InboxAiProviderError(
+			error instanceof Error ? error.message : "Workers AI reply generation failed",
+		);
 	}
 }
 
@@ -299,32 +308,31 @@ Respond ONLY with JSON.`;
 			messages: [{ role: "user", content: prompt }],
 		});
 
-		const responseText = (result as { response?: string }).response ?? "";
+		const responseText = (result as { response?: unknown }).response;
+		if (typeof responseText !== "string") {
+			throw new Error("Workers AI returned no text response");
+		}
 		const parsed = extractJson(responseText) as Partial<SummarizeResult>;
+		if (
+			typeof parsed.summary !== "string" ||
+			!Array.isArray(parsed.key_topics) ||
+			!parsed.key_topics.every((topic) => typeof topic === "string") ||
+			typeof parsed.action_needed !== "string"
+		) {
+			throw new Error("Workers AI returned an invalid conversation summary");
+		}
 
 		return {
-			summary:
-				typeof parsed.summary === "string"
-					? parsed.summary
-					: "Unable to generate summary.",
-			key_topics: Array.isArray(parsed.key_topics)
-				? parsed.key_topics.filter((t): t is string => typeof t === "string")
-				: [],
-			action_needed:
-				typeof parsed.action_needed === "string"
-					? parsed.action_needed
-					: "unknown",
+			summary: parsed.summary,
+			key_topics: parsed.key_topics as string[],
+			action_needed: parsed.action_needed,
 			message_count: messageCount,
 			timespan,
 		};
-	} catch {
-		return {
-			summary: "Unable to generate summary.",
-			key_topics: [],
-			action_needed: "unknown",
-			message_count: messageCount,
-			timespan,
-		};
+	} catch (error) {
+		throw new InboxAiProviderError(
+			error instanceof Error ? error.message : "Workers AI summarization failed",
+		);
 	}
 }
 

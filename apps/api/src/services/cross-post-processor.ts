@@ -87,7 +87,7 @@ export async function processCrossPostActions(env: Env): Promise<void> {
 		.where(
 			and(
 				inArray(crossPostActions.status, ["pending", "retry", "processing"]),
-				lte(crossPostActions.executeAt, now),
+				lte(crossPostActions.nextAttemptAt, now),
 				or(
 					isNull(crossPostActions.leaseExpiresAt),
 					lte(crossPostActions.leaseExpiresAt, now),
@@ -266,7 +266,7 @@ async function processClaimedAction(
 				await updateFenced(db, action, "retry", {
 					leaseExpiresAt: null,
 					readinessChecks: nextReadinessCheck,
-					executeAt: new Date(
+					nextAttemptAt: new Date(
 						Date.now() + crossPostReadinessDelayMs(nextReadinessCheck),
 					),
 					error: "Selected source post target is not published yet",
@@ -334,7 +334,9 @@ async function processClaimedAction(
 		} catch (error) {
 			await updateFenced(db, action, "retry", {
 				leaseExpiresAt: null,
-				executeAt: new Date(Date.now() + retryDelayMs(providerAttemptNumber)),
+				nextAttemptAt: new Date(
+					Date.now() + retryDelayMs(providerAttemptNumber),
+				),
 				error: error instanceof Error ? error.message : String(error),
 			});
 			return;
@@ -345,6 +347,7 @@ async function processClaimedAction(
 			refresh_token: null,
 			platform_account_id: account.platformAccountId,
 			username: account.username,
+			metadata: account.metadata as Record<string, unknown> | null,
 		};
 		const requestStartedAt = new Date();
 		const armed = await updateFenced(db, action, "executing", {
@@ -409,7 +412,9 @@ async function processClaimedAction(
 			await updateFenced(db, action, "retry", {
 				leaseExpiresAt: null,
 				requestMayHaveBeenSentAt: null,
-				executeAt: new Date(Date.now() + retryDelayMs(providerAttemptNumber)),
+				nextAttemptAt: new Date(
+					Date.now() + retryDelayMs(providerAttemptNumber),
+				),
 				error: outcome.error,
 			});
 			return;
@@ -453,14 +458,16 @@ async function processClaimedAction(
 		const values = {
 			leaseExpiresAt: null,
 			completedAt: requestBoundaryCrossed ? new Date() : null,
-			executeAt: requestBoundaryCrossed
-				? action.executeAt
-				: new Date(
-						Date.now() +
-							retryDelayMs(
-								providerAttemptNumber ?? Math.max(1, action.attempts),
-							),
-					),
+			...(requestBoundaryCrossed
+				? {}
+				: {
+						nextAttemptAt: new Date(
+							Date.now() +
+								retryDelayMs(
+									providerAttemptNumber ?? Math.max(1, action.attempts),
+								),
+						),
+					}),
 			error: message,
 		};
 		if (!requestBoundaryCrossed) {

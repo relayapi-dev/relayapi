@@ -35,7 +35,8 @@ export interface CrossPostActionResponse {
   content: string | null;
   delay_minutes: number;
   status: 'pending' | 'processing' | 'executing' | 'retry' | 'executed' | 'failed' | 'unknown' | 'cancelled';
-  execute_at: string;
+  scheduled_for: string;
+  next_attempt_at: string;
   executed_at: string | null;
   result_post_id: string | null;
   error: string | null;

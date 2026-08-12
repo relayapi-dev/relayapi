@@ -16,7 +16,7 @@ export const BLUR_FADE_DELAY = 0.15;
 export const siteConfig = {
 	name: "Relay",
 	description:
-		"Unified social media API — post to 21 platforms with a single call.",
+		"Unified social media API — post to 22 platforms with a single call.",
 	cta: "Get Started",
 	url: "https://relayapi.dev",
 	keywords: [
@@ -77,7 +77,7 @@ export const siteConfig = {
 		badge: "One API for every social platform",
 		title: '"Ehy claude, post this to all my socials"',
 		description:
-			"Relay is an open-source unified API that lets your AI or app post to 21 platforms at once.",
+			"Relay is an open-source unified API that lets your AI or app post to 22 platforms at once.",
 		cta: {
 			primary: {
 				text: "Start for free",
@@ -231,7 +231,7 @@ export const siteConfig = {
 					icon: <Icons.terminal className="size-4 text-muted-foreground" />,
 					title: "Connect accounts via OAuth",
 					description:
-						"Link Twitter, Instagram, LinkedIn, TikTok, and 11 more platforms in seconds. We handle token refresh and re-auth automatically.",
+						"Connect accounts across all 22 publishers with the documented OAuth, managed-bot, webhook, or API-credential flow.",
 				},
 				{
 					id: 2,
@@ -380,7 +380,7 @@ export const siteConfig = {
 				description: (
 					<p>
 						I used to mass-communicate through parables and word of mouth. With
-						Relay, I can post to all 21 platforms at once.
+						Relay, I can post to all 22 platforms at once.
 						<Highlight>
 							Truly a miracle. Even I couldn&apos;t have done it better.
 						</Highlight>
@@ -535,7 +535,7 @@ export const siteConfig = {
 				img: "https://pub-4cc181c2247149beb15ea4dd0c959249.r2.dev/testimonials/spongebob.jpg",
 				description: (
 					<p>
-						I&apos;M READY! I&apos;M READY! I&apos;M READY to post to 17
+						I&apos;M READY! I&apos;M READY! I&apos;M READY to post to 22
 						platforms at once! Mr. Krabs saved so much money switching to Relay.
 						<Highlight>The best API in all of Bikini Bottom!</Highlight>
 					</p>
@@ -570,7 +570,7 @@ export const siteConfig = {
 				yearlyPrice: "$0",
 				features: [
 					"200 requests/month",
-					"All 21 platforms",
+					"All 22 platforms",
 					"Unlimited profiles",
 					"Media uploads",
 					"Webhook notifications",
@@ -590,7 +590,7 @@ export const siteConfig = {
 				features: [
 					"10,000 requests included",
 					"$1 per 1,000 extra calls",
-					"All 21 platforms",
+					"All 22 platforms",
 					"Unlimited profiles",
 					"Media uploads & scheduling",
 					"Webhook notifications",
@@ -615,7 +615,7 @@ export const siteConfig = {
 				id: 1,
 				question: "What is Relay?",
 				answer:
-					"Relay is a unified social media API that lets you post to 21 platforms (Instagram, LinkedIn, TikTok, Facebook, YouTube, Reddit, Pinterest, Bluesky, Threads, Telegram, Snapchat, Google Business, WhatsApp, Mastodon, Discord, X/Twitter, and SMS via Twilio) with a single API call. No need to build and maintain separate integrations for each network.",
+					"Relay is a unified publishing API that lets you post to 22 channels (Instagram, LinkedIn, TikTok, Facebook, YouTube, Reddit, Pinterest, Bluesky, Threads, Telegram, Snapchat, Google Business, WhatsApp, Mastodon, Discord, Slack, X/Twitter, SMS via Twilio, Beehiiv, Kit, Mailchimp, and Listmonk) with a single API call. No need to build and maintain separate integrations for each provider.",
 			},
 			{
 				id: 2,
@@ -633,13 +633,13 @@ export const siteConfig = {
 				id: 4,
 				question: "Which platforms are supported?",
 				answer:
-					"We currently support Instagram, LinkedIn, TikTok, Facebook, YouTube, Reddit, Pinterest, Bluesky, Threads, Telegram, Snapchat, Google Business, WhatsApp, Mastodon, Discord, and SMS (via Twilio). 21 platforms and growing. X/Twitter support is paused due to their API pricing changes but can be enabled on demand with adjusted pricing.",
+					"We currently support Instagram, LinkedIn, TikTok, Facebook, YouTube, Reddit, Pinterest, Bluesky, Threads, Telegram, Snapchat, Google Business, WhatsApp, Mastodon, Discord, Slack, X/Twitter, SMS via Twilio, Beehiiv, Kit, Mailchimp, and Listmonk: 22 publishing channels in total. Provider account eligibility, app review, scopes, and content rules still apply.",
 			},
 			{
 				id: 5,
 				question: "Is there a free plan?",
 				answer:
-					"Yes! Our Free plan gives you 200 requests/month across all 21 platforms — no credit card required. When you're ready for more, Pro is $5/month with 10,000 requests included and $1 per 1,000 extra calls. Analytics and Comments APIs are included in Pro at no extra cost.",
+					"Yes! Our Free plan gives you 200 requests/month across all 22 platforms — no credit card required. When you're ready for more, Pro is $5/month with 10,000 requests included and $1 per 1,000 extra calls. Analytics and Comments APIs are included in Pro at no extra cost.",
 			},
 			{
 				id: 6,
@@ -658,7 +658,7 @@ export const siteConfig = {
 			href: "/signup",
 		},
 		subtext:
-			"Stop juggling 17 different APIs. One integration, every platform, free to start.",
+			"Stop juggling 22 provider integrations. One publishing contract, every supported channel, free to start.",
 	},
 	footerLinks: [
 		{

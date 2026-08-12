@@ -206,6 +206,234 @@ export async function findOwnedPhoneNumber(
 	return match ? { id: match.id, phoneNumber: match.phone_number } : null;
 }
 
+/**
+ * Enumerate the complete Telnyx account inventory for the pre-live money-path
+ * gate. This is deliberately account-wide so a lost local row cannot hide a
+ * still-rented number.
+ *
+ * Official docs:
+ * https://developers.telnyx.com/api-reference/phone-number-configurations/slim-list-phone-numbers
+ * GET /v2/phone_numbers/slim, page[size], page[number]
+ */
+export async function listOwnedPhoneNumbers(apiKey: string): Promise<
+	Array<{
+		id: string;
+		phoneNumber: string;
+		status: string | null;
+		customerReference: string | null;
+	}>
+> {
+	const rows: Array<{
+		id: string;
+		phoneNumber: string;
+		status: string | null;
+		customerReference: string | null;
+	}> = [];
+	let expectedTotalPages: number | undefined;
+	let expectedTotalResults: number | undefined;
+	for (let pageNumber = 1; pageNumber <= 10_000; pageNumber++) {
+		const params = new URLSearchParams({
+			"page[number]": String(pageNumber),
+			"page[size]": "100",
+		});
+		const response = await telnyxFetch<{
+			data: Array<{
+				id: string;
+				phone_number: string;
+				status?: string | null;
+				customer_reference?: string | null;
+			}>;
+			meta?: {
+				page_number?: number;
+				page_size?: number;
+				total_pages?: number;
+				total_results?: number;
+			};
+		}>(`${TELNYX_API}/phone_numbers/slim?${params.toString()}`, apiKey);
+		for (const row of response.data) {
+			if (!row.id || !row.phone_number) {
+				throw new Error(
+					"Telnyx returned a phone number without an ID or number",
+				);
+			}
+			rows.push({
+				id: row.id,
+				phoneNumber: row.phone_number,
+				status: row.status ?? null,
+				customerReference: row.customer_reference ?? null,
+			});
+		}
+		const totalPages = response.meta?.total_pages;
+		const observedPage = response.meta?.page_number;
+		const observedPageSize = response.meta?.page_size;
+		const totalResults = response.meta?.total_results;
+		if (
+			!Number.isSafeInteger(observedPage) ||
+			observedPage !== pageNumber ||
+			(observedPageSize !== undefined &&
+				(!Number.isSafeInteger(observedPageSize) ||
+					observedPageSize !== 100)) ||
+			!Number.isSafeInteger(totalPages) ||
+			(totalPages ?? -1) < 0 ||
+			(totalResults !== undefined &&
+				(!Number.isSafeInteger(totalResults) || totalResults < 0))
+		) {
+			throw new Error("Telnyx phone-number inventory pagination was invalid");
+		}
+		if (
+			(expectedTotalPages !== undefined && totalPages !== expectedTotalPages) ||
+			(expectedTotalResults !== undefined &&
+				totalResults !== expectedTotalResults)
+		) {
+			throw new Error("Telnyx phone-number inventory totals changed");
+		}
+		expectedTotalPages ??= totalPages;
+		expectedTotalResults ??= totalResults;
+		if (totalPages === 0) {
+			if (
+				pageNumber !== 1 ||
+				response.data.length !== 0 ||
+				(totalResults !== undefined && totalResults !== 0)
+			) {
+				throw new Error("Telnyx phone-number inventory empty page was invalid");
+			}
+			return [];
+		}
+		if (pageNumber >= (totalPages as number)) {
+			if (new Set(rows.map((row) => row.id)).size !== rows.length) {
+				throw new Error("Telnyx phone-number inventory returned duplicate IDs");
+			}
+			if (
+				expectedTotalResults !== undefined &&
+				rows.length !== expectedTotalResults
+			) {
+				throw new Error(
+					"Telnyx phone-number inventory did not match total_results",
+				);
+			}
+			return rows.sort((left, right) => left.id.localeCompare(right.id));
+		}
+	}
+	throw new Error("Telnyx phone-number inventory exceeded 10000 pages");
+}
+
+/**
+ * Enumerate every number order so the pre-live provider gate can detect an
+ * order that may still allocate a billable number after local state is wiped.
+ *
+ * Official docs:
+ * https://developers.telnyx.com/api-reference/phone-number-orders/list-number-orders
+ * GET /v2/number_orders, page[size], page[number]
+ */
+export async function listNumberOrders(apiKey: string): Promise<
+	Array<{
+		id: string;
+		status: string;
+		customerReference: string | null;
+		phoneNumbers: string[];
+		updatedAt: string | null;
+	}>
+> {
+	const rows: Array<{
+		id: string;
+		status: string;
+		customerReference: string | null;
+		phoneNumbers: string[];
+		updatedAt: string | null;
+	}> = [];
+	let expectedTotalPages: number | undefined;
+	let expectedTotalResults: number | undefined;
+	for (let pageNumber = 1; pageNumber <= 10_000; pageNumber++) {
+		const params = new URLSearchParams({
+			"page[number]": String(pageNumber),
+			"page[size]": "100",
+		});
+		const response = await telnyxFetch<{
+			data: Array<{
+				id?: string;
+				status?: string;
+				customer_reference?: string | null;
+				phone_numbers?: Array<{ phone_number?: string }>;
+				updated_at?: string | null;
+			}>;
+			meta?: {
+				page_number?: number;
+				page_size?: number;
+				total_pages?: number;
+				total_results?: number;
+			};
+		}>(`${TELNYX_API}/number_orders?${params.toString()}`, apiKey);
+		for (const row of response.data) {
+			if (!row.id || !row.status) {
+				throw new Error(
+					"Telnyx returned a number order without an ID or status",
+				);
+			}
+			rows.push({
+				id: row.id,
+				status: row.status,
+				customerReference: row.customer_reference ?? null,
+				phoneNumbers: (row.phone_numbers ?? [])
+					.map(({ phone_number: phoneNumber }) => phoneNumber)
+					.filter((phoneNumber): phoneNumber is string => Boolean(phoneNumber))
+					.sort(),
+				updatedAt: row.updated_at ?? null,
+			});
+		}
+		const totalPages = response.meta?.total_pages;
+		const observedPage = response.meta?.page_number;
+		const observedPageSize = response.meta?.page_size;
+		const totalResults = response.meta?.total_results;
+		if (
+			!Number.isSafeInteger(observedPage) ||
+			observedPage !== pageNumber ||
+			(observedPageSize !== undefined &&
+				(!Number.isSafeInteger(observedPageSize) ||
+					observedPageSize !== 100)) ||
+			!Number.isSafeInteger(totalPages) ||
+			(totalPages ?? -1) < 0 ||
+			(totalResults !== undefined &&
+				(!Number.isSafeInteger(totalResults) || totalResults < 0))
+		) {
+			throw new Error("Telnyx number-order inventory pagination was invalid");
+		}
+		if (
+			(expectedTotalPages !== undefined && totalPages !== expectedTotalPages) ||
+			(expectedTotalResults !== undefined &&
+				totalResults !== expectedTotalResults)
+		) {
+			throw new Error("Telnyx number-order inventory totals changed");
+		}
+		expectedTotalPages ??= totalPages;
+		expectedTotalResults ??= totalResults;
+		if (totalPages === 0) {
+			if (
+				pageNumber !== 1 ||
+				response.data.length !== 0 ||
+				(totalResults !== undefined && totalResults !== 0)
+			) {
+				throw new Error("Telnyx number-order inventory empty page was invalid");
+			}
+			return [];
+		}
+		if (pageNumber >= (totalPages as number)) {
+			if (new Set(rows.map((row) => row.id)).size !== rows.length) {
+				throw new Error("Telnyx number-order inventory returned duplicate IDs");
+			}
+			if (
+				expectedTotalResults !== undefined &&
+				rows.length !== expectedTotalResults
+			) {
+				throw new Error(
+					"Telnyx number-order inventory did not match total_results",
+				);
+			}
+			return rows.sort((left, right) => left.id.localeCompare(right.id));
+		}
+	}
+	throw new Error("Telnyx number-order inventory exceeded 10000 pages");
+}
+
 /** Return false only when Telnyx authoritatively reports that the number is gone. */
 export async function telnyxPhoneNumberExists(
 	apiKey: string,

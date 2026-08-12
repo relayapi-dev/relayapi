@@ -26,6 +26,10 @@ import {
 	type SendMessageResult,
 	sendMessage,
 } from "../../message-sender";
+import {
+	isAutomationExternalEffectControlError,
+	type RunContext,
+} from "../types";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -67,6 +71,7 @@ export type AutomationSendInput = {
 	};
 	/** Stable node-effect key; test/custom transports and future providers may use it. */
 	idempotencyKey?: string;
+	executeExternalEffect?: RunContext["executeExternalEffect"];
 	/**
 	 * Optional transport override for tests. When present, used in place of
 	 * the real `sendMessage(req)` call. This is the cleanest way to exercise
@@ -254,7 +259,31 @@ export async function dispatchAutomationMessage(
 		}
 
 		try {
-			const res = await sendFn(req);
+			const res = input.executeExternalEffect
+				? await input.executeExternalEffect(
+						{
+							effectKey: `message-block:${block.id}`,
+							kind: "message_block",
+						},
+						async (providerIdempotencyKey) => {
+							const value = await sendFn({
+								...req,
+								idempotencyKey: providerIdempotencyKey,
+							});
+							return value.success
+								? {
+										outcome: "succeeded" as const,
+										value,
+										providerReference: value.messageId ?? null,
+									}
+								: {
+										outcome: "failed" as const,
+										value,
+										error: value.error ?? "send_failed",
+									};
+						},
+					)
+				: await sendFn(req);
 			if (res.success) {
 				sent.push({ blockId: block.id, providerMessageId: res.messageId });
 			} else {
@@ -264,6 +293,7 @@ export async function dispatchAutomationMessage(
 				});
 			}
 		} catch (err) {
+			if (isAutomationExternalEffectControlError(err)) throw err;
 			errors.push({
 				blockId: block.id,
 				error: err instanceof Error ? err.message : String(err),

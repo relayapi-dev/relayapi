@@ -1,40 +1,364 @@
 ---
 title: Media Uploads
-description: Upload images, videos, and other media to include in your posts.
+description: Upload images, videos, audio, and PDFs to include in your posts.
 icon: Image
 ---
 
+import { Callout } from 'fumadocs-ui/components/callout';
+
 ## Overview
 
-RelayAPI supports media uploads through pre-signed URLs. Upload media first, then reference it in your posts.
+RelayAPI accepts canonical media objects up to **200 MiB** (`209,715,200`
+bytes). For new clients, use the upload-session API: it sends bytes directly to
+object storage, declares the expected size up front, and switches to resumable
+multipart upload above 64 MiB. The Worker-proxy endpoint remains capped at
+50 MiB.
 
-## Upload Flow
+An upload is usable only after completion succeeds. Completion verifies the
+stored size and MIME type, marks the media ready, and starts asynchronous
+normalization when that optional service is available. Attach the ready
+media's `reference_url` to a post; post writes accept media objects, not a
+`med_` ID in place of the object.
 
-1. Request a pre-signed upload URL via `POST /v1/media/upload`
-2. Upload your file directly to the pre-signed URL
-3. Reference the media ID in your post's content
+## Recommended upload-session flow
 
-```bash
-# Step 1: Get upload URL
-curl -X POST https://api.relayapi.dev/v1/media/upload \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
-  -H "Content-Type: application/json" \
-  -d '{"filename": "photo.jpg", "mime_type": "image/jpeg", "size": 1048576}'
+1. Send `POST /v1/media/uploads` with `filename`, `content_type`, exact
+   `size_bytes`, and optional `workspace_id`.
+2. Inspect `mode`:
+   - `single`: PUT the file once to `upload.url`, using every returned header.
+   - `multipart`: request signed URLs from
+     `POST /v1/media/uploads/{id}/parts` (at most 32 part numbers per request),
+     upload every 16 MiB part, and retain each response `ETag`.
+3. Send `POST /v1/media/uploads/{id}/complete`. For multipart sessions, pass
+   every contiguous `{part_number, etag}` pair in order; single-part sessions
+   pass an empty `parts` array.
+4. Use the returned ready media's `reference_url` in `POST /v1/posts`.
 
-# Step 2: Upload to the pre-signed URL
-curl -X PUT "https://media.relayapi.dev/upload/..." \
-  -H "Content-Type: image/jpeg" \
-  --data-binary @photo.jpg
+`reference_url` is the stable attachment URL while Relay retains the original.
+`url` is a read URL and can be signed and short-lived. Do not persist `url` for
+a scheduled post. `reference_url` becomes `null` after the original is no
+longer available; `url` can then point to the durable preview instead.
+
+Sessions expose `created`, `uploading`, `completing`, `completed`, `aborting`,
+`aborted`, `failed`, and `expired`. Retrieve a session with
+`GET /v1/media/uploads/{id}` after an interrupted client request. Abort an
+incomplete session with `DELETE /v1/media/uploads/{id}`; a completed object is
+deleted through `DELETE /v1/media/{media_id}` instead.
+
+```typescript
+import Relay from '@relayapi/sdk';
+
+const client = new Relay();
+const file = new Blob([bytes], { type: 'video/mp4' });
+const session = await client.media.createUploadSession({
+  filename: 'launch.mp4',
+  content_type: file.type,
+  size_bytes: file.size,
+});
+
+if (session.mode === 'single') {
+  if (!session.upload) throw new Error('Missing single-part upload URL');
+  const response = await fetch(session.upload.url, {
+    method: 'PUT',
+    headers: session.upload.headers,
+    body: file,
+  });
+  if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
+  const completed = await client.media.completeUploadSession(session.id, {
+    parts: [],
+  });
+  if (!completed.reference_url) {
+    throw new Error('Completed upload has no attachment URL');
+  }
+} else {
+  const partSize = session.part_size;
+  const partCount = session.part_count;
+  if (!partSize || !partCount) throw new Error('Missing multipart plan');
+
+  const uploaded: Array<{ part_number: number; etag: string }> = [];
+  for (let first = 1; first <= partCount; first += 32) {
+    const partNumbers = Array.from(
+      { length: Math.min(32, partCount - first + 1) },
+      (_, index) => first + index,
+    );
+    const signed = await client.media.createUploadPartURLs(session.id, {
+      part_numbers: partNumbers,
+    });
+
+    for (const part of signed.parts) {
+      const start = (part.part_number - 1) * partSize;
+      const response = await fetch(part.upload_url, {
+        method: 'PUT',
+        headers: part.upload_headers,
+        body: file.slice(start, Math.min(start + partSize, file.size)),
+      });
+      if (!response.ok) throw new Error(`Part ${part.part_number} failed`);
+      const etag = response.headers.get('etag');
+      if (!etag) throw new Error('Storage response did not expose ETag');
+      uploaded.push({ part_number: part.part_number, etag });
+    }
+  }
+
+  const completed = await client.media.completeUploadSession(session.id, {
+    parts: uploaded,
+  });
+  if (!completed.reference_url) {
+    throw new Error('Completed upload has no attachment URL');
+  }
+}
 ```
 
-## Supported Formats
+<Callout type="info">
+Hosted RelayAPI pins media-bucket CORS to the RelayAPI dashboard origin;
+self-host provisioning pins it to the configured dashboard origin. Both permit
+`PUT` and expose `ETag`, which browser multipart completion requires. A custom
+browser app on another origin should proxy the signed PUT through its own
+backend; server-to-server clients are not subject to browser CORS. Do not
+persist signed upload URLs: request new part URLs from the session when a
+signature expires.
+</Callout>
 
-| Type | Formats | Max Size |
-|------|---------|----------|
-| Image | JPEG, PNG, GIF, WebP | 10 MB |
-| Video | MP4, MOV, AVI | 100 MB |
-| Document | PDF | 25 MB |
+## Legacy pre-signed flow
+
+`POST /v1/media/presign` remains available for single-PUT clients. It does not
+provide multipart retry/resume, so the upload-session flow above is preferred.
+A legacy direct upload is complete only after all three steps succeed: create
+an intent, PUT the bytes, and confirm the object.
+
+1. Send `POST /v1/media/presign` with `filename`, `content_type`, and optional `workspace_id`.
+2. PUT the raw file bytes to `upload_url` with every entry from `upload_headers`. `Content-Type` must exactly match the normalized type signed in step 1, and `If-None-Match: *` makes the object key create-only.
+3. Send `POST /v1/media/confirm` with the storage key from the returned canonical `url`. Confirmation is mandatory: it verifies the stored MIME type and size and marks the media ready.
+4. Create a post with the confirmed media record's `reference_url`, such as `{ "url": confirmed.reference_url, "type": "image" }`. Posts accept media objects containing `url` and an optional `type`; they do not accept a media ID in place of the object.
+
+The presign response has this shape:
+
+```json
+{
+  "id": "med_abc123",
+  "upload_url": "https://<account>.r2.cloudflarestorage.com/relayapi-media/...?X-Amz-Signature=...",
+  "upload_headers": {
+    "Content-Type": "image/jpeg",
+    "If-None-Match": "*"
+  },
+  "url": "https://media.relayapi.dev/org_123/file_abc/photo.jpg",
+  "expires_in": 3600
+}
+```
+
+`id` identifies the pending upload intent. The presign response's `url` is the
+canonical attachment URL and is returned as `reference_url` after confirmation;
+`upload_url` is only for the PUT and expires after `expires_in` seconds.
+Presigned URLs remain usable until they expire, so RelayAPI signs
+`If-None-Match: *` and requires clients to send it to prevent a later PUT from
+replacing confirmed bytes.
+
+```bash
+# Step 1: Create the upload intent
+presign="$(curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/presign \
+  -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"filename":"photo.jpg","content_type":"image/jpeg"}')"
+
+upload_url="$(printf '%s' "$presign" | jq -r '.upload_url')"
+upload_content_type="$(printf '%s' "$presign" | jq -r '.upload_headers["Content-Type"]')"
+upload_precondition="$(printf '%s' "$presign" | jq -r '.upload_headers["If-None-Match"]')"
+canonical_url="$(printf '%s' "$presign" | jq -r '.url')"
+storage_key="${canonical_url#https://media.relayapi.dev/}"
+
+# Step 2: PUT once with every exact header signed in step 1
+curl --fail-with-body -sS -X PUT "$upload_url" \
+  -H "Content-Type: $upload_content_type" \
+  -H "If-None-Match: $upload_precondition" \
+  --data-binary @photo.jpg
+
+# Step 3: Confirm the object (mandatory)
+confirmed="$(jq -n --arg storage_key "$storage_key" '{storage_key: $storage_key}' | \
+  curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/media/confirm \
+    -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)"
+
+# Step 4: Attach the stable reference URL, not the expiring read URL
+reference_url="$(printf '%s' "$confirmed" | jq -r '.reference_url')"
+jq -n --arg media_url "$reference_url" '{
+  content: "Check out this photo!",
+  targets: ["instagram"],
+  scheduled_at: "now",
+  media: [{url: $media_url, type: "image"}]
+}' | curl --fail-with-body -sS -X POST https://api.relayapi.dev/v1/posts \
+  -H "Authorization: Bearer $RELAYAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data-binary @-
+```
+
+<Callout type="info">
+The confirmation response is the ready media record, including `id`, `url`,
+`reference_url`, `original_available`, `filename`, `mime_type`, `size`, and
+`created_at`. Use `reference_url` in future or scheduled posts. The `url` field
+is for reading now and may be short-lived.
+</Callout>
+
+## Request envelope limits
+
+File-size limits and HTTP request-envelope limits are separate:
+
+| Flow | Envelope limit | File limit |
+|------|----------------|------------|
+| `POST /v1/media/uploads` | File bytes bypass the Worker | 200 MiB; multipart when the declared size is greater than 64 MiB |
+| Legacy `POST /v1/media/presign` | File bytes bypass the Worker | 200 MiB, verified at confirmation; single PUT only |
+| [`POST /v1/media/upload`](/api-reference/media/uploadMedia) | Streamed by the media route | 50 MiB |
+| `POST /v1/ideas/{id}/media` | 3 MiB multipart envelope | 2 MiB file |
+| `POST /v1/posts/bulk-csv` | 2 MiB multipart envelope | 1 MiB CSV file |
+
+The general 4 MiB authenticated JSON limit does not replace these route-specific file limits. Conversely, embedding file bytes or a data URL in JSON is not an upload mechanism; upload media first and reference its canonical URL.
+
+RelayAPI enforces streamed limits even when `Content-Length` is absent, malformed, or understated. Buffered JSON and the two multipart endpoints reject non-identity `Content-Encoding`; do not gzip those request bodies.
+
+## Supported Formats and Size
+
+The canonical object limit is **200 MiB**. Only the Worker-proxy
+`POST /v1/media/upload` flow retains the smaller **50 MiB** limit. The same
+MIME allowlist applies to all media-library upload paths.
+
+| Type | Allowed MIME types |
+|------|--------------------|
+| Image | `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/heic`, `image/heif`, `image/avif` |
+| Video | `video/mp4`, `video/webm`, `video/quicktime`, `video/mpeg` |
+| Audio | `audio/mpeg`, `audio/mp4`, `audio/webm`, `audio/wav`, `audio/ogg` |
+| Document | `application/pdf` |
+
+Generic `application/octet-stream`, SVG, HTML, and MIME types not listed above are rejected. The pre-signed PUT is bound to the declared `content_type`; changing the header on the PUT invalidates the signed request.
+
+## Automatic normalization
+
+After an image, video, or audio object becomes ready, RelayAPI best-effort
+queues a `publish-standard-v1` normalization job. It can normalize images,
+transcode video/audio, and convert GIFs into provider-friendly MP4 variants.
+Processing is deliberately **fail-open**:
+
+- the verified original becomes ready immediately and remains publishable;
+- a pending or failed derivative never makes the original upload fail;
+- publishing selects a ready, unexpired, compatible normalized derivative only
+  when it is smaller than the original, and otherwise uses the original;
+- the media response exposes `processing_status`, `processing_error`, and
+  bounded `variants` metadata. It never exposes a permanent signed derivative
+  URL.
+
+Use `GET /v1/media/{id}` to poll processing state. You can also explicitly
+request a normalization or provider variant:
+
+```typescript
+await client.media.process('med_source', {
+  operation: 'normalize',
+  profile: 'publish-standard-v1',
+  options: {
+    compression_mode: 'balanced',
+    fail_open: true,
+  },
+});
+```
+
+The processing request is a strict discriminated contract:
+
+| Operation | Accepted `options` |
+| --- | --- |
+| `normalize` / `provider_variant` | `compression_mode`: `balanced`, `high_quality`, or `smaller`; `fail_open`: boolean |
+| `cover` | `timestamp_seconds`: number from 0 through 86,400 |
+
+`profile` must be 1–128 characters, begin with a letter or number, and contain
+only letters, numbers, dots, underscores, colons, or hyphens. Unknown option
+fields and options intended for another operation fail schema validation rather
+than being silently ignored. Automatic `publish-standard-v1` normalization
+uses the fail-open path described above.
+
+`POST /v1/media/{id}/process` returns `503 MEDIA_PROCESSING_UNAVAILABLE` when a
+deployment has not enabled the processing service. That does not affect the
+original upload.
+
+### Custom Reel covers
+
+Generate a still image from an uploaded video by requesting `operation: 'cover'`.
+`timestamp_seconds` must be between `0` and `86400`.
+
+```typescript
+await client.media.process('med_video', {
+  operation: 'cover',
+  profile: 'instagram-reel-cover-v1',
+  options: { timestamp_seconds: 3.5 },
+});
+
+// After GET /v1/media/med_video reports a ready `cover` variant:
+await client.posts.create({
+  content: 'Launch day',
+  targets: ['instagram'],
+  scheduled_at: 'now',
+  media: [{ url: mediaURL, type: 'video' }],
+  target_options: {
+    instagram: {
+      content_type: 'reels',
+      cover_variant_id: 'mder_ready_cover',
+    },
+  },
+});
+```
+
+Instagram Reel covers accept exactly one of `cover_url`, `cover_media_id`,
+`cover_variant_id`, or `thumb_offset`. Stable Relay IDs are tenant- and
+workspace-checked and resolved into a fresh signed URL only at the final
+provider boundary.
+
+### Self-hosted processing
+
+The media library and 200 MiB direct-to-storage upload sessions are part of the
+base self-hosted deployment. Automatic normalization and explicit custom-cover
+jobs are optional because Cloudflare Containers and Workflows can add cost.
+Initialize with `--media-processing`, or set `features.mediaProcessing: true`,
+to provision the private, internet-disabled ffmpeg Container, Workflow, Queue,
+and dead-letter Queue. Without that flag, originals still upload and publish,
+while explicit processing returns `MEDIA_PROCESSING_UNAVAILABLE`.
 
 ## Platform-Specific Limits
 
-Each platform has its own media requirements. RelayAPI automatically validates and, where possible, converts media to meet platform specifications. See individual [platform pages](/platforms) for details.
+Each platform can impose stricter dimensions, duration, codec, aspect-ratio, or
+file-size requirements. The 200 MiB library limit does not override a
+provider's smaller limit. Automatic normalization improves common inputs but
+does not guarantee that every source can be converted for every provider;
+review the relevant [platform page](/platforms) before publishing.
+
+Important current publisher boundaries:
+
+- `audio` is a valid shared media type, but WhatsApp is currently the only
+  publisher that accepts it. Every other adapter rejects audio during central
+  validation before provider I/O.
+- Bluesky image blobs are capped at exactly 2,000,000 decimal bytes (about 1.91 MiB); RelayAPI does not silently recompress an oversized source.
+- Reddit accepts at most one media URL through RelayAPI, and it is submitted as a link post rather than a native upload or gallery.
+- YouTube accepts exactly one video and at most one thumbnail for that video.
+- Telegram media groups contain 2–10 items and can include up to ten videos; RelayAPI journals every returned album message ID for later unpublish.
+- Discord uploads at most ten non-video attachments at the defensive 10 MiB-per-file limit. Up to ten video items are appended as public URLs for Discord to unfurl, not uploaded as files.
+- Beehiiv accepts image and GIF media as inline HTML when no custom `content_html` is
+  supplied. Kit, Mailchimp, and Listmonk accept text/HTML only and reject every
+  Relay media attachment before provider I/O.
+
+### TikTok source modes
+
+TikTok video posts require `duration_ms` on the media item. RelayAPI re-queries
+fresh creator info and rejects a video that exceeds either TikTok's global
+duration limit or that creator's current `max_video_post_duration_sec` before
+publish initialization.
+
+`target_options.tiktok.source_mode` controls how RelayAPI transfers a video:
+
+- `file_upload` makes RelayAPI fetch the media through its guarded, bounded
+  public-media client and stream sequential chunks to TikTok. The binary is not
+  embedded in the post JSON.
+- `pull_from_url` lets TikTok fetch the media and is allowed only when the URL
+  is beneath an HTTPS URL prefix verified by the operator and pinned into the
+  connected account.
+- If omitted, a video under a pinned prefix uses pull mode; any other video
+  falls back to bounded file upload.
+
+Photo posts always use `PULL_FROM_URL`; every photo URL must match a pinned
+prefix. Pull-mode URLs must remain directly reachable over HTTPS and must not
+redirect. The operator prefix list is snapshotted when TikTok OAuth completes,
+so reconnect the account after changing it. See the [TikTok platform
+guide](/platforms/tiktok) for the complete consent and source contract.

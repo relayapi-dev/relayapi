@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -6,7 +10,10 @@ import type {
 	DailyMetricPoint,
 	DateRange,
 } from "./types";
-import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../../lib/linkedin-rest";
+import {
+	getLinkedInRestHeaders,
+	LINKEDIN_API_BASE,
+} from "../../lib/linkedin-rest";
 import { fetchWithTimeout } from "../../lib/fetch-timeout";
 
 // Country code to name mapping for LinkedIn geo facets
@@ -144,14 +151,14 @@ async function fetchShareStatistics(
 
 	const res = await linkedinFetch(accessToken, path);
 	if (!res.ok) {
-		const errBody = await res.text();
+		const errBody = await readProviderText(res);
 		console.error(
 			`LinkedIn share statistics error (${res.status}): ${errBody}`,
 		);
 		return [];
 	}
 
-	const data = (await res.json()) as ShareStatsResponse;
+	const data = (await readProviderJson(res)) as ShareStatsResponse;
 	return data.elements ?? [];
 }
 
@@ -200,14 +207,14 @@ async function fetchFollowerStatistics(
 
 	const res = await linkedinFetch(accessToken, path);
 	if (!res.ok) {
-		const errBody = await res.text();
+		const errBody = await readProviderText(res);
 		console.error(
 			`LinkedIn follower statistics error (${res.status}): ${errBody}`,
 		);
 		return null;
 	}
 
-	const data = (await res.json()) as FollowerStatsResponse;
+	const data = (await readProviderJson(res)) as FollowerStatsResponse;
 	return data.elements?.[0] ?? null;
 }
 
@@ -232,14 +239,14 @@ async function fetchDailyFollowerStatistics(
 
 	const res = await linkedinFetch(accessToken, path);
 	if (!res.ok) {
-		const errBody = await res.text();
+		const errBody = await readProviderText(res);
 		console.error(
 			`LinkedIn daily follower statistics error (${res.status}): ${errBody}`,
 		);
 		return [];
 	}
 
-	const data = (await res.json()) as FollowerStatsResponse;
+	const data = (await readProviderJson(res)) as FollowerStatsResponse;
 	return data.elements ?? [];
 }
 
@@ -340,8 +347,7 @@ export const linkedinAnalytics: PlatformAnalyticsFetcher = {
 
 		const engagementChange =
 			previous.engagement > 0
-				? ((current.engagement - previous.engagement) /
-						previous.engagement) *
+				? ((current.engagement - previous.engagement) / previous.engagement) *
 					100
 				: null;
 
@@ -384,14 +390,14 @@ export const linkedinAnalytics: PlatformAnalyticsFetcher = {
 
 		const postsRes = await linkedinFetch(accessToken, postsPath);
 		if (!postsRes.ok) {
-			const errBody = await postsRes.text();
+			const errBody = await readProviderText(postsRes);
 			console.error(
 				`LinkedIn posts fetch error (${postsRes.status}): ${errBody}`,
 			);
 			return [];
 		}
 
-		const postsData = (await postsRes.json()) as PostsResponse;
+		const postsData = (await readProviderJson(postsRes)) as PostsResponse;
 		const posts = postsData.elements ?? [];
 
 		if (posts.length === 0) return [];
@@ -416,7 +422,7 @@ export const linkedinAnalytics: PlatformAnalyticsFetcher = {
 		const statsMap = new Map<string, ShareStatElement>();
 
 		if (statsRes.ok) {
-			const statsData = (await statsRes.json()) as {
+			const statsData = (await readProviderJson(statsRes)) as {
 				elements?: Array<ShareStatElement & { share?: string }>;
 			};
 			for (const el of statsData.elements ?? []) {
@@ -425,7 +431,7 @@ export const linkedinAnalytics: PlatformAnalyticsFetcher = {
 				}
 			}
 		} else {
-			const errBody = await statsRes.text();
+			const errBody = await readProviderText(statsRes);
 			console.error(
 				`LinkedIn share stats fetch error (${statsRes.status}): ${errBody}`,
 			);
@@ -495,7 +501,7 @@ export const linkedinAnalytics: PlatformAnalyticsFetcher = {
 				const total = getTotalFollowers(entry.followerCounts);
 				// The geo field contains a country code like "urn:li:geo:103644278" or a country code
 				const geoCode = entry.geo.includes(":")
-					? entry.geo.split(":").pop() ?? entry.geo
+					? (entry.geo.split(":").pop() ?? entry.geo)
 					: entry.geo;
 				return {
 					code: geoCode,

@@ -1,9 +1,10 @@
 import type { APIRoute } from "astro";
-import { handleSdkError, requireClient } from "@/lib/api-utils";
+import { handleSdkError, requireSessionBoundClient } from "@/lib/api-utils";
 
 export const GET: APIRoute = async (ctx) => {
-	const client = await requireClient(ctx);
-	if (client instanceof Response) return client;
+	const boundClient = await requireSessionBoundClient(ctx);
+	if (boundClient instanceof Response) return boundClient;
+	const { client, requestOptions } = boundClient;
 	try {
 		const url = new URL(ctx.request.url);
 		const data = await client.connect.startOAuthFlow(
@@ -13,9 +14,11 @@ export const GET: APIRoute = async (ctx) => {
 			{
 				redirect_url: url.searchParams.get("redirect_url") || undefined,
 				method: url.searchParams.get("method") || undefined,
+				instance_url: url.searchParams.get("instance_url") || undefined,
 				headless: url.searchParams.get("headless") || undefined,
 				workspace_id: url.searchParams.get("workspace_id") || undefined,
 			},
+			requestOptions,
 		);
 		return Response.json(data);
 	} catch (e) {

@@ -6,7 +6,9 @@ import {
 	socialAccounts,
 } from "@relayapi/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { decryptToken, encryptionKeyId, encryptToken } from "../lib/crypto";
 import type { Env } from "../types";
+import { normalizeQueueClass } from "./queue-class";
 
 export type QueueFailureKind =
 	| "permanent_input"
@@ -44,8 +46,88 @@ function organizationIds(body: unknown): string[] {
 	return [...ids];
 }
 
+function locatorIds(
+	body: unknown,
+	scalarNames: readonly string[],
+	arrayName: string,
+): string[] {
+	if (!body || typeof body !== "object" || Array.isArray(body)) return [];
+	const value = body as Record<string, unknown>;
+	const ids = new Set<string>();
+	for (const name of scalarNames) {
+		if (typeof value[name] === "string" && value[name]) {
+			ids.add(value[name]);
+		}
+	}
+	if (Array.isArray(value[arrayName])) {
+		for (const id of value[arrayName]) {
+			if (typeof id === "string" && id) ids.add(id);
+		}
+	}
+	return [...ids];
+}
+
+function sanitizeQueueFailureError(error: unknown): string {
+	const raw = error instanceof Error ? error.message : String(error);
+	return raw
+		.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
+		.replace(/\b(?:\+?\d[\d\s().-]{7,}\d)\b/g, "[redacted-phone]")
+		.replace(
+			/\b(bearer|token|secret|password|api[_-]?key)\s*[:=]\s*\S+/gi,
+			"$1=[redacted]",
+		)
+		.slice(0, 2_000);
+}
+
+function queueFailurePayloadContext(
+	queueName: string,
+	messageId: string,
+): { recordId: string; field: string } {
+	return {
+		recordId: `${queueName}:${messageId}`,
+		field: "queue_failure_payload",
+	};
+}
+
+export async function encryptQueueFailurePayload(
+	env: Pick<Env, "ENCRYPTION_KEY">,
+	queueName: string,
+	messageId: string,
+	payload: unknown,
+): Promise<{ payloadCiphertext: string; payloadKeyId: string }> {
+	const payloadCiphertext = await encryptToken(
+		JSON.stringify(normalizePayload(payload)),
+		env.ENCRYPTION_KEY,
+		queueFailurePayloadContext(queueName, messageId),
+	);
+	const payloadKeyId = encryptionKeyId(payloadCiphertext);
+	if (!payloadKeyId) throw new Error("Queue-failure payload key ID is missing");
+	return { payloadCiphertext, payloadKeyId };
+}
+
+export async function decryptQueueFailurePayload(
+	env: Pick<Env, "ENCRYPTION_KEY">,
+	row: {
+		queueName: string;
+		messageId: string;
+		payloadCiphertext: string | null;
+	},
+): Promise<Record<string, unknown> | null> {
+	if (!row.payloadCiphertext) return null;
+	const plaintext = await decryptToken(
+		row.payloadCiphertext,
+		env.ENCRYPTION_KEY,
+		queueFailurePayloadContext(row.queueName, row.messageId),
+	);
+	const parsed = JSON.parse(plaintext) as unknown;
+	return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+		? (parsed as Record<string, unknown>)
+		: null;
+}
+
 function mediaOrganizationId(queueName: string, body: unknown): string | null {
-	if (!queueName.includes("relayapi-media-cleanup")) return null;
+	if (normalizeQueueClass(queueName)?.capability !== "media-cleanup")
+		return null;
 	if (!body || typeof body !== "object" || Array.isArray(body)) return null;
 	const object = (body as Record<string, unknown>).object;
 	if (!object || typeof object !== "object" || Array.isArray(object))
@@ -84,6 +166,7 @@ export async function recordQueueFailureRecord(
 			"ad_id",
 			"receipt_id",
 		);
+	const queueCapability = normalizeQueueClass(input.queueName)?.capability;
 	await db.transaction(async (tx) => {
 		const scopedOrganizations = new Set([
 			...(input.organizationIds ?? []),
@@ -93,7 +176,7 @@ export async function recordQueueFailureRecord(
 		if (mediaScope) scopedOrganizations.add(mediaScope);
 		if (
 			scopedOrganizations.size === 0 &&
-			input.queueName.includes("relayapi-refresh") &&
+			queueCapability === "refresh" &&
 			typeof payload.account_id === "string"
 		) {
 			const [account] = await tx
@@ -108,7 +191,7 @@ export async function recordQueueFailureRecord(
 		// entry is immediately visible through every affected organization.
 		if (
 			scopedOrganizations.size === 0 &&
-			input.queueName.includes("relayapi-inbox") &&
+			queueCapability === "inbox" &&
 			typeof payload.receipt_id === "string"
 		) {
 			const [receipt] = await tx
@@ -151,6 +234,15 @@ export async function recordQueueFailureRecord(
 						...(operationId ? { operation_id: operationId } : {}),
 					}
 				: payload;
+		const encryptedPayload = await encryptQueueFailurePayload(
+			env,
+			input.queueName,
+			input.messageId,
+			persistedPayload,
+		);
+		const preserveSubjectLocators =
+			!hasTenantScope ||
+			activeOrganizationIds.length === scopedOrganizations.size;
 
 		await tx
 			.insert(queueFailures)
@@ -161,22 +253,88 @@ export async function recordQueueFailureRecord(
 				operationId,
 				failureKind: input.kind,
 				attempts: input.attempts,
-				payload: persistedPayload,
-				error:
-					input.error instanceof Error
-						? input.error.message
-						: String(input.error),
+				...encryptedPayload,
+				workspaceIds: preserveSubjectLocators
+					? locatorIds(input.payload, ["workspace_id"], "workspace_ids")
+					: [],
+				userIds: preserveSubjectLocators
+					? locatorIds(input.payload, ["user_id"], "user_ids")
+					: [],
+				contactIds: preserveSubjectLocators
+					? locatorIds(input.payload, ["contact_id"], "contact_ids")
+					: [],
+				accountIds: preserveSubjectLocators
+					? locatorIds(
+							input.payload,
+							["account_id", "social_account_id"],
+							"account_ids",
+						)
+					: [],
+				error: sanitizeQueueFailureError(input.error),
 			})
 			.onConflictDoUpdate({
 				target: [queueFailures.queueName, queueFailures.messageId],
 				set: {
 					attempts: sql`GREATEST(${queueFailures.attempts}, excluded.attempts)`,
-					error: sql`excluded.error`,
-					payload: sql`excluded.payload`,
-					organizationIds: sql`(
-					SELECT COALESCE(array_agg(DISTINCT merged.value), ARRAY[]::text[])
-					FROM unnest(${queueFailures.organizationIds} || excluded.organization_ids) AS merged(value)
-					)`,
+					error: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NULL THEN excluded.error
+						ELSE ${queueFailures.error}
+					END`,
+					payloadCiphertext: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NULL
+							THEN excluded.payload_ciphertext
+						ELSE NULL
+					END`,
+					payloadKeyId: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NULL
+							THEN excluded.payload_key_id
+						ELSE NULL
+					END`,
+					// Redelivery must never renew a privacy clock. Once a receipt is
+					// redacted, the unique message identity cannot resurrect its body
+					// or erased subject locators.
+					payloadExpiresAt: sql`LEAST(${queueFailures.payloadExpiresAt}, excluded.payload_expires_at)`,
+					payloadRedactedAt: sql`${queueFailures.payloadRedactedAt}`,
+					organizationIds: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NOT NULL
+							THEN ${queueFailures.organizationIds}
+						ELSE (
+							SELECT COALESCE(array_agg(DISTINCT merged.value), ARRAY[]::text[])
+							FROM unnest(${queueFailures.organizationIds} || excluded.organization_ids) AS merged(value)
+						)
+					END`,
+					workspaceIds: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NOT NULL
+							THEN ${queueFailures.workspaceIds}
+						ELSE (
+							SELECT COALESCE(array_agg(DISTINCT merged.value), ARRAY[]::text[])
+							FROM unnest(${queueFailures.workspaceIds} || excluded.workspace_ids) AS merged(value)
+						)
+					END`,
+					userIds: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NOT NULL
+							THEN ${queueFailures.userIds}
+						ELSE (
+							SELECT COALESCE(array_agg(DISTINCT merged.value), ARRAY[]::text[])
+							FROM unnest(${queueFailures.userIds} || excluded.user_ids) AS merged(value)
+						)
+					END`,
+					contactIds: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NOT NULL
+							THEN ${queueFailures.contactIds}
+						ELSE (
+							SELECT COALESCE(array_agg(DISTINCT merged.value), ARRAY[]::text[])
+							FROM unnest(${queueFailures.contactIds} || excluded.contact_ids) AS merged(value)
+						)
+					END`,
+					accountIds: sql`CASE
+						WHEN ${queueFailures.payloadRedactedAt} IS NOT NULL
+							THEN ${queueFailures.accountIds}
+						ELSE (
+							SELECT COALESCE(array_agg(DISTINCT merged.value), ARRAY[]::text[])
+							FROM unnest(${queueFailures.accountIds} || excluded.account_ids) AS merged(value)
+						)
+					END`,
 				},
 			});
 	});

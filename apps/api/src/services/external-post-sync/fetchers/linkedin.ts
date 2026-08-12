@@ -1,14 +1,18 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../../lib/provider-response";
 // ---------------------------------------------------------------------------
 // LinkedIn Organization Posts Fetcher
 // Docs: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
+import type { ExternalPostFetcher, ExternalPostData } from "../types";
 import { RateLimitError } from "../types";
-import { getLinkedInRestHeaders, LINKEDIN_API_BASE } from "../../../lib/linkedin-rest";
+import {
+	getLinkedInRestHeaders,
+	LINKEDIN_API_BASE,
+} from "../../../lib/linkedin-rest";
 import { parseRateLimitHeaders } from "../rate-limits";
 
 const DEFAULT_LIMIT = 50;
@@ -55,10 +59,10 @@ async function liFetch<T = unknown>(
 		);
 	}
 	if (!res.ok) {
-		const body = await res.text();
+		const body = await readProviderText(res);
 		throw new Error(`LinkedIn API ${res.status}: ${body}`);
 	}
-	return { data: (await res.json()) as T, headers: res.headers };
+	return { data: (await readProviderJson(res)) as T, headers: res.headers };
 }
 
 function parsePost(raw: LinkedInRawPost): ExternalPostData {
@@ -68,11 +72,12 @@ function parsePost(raw: LinkedInRawPost): ExternalPostData {
 
 	const content = raw.content ?? {};
 	if (content.media) {
-		mediaType = content.media.type === "urn:li:digitalmediaClass:document"
-			? "document"
-			: content.media.type?.includes("video")
-				? "video"
-				: "image";
+		mediaType =
+			content.media.type === "urn:li:digitalmediaClass:document"
+				? "document"
+				: content.media.type?.includes("video")
+					? "video"
+					: "image";
 		if (content.media.id) {
 			// LinkedIn media IDs require separate resolution — store raw
 		}
@@ -139,7 +144,9 @@ export const linkedinPostFetcher: ExternalPostFetcher = {
 		// LinkedIn: fetch socialActions per post for engagement counts
 		for (const postId of platformPostIds) {
 			try {
-				const urn = postId.startsWith("urn:") ? postId : `urn:li:share:${postId}`;
+				const urn = postId.startsWith("urn:")
+					? postId
+					: `urn:li:share:${postId}`;
 				const { data: json } = await liFetch<LinkedInSocialActionsResponse>(
 					`${LINKEDIN_API_BASE}/rest/socialActions/${encodeURIComponent(urn)}`,
 					accessToken,

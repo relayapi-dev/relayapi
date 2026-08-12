@@ -1,385 +1,444 @@
 ---
 title: Self-Hosting
-description: Deploy your own instance of RelayAPI on Cloudflare Workers with step-by-step instructions.
+description: Deploy and safely update RelayAPI in your own Cloudflare account.
 icon: Server
 ---
 
 ## Overview
 
-RelayAPI runs entirely on Cloudflare's developer platform. This guide walks you through setting up every resource from scratch and deploying both the API and dashboard.
+RelayAPI's self-hosted edition keeps the same Cloudflare-native architecture as
+the hosted service. The supported setup is a bootstrap CLI, not a Docker image:
+Workers bindings such as Queues, Hyperdrive, R2, Images, Media Transformations,
+and Durable Objects do not have a faithful Docker Compose equivalent.
+
+The CLI gives you a small private operator repository and provisions one
+RelayAPI instance in your Cloudflare account. It stores only resource IDs,
+domains, feature choices, and a reviewed release version in Git. Secrets remain
+in your shell, Cloudflare Worker secrets, and GitHub Actions secrets.
+
+```bash
+mkdir my-relayapi && cd my-relayapi
+bunx @relayapi/self-host init
+```
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org) v20+ or [Bun](https://bun.sh) v1.0+
-- [Git](https://git-scm.com)
-- A PostgreSQL 18 database with TLS hostname and CA verification
-
-## 1. Create a Cloudflare Account
-
-1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) and sign up for a free account
-2. After signing in, navigate to **Workers & Pages** in the sidebar to confirm your account is activated
-
-## 2. Install Wrangler
-
-Wrangler is Cloudflare's CLI for managing Workers and resources.
-
-```bash
-npm install -g wrangler
-```
-
-Authenticate with your Cloudflare account:
-
-```bash
-wrangler login
-```
-
-This opens a browser window. Authorize Wrangler and return to your terminal. Verify it works:
-
-```bash
-wrangler whoami
-```
-
-## 3. Clone the Repository
-
-```bash
-git clone https://github.com/relayapi-dev/relayapi.git
-cd relayapi
-bun install
-```
-
-## 4. Create Cloudflare Resources
-
-### KV Namespace
-
-KV is used to cache API keys (24-hour TTL) for fast authentication.
-
-```bash
-wrangler kv namespace create KV
-```
-
-This outputs a namespace ID. Save it — you'll need it for the wrangler config.
-
-```
-# Example output:
-# 🌀 Creating namespace with title "relayapi-KV"
-# ✅ Success! Add the following to your wrangler configuration:
-# [[kv_namespaces]]
-# binding = "KV"
-# id = "abc123..."
-```
-
-### R2 Buckets
-
-RelayAPI uses three R2 buckets for file storage:
-
-```bash
-# Media uploads (images, videos attached to posts)
-wrangler r2 bucket create relayapi-media
-
-# User avatars
-wrangler r2 bucket create relayapi-avatars
-
-# Public assets
-wrangler r2 bucket create relayapi-public-assets
-```
-
-### Queues
-
-RelayAPI uses queues for async job processing. Create each one:
-
-```bash
-# Core publishing queue
-wrangler queues create relayapi-publish
-
-# Email notifications
-wrangler queues create relayapi-email
-
-# Dead letter queue for failed emails
-wrangler queues create relayapi-email-dlq
-
-# OAuth token refresh
-wrangler queues create relayapi-refresh
-
-# Inbox sync (comments, messages)
-wrangler queues create relayapi-inbox
-
-# Background tools (validation, processing)
-wrangler queues create relayapi-tools
-
-# Ad campaign sync
-wrangler queues create relayapi-ads
-
-# Account data sync
-wrangler queues create relayapi-sync
-
-# Media cleanup
-wrangler queues create relayapi-media-cleanup
-```
-
-### Hyperdrive
-
-Hyperdrive provides connection pooling for PostgreSQL. For a private origin, the supported production path is Workers VPC; do not publish PostgreSQL directly.
-
-The repository's `packages/db/setup-postgres.sh` provisions PostgreSQL 18 with separate owner, migration, and no-DDL runtime roles. It requires a trusted server certificate and installs a Cloudflare Tunnel connector, but it deliberately does not create a public TCP route or install a backup system.
-
-Create a TCP VPC Service that resolves the certificate hostname inside the origin network:
-
-```bash
-npx wrangler vpc service create relayapi-postgres \
-  --type tcp \
-  --tcp-port 5432 \
-  --app-protocol postgresql \
-  --tunnel-id <TUNNEL_ID> \
-  --hostname <DATABASE_TLS_HOSTNAME> \
-  --cert-verification-mode verify_full
-```
-
-Then create Hyperdrive with the no-DDL runtime role:
-
-```bash
-npx wrangler hyperdrive create relayapi-db \
-  --service-id <VPC_SERVICE_ID> \
-  --database relayapi \
-  --user relayapi_runtime \
-  --password '<runtime-password>' \
-  --scheme postgresql \
-  --caching-disabled
-```
-
-Save both the VPC Service ID and Hyperdrive ID from the output.
+- Bun 1.2 or newer
+- A Cloudflare account with Workers, KV, R2, Queues, Hyperdrive, Images, Media
+  Transformations, and Durable Objects enabled
+- A domain already active in that Cloudflare account
+- A managed PostgreSQL 18 database reachable by Hyperdrive
+- The PostgreSQL server CA bundle uploaded to Cloudflare for Hyperdrive, with
+  its non-secret certificate UUID available
+- Separate PostgreSQL migration and runtime roles; the runtime role must not
+  have DDL privileges
+- An R2 S3 API token for presigned browser uploads
+- Optional: the GitHub CLI (`gh`) when creating the private deployment
+  repository automatically
 
 <Callout type="warn">
-Workers VPC must remain in `verify_full` mode in production. The certificate chain must be publicly trusted or use Cloudflare Origin CA, and its SAN must match the VPC Service hostname. Self-signed certificates are not the production configuration.
+The first version supports one managed RelayAPI instance per Cloudflare account.
+The CLI never deletes resources and has no `destroy` command.
 </Callout>
 
-## 5. Update Wrangler Configuration
+## 1. Prepare credentials
 
-Open `apps/api/wrangler.jsonc` and replace the resource IDs with your own:
+Create a scoped Cloudflare API token with edit access to Workers scripts,
+routes, KV, R2, Queues, Hyperdrive, and the zone you will use. Export it and the
+account ID:
 
-```jsonc
+```bash
+export CLOUDFLARE_API_TOKEN="..."
+export CLOUDFLARE_ACCOUNT_ID="..."
+```
+
+Supply two TLS PostgreSQL URLs. The migration credential owns schema changes;
+the runtime credential is used by Hyperdrive and must not be able to run DDL.
+Both URLs must name the same host, port, and database, but authenticate as
+different roles. Remote URLs must use `sslmode=verify-full`.
+
+```bash
+export RELAYAPI_MIGRATION_DATABASE_URL='<tls-postgresql-url-for-migration-role>'
+export RELAYAPI_RUNTIME_DATABASE_URL='<tls-postgresql-url-for-runtime-role>'
+```
+
+Upload the PostgreSQL server's CA certificate bundle to Cloudflare before
+initializing RelayAPI. Hyperdrive requires the resulting certificate UUID for
+`verify-ca` and `verify-full`; follow Cloudflare's
+[TLS certificate instructions](https://developers.cloudflare.com/hyperdrive/configuration/tls-ssl-certificates-for-hyperdrive/).
+The UUID is non-secret configuration. Do not put the CA private key in the
+operator repository.
+
+```bash
+npx wrangler cert upload certificate-authority \
+  --ca-cert server-ca-chain.pem \
+  --name RELAYAPI_DATABASE_CA
+```
+
+The PostgreSQL 18 server must provide the `btree_gist`, `pg_trgm`, and `vector`
+extension packages. Preflight proves the actual vector(1536), HNSW cosine
+operator class, trigram GIN operator class, and `similarity` operations inside
+a transaction that rolls back. It also connects with the runtime URL and
+proves that credential cannot create a table in `public`; seeing extension
+names in a provider catalog is not enough.
+
+<Callout type="warn">
+**Current fresh-install release stop:** do not replay the immutable
+`0000_baseline.sql` directly against a virgin PostgreSQL 18 database. Its sealed
+expression-index SQL does not parse on PostgreSQL 18.4. A fresh installation
+must use RelayAPI's protected generation-2 baseline process; if the reviewed
+release bundle cannot provide and verify that process, stop before migration or
+Worker deployment. Existing installations with a valid baseline continue
+through the normal forward-only migration path.
+</Callout>
+
+Create an R2 S3 API token in the Cloudflare dashboard and export its access key
+pair:
+
+```bash
+export R2_ACCESS_KEY_ID="..."
+export R2_SECRET_ACCESS_KEY="..."
+```
+
+`init` generates the encryption key, Better Auth secret, and a strong initial
+administrator password in a local, mode-0600, gitignored file. You may instead
+provide your own values:
+
+```bash
+ENCRYPTION_ACTIVE_KEY="$(openssl rand -hex 32)"
+ENCRYPTION_IDENTITY_KEY="$(openssl rand -hex 32)"
+export ENCRYPTION_KEY="active=${ENCRYPTION_ACTIVE_KEY},identity=${ENCRYPTION_IDENTITY_KEY}"
+export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
+export RELAYAPI_ADMIN_EMAIL="you@example.com"
+export RELAYAPI_ADMIN_PASSWORD="$(openssl rand -base64 24)"
+```
+
+The two encryption entries must contain distinct 32-byte values. Keep the
+`identity` entry unchanged and non-active across every future key rotation;
+prepend a new active key and retain old decryption keys until their ciphertext
+has been rotated. Both `doctor` and `deploy` reject a missing, active, duplicate,
+or reused identity key before contacting PostgreSQL or Cloudflare.
+
+## 2. Initialize the operator repository
+
+Run the interactive wizard:
+
+```bash
+bunx @relayapi/self-host init
+```
+
+For automation, provide the non-secret values explicitly:
+
+```bash
+bunx @relayapi/self-host init \
+  --non-interactive \
+  --account-id "$CLOUDFLARE_ACCOUNT_ID" \
+  --zone-id "<ZONE_ID>" \
+  --domain "example.com" \
+  --admin-email "you@example.com" \
+  --hyperdrive-ca-certificate-id "<CLOUDFLARE_CA_CERTIFICATE_UUID>"
+```
+
+This creates:
+
+| File | Purpose |
+| --- | --- |
+| `relayapi.selfhost.json` | Domains, feature flags, immutable resource intent (including the Hyperdrive CA certificate ID), optional TikTok verified URL prefixes, and provisioned resource IDs |
+| `relayapi.lock.json` | Exact stable RelayAPI version and source repository |
+| `.github/workflows/deploy-relayapi.yml` | Migration-first production deployment |
+| `.github/workflows/update-relayapi.yml` | Daily stable-release update pull request |
+| `.relayapi/secrets.env` | Generated local secrets; mode 0600 and gitignored |
+
+To create and push a private GitHub operator repository in the same command,
+authenticate `gh` first and add `--github`:
+
+```bash
+gh auth login
+bunx @relayapi/self-host init --github your-org/relayapi-deployment
+```
+
+The CLI uploads environment values as GitHub secrets over stdin. It never puts
+secret values in command arguments or the checked-in configuration. Run this
+`--github` form only in a new empty directory: the CLI refuses an existing
+`.git` path or any pre-existing entry, even with `--force`, before changing Git
+state. Omit `--github` for collision-safe local initialization in an existing
+directory.
+
+## 3. Choose optional features
+
+The core install includes the API, dashboard, publishing, inbox, automations,
+analytics, media, and realtime features. Self-hosted community mode does not use
+RelayAPI's Stripe billing and does not impose hosted-plan entitlements.
+
+Optional integrations are explicit flags during `init`:
+
+```bash
+bunx @relayapi/self-host init --email --ai --downloader --media-processing
+```
+
+- `--email` requires `RESEND_API_KEY`.
+- `--ai` enables the Workers AI binding.
+- `--downloader` requires `DOWNLOADER_SERVICE_URL` and
+  `DOWNLOADER_SERVICE_KEY`.
+- `--media-processing` provisions Cloudflare Containers and Workflows for
+  automatic compression, provider variants, and custom covers. It is optional;
+  originals remain uploadable and publishable when it is disabled. Docker must
+  be running during deployment. On Apple Silicon, Docker's amd64 emulation must
+  be enabled; the CLI forces `linux/amd64`, the architecture Cloudflare runs.
+
+Media upload sessions themselves are part of the base installation and accept
+direct-to-storage objects up to 200 MiB. Files greater than 64 MiB use 16 MiB
+multipart parts; the Worker-proxy upload endpoint remains capped at 50 MiB.
+Provisioning pins media-bucket browser CORS to the configured dashboard origin,
+permits `PUT`, and exposes `ETag` so multipart completion works without granting
+unrelated origins access. Ready media returns a stable `reference_url` for post
+attachments separately from its potentially expiring read `url`.
+With media processing enabled, ready image/video/audio uploads enqueue
+best-effort normalization. Processing is fail-open: the original stays ready,
+and publishing uses a compatible normalized derivative only when it is ready,
+unexpired, and smaller. See [Media Uploads](/guides/media-uploads) for the
+session and custom-cover flows.
+
+OAuth platform credentials are also optional. Export only the platforms you
+intend to expose, using the names in `.env.example`, then run `deploy` again.
+Configure each provider's callback URL against your API hostname.
+
+### Publisher connector compatibility
+
+The shared database schema now contains all 22 publishing platform values,
+including `slack`. Version-pinned self-host upgrades apply the PostgreSQL enum
+migration before either Worker is deployed, so an older database is ready
+before the Slack route can create an account.
+
+Discord, Slack, and Twilio SMS are tenant-supplied credential connections. They
+reuse the existing `ENCRYPTION_KEY` account-credential store and require no new
+self-host binding or global provider secret:
+
+| Connector | Connection-time verification | Lifecycle |
+|-----------|------------------------------|-----------|
+| Discord | Exact Discord webhook origin/path plus Discord's read-only Get Webhook with Token response | Reconnect after webhook deletion or token rotation |
+| Slack/GovSlack | Exact Slack-issued webhook origin/path; Slack exposes no non-mutating probe | First publish verifies activation/channel policy; incoming webhooks expose no delete or message reconciliation |
+| SMS | Active Twilio account plus an owned SMS-capable default sender | Reconnect after Twilio Auth Token rotation |
+
+Discord forum/media-thread editing is self-host compatible without another
+binding, secret, or database migration. The publisher journals the confirmed
+thread snowflake in the existing target `provider_effects` JSON as a
+`discord_thread_context` effect, and persisted inbox messages retain the same
+exact thread context. If a record is known to be thread-scoped but lacks a
+valid durable thread ID, the edit fails closed with
+`DISCORD_THREAD_CONTEXT_MISSING` before provider I/O. Upgrade through the
+version-pinned self-host release so the publisher and edit routes move together.
+
+New Mastodon connections register an OAuth client dynamically on the validated
+public instance and pin that origin to the encrypted account. The optional
+`MASTODON_CLIENT_ID`/`MASTODON_CLIENT_SECRET` declarations remain only for
+legacy direct-code compatibility; the recommended per-instance start flow does
+not use them. Snapchat still requires an allowlisted
+`SNAPCHAT_CLIENT_ID`/`SNAPCHAT_CLIENT_SECRET`. Telegram continues to require the
+operator's existing `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET`; tenant
+users connect chats through the same managed-bot permission challenge rather
+than submitting those secrets.
+
+Connection-owned provider authority is identical in hosted and self-hosted deployments. Generic account metadata updates cannot overwrite provider origins or identities such as Mastodon/Listmonk `instance_url`, Bluesky `pds_url`/`did`/`auth_mode`, WhatsApp `waba_id`, Beehiiv `publication_id`, Twilio `from_number`/MMS capability, TikTok verified prefixes, or Snapchat's internal Public Profile verification marker. Beehiiv publishing uses the connected publication ID; SMS always uses the connector-verified sender and treats a legacy `target_options.from_number` only as a matching assertion; Listmonk publishing uses the connected canonical public HTTPS base and applies DNS/private-host rejection, redirect denial, a 30-second through-body timeout, and a 512 KiB response cap. Newsletter list/template discovery also checks the account's workspace before provider I/O. These guards reuse the existing Worker, database, DNS, and encryption paths and add no operator secret or binding.
+
+After upgrading, reconnect every Snapchat account created before the Public Profile verification marker was introduced. Such legacy records fail closed with `SNAPCHAT_RECONNECT_REQUIRED`; a metadata edit cannot migrate or forge the provider identity.
+
+LinkedIn publishing likewise always uses the member or organization URN selected by the connector. Legacy `target_options.linkedin.organization_urn` is only a matching assertion and a mismatch is rejected before provider I/O. No self-host setting is required.
+
+TikTok Direct Post can use bounded `FILE_UPLOAD` for videos without additional
+configuration. Photo posts and explicit video `PULL_FROM_URL` require URL
+prefixes that are already verified in the operator's TikTok developer app. Add
+the same non-secret prefixes to `relayapi.selfhost.json` before connecting the
+TikTok account:
+
+```json
 {
-  "kv_namespaces": [
-    {
-      "binding": "KV",
-      "id": "<your-kv-namespace-id>"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "MEDIA_BUCKET",
-      "bucket_name": "relayapi-media"
-    }
-  ],
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "<your-hyperdrive-id>"
-    }
-  ]
+  "publishing": {
+    "tiktokVerifiedUrlPrefixes": [
+      "https://media.example.com/tiktok/"
+    ]
+  }
 }
 ```
 
-Do the same for `apps/app/wrangler.jsonc`:
+The CLI validates the prefixes and publishes them to the API Worker as
+`TIKTOK_VERIFIED_URL_PREFIXES`. OAuth snapshots that list into immutable
+account metadata; changing the operator config does not expand an existing
+connection, so reconnect TikTok to adopt the new list. Prefixes are public
+authority configuration, not secrets. They must use HTTPS and contain no
+credentials, IP host, non-default port, query string, or fragment, and each path
+must end in `/`. That slash is an authority boundary: `/media/` does not permit
+`/mediaevil`.
 
-```jsonc
-{
-  "kv_namespaces": [
-    {
-      "binding": "KV",
-      "id": "<your-kv-namespace-id>"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "AVATARS_BUCKET",
-      "bucket_name": "relayapi-avatars"
-    },
-    {
-      "binding": "PUBLIC_ASSETS",
-      "bucket_name": "relayapi-public-assets"
-    }
-  ],
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "<your-hyperdrive-id>"
-    }
-  ]
-}
-```
+### Advertising provider compatibility
 
-## 6. Set Up Secrets
+Self-hosted releases ship the same six registered ad adapters and durable provider-first operation fences as the hosted API. Community mode bypasses only RelayAPI's hosted Stripe entitlement check; it never bypasses actor permissions, the dedicated `ad_connections` credential, provider-account scope, revocation, provider approval, or the per-operation capability returned by `GET /v1/ads/platforms`.
 
-Secrets are environment variables that are encrypted and not visible in your config files. Set them for the API worker:
+The five non-Meta write adapters require no additional Cloudflare binding, but their provider credentials and options remain mandatory:
+
+- Google Ads v25 requires the `adwords` OAuth scope, `GOOGLE_ADS_DEVELOPER_TOKEN`, an authorized customer, Search/RSA options, and the explicit EU political-ad declaration. Manager access can use connection metadata `login_customer_id`.
+- LinkedIn Marketing API requires approved Advertising API access, `rw_ads`, an eligible account/content role, existing content authority, typed targeting, and explicit political intent. Reporting separately needs `r_ads_reporting`.
+- Pinterest Ads v5 requires `ads:read` and `ads:write`; audience features remain production-approval-gated.
+- TikTok Marketing API v1.3 requires an authorized Business advertiser and creative identity. `TIKTOK_ADS_APP_ID` and `TIKTOK_ADS_APP_SECRET` support an operator-run upstream OAuth exchange; a publishing Login Kit token is not an ads credential.
+- X Ads API v12 requires Ads entitlement, OAuth 1.0a `token_secret`, `TWITTER_ADS_CONSUMER_KEY`, `TWITTER_ADS_CONSUMER_SECRET`, and a funding instrument.
+
+The presence of an environment secret does not turn an unsupported or approval-gated operation into a supported one. Use the [advertising capability guide](/guides/advertising-platforms) and runtime response before exposing a write in an operator UI.
+
+## 4. Inspect and deploy
+
+Run the preflight before making changes:
 
 ```bash
-# Encryption key for sensitive fields (enter active=<generated 32-byte hex string>)
-wrangler secret put ENCRYPTION_KEY --name relayapi
-
-# Better Auth secret (generate a random string)
-wrangler secret put BETTER_AUTH_SECRET --name relayapi
-
-# Google OAuth (for dashboard login)
-wrangler secret put GOOGLE_CLIENT_ID --name relayapi
-wrangler secret put GOOGLE_CLIENT_SECRET --name relayapi
+bunx @relayapi/self-host doctor
+bunx @relayapi/self-host plan
 ```
 
-`ENCRYPTION_KEY` is a key ring, so even a single key must include an explicit key ID in the form `key-id=64hex`. For example, generate a 32-byte hex value and enter it at the Wrangler prompt as `active=<generated-hex>`.
+`doctor` verifies the config and release lock, required tools, separate database
+roles, PostgreSQL 18 semantic capabilities and runtime no-DDL boundary,
+encryption-key format, Cloudflare account/zone access, and permission to inspect
+every required service in the configured R2 jurisdiction. `plan` reports which
+resources will be created or reused.
 
-For each social media platform you want to support, set the corresponding OAuth credentials:
+Hyperdrive creation always sends the configured CA certificate ID, and an
+existing pinned Hyperdrive must retain that exact trust anchor. A conflicting
+ID without an explicit rotation flag, or a Hyperdrive with no attached CA
+certificate, fails closed. Older operator configs without the field remain
+readable: the next successful real `configure` or `deploy` adopts the CA ID from
+the exact existing Hyperdrive and writes it to `relayapi.selfhost.json`. A
+legacy config must persist that attached CA before requesting a different
+rotation target; if the requested target is already attached, it can be safely
+adopted immediately. `plan`, `doctor`, and dry runs remain read-only, while a
+clean installation always requires the explicit ID.
+
+### Rotate the Hyperdrive server CA
+
+Upload the replacement regional CA bundle, retain the returned UUID, and pass
+that UUID explicitly rather than editing the operator config first:
 
 ```bash
-# Example: Twitter/X
-wrangler secret put TWITTER_CLIENT_ID --name relayapi
-wrangler secret put TWITTER_CLIENT_SECRET --name relayapi
-
-# Example: Facebook/Instagram/Threads
-wrangler secret put FACEBOOK_APP_ID --name relayapi
-wrangler secret put FACEBOOK_APP_SECRET --name relayapi
-
-# Repeat for each platform you want to enable
+bunx @relayapi/self-host plan \
+  --hyperdrive-ca-certificate-id "<NEW_CLOUDFLARE_CA_CERTIFICATE_UUID>"
+bunx @relayapi/self-host doctor \
+  --hyperdrive-ca-certificate-id "<NEW_CLOUDFLARE_CA_CERTIFICATE_UUID>"
+bunx @relayapi/self-host deploy \
+  --hyperdrive-ca-certificate-id "<NEW_CLOUDFLARE_CA_CERTIFICATE_UUID>"
 ```
 
-<Callout type="warn">
-You only need to configure OAuth credentials for platforms you plan to support. Platforms without credentials will simply be unavailable for account connections.
-</Callout>
+The preview reports `rotate`, `retain`, or legacy `adopt` intent. Rotation is
+allowed only for the exact ID already pinned as `resources.hyperdriveId`, never
+for a resource found only by name. The PATCH preserves any client certificate
+and origin connection limit, verifies the returned and freshly read CA UUID,
+then persists the new UUID only after Cloudflare reconciliation succeeds. Dry
+runs and failed PATCHes leave `relayapi.selfhost.json` unchanged. Rerunning the
+same command is safe if Cloudflare already reached the target but local writing
+was interrupted; an unexplained third UUID fails closed.
 
-## 7. Set Up the Database
+Cloudflare performs a fresh database connection and an empty PostgreSQL test
+query before accepting connection-parameter updates. `deploy` additionally
+probes both deployed Workers through their actual Hyperdrive bindings, so no
+undocumented connection-pool restart is used. See Cloudflare's
+[PATCH API](https://developers.cloudflare.com/api/resources/hyperdrive/subresources/configs/methods/edit/)
+and [configuration troubleshooting](https://developers.cloudflare.com/hyperdrive/observability/troubleshooting/).
 
-The Worker uses the no-DDL runtime role. Migrations use the separate migration role through an Access-protected TCP application or another trusted private runner. Never put the migration credential in Worker secrets.
+Choose the R2 jurisdiction during `init` with `--r2-jurisdiction default|eu`.
+The CLI records that choice in `relayapi.selfhost.json`, sends it on every R2
+inspection and apply request, and refuses a same-named bucket in the other
+jurisdiction. Cloudflare does not permit changing a bucket's jurisdiction after
+creation.
 
-For a local or otherwise trusted migration connection, verify the reviewed manifest and apply the baseline:
+Deploy the reviewed version:
+```bash
+bunx @relayapi/self-host deploy
+```
+
+The deploy is ordered for safety:
+
+1. Prove the complete PostgreSQL 18, extension-semantics, database-identity, and
+   runtime no-DDL contract.
+2. Create or reuse the named Cloudflare resources in the configured immutable
+   R2 jurisdiction.
+3. Apply R2 lifecycle, event-notification, and custom-domain policies.
+4. Download the exact stable source tag in `relayapi.lock.json`.
+5. Recheck extension replay capability, then verify and apply forward-only
+   PostgreSQL migrations under the migration lock.
+6. Recheck the exact installed extension state and semantic/runtime-role
+   contract.
+7. Idempotently create the initial administrator and organization.
+8. Build and deploy the API and dashboard Workers.
+9. Stream Worker secrets to Wrangler over stdin.
+10. Probe each deployed Worker's actual Hyperdrive binding and require the
+    expected database identity, `ok: true`, an open runtime-control state, and
+    matching application/configured baseline generations before reporting the
+    deployment live.
+
+If any migration fails, the Worker deploy does not start. Migrations are never
+automatically rolled back after a forward migration.
+
+## Resources created
+
+| Component | Cloudflare service | Purpose |
+| --- | --- | --- |
+| API and dashboard | Workers | Public API and authenticated UI |
+| API-key cache | KV | Edge authentication cache |
+| Media, avatars, thumbnails, assets, rescue ledger | R2 | Durable object storage |
+| PostgreSQL pool | Hyperdrive | Runtime database connections |
+| Background work and dead letters | Queues | Publishing, sync, email, and recovery |
+| Realtime coordinator | Durable Objects | WebSocket state |
+| Image/video previews | Images and Media Transformations | Off-request thumbnails |
+| Optional media processor | Container, Workflow, Queue, and DLQ | Private ffmpeg normalization, provider variants, custom covers, and bounded retry/dead-letter handling (`MEDIA_PROCESSOR`, `MEDIA_PROCESSING_WORKFLOW`, `MEDIA_PROCESSING_QUEUE`, `MEDIA_PROCESSING_DLQ`) |
+| Optional generation | Workers AI | AI tools when enabled |
+
+Every resource uses the `relayapi-selfhost-*` prefix. If a unique named resource
+already exists, the CLI reuses it; if duplicates make ownership ambiguous, it
+stops instead of guessing.
+
+## Receiving updates
+
+Self-hosted deployments follow stable `self-host-vX.Y.Z` releases, never the
+`main` branch. The generated update workflow checks daily and opens a pull
+request that changes only `relayapi.lock.json`.
+
+Review and merge that pull request to deploy the update. The merge triggers the
+same migration-first workflow as the initial deployment, so application code is
+not updated if its database migration cannot complete.
+
+You can check manually too:
 
 ```bash
-# Refuses a non-empty database without the exact supported migration ledger
-bun run db:migration-history
-
-# Apply reviewed migrations
-bun run db:migrate
-
-# Verify the exact catalog and applied hashes
-bun run db:verify
-bun run db:migration-history:current
+bunx @relayapi/self-host upgrade
 ```
 
-This creates all required tables in both the `auth` schema (managed by Better Auth) and the `public` schema (business data).
-
-<Callout type="warn">
-The current pre-launch baseline supports a virgin PostgreSQL 18 database only. It is not an upgrade path from the removed 42-migration development ledger. Recreate disposable environments instead of forging or rewriting migration history.
-</Callout>
-
-## 8. Local Development
-
-For local development, you need to tell Wrangler how to reach your database without Hyperdrive.
-
-Read the runtime password without saving it in shell history, then set the local connection string as an environment variable:
-
-```bash
-read -rsp "PostgreSQL runtime password: " PG_PASSWORD && echo
-export DB_AUTHORITY="relayapi_runtime:${PG_PASSWORD}"
-export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgresql://${DB_AUTHORITY}@localhost:5433/relayapi?sslmode=verify-full"
-unset PG_PASSWORD DB_AUTHORITY
-```
-
-Then start the dev servers:
-
-```bash
-# API server (localhost:8789)
-bun run dev:api
-
-# Dashboard (localhost:4321)
-bun run dev:app
-
-# Docs site
-bun run dev:docs
-```
-
-<Callout type="info">
-The repository's VS Code task forwards local port `5433` to the remote PostgreSQL port. For hostname verification, connect using a hostname present in the server certificate and resolve that hostname to the local listener, or use the documented local development certificate setup. Do not weaken a production connection to `sslmode=require`.
-</Callout>
-
-## 9. Deploy to Cloudflare
-
-Deploy each app using Wrangler:
-
-```bash
-# Deploy the API
-cd apps/api
-wrangler deploy
-
-# Deploy the dashboard
-cd ../app
-wrangler deploy
-```
-
-After deployment, Wrangler outputs the URL for each worker (e.g., `https://relayapi.<your-subdomain>.workers.dev`).
-
-### Custom Domains
-
-To use a custom domain, go to your worker in the Cloudflare dashboard:
-
-1. Navigate to **Workers & Pages > your worker > Settings > Domains & Routes**
-2. Click **Add** and enter your domain (e.g., `api.yourdomain.com`)
-3. Cloudflare automatically provisions SSL
-
-## 10. CI/CD (Optional)
-
-The repository includes GitHub Actions workflows that deploy each app independently on push to `main` when relevant paths change. To enable:
-
-1. In your GitHub repository, go to **Settings > Secrets and variables > Actions**
-2. Add the following repository secrets:
-   - `CLOUDFLARE_API_TOKEN` — create an API token in the Cloudflare dashboard with **Workers** edit permissions
-   - `CLOUDFLARE_ACCOUNT_ID`
-3. Create a protected `production` environment with:
-   - `PRODUCTION_DATABASE_URL` — migration-role DSN using the protected hostname, local listener port `5433`, and `sslmode=verify-full`
-   - `PRODUCTION_DATABASE_HOSTNAME`
-   - `PRODUCTION_DATABASE_CA_CERT`
-   - `PRODUCTION_DATABASE_ACCESS_CLIENT_ID`
-   - `PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET`
-
-The database hostname must be a Cloudflare Access TCP application with a Service Auth policy. The workflow runs `cloudflared access tcp` in an isolated container, verifies TLS, checks migration history/catalog, and only applies pending migrations on a manual workflow run.
-
-Pushes to `main` will automatically deploy changed apps.
-
-## Architecture Overview
-
-Once deployed, your self-hosted RelayAPI instance consists of:
-
-| Component | Cloudflare Service | Purpose |
-|-----------|-------------------|---------|
-| API | Worker (`relayapi`) | REST API handling all requests |
-| Dashboard | Worker (`relayapi-app`) | Astro SSR web application |
-| Database | Hyperdrive + external PostgreSQL | Data storage with connection pooling |
-| Media | R2 (`relayapi-media`) | Uploaded images and videos |
-| Avatars | R2 (`relayapi-avatars`) | User profile pictures |
-| Assets | R2 (`relayapi-public-assets`) | Public static files |
-| Cache | KV | API key cache for fast auth |
-| Jobs | Queues (9 queues) | Async publishing, email, sync |
-| AI | Workers AI | Content generation features |
-| Realtime | Durable Object (`RealtimeDO`) | WebSocket connections |
+`upgrade` updates the local lock file but does not deploy. Review the diff, then
+run `deploy` or merge the generated pull request. Keep backups and restore from a
+backup for database rollback; the CLI deliberately does not attempt destructive
+down-migrations.
 
 ## Troubleshooting
 
-### "Hyperdrive connection failed"
+### A service is not enabled
 
-Ensure your PostgreSQL database is accessible from Cloudflare's network. Most home/office databases are behind firewalls. Use a cloud-hosted database provider instead.
+Open that product once in the Cloudflare dashboard and complete any account
+activation or billing prompt, then rerun `doctor`. The CLI will not silently
+replace an unavailable Cloudflare product with a different architecture.
 
-### "KV namespace not found"
+### Hyperdrive cannot connect
 
-Double-check that the KV namespace ID in your `wrangler.jsonc` matches the one from `wrangler kv namespace create`. You can list existing namespaces with:
+Confirm the runtime URL is reachable from Cloudflare, uses TLS, and contains a
+direct PostgreSQL hostname rather than a transaction-pool endpoint. The runtime
+role needs normal DML privileges but must not own schemas or tables. Also verify
+that `cloudflare.hyperdriveCaCertificateId` is the UUID of the CA bundle
+actually attached to the pinned Hyperdrive; the CLI will not silently replace a
+different trust anchor unless you pass the explicit rotation flag for that exact
+pinned resource.
 
-```bash
-wrangler kv namespace list
-```
+### A deployment update is stuck
 
-### "Queue not found"
+Open the GitHub Actions run. Migration verification and migration application
+happen before either Worker deploy, and the logs identify the failed phase
+without printing connection URLs or Worker secrets.
 
-Verify queues were created in the same Cloudflare account:
+### A platform is unavailable
 
-```bash
-wrangler queues list
-```
-
-### Migrations fail
-
-Make sure `DATABASE_URL` is set and points to your PostgreSQL instance. For local development, the connection string should use the local port (e.g., `localhost:5432` or your SSH tunnel port).
+Only platforms with their required OAuth credentials are connectable. Add the
+provider credentials as GitHub secrets, configure the provider's callback URLs
+for your custom API/app domains, and rerun the deploy workflow.

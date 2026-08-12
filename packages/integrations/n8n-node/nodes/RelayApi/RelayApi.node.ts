@@ -26,8 +26,88 @@ const PLATFORMS = [
 	'whatsapp',
 	'mastodon',
 	'discord',
+	'slack',
 	'sms',
+	'beehiiv',
+	'convertkit',
+	'mailchimp',
+	'listmonk',
 ] as const;
+
+type CreatePostRequestInput = {
+	content: string;
+	targets: string[];
+	scheduledAt: string;
+	scheduledDateTime?: string;
+	timezone?: string;
+	mediaCollection?: IDataObject;
+	targetOptions?: unknown;
+};
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function parseTargetOptions(value: unknown): Record<string, unknown> | undefined {
+	if (value === undefined || value === null || value === '') {
+		return undefined;
+	}
+
+	let parsed: unknown = value;
+	if (typeof value === 'string') {
+		try {
+			parsed = JSON.parse(value);
+		} catch {
+			throw new Error('Target Options must be valid JSON.');
+		}
+	}
+
+	if (!isJsonObject(parsed)) {
+		throw new Error('Target Options must be a JSON object keyed by target.');
+	}
+
+	for (const [target, options] of Object.entries(parsed)) {
+		if (!target.trim() || !isJsonObject(options)) {
+			throw new Error('Target Options must map each platform, account, or workspace target to a JSON object.');
+		}
+	}
+
+	return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+export function buildCreatePostRequestBody(input: CreatePostRequestInput): Record<string, unknown> {
+	const body: Record<string, unknown> = {
+		content: input.content,
+		targets: input.targets,
+	};
+
+	if (input.scheduledAt === 'now' || input.scheduledAt === 'draft') {
+		body.scheduled_at = input.scheduledAt;
+	} else if (input.scheduledAt === 'schedule') {
+		body.scheduled_at = input.scheduledDateTime;
+		body.timezone = input.timezone;
+	}
+
+	const mediaItems = input.mediaCollection?.items as IDataObject[] | undefined;
+	if (mediaItems?.length) {
+		body.media = mediaItems.map((item) => ({
+			url: item.url,
+			type: item.type,
+			...(typeof item.altText === 'string' && item.altText ? { alt_text: item.altText } : {}),
+			...(typeof item.mimeType === 'string' && item.mimeType ? { mime_type: item.mimeType } : {}),
+			...(typeof item.width === 'number' && item.width > 0 ? { width: item.width } : {}),
+			...(typeof item.height === 'number' && item.height > 0 ? { height: item.height } : {}),
+			...(typeof item.durationMs === 'number' && item.durationMs > 0 ? { duration_ms: item.durationMs } : {}),
+		}));
+	}
+
+	const targetOptions = parseTargetOptions(input.targetOptions);
+	if (targetOptions) {
+		body.target_options = targetOptions;
+	}
+
+	return body;
+}
 
 export class RelayApi implements INodeType {
 	description: INodeTypeDescription = {
@@ -37,7 +117,7 @@ export class RelayApi implements INodeType {
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
-		description: 'Post to 21 platforms',
+		description: 'Post to 22 platforms',
 		defaults: {
 			name: 'RelayAPI',
 		},
@@ -91,7 +171,11 @@ export class RelayApi implements INodeType {
 				displayOptions: { show: { resource: ['account'] } },
 				options: [
 					{ name: 'Get', value: 'get', action: 'Get an account' },
-					{ name: 'Health Check', value: 'healthCheck', action: 'Health check accounts' },
+					{
+						name: 'Health Check',
+						value: 'healthCheck',
+						action: 'Health check accounts',
+					},
 					{ name: 'List', value: 'list', action: 'List accounts' },
 				],
 				default: 'list',
@@ -106,7 +190,11 @@ export class RelayApi implements INodeType {
 				displayOptions: { show: { resource: ['media'] } },
 				options: [
 					{ name: 'List', value: 'list', action: 'List media' },
-					{ name: 'Presign', value: 'presign', action: 'Get presigned upload URL' },
+					{
+						name: 'Presign',
+						value: 'presign',
+						action: 'Get presigned upload URL',
+					},
 				],
 				default: 'presign',
 			},
@@ -118,9 +206,7 @@ export class RelayApi implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['usage'] } },
-				options: [
-					{ name: 'Get', value: 'get', action: 'Get usage info' },
-				],
+				options: [{ name: 'Get', value: 'get', action: 'Get usage info' }],
 				default: 'get',
 			},
 
@@ -133,9 +219,8 @@ export class RelayApi implements INodeType {
 				type: 'string',
 				typeOptions: { rows: 4 },
 				default: '',
-				required: true,
 				displayOptions: { show: { resource: ['post'], operation: ['create'] } },
-				description: 'The text content of the post',
+				description: 'The text content of the post. Optional when media or per-target content is provided.',
 			},
 			{
 				displayName: 'Target Accounts',
@@ -166,7 +251,11 @@ export class RelayApi implements INodeType {
 				type: 'dateTime',
 				default: '',
 				displayOptions: {
-					show: { resource: ['post'], operation: ['create'], scheduledAt: ['schedule'] },
+					show: {
+						resource: ['post'],
+						operation: ['create'],
+						scheduledAt: ['schedule'],
+					},
 				},
 				description: 'ISO 8601 date/time to schedule the post',
 			},
@@ -176,7 +265,11 @@ export class RelayApi implements INodeType {
 				type: 'string',
 				default: 'UTC',
 				displayOptions: {
-					show: { resource: ['post'], operation: ['create'], scheduledAt: ['schedule'] },
+					show: {
+						resource: ['post'],
+						operation: ['create'],
+						scheduledAt: ['schedule'],
+					},
 				},
 				description: 'Timezone for the scheduled time (e.g. America/New_York)',
 			},
@@ -197,6 +290,7 @@ export class RelayApi implements INodeType {
 								name: 'url',
 								type: 'string',
 								default: '',
+								required: true,
 								description: 'URL of the media file',
 							},
 							{
@@ -207,13 +301,63 @@ export class RelayApi implements INodeType {
 									{ name: 'Image', value: 'image' },
 									{ name: 'Video', value: 'video' },
 									{ name: 'GIF', value: 'gif' },
+									{ name: 'Document', value: 'document' },
+									{ name: 'Audio', value: 'audio' },
 								],
 								default: 'image',
+							},
+							{
+								displayName: 'MIME Type',
+								name: 'mimeType',
+								type: 'string',
+								default: '',
+								description: 'Authoritative MIME type when known (e.g. audio/mpeg)',
+							},
+							{
+								displayName: 'Alt Text',
+								name: 'altText',
+								type: 'string',
+								default: '',
+								description: 'Accessible media description',
+							},
+							{
+								displayName: 'Width',
+								name: 'width',
+								type: 'number',
+								typeOptions: { minValue: 0 },
+								default: 0,
+								description: 'Width in pixels when known',
+							},
+							{
+								displayName: 'Height',
+								name: 'height',
+								type: 'number',
+								typeOptions: { minValue: 0 },
+								default: 0,
+								description: 'Height in pixels when known',
+							},
+							{
+								displayName: 'Duration (Milliseconds)',
+								name: 'durationMs',
+								type: 'number',
+								typeOptions: { minValue: 0 },
+								default: 0,
+								description: 'Media duration in milliseconds. Required for TikTok video validation.',
 							},
 						],
 					},
 				],
 				description: 'Media attachments for the post',
+			},
+			{
+				displayName: 'Target Options (JSON)',
+				name: 'targetOptions',
+				type: 'json',
+				typeOptions: { rows: 12 },
+				default: '{}',
+				displayOptions: { show: { resource: ['post'], operation: ['create'] } },
+				description:
+					'JSON object keyed by platform, account ID, or workspace ID. Examples: {"whatsapp":{"to":"15551234567"}}, {"snapchat":{"content_type":"saved_story"}}, or {"tiktok":{"privacy_level":"SELF_ONLY","allow_comment":true,"allow_duet":false,"allow_stitch":false,"brand_content_toggle":false,"brand_organic_toggle":false,"content_preview_confirmed":true,"express_consent_given":true}}.',
 			},
 
 			// ─────────────────────────────────────
@@ -225,7 +369,9 @@ export class RelayApi implements INodeType {
 				type: 'string',
 				default: '',
 				required: true,
-				displayOptions: { show: { resource: ['post'], operation: ['get', 'delete', 'update'] } },
+				displayOptions: {
+					show: { resource: ['post'], operation: ['get', 'delete', 'update'] },
+				},
 				description: 'The ID of the post',
 			},
 
@@ -294,7 +440,9 @@ export class RelayApi implements INodeType {
 					})),
 				],
 				default: '',
-				displayOptions: { show: { resource: ['account'], operation: ['list'] } },
+				displayOptions: {
+					show: { resource: ['account'], operation: ['list'] },
+				},
 				description: 'Filter by platform',
 			},
 
@@ -320,7 +468,9 @@ export class RelayApi implements INodeType {
 				type: 'string',
 				default: '',
 				required: true,
-				displayOptions: { show: { resource: ['media'], operation: ['presign'] } },
+				displayOptions: {
+					show: { resource: ['media'], operation: ['presign'] },
+				},
 				description: 'Name of the file to upload',
 			},
 			{
@@ -329,8 +479,10 @@ export class RelayApi implements INodeType {
 				type: 'string',
 				default: 'image/jpeg',
 				required: true,
-				displayOptions: { show: { resource: ['media'], operation: ['presign'] } },
-				description: 'MIME type of the file (e.g. image/jpeg, video/mp4)',
+				displayOptions: {
+					show: { resource: ['media'], operation: ['presign'] },
+				},
+				description: 'MIME type of the file (e.g. image/jpeg, video/mp4, audio/mpeg, application/pdf)',
 			},
 
 			// ─────────────────────────────────────
@@ -386,28 +538,17 @@ export class RelayApi implements INodeType {
 						const targets = this.getNodeParameter('targets', i) as string[];
 						const scheduledAt = this.getNodeParameter('scheduledAt', i) as string;
 						const mediaCollection = this.getNodeParameter('media', i) as IDataObject;
-
-						const body: Record<string, unknown> = {
+						const targetOptions = this.getNodeParameter('targetOptions', i) as unknown;
+						const body = buildCreatePostRequestBody({
 							content,
 							targets,
-						};
-
-						if (scheduledAt === 'now') {
-							body.scheduled_at = 'now';
-						} else if (scheduledAt === 'draft') {
-							body.scheduled_at = 'draft';
-						} else if (scheduledAt === 'schedule') {
-							body.scheduled_at = this.getNodeParameter('scheduledDateTime', i) as string;
-							body.timezone = this.getNodeParameter('timezone', i) as string;
-						}
-
-						const mediaItems = mediaCollection?.items as IDataObject[] | undefined;
-						if (mediaItems?.length) {
-							body.media = mediaItems.map((item: IDataObject) => ({
-								url: item.url,
-								type: item.type,
-							}));
-						}
+							scheduledAt,
+							scheduledDateTime:
+								scheduledAt === 'schedule' ? (this.getNodeParameter('scheduledDateTime', i) as string) : undefined,
+							timezone: scheduledAt === 'schedule' ? (this.getNodeParameter('timezone', i) as string) : undefined,
+							mediaCollection,
+							targetOptions,
+						});
 
 						response = await relayApiRequest.call(this, 'POST', '/v1/posts', body);
 					} else if (operation === 'get') {
@@ -428,12 +569,7 @@ export class RelayApi implements INodeType {
 						const scheduledAt = this.getNodeParameter('updateScheduledAt', i) as string;
 						if (content) body.content = content;
 						if (scheduledAt) body.scheduled_at = scheduledAt;
-						response = await relayApiRequest.call(
-							this,
-							'PATCH',
-							`/v1/posts/${postId}`,
-							body,
-						);
+						response = await relayApiRequest.call(this, 'PATCH', `/v1/posts/${postId}`, body);
 					} else if (operation === 'delete') {
 						const postId = this.getNodeParameter('postId', i) as string;
 						response = await relayApiRequest.call(this, 'DELETE', `/v1/posts/${postId}`);
@@ -448,26 +584,12 @@ export class RelayApi implements INodeType {
 						if (platform) {
 							qs.platform = platform;
 						}
-						response = await relayApiRequest.call(
-							this,
-							'GET',
-							'/v1/accounts',
-							undefined,
-							qs,
-						);
+						response = await relayApiRequest.call(this, 'GET', '/v1/accounts', undefined, qs);
 					} else if (operation === 'get') {
 						const accountId = this.getNodeParameter('accountId', i) as string;
-						response = await relayApiRequest.call(
-							this,
-							'GET',
-							`/v1/accounts/${accountId}`,
-						);
+						response = await relayApiRequest.call(this, 'GET', `/v1/accounts/${accountId}`);
 					} else if (operation === 'healthCheck') {
-						response = await relayApiRequest.call(
-							this,
-							'GET',
-							'/v1/accounts/health',
-						);
+						response = await relayApiRequest.call(this, 'GET', '/v1/accounts/health');
 					}
 				}
 

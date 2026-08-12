@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { ResponseTooLargeError } from "../lib/fetch-public-url";
 import autoPostRouter from "../routes/auto-post-rules";
-import { parseFeed, RSS_FEED_MAX_BYTES } from "../services/feed-parser";
+import {
+	htmlToSafePlainText,
+	parseFeed,
+	RSS_FEED_MAX_BYTES,
+} from "../services/feed-parser";
+import { isHostedAutoPostEligible } from "../services/rss-generator";
 import type { Env, Variables } from "../types";
 
 const originalFetch = globalThis.fetch;
@@ -66,6 +71,39 @@ describe("RSS resource bounds", () => {
 		expect(parsed).toHaveLength(itemCount);
 		expect(parsed[0]?.sourceId).toBe(String(itemCount - 1));
 		expect(parsed.some((item) => item.sourceId === "0")).toBe(true);
+	});
+});
+
+describe("RSS description sanitization", () => {
+	it("keeps readable text while removing markup in one pass", () => {
+		expect(
+			htmlToSafePlainText(
+				'<p>Tom &amp; Jerry</p><p title=">">Second&nbsp;line</p>',
+			),
+		).toBe("Tom & Jerry Second line");
+	});
+
+	it("never leaves ASCII angle brackets from malformed or encoded tags", () => {
+		for (const value of [
+			"<<script>alert(1)</script>",
+			"<scr<script>ipt>alert(1)</scr<script>ipt>",
+			"&lt;img src=x onerror=alert(1)&gt;",
+			"&#60;svg onload=alert(1)&#62;",
+			"&amp;lt;script&amp;gt;",
+			"plain 2 < 3 and 4 > 1",
+		]) {
+			const result = htmlToSafePlainText(value);
+			expect(result).not.toContain("<");
+			expect(result).not.toContain(">");
+		}
+	});
+
+	it("bounds malformed tags and decodes entities at most once", () => {
+		const unterminated = `<script ${"x".repeat(5_000)}`;
+		expect(htmlToSafePlainText(unterminated)).toStartWith("‹script ");
+		expect(htmlToSafePlainText("&amp;lt;script&amp;gt;")).toBe(
+			"&lt;script&gt;",
+		);
 	});
 });
 
@@ -153,5 +191,123 @@ describe("RSS pause fencing", () => {
 		expect(
 			source.match(/eq\(autoPostRules\.status, "active"\)/g)?.length ?? 0,
 		).toBeGreaterThanOrEqual(6);
+	});
+});
+
+describe("RSS hosted entitlement admission", () => {
+	const now = new Date("2026-08-02T12:00:00.000Z");
+	const stripeAuthority = {
+		status: "active" as const,
+		source: "stripe" as const,
+		stripeSubscriptionId: "sub_stripe_1",
+		trialEndsAt: null,
+		delinquentAt: null,
+		graceEndsAt: null,
+	};
+
+	it("admits only an authoritative hosted Pro agreement", () => {
+		expect(isHostedAutoPostEligible(stripeAuthority, now)).toBe(true);
+		expect(
+			isHostedAutoPostEligible(
+				{ ...stripeAuthority, stripeSubscriptionId: null },
+				now,
+			),
+		).toBe(false);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "cancelled",
+					stripeSubscriptionId: null,
+				},
+				now,
+			),
+		).toBe(false);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					source: "complimentary",
+					stripeSubscriptionId: null,
+				},
+				now,
+			),
+		).toBe(true);
+	});
+
+	it("uses exact trial and past-due grace boundaries", () => {
+		const delinquentAt = new Date("2026-07-19T12:00:00.000Z");
+		const graceEndsAt = new Date("2026-08-02T13:00:00.000Z");
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "past_due",
+					delinquentAt,
+					graceEndsAt,
+				},
+				now,
+			),
+		).toBe(true);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "past_due",
+					delinquentAt,
+					graceEndsAt: now,
+				},
+				now,
+			),
+		).toBe(false);
+		expect(
+			isHostedAutoPostEligible(
+				{
+					...stripeAuthority,
+					status: "trialing",
+					trialEndsAt: new Date("2026-08-02T12:00:00.001Z"),
+				},
+				now,
+			),
+		).toBe(true);
+		expect(
+			isHostedAutoPostEligible(
+				{ ...stripeAuthority, status: "trialing", trialEndsAt: now },
+				now,
+			),
+		).toBe(false);
+	});
+
+	it("filters ineligible tenants before LIMIT and rechecks under lock", async () => {
+		const source = await Bun.file(
+			new URL("../services/rss-generator.ts", import.meta.url),
+		).text();
+		const claimStart = source.indexOf("async function claimDueRules");
+		const eligibilityInClaim = source.indexOf(
+			"...(hostedEligibility ? [hostedEligibility] : [])",
+			claimStart,
+		);
+		const claimLimit = source.indexOf(".limit(10)", claimStart);
+		expect(eligibilityInClaim).toBeGreaterThan(claimStart);
+		expect(eligibilityInClaim).toBeLessThan(claimLimit);
+
+		const itemLoop = source.indexOf("for (const entry of candidates)");
+		const authorityLock = source.indexOf(
+			"lockOrganizationSubscription(",
+			itemLoop,
+		);
+		const entitlementRecheck = source.indexOf(
+			"isHostedAutoPostEligible(subscription, new Date())",
+			authorityLock,
+		);
+		const postInsert = source.indexOf(".insert(posts)", itemLoop);
+		const outboxInsert = source.indexOf(".insert(publishOutbox)", itemLoop);
+		expect(authorityLock).toBeGreaterThan(itemLoop);
+		expect(entitlementRecheck).toBeGreaterThan(authorityLock);
+		expect(entitlementRecheck).toBeLessThan(postInsert);
+		expect(entitlementRecheck).toBeLessThan(outboxInsert);
+		expect(source.slice(authorityLock, entitlementRecheck)).toContain(
+			'"share"',
+		);
 	});
 });

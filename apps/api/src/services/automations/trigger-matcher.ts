@@ -20,8 +20,10 @@ import {
 	type Database,
 } from "@relayapi/db";
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { decryptContactRow } from "../contact-protection";
+import { getContactSegmentIds } from "../segment-memberships";
 import { evaluateFilterGroup } from "./filter-eval";
-import { enrollContact } from "./runner";
+import { EnrollmentBlockedError, enrollContact } from "./runner";
 import { testSafeAutomationRegex } from "./safe-regex";
 
 export type InboundEventKind =
@@ -31,13 +33,13 @@ export type InboundEventKind =
 	| "story_mention"
 	| "live_comment"
 	| "share_to_dm"
-	| "follow"
 	| "ad_click"
 	| "ref_link_click"
 	| "tag_applied"
 	| "tag_removed"
 	| "field_changed"
-	| "conversion_event";
+	| "conversion_event"
+	| "webhook_inbound";
 
 export type InboundEvent = {
 	kind: InboundEventKind | "schedule";
@@ -88,11 +90,23 @@ export type MatchResult =
 				| "no_candidates"
 				| "all_filtered"
 				| "reentry_blocked"
+				| "daily_cap_reached"
 				| "paused"
 				| "no_active_automation";
 	  };
 
 export type Db = Database;
+
+export type MatchAndEnrollOptions = {
+	/** Restrict matching to one already-authorized entrypoint. */
+	pinnedEntrypointId?: string;
+	/** Restrict matching to one already-authorized automation owner. */
+	pinnedAutomationId?: string;
+	/** Additional run context supplied by internal trigger adapters. */
+	contextOverrides?: Record<string, unknown>;
+	/** Persist an immediate resume job instead of walking the graph inline. */
+	deferRun?: boolean;
+};
 
 // ---------------------------------------------------------------------------
 // Specificity auto-derivation (spec §6.2)
@@ -204,6 +218,12 @@ function matchesEntrypointConfig(
 		case "keyword":
 		case "dm_received": {
 			const text = event.text ?? "";
+			if (
+				config.first_message_only === true &&
+				event.isFirstInboundOnChannel !== true
+			) {
+				return false;
+			}
 			if (Array.isArray(config.keywords) && config.keywords.length > 0) {
 				return matchesKeywordConfig(config, text);
 			}
@@ -275,7 +295,6 @@ function matchesEntrypointConfig(
 			return true;
 		}
 		case "share_to_dm":
-		case "follow":
 			return true;
 		default:
 			// Unknown kinds match by default (graceful forward-compat)
@@ -291,7 +310,64 @@ export async function matchAndEnroll(
 	db: Db,
 	event: InboundEvent,
 	env: Record<string, unknown>,
+	options: MatchAndEnrollOptions = {},
 ): Promise<MatchResult> {
+	const scheduledEntrypointId =
+		event.kind === "schedule" &&
+		typeof event.payload?.entrypoint_id === "string"
+			? (event.payload.entrypoint_id as string)
+			: null;
+	const pinnedEntrypointId =
+		options.pinnedEntrypointId ?? scheduledEntrypointId;
+
+	// Resolve the authoritative contact scope before ranking entrypoints. A
+	// workspace-A event must never be won by a workspace-B (or organization-
+	// scoped) automation and then fail only at the run's composite FK, because
+	// that would suppress a valid lower-priority candidate from workspace A.
+	const contactRow = await db.query.contacts.findFirst({
+		where: and(
+			eq(contacts.id, event.contactId),
+			eq(contacts.organizationId, event.organizationId),
+		),
+	});
+	if (!contactRow) return { matched: false, reason: "no_candidates" };
+	const keyConfig =
+		typeof env.ENCRYPTION_KEY === "string"
+			? env.ENCRYPTION_KEY
+			: (() => {
+					throw new Error("ENCRYPTION_KEY is required");
+				})();
+	const plaintextContactRow = await decryptContactRow(keyConfig, contactRow);
+
+	// Durable receipts/jobs may retry after the run was committed but before
+	// their owner acknowledged success. Resolve the occurrence before
+	// active-status/re-entry filtering. This also matters for unpinned internal
+	// events: without the lookup, a retry could skip the first automation because
+	// its new run is active and incorrectly enroll a lower-ranked candidate.
+	if (event.triggerOccurrenceId) {
+		const existingOccurrence = await db.query.automationRuns.findFirst({
+			where: and(
+				eq(automationRuns.organizationId, event.organizationId),
+				eq(automationRuns.contactId, event.contactId),
+				eq(automationRuns.triggerOccurrenceId, event.triggerOccurrenceId),
+				pinnedEntrypointId
+					? eq(automationRuns.entrypointId, pinnedEntrypointId)
+					: undefined,
+				options.pinnedAutomationId
+					? eq(automationRuns.automationId, options.pinnedAutomationId)
+					: undefined,
+			),
+		});
+		if (existingOccurrence?.entrypointId) {
+			return {
+				matched: true,
+				entrypointId: existingOccurrence.entrypointId,
+				automationId: existingOccurrence.automationId,
+				runId: existingOccurrence.id,
+			};
+		}
+	}
+
 	// 1. Load candidate entrypoints — channel + kind + active.
 	//    Allow either (social_account_id IS NULL) OR (social_account_id = event.socialAccountId).
 	//
@@ -303,11 +379,6 @@ export async function matchAndEnroll(
 	// schedules on the same org, every dispatch funnels contacts into one winner
 	// and the other schedule silently never enrolls anyone. Constrain to the
 	// entrypoint id carried in the payload to keep each schedule self-contained.
-	const scheduledEntrypointId =
-		event.kind === "schedule" &&
-		typeof event.payload?.entrypoint_id === "string"
-			? (event.payload.entrypoint_id as string)
-			: null;
 	// Narrow the joined automation projection to just `id` — the only field the
 	// matcher reads (status/organizationId are used only in the WHERE clause).
 	// Selecting the whole row pulled the `graph` JSONB (the full node/edge flow)
@@ -329,8 +400,12 @@ export async function matchAndEnroll(
 				eq(automationEntrypoints.status, "active"),
 				eq(automations.status, "active"),
 				eq(automations.organizationId, event.organizationId),
-				scheduledEntrypointId
-					? eq(automationEntrypoints.id, scheduledEntrypointId)
+				eq(automations.scopeKey, contactRow.scopeKey),
+				options.pinnedAutomationId
+					? eq(automations.id, options.pinnedAutomationId)
+					: undefined,
+				pinnedEntrypointId
+					? eq(automationEntrypoints.id, pinnedEntrypointId)
 					: undefined,
 				event.socialAccountId
 					? or(
@@ -348,33 +423,38 @@ export async function matchAndEnroll(
 		return { matched: false, reason: "no_candidates" };
 	}
 
-	// Load contact context for filter evaluation (once).
-	const contactRow = await db.query.contacts.findFirst({
-		where: eq(contacts.id, event.contactId),
-	});
 	const tagList: string[] = contactRow?.tags ?? [];
 	const fieldsMap: Record<string, unknown> = {};
+	let segmentIds: string[] = [];
 	if (contactRow) {
-		const fieldRows = await db
-			.select({
-				slug: customFieldDefinitions.slug,
-				value: customFieldValues.value,
-			})
-			.from(customFieldValues)
-			.leftJoin(
-				customFieldDefinitions,
-				eq(customFieldValues.definitionId, customFieldDefinitions.id),
-			)
-			.where(
-				and(
-					eq(customFieldValues.contactId, event.contactId),
-					eq(customFieldValues.organizationId, event.organizationId),
+		const [fieldRows, segmentIdsMap] = await Promise.all([
+			db
+				.select({
+					slug: customFieldDefinitions.slug,
+					value: customFieldValues.value,
+				})
+				.from(customFieldValues)
+				.leftJoin(
+					customFieldDefinitions,
+					eq(customFieldValues.definitionId, customFieldDefinitions.id),
+				)
+				.where(
+					and(
+						eq(customFieldValues.contactId, event.contactId),
+						eq(customFieldValues.organizationId, event.organizationId),
+					),
 				),
-			);
+			getContactSegmentIds(db, event.organizationId, [event.contactId]),
+		]);
 		for (const fr of fieldRows) {
 			if (fr.slug) fieldsMap[fr.slug] = fr.value;
 		}
+		segmentIds = segmentIdsMap.get(event.contactId) ?? [];
 	}
+	const contactWithSegments = {
+		...(plaintextContactRow as unknown as Record<string, unknown>),
+		segment_ids: segmentIds,
+	};
 
 	// 2. Per-kind config + filter evaluation.
 	type Candidate = (typeof rows)[number];
@@ -386,7 +466,7 @@ export async function matchAndEnroll(
 		const filters = row.entrypoint.filters as Record<string, unknown> | null;
 		if (filters) {
 			const ok = evaluateFilterGroup(filters as never, {
-				contact: (contactRow as Record<string, unknown> | undefined) ?? null,
+				contact: contactWithSegments,
 				tags: tagList,
 				fields: fieldsMap,
 				state: (event.payload as Record<string, unknown> | undefined) ?? {},
@@ -467,9 +547,11 @@ export async function matchAndEnroll(
 	}
 
 	const finalists: Candidate[] = [];
+	let hasUnpausedCandidate = false;
 	for (const row of survivors) {
 		const auto = row.automation;
 		if (pausedAutomationIds.has(auto.id)) continue;
+		hasUnpausedCandidate = true;
 
 		const stats = runStatsByAutomation.get(auto.id);
 
@@ -493,7 +575,10 @@ export async function matchAndEnroll(
 	}
 
 	if (finalists.length === 0) {
-		return { matched: false, reason: "reentry_blocked" };
+		return {
+			matched: false,
+			reason: hasUnpausedCandidate ? "reentry_blocked" : "paused",
+		};
 	}
 
 	// 5. Sort by (specificity DESC, priority ASC, created_at ASC) and take first.
@@ -529,14 +614,26 @@ export async function matchAndEnroll(
 			// multi-account workspace. Internal-only events (schedule,
 			// tag_applied, field_changed, ...) may pass null.
 			socialAccountId: event.socialAccountId ?? null,
-			contextOverrides: { triggerEvent: event },
+			contextOverrides: {
+				...(options.contextOverrides ?? {}),
+				// The normalized trigger event is a runtime-owned key. Keep it last so
+				// a webhook payload mapping cannot replace the source attribution used
+				// by comment actions, conditions, and observability.
+				triggerEvent: event,
+			},
 			env,
+			deferRun: options.deferRun,
 			// Reuse the contact row + custom fields we already loaded above for
 			// filter evaluation so enrollContact doesn't re-query them.
 			prehydrated: {
-				contact: (contactRow as Record<string, unknown> | undefined) ?? null,
+				contact: contactWithSegments,
 				tags: tagList,
 				fields: fieldsMap as Record<string, string>,
+			},
+			admission: {
+				allowReentry: picked.entrypoint.allowReentry,
+				reentryCooldownMin: picked.entrypoint.reentryCooldownMin,
+				dailyCap: picked.entrypoint.dailyCap,
 			},
 		});
 		return {
@@ -545,7 +642,19 @@ export async function matchAndEnroll(
 			automationId: picked.automation.id,
 			runId,
 		};
-	} catch {
-		return { matched: false, reason: "no_active_automation" };
+	} catch (error) {
+		if (error instanceof EnrollmentBlockedError) {
+			return {
+				matched: false,
+				reason:
+					error.reason === "daily_cap"
+						? "daily_cap_reached"
+						: "reentry_blocked",
+			};
+		}
+		// Infrastructure and graph-execution failures are not a legitimate
+		// no-match. Let the queue/receipt owner retry them and preserve the real
+		// error for observability instead of silently dropping an inbound event.
+		throw error;
 	}
 }

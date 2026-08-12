@@ -1,10 +1,14 @@
+import { readProviderText } from "../../../lib/provider-response";
 import { socialAccounts } from "@relayapi/db";
-import { and, eq } from "drizzle-orm";
-import { API_VERSIONS, GRAPH_BASE } from "../../../config/api-versions";
+import { and, eq, isNull } from "drizzle-orm";
+import { GRAPH_BASE } from "../../../config/api-versions";
 import { decryptAccountToken } from "../../../lib/account-token-crypto";
 import type { Action } from "../../../schemas/automation-actions";
 import { applyMergeTags } from "../merge-tags";
-import type { RunContext } from "../types";
+import {
+	AutomationExternalEffectKnownFailureError,
+	type RunContext,
+} from "../types";
 import type { ActionHandler } from "./types";
 
 type ReplyToCommentAction = Extract<Action, { type: "reply_to_comment" }>;
@@ -46,42 +50,64 @@ const replyToComment: ActionHandler<ReplyToCommentAction> = async (
 	if (!account.accessToken) {
 		throw new Error(`social account ${accountId} has no access token`);
 	}
+	const accessToken = account.accessToken;
 
-	let res: Response;
-	switch (account.platform) {
-		case "facebook":
-			res = await fetch(`${GRAPH_BASE.facebook}/${commentId}/comments`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					message: renderedText,
-					access_token: account.accessToken,
-				}),
-			});
-			break;
-		case "instagram":
-			res = await fetch(
-				`https://${igGraphHost(account.accessToken)}/${API_VERSIONS.meta_graph}/${commentId}/replies`,
-				{
+	const dispatch = async () => {
+		let res: Response;
+		switch (account.platform) {
+			case "facebook":
+				res = await fetch(`${GRAPH_BASE.facebook}/${commentId}/comments`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						message: renderedText,
-						access_token: account.accessToken,
+						access_token: accessToken,
 					}),
-				},
+				});
+				break;
+			case "instagram":
+				res = await fetch(
+					`${instagramGraphBase(accessToken)}/${commentId}/replies`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							message: renderedText,
+							access_token: accessToken,
+						}),
+					},
+				);
+				break;
+			default:
+				throw new Error(
+					`reply_to_comment is unsupported for platform "${account.platform}"`,
+				);
+		}
+		if (!res.ok) {
+			const detail = await summarizeErrorResponse(res);
+			if (res.status >= 500) {
+				throw new Error(`reply_to_comment ambiguous: ${detail}`);
+			}
+			throw new AutomationExternalEffectKnownFailureError(
+				`reply_to_comment failed: ${detail}`,
 			);
-			break;
-		default:
-			throw new Error(
-				`reply_to_comment is unsupported for platform "${account.platform}"`,
-			);
-	}
+		}
+		return { status: res.status };
+	};
 
-	if (!res.ok) {
-		throw new Error(
-			`reply_to_comment failed: ${await summarizeErrorResponse(res)}`,
+	if (ctx.executeExternalEffect) {
+		await ctx.executeExternalEffect(
+			{
+				effectKey: `action:${action.id}`,
+				kind: "automation_action",
+			},
+			async () => ({
+				outcome: "succeeded",
+				value: await dispatch(),
+			}),
 		);
+	} else {
+		await dispatch();
 	}
 };
 
@@ -100,6 +126,14 @@ async function loadSocialAccount(
 			and(
 				eq(socialAccounts.id, accountId),
 				eq(socialAccounts.organizationId, ctx.organizationId),
+				eq(
+					socialAccounts.platform,
+					ctx.channel as typeof socialAccounts.$inferSelect.platform,
+				),
+				eq(socialAccounts.lifecycleStatus, "active"),
+				ctx.workspaceId
+					? eq(socialAccounts.workspaceId, ctx.workspaceId)
+					: isNull(socialAccounts.workspaceId),
 			),
 		)
 		.limit(1);
@@ -152,16 +186,14 @@ function resolveCommentId(ctx: RunContext): string | null {
 		: null;
 }
 
-function igGraphHost(token: string): string {
-	return token.startsWith("IGAA")
-		? "graph.instagram.com"
-		: "graph.facebook.com";
+function instagramGraphBase(token: string): string {
+	return token.startsWith("IGAA") ? GRAPH_BASE.instagram : GRAPH_BASE.facebook;
 }
 
 async function summarizeErrorResponse(res: Response): Promise<string> {
 	const fallback = `${res.status} ${res.statusText || "request failed"}`.trim();
 	try {
-		const body = await res.text();
+		const body = await readProviderText(res);
 		if (!body) return fallback;
 		return `${fallback} ${body.slice(0, 200)}`.trim();
 	} catch {

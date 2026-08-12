@@ -1,11 +1,12 @@
+import { createDb, type Database, posts, socialAccounts } from "@relayapi/db";
+import { and, eq, gte, inArray, isNull, lte, type SQL } from "drizzle-orm";
+import { workspaceScopeSqlCondition } from "../lib/workspace-scope";
+import type { Env, Variables } from "../types";
+import { type BestTimeSlot, getCachedBestTimes } from "./best-time-cache";
 import {
-	createDb,
-	posts,
-	socialAccounts,
-} from "@relayapi/db";
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
-import { getCachedBestTimes, type BestTimeSlot } from "./best-time-cache";
-import type { Env } from "../types";
+	listQueueSchedules,
+	type StoredQueueSchedule,
+} from "./queue-schedules";
 
 export interface SlotCandidate {
 	slot_at: string;
@@ -15,6 +16,10 @@ export interface SlotCandidate {
 }
 
 export interface FindSlotOptions {
+	db?: Database;
+	workspaceScope?: Variables["workspaceScope"];
+	/** Undefined means every authorized workspace; null means org-scoped only. */
+	workspaceId?: string | null;
 	accountId?: string;
 	after?: Date;
 	strategy?: "queue" | "best-time" | "smart";
@@ -22,19 +27,12 @@ export interface FindSlotOptions {
 	excludeTimes?: Date[];
 }
 
-interface StoredSchedule {
-	id: string;
-	name: string;
-	slots: Array<{ day_of_week: number; time: string; timezone: string }>;
-	is_default: boolean;
-}
-
 /**
  * Calculate the next N upcoming slot times from a schedule's slots.
  * Reused from queue.ts logic.
  */
 function calculateUpcomingSlots(
-	slots: StoredSchedule["slots"],
+	slots: StoredQueueSchedule["slots"],
 	count: number,
 	now: Date,
 ): Date[] {
@@ -105,11 +103,6 @@ function calculateUpcomingSlots(
 	return upcoming.slice(0, count);
 }
 
-async function getSchedules(kv: KVNamespace, orgId: string): Promise<StoredSchedule[]> {
-	const data = await kv.get<StoredSchedule[]>(`queue-schedule:${orgId}`, "json");
-	return data ?? [];
-}
-
 /**
  * Find the best available posting slots for an organization.
  */
@@ -119,6 +112,9 @@ export async function findBestSlots(
 	options: FindSlotOptions = {},
 ): Promise<{ slots: SlotCandidate[]; fallback: boolean }> {
 	const {
+		db: requestDb,
+		workspaceScope = "all",
+		workspaceId,
 		accountId,
 		after = new Date(),
 		strategy = "smart",
@@ -126,8 +122,9 @@ export async function findBestSlots(
 		excludeTimes = [],
 	} = options;
 
-	// Load queue schedule from KV
-	const schedules = await getSchedules(env.KV, orgId);
+	const db = requestDb ?? createDb(env.HYPERDRIVE.connectionString);
+	// PostgreSQL owns schedule state; KV is only a short-lived cache.
+	const schedules = await listQueueSchedules(db, env.KV, orgId);
 	const schedule = schedules.find((s) => s.is_default) ?? schedules[0];
 	const queueSlots = schedule?.slots ?? [];
 
@@ -139,7 +136,12 @@ export async function findBestSlots(
 	// For best-time strategy, also generate candidates from engagement data
 	let bestTimeData: BestTimeSlot[] = [];
 	if (strategy === "best-time" || strategy === "smart") {
-		bestTimeData = await getCachedBestTimes(env, orgId);
+		bestTimeData = await getCachedBestTimes(env, db, {
+			organizationId: orgId,
+			workspaceScope,
+			workspaceId,
+			accountId,
+		});
 	}
 
 	// Build candidate set
@@ -177,18 +179,24 @@ export async function findBestSlots(
 	windowStart.setMinutes(windowStart.getMinutes() - 5);
 	windowEnd.setMinutes(windowEnd.getMinutes() + 5);
 
-	const db = createDb(env.HYPERDRIVE.connectionString);
+	const collisionConditions: SQL[] = [
+		eq(posts.organizationId, orgId),
+		workspaceScopeSqlCondition(workspaceScope, posts.workspaceId),
+		inArray(posts.status, ["scheduled", "publishing"]),
+		gte(posts.scheduledAt, windowStart),
+		lte(posts.scheduledAt, windowEnd),
+	];
+	if (workspaceId !== undefined) {
+		collisionConditions.push(
+			workspaceId === null
+				? isNull(posts.workspaceId)
+				: eq(posts.workspaceId, workspaceId),
+		);
+	}
 	const scheduledPosts = await db
 		.select({ scheduledAt: posts.scheduledAt })
 		.from(posts)
-		.where(
-			and(
-				eq(posts.organizationId, orgId),
-				inArray(posts.status, ["scheduled", "publishing"]),
-				gte(posts.scheduledAt, windowStart),
-				lte(posts.scheduledAt, windowEnd),
-			),
-		);
+		.where(and(...collisionConditions));
 
 	// Count conflicts per candidate (posts within +/- 5 minutes)
 	const conflictCounts = new Map<string, number>();
@@ -206,10 +214,22 @@ export async function findBestSlots(
 	// Load account preferences if accountId provided
 	let postingWindows: Array<{ day_of_week: number; start_hour: number; end_hour: number }> = [];
 	if (accountId) {
+		const accountConditions: SQL[] = [
+			eq(socialAccounts.id, accountId),
+			eq(socialAccounts.organizationId, orgId),
+			workspaceScopeSqlCondition(workspaceScope, socialAccounts.workspaceId),
+		];
+		if (workspaceId !== undefined) {
+			accountConditions.push(
+				workspaceId === null
+					? isNull(socialAccounts.workspaceId)
+					: eq(socialAccounts.workspaceId, workspaceId),
+			);
+		}
 		const [account] = await db
 			.select({ schedulingPreferences: socialAccounts.schedulingPreferences })
 			.from(socialAccounts)
-			.where(eq(socialAccounts.id, accountId))
+			.where(and(...accountConditions))
 			.limit(1);
 		if (account?.schedulingPreferences) {
 			const prefs = account.schedulingPreferences as {

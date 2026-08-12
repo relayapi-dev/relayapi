@@ -6,20 +6,27 @@ import {
 	contactChannels,
 	contactConsentEvents,
 	contactSegmentMemberships,
-	contactSubscriptions,
 	contacts,
 	customFieldDefinitions,
 	customFieldValues,
 	generateId,
 	inboxConversations,
+	segments,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { mapConcurrently } from "../lib/concurrency";
+import {
+	deriveProtectedContactSubjectLocator,
+	requireConsentHmacKeyConfig,
+} from "../lib/consent-hmac";
 import {
 	decodeTimestampIdCursor,
 	encodeTimestampIdCursor,
 	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
 } from "../lib/pagination-cursor";
+import { hasPostgresErrorCode } from "../lib/postgres-errors";
 import {
 	inheritOperationalCreateScope,
 	workspaceScopeKey,
@@ -65,6 +72,30 @@ import {
 	recordContactConsentInTransaction,
 } from "../services/contact-consent";
 import {
+	CONTACT_ERASURE_PURPOSES,
+	ContactErasureHeldError,
+	ContactErasureScopeChangedError,
+	eraseContactsInTransaction,
+	lockContactErasureScope,
+} from "../services/contact-erasure";
+import {
+	contactPlaintextMatchesSearch,
+	decryptContactChannelRow,
+	decryptContactChannelRows,
+	decryptContactRow,
+	decryptContactRows,
+	deriveContactSearchQuery,
+	protectContactChannelIdentifier,
+	protectContactEmail,
+	protectContactMetadata,
+	protectContactName,
+	protectContactPhone,
+	protectContactValues,
+} from "../services/contact-protection";
+import { mergeContactSubscriptionProjections } from "../services/contact-subscription-transitions";
+import { contactMatchesSegment } from "../services/dynamic-segments";
+import { enqueueQueueRescueSubjectCleanup } from "../services/external-subject-cleanup";
+import {
 	addContactToStaticSegment,
 	ensureStaticSegment,
 	getContactSegmentIds,
@@ -74,18 +105,15 @@ import {
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
-const CONTACT_ERASURE_PURPOSES = [
-	"marketing",
-	"automation",
-	"service",
-] as const;
-
 // --- Helpers ---
 
-type SerializableChannel = Pick<
-	typeof contactChannels.$inferSelect,
-	"id" | "socialAccountId" | "platform" | "identifier" | "createdAt"
->;
+interface SerializableChannel {
+	id: string;
+	socialAccountId: string;
+	platform: string;
+	identifier: string;
+	createdAt: Date;
+}
 
 function uniqueConsentIdentifiers(
 	identifiers: Array<{ channel: string; identifier: string } | null>,
@@ -154,6 +182,7 @@ function serializeConsentEvent(
 		purpose: event.purpose,
 		status: event.status,
 		identifier_hash: event.identifierHash,
+		identifier_key_version: event.identifierKeyVersion,
 		identifier_masked: event.identifierMasked,
 		source: event.source,
 		occurred_at: event.occurredAt.toISOString(),
@@ -182,6 +211,18 @@ const listContacts = createRoute({
 			description: "Contacts list",
 			content: { "application/json": { schema: ContactListResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Segment workspace is not authorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		404: {
+			description: "Segment not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -203,6 +244,10 @@ const createContact = createRoute({
 		},
 		400: {
 			description: "Validation error",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Canonical email or phone identity conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -250,6 +295,10 @@ const updateContact = createRoute({
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		409: {
+			description: "Canonical email or phone identity conflict",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -266,6 +315,10 @@ const deleteContact = createRoute({
 		204: { description: "Contact deleted" },
 		404: {
 			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Deletion is paused by an active erasure hold",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -405,13 +458,13 @@ const removeChannel = createRoute({
 	},
 });
 
-// 9. List static segment memberships for a contact
+// 9. List stored static and derived dynamic segment memberships for a contact
 const listContactSegments = createRoute({
 	operationId: "listContactSegments",
 	method: "get",
 	path: "/{id}/segments",
 	tags: ["Contacts"],
-	summary: "List static segment memberships for a contact",
+	summary: "List all segment memberships for a contact",
 	security: [{ Bearer: [] }],
 	request: { params: ContactIdParams },
 	responses: {
@@ -511,6 +564,10 @@ const bulkOperations = createRoute({
 		200: {
 			description: "Bulk operation result",
 			content: { "application/json": { schema: BulkOperationsResponse } },
+		},
+		409: {
+			description: "Deletion is paused by an active erasure hold",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
@@ -616,11 +673,18 @@ app.openapi(listContacts, async (c) => {
 	}
 
 	if (search) {
-		const escaped = search.replace(/[%_\\]/g, "\\$&");
+		const projection = await deriveContactSearchQuery(
+			c.env.ENCRYPTION_KEY,
+			orgId,
+			search,
+		);
 		const searchCondition = or(
-			ilike(contacts.name, `%${escaped}%`),
-			ilike(contacts.phone, `%${escaped}%`),
-			ilike(contacts.email, `%${escaped}%`),
+			sql`${contacts.nameSearchTokens} @> ${projection.tokens}::text[]`,
+			sql`${contacts.phoneSearchTokens} @> ${projection.tokens}::text[]`,
+			sql`${contacts.emailSearchTokens} @> ${projection.tokens}::text[]`,
+			projection.phoneHash
+				? eq(contacts.phoneHash, projection.phoneHash)
+				: undefined,
 		);
 		if (searchCondition) {
 			conditions.push(searchCondition);
@@ -632,14 +696,22 @@ app.openapi(listContacts, async (c) => {
 	}
 
 	if (segment_id) {
-		conditions.push(
-			sql`EXISTS (
-				SELECT 1 FROM contact_segment_memberships csm
-				WHERE csm.contact_id = ${contacts.id}
-				AND csm.segment_id = ${segment_id}
-				AND csm.organization_id = ${orgId}
-			)`,
-		);
+		const segment = await db.query.segments.findFirst({
+			where: and(
+				eq(segments.id, segment_id),
+				eq(segments.organizationId, orgId),
+			),
+		});
+		if (!segment) {
+			return c.json(
+				{ error: { code: "NOT_FOUND", message: "Segment not found" } },
+				404,
+			);
+		}
+		if (isWorkspaceScopeDenied(c, segment.workspaceId)) {
+			return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
+		}
+		conditions.push(contactMatchesSegment(segment));
 	}
 
 	if (platform && account_id) {
@@ -668,38 +740,113 @@ app.openapi(listContacts, async (c) => {
 		// (common after bulk imports) once the page boundary falls inside that
 		// millisecond. Bind it back with an explicit ::timestamptz cast to keep the
 		// keyset comparison exact.
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${contacts.createdAt}::text` })
-			.from(contacts)
-			.where(eq(contacts.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${contacts.createdAt}, ${contacts.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${contacts.createdAt}, ${contacts.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
+	}
+
+	const protectedSelection = {
+		id: contacts.id,
+		organizationId: contacts.organizationId,
+		workspaceId: contacts.workspaceId,
+		nameCiphertext: contacts.nameCiphertext,
+		emailCiphertext: contacts.emailCiphertext,
+		phoneCiphertext: contacts.phoneCiphertext,
+		metadataCiphertext: contacts.metadataCiphertext,
+		searchIdentityKeyFingerprint: contacts.searchIdentityKeyFingerprint,
+		tags: contacts.tags,
+		optedIn: contacts.optedIn,
+		createdAt: contacts.createdAt,
+		updatedAt: contacts.updatedAt,
+		cursorTimestamp: sql<string>`to_char(${contacts.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+	};
+	const matched: Array<
+		Parameters<typeof serializeContact>[0] & { organizationId: string }
+	> = [];
+	const candidateBatchSize = search
+		? Math.min(Math.max((limit + 1) * 2, 100), 250)
+		: limit + 1;
+	const maxCandidates = search ? 1_000 : limit + 1;
+	let scanned = 0;
+	// The batch boundary carries its own sort key, so successive scan batches
+	// need no correlated lookup and cannot be derailed by a concurrent delete.
+	let scanBoundary: { timestamp: string; id: string } | null = null;
+	// Search filtering happens in plaintext after decryption, so the sort key of
+	// a matched row has to be carried across from its encrypted row.
+	const cursorTimestampById = new Map<string, string>();
+	let exhausted = false;
+	while (matched.length < limit + 1 && scanned < maxCandidates) {
+		const pageConditions = [...conditions];
+		if (scanBoundary) {
+			pageConditions.push(
+				sql`(${contacts.createdAt}, ${contacts.id}) < (${scanBoundary.timestamp}::timestamptz, ${scanBoundary.id})`,
 			);
+		}
+		const requestedBatchSize = Math.min(
+			candidateBatchSize,
+			maxCandidates - scanned,
+		);
+		const protectedRows = await db
+			.select(protectedSelection)
+			.from(contacts)
+			.where(and(...pageConditions))
+			.orderBy(desc(contacts.createdAt), desc(contacts.id))
+			.limit(requestedBatchSize);
+		if (protectedRows.length === 0) {
+			exhausted = true;
+			break;
+		}
+		scanned += protectedRows.length;
+		for (const row of protectedRows) {
+			cursorTimestampById.set(row.id, row.cursorTimestamp);
+		}
+		const boundaryRow = protectedRows.at(-1);
+		if (boundaryRow) {
+			scanBoundary = {
+				timestamp: boundaryRow.cursorTimestamp,
+				id: boundaryRow.id,
+			};
+		}
+		const plaintextRows = await decryptContactRows(
+			c.env.ENCRYPTION_KEY,
+			protectedRows,
+		);
+		matched.push(
+			...(search
+				? plaintextRows.filter((row) =>
+						contactPlaintextMatchesSearch(row, search),
+					)
+				: plaintextRows),
+		);
+		if (protectedRows.length < requestedBatchSize) {
+			exhausted = true;
+			break;
 		}
 	}
 
-	const rows = await db
-		.select({
-			id: contacts.id,
-			workspaceId: contacts.workspaceId,
-			name: contacts.name,
-			email: contacts.email,
-			phone: contacts.phone,
-			tags: contacts.tags,
-			optedIn: contacts.optedIn,
-			metadata: contacts.metadata,
-			createdAt: contacts.createdAt,
-			updatedAt: contacts.updatedAt,
-		})
-		.from(contacts)
-		.where(and(...conditions))
-		.orderBy(desc(contacts.createdAt), desc(contacts.id))
-		.limit(limit + 1);
-
-	const hasMore = rows.length > limit;
-	const data = rows.slice(0, limit);
+	const scanTruncated =
+		Boolean(search) &&
+		matched.length <= limit &&
+		!exhausted &&
+		scanned >= maxCandidates;
+	const hasMore = matched.length > limit || scanTruncated;
+	const data = matched.slice(0, limit);
+	// A truncated search scan resumes from where scanning stopped, not from the
+	// last matched row, so the two cases carry different sort keys.
+	const lastMatched = data.at(-1);
+	const lastMatchedTimestamp =
+		lastMatched && cursorTimestampById.get(lastMatched.id);
+	const cursorKey = scanTruncated
+		? scanBoundary
+		: lastMatched && lastMatchedTimestamp
+			? { timestamp: lastMatchedTimestamp, id: lastMatched.id }
+			: null;
+	const nextCursor =
+		hasMore && cursorKey
+			? encodeTimestampIdCursor(cursorKey.timestamp, cursorKey.id)
+			: null;
 
 	// Load channels for all returned contacts
 	const contactIds = data.map((ct) => ct.id);
@@ -713,17 +860,27 @@ app.openapi(listContacts, async (c) => {
 						contactId: contactChannels.contactId,
 						socialAccountId: contactChannels.socialAccountId,
 						platform: contactChannels.platform,
-						identifier: contactChannels.identifier,
+						organizationId: contactChannels.organizationId,
+						identifierCiphertext: contactChannels.identifierCiphertext,
+						identifierHash: contactChannels.identifierHash,
+						identityKeyFingerprint: contactChannels.identityKeyFingerprint,
 						createdAt: contactChannels.createdAt,
 					})
 					.from(contactChannels)
 					.where(inArray(contactChannels.contactId, contactIds))
 			: Promise.resolve([]),
-		getContactSegmentIds(db, contactIds),
+		getContactSegmentIds(db, orgId, contactIds),
 	]);
 
-	const channelsByContact = new Map<string, (typeof channels)[number][]>();
-	for (const ch of channels) {
+	const plaintextChannels = await decryptContactChannelRows(
+		c.env.ENCRYPTION_KEY,
+		channels,
+	);
+	const channelsByContact = new Map<
+		string,
+		(typeof plaintextChannels)[number][]
+	>();
+	for (const ch of plaintextChannels) {
 		const list = channelsByContact.get(ch.contactId) ?? [];
 		list.push(ch);
 		channelsByContact.set(ch.contactId, list);
@@ -738,8 +895,7 @@ app.openapi(listContacts, async (c) => {
 					segmentIdsByContact.get(ct.id) ?? [],
 				),
 			),
-			next_cursor:
-				hasMore && data.length > 0 ? (data[data.length - 1]?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,
@@ -747,7 +903,6 @@ app.openapi(listContacts, async (c) => {
 });
 
 // 2. Create contact
-// @ts-expect-error — handler returns 201 or 400
 app.openapi(createContact, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
@@ -791,76 +946,68 @@ app.openapi(createContact, async (c) => {
 	if (!scope.ok) return scope.response as never;
 	const workspaceId = scope.workspaceId;
 
+	const contactId = generateId("ct_");
+	const protectedContact = await protectContactValues(
+		c.env.ENCRYPTION_KEY,
+		orgId,
+		contactId,
+		{
+			name: body.name ?? null,
+			email: body.email ?? null,
+			phone: body.phone ?? null,
+			metadata: body.metadata ?? null,
+		},
+	);
 	const contactValues = {
+		id: contactId,
 		organizationId: orgId,
 		workspaceId,
-		name: body.name ?? null,
-		email: body.email ?? null,
-		phone: body.phone ?? null,
+		...protectedContact,
 		tags: body.tags ?? [],
 		optedIn: body.opted_in ?? false,
-		metadata: body.metadata ?? null,
 	};
-
-	// The common path has no consent evidence to project. Preserve its original
-	// latency by avoiding a transaction and the associated extra round trip.
-	if (body.opted_in === undefined) {
-		const [contact] = await db
-			.insert(contacts)
-			.values(contactValues)
-			.returning();
-		if (!contact) {
-			return c.json(
-				{
-					error: {
-						code: "INTERNAL_ERROR",
-						message: "Failed to create contact",
-					},
-				},
-				500,
-			);
-		}
-		let channelRows: (typeof contactChannels.$inferSelect)[] = [];
-		if (body.account_id && body.platform && body.identifier) {
-			const [channel] = await db
-				.insert(contactChannels)
-				.values({
+	const channelId =
+		body.account_id && body.platform && body.identifier
+			? generateId("cc_")
+			: null;
+	const protectedChannel =
+		channelId && body.identifier
+			? await protectContactChannelIdentifier(c.env.ENCRYPTION_KEY, {
+					id: channelId,
 					organizationId: orgId,
-					scopeKey: workspaceScopeKey(workspaceId),
-					contactId: contact.id,
-					socialAccountId: body.account_id,
-					platform:
-						body.platform as typeof contactChannels.$inferInsert.platform,
 					identifier: body.identifier,
 				})
-				.onConflictDoNothing()
-				.returning();
-			if (channel) channelRows = [channel];
-		}
-		return c.json(serializeContact(contact, channelRows, []), 201);
-	}
+			: null;
 
 	const created = await db.transaction(async (tx) => {
 		const [contact] = await tx
 			.insert(contacts)
 			.values(contactValues)
+			.onConflictDoNothing()
 			.returning();
 		if (!contact) return null;
 
 		// If channel info was provided, create the first channel. ON CONFLICT keeps
 		// the former duplicate-skip behavior without aborting the outer transaction.
 		let channelRows: (typeof contactChannels.$inferSelect)[] = [];
-		if (body.account_id && body.platform && body.identifier) {
+		if (
+			channelId &&
+			protectedChannel &&
+			body.account_id &&
+			body.platform &&
+			body.identifier
+		) {
 			const [channel] = await tx
 				.insert(contactChannels)
 				.values({
+					id: channelId,
 					organizationId: orgId,
 					scopeKey: workspaceScopeKey(workspaceId),
 					contactId: contact.id,
 					socialAccountId: body.account_id,
 					platform:
 						body.platform as typeof contactChannels.$inferInsert.platform,
-					identifier: body.identifier,
+					...protectedChannel,
 				})
 				.onConflictDoNothing()
 				.returning();
@@ -876,13 +1023,12 @@ app.openapi(createContact, async (c) => {
 				body.email ? { channel: "email", identifier: body.email } : null,
 				body.phone ? { channel: "sms", identifier: body.phone } : null,
 				body.phone ? { channel: "whatsapp", identifier: body.phone } : null,
-				...channelRows.map((channel) => ({
-					channel: channel.platform,
-					identifier: channel.identifier,
-				})),
+				body.platform && body.identifier
+					? { channel: body.platform, identifier: body.identifier }
+					: null,
 			]);
 			for (const identifier of identifiers) {
-				await recordContactConsentInTransaction(tx, {
+				await recordContactConsentInTransaction(tx, c.env.ENCRYPTION_KEY, {
 					organizationId: orgId,
 					workspaceId,
 					contactId: contact.id,
@@ -904,14 +1050,28 @@ app.openapi(createContact, async (c) => {
 	if (!created) {
 		return c.json(
 			{
-				error: { code: "INTERNAL_ERROR", message: "Failed to create contact" },
+				error: {
+					code: "CONTACT_IDENTITY_CONFLICT",
+					message:
+						"A contact with this email or phone already exists in the same scope.",
+				},
 			},
-			500,
+			409,
 		);
 	}
 
+	const [plaintextContact, plaintextChannels, segmentIdsMap] =
+		await Promise.all([
+			decryptContactRow(c.env.ENCRYPTION_KEY, created.contact),
+			decryptContactChannelRows(c.env.ENCRYPTION_KEY, created.channelRows),
+			getContactSegmentIds(db, orgId, [created.contact.id]),
+		]);
 	return c.json(
-		serializeContact(created.contact, created.channelRows, []),
+		serializeContact(
+			plaintextContact,
+			plaintextChannels,
+			segmentIdsMap.get(created.contact.id) ?? [],
+		),
 		201,
 	);
 });
@@ -944,11 +1104,18 @@ app.openapi(getContact, async (c) => {
 			.select()
 			.from(contactChannels)
 			.where(eq(contactChannels.contactId, contact.id)),
-		getContactSegmentIds(db, [contact.id]),
+		getContactSegmentIds(db, orgId, [contact.id]),
 	]);
 	const segmentIds = segmentIdsMap.get(contact.id) ?? [];
+	const [plaintextContact, plaintextChannels] = await Promise.all([
+		decryptContactRow(c.env.ENCRYPTION_KEY, contact),
+		decryptContactChannelRows(c.env.ENCRYPTION_KEY, channels),
+	]);
 
-	return c.json(serializeContact(contact, channels, segmentIds), 200);
+	return c.json(
+		serializeContact(plaintextContact, plaintextChannels, segmentIds),
+		200,
+	);
 });
 
 app.openapi(listContactConsents, async (c) => {
@@ -1043,16 +1210,20 @@ app.openapi(recordContactConsentRoute, async (c) => {
 	if (isWorkspaceScopeDenied(c, contact.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
+	const plaintextContact = await decryptContactRow(
+		c.env.ENCRYPTION_KEY,
+		contact,
+	);
 
 	let identifier = body.identifier;
 	if (!identifier && body.channel === "email")
-		identifier = contact.email ?? undefined;
+		identifier = plaintextContact.email ?? undefined;
 	if (!identifier && ["sms", "whatsapp", "phone"].includes(body.channel)) {
-		identifier = contact.phone ?? undefined;
+		identifier = plaintextContact.phone ?? undefined;
 	}
 	if (!identifier) {
 		const matchingChannels = await db
-			.selectDistinct({ identifier: contactChannels.identifier })
+			.selectDistinct()
 			.from(contactChannels)
 			.where(
 				and(
@@ -1076,7 +1247,9 @@ app.openapi(recordContactConsentRoute, async (c) => {
 				400,
 			);
 		}
-		identifier = matchingChannels[0]?.identifier;
+		identifier = (
+			await decryptContactChannelRows(c.env.ENCRYPTION_KEY, matchingChannels)
+		)[0]?.identifier;
 	}
 	if (!identifier) {
 		return c.json(
@@ -1090,7 +1263,7 @@ app.openapi(recordContactConsentRoute, async (c) => {
 		);
 	}
 
-	const event = await recordContactConsent(db, {
+	const event = await recordContactConsent(db, c.env.ENCRYPTION_KEY, {
 		organizationId: orgId,
 		workspaceId: contact.workspaceId,
 		contactId: id,
@@ -1131,169 +1304,171 @@ app.openapi(updateContact, async (c) => {
 
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied;
+	const existingPlaintext = await decryptContactRow(
+		c.env.ENCRYPTION_KEY,
+		existing,
+	);
 
 	const updateSet: Record<string, unknown> = { updatedAt: new Date() };
-	if (body.name !== undefined) updateSet.name = body.name;
-	if (body.email !== undefined) updateSet.email = body.email;
-	if (body.phone !== undefined) updateSet.phone = body.phone;
+	const [protectedName, protectedEmail, protectedPhone, protectedMetadata] =
+		await Promise.all([
+			body.name !== undefined
+				? protectContactName(c.env.ENCRYPTION_KEY, orgId, id, body.name)
+				: null,
+			body.email !== undefined
+				? protectContactEmail(c.env.ENCRYPTION_KEY, orgId, id, body.email)
+				: null,
+			body.phone !== undefined
+				? protectContactPhone(c.env.ENCRYPTION_KEY, orgId, id, body.phone)
+				: null,
+			body.metadata !== undefined
+				? protectContactMetadata(c.env.ENCRYPTION_KEY, orgId, id, body.metadata)
+				: null,
+		]);
+	if (protectedName) Object.assign(updateSet, protectedName);
+	if (protectedEmail) Object.assign(updateSet, protectedEmail);
+	if (protectedPhone) Object.assign(updateSet, protectedPhone);
+	if (protectedMetadata) Object.assign(updateSet, protectedMetadata);
 	if (body.tags !== undefined) updateSet.tags = body.tags;
 	if (body.opted_in !== undefined) updateSet.optedIn = body.opted_in;
-	if (body.metadata !== undefined) updateSet.metadata = body.metadata;
 	const retiredIdentifiers = uniqueConsentIdentifiers([
 		body.email !== undefined &&
-		existing.email &&
-		normalizeRecipientIdentifier("email", existing.email) !==
+		existingPlaintext.email &&
+		normalizeRecipientIdentifier("email", existingPlaintext.email) !==
 			normalizeRecipientIdentifier("email", body.email)
-			? { channel: "email", identifier: existing.email }
+			? { channel: "email", identifier: existingPlaintext.email }
 			: null,
 		body.phone !== undefined &&
-		existing.phone &&
-		normalizeRecipientIdentifier("sms", existing.phone) !==
+		existingPlaintext.phone &&
+		normalizeRecipientIdentifier("sms", existingPlaintext.phone) !==
 			normalizeRecipientIdentifier("sms", body.phone)
-			? { channel: "sms", identifier: existing.phone }
+			? { channel: "sms", identifier: existingPlaintext.phone }
 			: null,
 		body.phone !== undefined &&
-		existing.phone &&
-		normalizeRecipientIdentifier("whatsapp", existing.phone) !==
+		existingPlaintext.phone &&
+		normalizeRecipientIdentifier("whatsapp", existingPlaintext.phone) !==
 			normalizeRecipientIdentifier("whatsapp", body.phone)
-			? { channel: "whatsapp", identifier: existing.phone }
+			? { channel: "whatsapp", identifier: existingPlaintext.phone }
 			: null,
 	]);
+	const nextPlaintext = {
+		name: body.name ?? existingPlaintext.name,
+		email: body.email ?? existingPlaintext.email,
+		phone: body.phone ?? existingPlaintext.phone,
+		metadata: body.metadata ?? existingPlaintext.metadata,
+	};
 
-	if (body.opted_in === undefined) {
-		const updated =
-			retiredIdentifiers.length === 0
-				? (
-						await db
-							.update(contacts)
-							.set(updateSet)
-							.where(eq(contacts.id, id))
-							.returning()
-					).at(0)
-				: await db.transaction(async (tx) => {
-						const [saved] = await tx
-							.update(contacts)
-							.set(updateSet)
-							.where(eq(contacts.id, id))
-							.returning();
-						if (!saved) return null;
-						const occurredAt = new Date();
-						for (const identifier of retiredIdentifiers) {
-							for (const purpose of CONTACT_ERASURE_PURPOSES) {
-								await recordContactConsentInTransaction(tx, {
-									organizationId: orgId,
-									workspaceId: saved.workspaceId,
-									contactId: saved.id,
-									channel: identifier.channel,
-									purpose,
-									identifier: identifier.identifier,
-									status: "denied",
-									source: "contact_identifier_replaced",
-									occurredAt,
-									evidence: { reason: "identifier_replaced" },
-								});
-							}
-						}
-						return saved;
+	try {
+		const result = await db.transaction(async (tx) => {
+			const [updated] = await tx
+				.update(contacts)
+				.set(updateSet)
+				.where(eq(contacts.id, id))
+				.returning();
+			if (!updated) return null;
+			const channels = await tx
+				.select()
+				.from(contactChannels)
+				.where(eq(contactChannels.contactId, updated.id));
+			const plaintextChannels = await decryptContactChannelRows(
+				c.env.ENCRYPTION_KEY,
+				channels,
+			);
+			const occurredAt = new Date();
+			for (const identifier of retiredIdentifiers) {
+				for (const purpose of CONTACT_ERASURE_PURPOSES) {
+					await recordContactConsentInTransaction(tx, c.env.ENCRYPTION_KEY, {
+						organizationId: orgId,
+						workspaceId: updated.workspaceId,
+						contactId: updated.id,
+						channel: identifier.channel,
+						purpose,
+						identifier: identifier.identifier,
+						status: "denied",
+						source: "contact_identifier_replaced",
+						occurredAt,
+						evidence: { reason: "identifier_replaced" },
 					});
-		if (!updated) {
+				}
+			}
+			if (body.opted_in === undefined) {
+				return { updated, channels };
+			}
+			const identifiers = uniqueConsentIdentifiers([
+				nextPlaintext.email
+					? { channel: "email", identifier: nextPlaintext.email }
+					: null,
+				nextPlaintext.phone
+					? { channel: "sms", identifier: nextPlaintext.phone }
+					: null,
+				nextPlaintext.phone
+					? { channel: "whatsapp", identifier: nextPlaintext.phone }
+					: null,
+				!body.opted_in && existingPlaintext.email
+					? { channel: "email", identifier: existingPlaintext.email }
+					: null,
+				!body.opted_in && existingPlaintext.phone
+					? { channel: "sms", identifier: existingPlaintext.phone }
+					: null,
+				!body.opted_in && existingPlaintext.phone
+					? { channel: "whatsapp", identifier: existingPlaintext.phone }
+					: null,
+				...plaintextChannels.map((channel) => ({
+					channel: channel.platform,
+					identifier: channel.identifier,
+				})),
+			]);
+			for (const identifier of identifiers) {
+				await recordContactConsentInTransaction(tx, c.env.ENCRYPTION_KEY, {
+					organizationId: orgId,
+					workspaceId: updated.workspaceId,
+					contactId: updated.id,
+					channel: identifier.channel,
+					purpose: "marketing",
+					identifier: identifier.identifier,
+					status: body.opted_in ? "granted" : "denied",
+					source: body.opted_in
+						? "contact_global_opt_in"
+						: "contact_global_opt_out",
+					occurredAt,
+					evidence: { opted_in: body.opted_in },
+				});
+			}
+			return { updated, channels };
+		});
+		if (!result) {
 			return c.json(
 				{ error: { code: "NOT_FOUND", message: "Contact not found" } },
 				404,
 			);
 		}
-		const [channels, segmentIdsMap] = await Promise.all([
-			db
-				.select()
-				.from(contactChannels)
-				.where(eq(contactChannels.contactId, updated.id)),
-			getContactSegmentIds(db, [updated.id]),
-		]);
+		const [segmentIdsMap, plaintextUpdated, plaintextChannels] =
+			await Promise.all([
+				getContactSegmentIds(db, orgId, [result.updated.id]),
+				decryptContactRow(c.env.ENCRYPTION_KEY, result.updated),
+				decryptContactChannelRows(c.env.ENCRYPTION_KEY, result.channels),
+			]);
 		return c.json(
-			serializeContact(updated, channels, segmentIdsMap.get(updated.id) ?? []),
+			serializeContact(
+				plaintextUpdated,
+				plaintextChannels,
+				segmentIdsMap.get(result.updated.id) ?? [],
+			),
 			200,
 		);
-	}
-
-	const result = await db.transaction(async (tx) => {
-		const [updated] = await tx
-			.update(contacts)
-			.set(updateSet)
-			.where(eq(contacts.id, id))
-			.returning();
-		if (!updated) return null;
-		const channels = await tx
-			.select()
-			.from(contactChannels)
-			.where(eq(contactChannels.contactId, updated.id));
-		const occurredAt = new Date();
-		for (const identifier of retiredIdentifiers) {
-			for (const purpose of CONTACT_ERASURE_PURPOSES) {
-				await recordContactConsentInTransaction(tx, {
-					organizationId: orgId,
-					workspaceId: updated.workspaceId,
-					contactId: updated.id,
-					channel: identifier.channel,
-					purpose,
-					identifier: identifier.identifier,
-					status: "denied",
-					source: "contact_identifier_replaced",
-					occurredAt,
-					evidence: { reason: "identifier_replaced" },
-				});
-			}
-		}
-		const identifiers = uniqueConsentIdentifiers([
-			updated.email ? { channel: "email", identifier: updated.email } : null,
-			updated.phone ? { channel: "sms", identifier: updated.phone } : null,
-			updated.phone ? { channel: "whatsapp", identifier: updated.phone } : null,
-			!body.opted_in && existing.email
-				? { channel: "email", identifier: existing.email }
-				: null,
-			!body.opted_in && existing.phone
-				? { channel: "sms", identifier: existing.phone }
-				: null,
-			!body.opted_in && existing.phone
-				? { channel: "whatsapp", identifier: existing.phone }
-				: null,
-			...channels.map((channel) => ({
-				channel: channel.platform,
-				identifier: channel.identifier,
-			})),
-		]);
-		for (const identifier of identifiers) {
-			await recordContactConsentInTransaction(tx, {
-				organizationId: orgId,
-				workspaceId: updated.workspaceId,
-				contactId: updated.id,
-				channel: identifier.channel,
-				purpose: "marketing",
-				identifier: identifier.identifier,
-				status: body.opted_in ? "granted" : "denied",
-				source: body.opted_in
-					? "contact_global_opt_in"
-					: "contact_global_opt_out",
-				occurredAt,
-				evidence: { opted_in: body.opted_in },
-			});
-		}
-		return { updated, channels };
-	});
-	if (!result) {
+	} catch (error) {
+		if (!hasPostgresErrorCode(error, "23505")) throw error;
 		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Contact not found" } },
-			404,
+			{
+				error: {
+					code: "CONTACT_IDENTITY_CONFLICT",
+					message:
+						"A contact with this email or phone already exists in the same scope.",
+				},
+			},
+			409,
 		);
 	}
-	const segmentIdsMap = await getContactSegmentIds(db, [result.updated.id]);
-	return c.json(
-		serializeContact(
-			result.updated,
-			result.channels,
-			segmentIdsMap.get(result.updated.id) ?? [],
-		),
-		200,
-	);
 });
 
 // 5. Delete contact
@@ -1306,8 +1481,6 @@ app.openapi(deleteContact, async (c) => {
 		.select({
 			id: contacts.id,
 			workspaceId: contacts.workspaceId,
-			email: contacts.email,
-			phone: contacts.phone,
 		})
 		.from(contacts)
 		.where(and(eq(contacts.id, id), eq(contacts.organizationId, orgId)))
@@ -1322,42 +1495,59 @@ app.openapi(deleteContact, async (c) => {
 
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied;
-	const channels = await db
-		.select({
-			platform: contactChannels.platform,
-			identifier: contactChannels.identifier,
-		})
-		.from(contactChannels)
-		.where(eq(contactChannels.contactId, id));
-	const identifiers = [
-		existing.email ? { channel: "email", identifier: existing.email } : null,
-		existing.phone ? { channel: "sms", identifier: existing.phone } : null,
-		existing.phone ? { channel: "whatsapp", identifier: existing.phone } : null,
-		...channels.map((channel) => ({
-			channel: channel.platform,
-			identifier: channel.identifier,
-		})),
-	].filter(
-		(value): value is { channel: string; identifier: string } => value !== null,
-	);
-	for (const identifier of identifiers) {
-		for (const purpose of CONTACT_ERASURE_PURPOSES) {
-			await recordContactConsent(db, {
+	const occurredAt = new Date();
+	let erased: Awaited<ReturnType<typeof eraseContactsInTransaction>> | null;
+	try {
+		erased = await db.transaction(async (tx) => {
+			const scopeAuthority = await lockContactErasureScope(tx, {
 				organizationId: orgId,
-				workspaceId: existing.workspaceId,
-				contactId: id,
-				channel: identifier.channel,
-				purpose,
-				identifier: identifier.identifier,
-				status: "denied",
+				workspaceIds: [existing.workspaceId],
+				contactIds: [id],
+			});
+			const [locked] = await tx
+				.select()
+				.from(contacts)
+				.where(and(eq(contacts.id, id), eq(contacts.organizationId, orgId)))
+				.for("update")
+				.limit(1);
+			if (!locked || locked.workspaceId !== existing.workspaceId) return null;
+			const plaintextLocked = await decryptContactRow(
+				c.env.ENCRYPTION_KEY,
+				locked,
+			);
+			return eraseContactsInTransaction(tx, {
+				organizationId: orgId,
+				contacts: [plaintextLocked],
+				scopeAuthority,
+				keyConfig: c.env.ENCRYPTION_KEY,
+				occurredAt,
 				source: "contact_deleted",
-				occurredAt: new Date(),
 				evidence: { reason: "contact_deleted" },
 			});
+		});
+	} catch (error) {
+		if (
+			error instanceof ContactErasureHeldError ||
+			error instanceof ContactErasureScopeChangedError
+		) {
+			return c.json(
+				{
+					error: {
+						code: error.code,
+						message: error.message,
+					},
+				},
+				409,
+			);
 		}
+		throw error;
 	}
-
-	await db.delete(contacts).where(eq(contacts.id, id));
+	if (!erased) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Contact not found" } },
+			404,
+		);
+	}
 
 	return c.body(null, 204);
 });
@@ -1390,8 +1580,12 @@ app.openapi(listChannels, async (c) => {
 		.select()
 		.from(contactChannels)
 		.where(eq(contactChannels.contactId, id));
+	const plaintextChannels = await decryptContactChannelRows(
+		c.env.ENCRYPTION_KEY,
+		channels,
+	);
 
-	return c.json({ data: channels.map(serializeChannel) }, 200);
+	return c.json({ data: plaintextChannels.map(serializeChannel) }, 200);
 });
 
 // 7. Add channel
@@ -1443,21 +1637,40 @@ app.openapi(addChannel, async (c) => {
 	}
 
 	try {
+		const channelId = generateId("cc_");
+		const protectedIdentifier = await protectContactChannelIdentifier(
+			c.env.ENCRYPTION_KEY,
+			{
+				id: channelId,
+				organizationId: orgId,
+				identifier: body.identifier,
+			},
+		);
 		const [ch] = await db
 			.insert(contactChannels)
 			.values({
+				id: channelId,
 				organizationId: orgId,
 				scopeKey: workspaceScopeKey(contact.workspaceId),
 				contactId: id,
 				socialAccountId: body.account_id,
 				platform: body.platform,
-				identifier: body.identifier,
+				...protectedIdentifier,
 			})
 			.returning();
 
 		if (!ch) throw new Error("Failed to create channel");
-		return c.json(serializeChannel(ch), 201);
-	} catch {
+		return c.json(
+			serializeChannel(
+				await decryptContactChannelRow(c.env.ENCRYPTION_KEY, ch),
+			),
+			201,
+		);
+	} catch (error) {
+		if (!hasPostgresErrorCode(error, "23505")) throw error;
+		c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+			kind: "not_applied",
+		});
 		return c.json(
 			{
 				error: {
@@ -1746,65 +1959,68 @@ app.openapi(bulkCreate, async (c) => {
 		// (duplicates skipped by the unique (workspace_id, email) index are
 		// omitted), so positional zipping would attach channels to the wrong
 		// contacts — or drop them entirely — once any row in the batch conflicts.
-		const values = batch.map((item) => ({
-			id: generateId("ct_"),
-			organizationId: orgId,
-			workspaceId,
-			name: item.name ?? null,
-			email: item.email ?? null,
-			phone: item.phone ?? null,
-			tags: item.tags ?? [],
-		}));
-
-		const result = await db
-			.insert(contacts)
-			.values(values)
-			.onConflictDoNothing()
-			.returning({ id: contacts.id });
-
-		const insertedIdSet = new Set(result.map((r) => r.id));
-		created += insertedIdSet.size;
-
-		// Batch channel inserts for this batch — one query instead of N.
-		// onConflictDoNothing mirrors the prior per-row try/catch on duplicates.
-		// Only attach a channel when its contact row was actually inserted; this
-		// pairs each channel with the exact contact generated for that item and
-		// naturally skips channels for rows skipped as duplicates.
-		const channelValues: Array<{
-			organizationId: string;
-			scopeKey: string;
-			contactId: string;
-			socialAccountId: string;
-			platform: typeof contactChannels.$inferInsert.platform;
-			identifier: string;
-		}> = [];
-		for (const [j, item] of batch.entries()) {
-			const insertedValue = values[j];
-			if (!insertedValue) continue;
-			const contactId = insertedValue.id;
-			if (
-				insertedIdSet.has(contactId) &&
-				item.account_id &&
-				item.platform &&
-				item.identifier
-			) {
-				channelValues.push({
+		const prepared = await mapConcurrently(batch, 8, async (item) => {
+			const id = generateId("ct_");
+			const channelId =
+				item.account_id && item.platform && item.identifier
+					? generateId("cc_")
+					: null;
+			return {
+				contact: {
+					id,
 					organizationId: orgId,
-					scopeKey: workspaceScopeKey(workspaceId),
-					contactId,
-					socialAccountId: item.account_id,
-					platform:
-						item.platform as typeof contactChannels.$inferInsert.platform,
-					identifier: item.identifier,
-				});
+					workspaceId,
+					...(await protectContactValues(c.env.ENCRYPTION_KEY, orgId, id, {
+						name: item.name ?? null,
+						email: item.email ?? null,
+						phone: item.phone ?? null,
+						metadata: null,
+					})),
+					tags: item.tags ?? [],
+				},
+				channel:
+					channelId && item.account_id && item.platform && item.identifier
+						? {
+								id: channelId,
+								organizationId: orgId,
+								scopeKey: workspaceScopeKey(workspaceId),
+								contactId: id,
+								socialAccountId: item.account_id,
+								platform:
+									item.platform as typeof contactChannels.$inferInsert.platform,
+								...(await protectContactChannelIdentifier(
+									c.env.ENCRYPTION_KEY,
+									{
+										id: channelId,
+										organizationId: orgId,
+										identifier: item.identifier,
+									},
+								)),
+							}
+						: null,
+			};
+		});
+		const values = prepared.map(({ contact }) => contact);
+
+		const insertedCount = await db.transaction(async (tx) => {
+			const result = await tx
+				.insert(contacts)
+				.values(values)
+				.onConflictDoNothing()
+				.returning({ id: contacts.id });
+			const insertedIdSet = new Set(result.map((row) => row.id));
+			const channelValues = prepared.flatMap(({ channel }) =>
+				channel && insertedIdSet.has(channel.contactId) ? [channel] : [],
+			);
+			if (channelValues.length > 0) {
+				await tx
+					.insert(contactChannels)
+					.values(channelValues)
+					.onConflictDoNothing();
 			}
-		}
-		if (channelValues.length > 0) {
-			await db
-				.insert(contactChannels)
-				.values(channelValues)
-				.onConflictDoNothing();
-		}
+			return insertedIdSet.size;
+		});
+		created += insertedCount;
 	}
 
 	skipped = body.contacts.length - created;
@@ -1830,66 +2046,61 @@ app.openapi(bulkOperations, async (c) => {
 	};
 
 	if (body.action === "delete") {
-		const deleting = await db
+		const occurredAt = new Date();
+		const candidates = await db
 			.select({
 				id: contacts.id,
 				workspaceId: contacts.workspaceId,
-				email: contacts.email,
-				phone: contacts.phone,
 			})
 			.from(contacts)
 			.where(and(...scopedConditions()));
-		const deletingIds = deleting.map((contact) => contact.id);
-		const channels =
-			deletingIds.length > 0
-				? await db
-						.select({
-							contactId: contactChannels.contactId,
-							platform: contactChannels.platform,
-							identifier: contactChannels.identifier,
-						})
-						.from(contactChannels)
-						.where(inArray(contactChannels.contactId, deletingIds))
-				: [];
-		for (const contact of deleting) {
-			const identifiers = [
-				contact.email ? { channel: "email", identifier: contact.email } : null,
-				contact.phone ? { channel: "sms", identifier: contact.phone } : null,
-				contact.phone
-					? { channel: "whatsapp", identifier: contact.phone }
-					: null,
-				...channels
-					.filter((channel) => channel.contactId === contact.id)
-					.map((channel) => ({
-						channel: channel.platform,
-						identifier: channel.identifier,
-					})),
-			].filter(
-				(value): value is { channel: string; identifier: string } =>
-					value !== null,
-			);
-			for (const identifier of identifiers) {
-				for (const purpose of CONTACT_ERASURE_PURPOSES) {
-					await recordContactConsent(db, {
-						organizationId: orgId,
-						workspaceId: contact.workspaceId,
-						contactId: contact.id,
-						channel: identifier.channel,
-						purpose,
-						identifier: identifier.identifier,
-						status: "denied",
-						source: "contact_deleted",
-						occurredAt: new Date(),
-						evidence: { reason: "bulk_contact_deleted" },
-					});
-				}
-			}
+		if (candidates.length === 0) {
+			return c.json({ affected: 0 }, 200);
 		}
-		const result = await db
-			.delete(contacts)
-			.where(and(...scopedConditions()))
-			.returning({ id: contacts.id });
-		affected = result.length;
+		try {
+			const result = await db.transaction(async (tx) => {
+				const scopeAuthority = await lockContactErasureScope(tx, {
+					organizationId: orgId,
+					workspaceIds: candidates.map(({ workspaceId }) => workspaceId),
+					contactIds: candidates.map(({ id }) => id),
+				});
+				const deleting = await tx
+					.select()
+					.from(contacts)
+					.where(and(...scopedConditions()))
+					.for("update");
+				const plaintextDeleting = await decryptContactRows(
+					c.env.ENCRYPTION_KEY,
+					deleting,
+				);
+				return eraseContactsInTransaction(tx, {
+					organizationId: orgId,
+					contacts: plaintextDeleting,
+					scopeAuthority,
+					keyConfig: c.env.ENCRYPTION_KEY,
+					occurredAt,
+					source: "contact_deleted",
+					evidence: { reason: "bulk_contact_deleted" },
+				});
+			});
+			affected = result.deletedIds.length;
+		} catch (error) {
+			if (
+				error instanceof ContactErasureHeldError ||
+				error instanceof ContactErasureScopeChangedError
+			) {
+				return c.json(
+					{
+						error: {
+							code: error.code,
+							message: error.message,
+						},
+					},
+					409,
+				);
+			}
+			throw error;
+		}
 	} else if (body.action === "add_tags" && body.tags) {
 		const tagsToAdd = body.tags;
 		const result = await db
@@ -1992,6 +2203,21 @@ app.openapi(mergeContact, async (c) => {
 			400,
 		);
 	}
+	const subjectLocatorKeyConfig = requireConsentHmacKeyConfig(
+		c.env.ENCRYPTION_KEY,
+	);
+	const [sourceSubjectLocator, targetSubjectLocator] = await Promise.all([
+		deriveProtectedContactSubjectLocator(
+			subjectLocatorKeyConfig,
+			orgId,
+			sourceId,
+		),
+		deriveProtectedContactSubjectLocator(
+			subjectLocatorKeyConfig,
+			orgId,
+			targetId,
+		),
+	]);
 
 	// Run the whole merge inside a single transaction so a mid-sequence failure
 	// (TOCTOU on a unique index, transient DB error, worker eviction) rolls back
@@ -2000,13 +2226,13 @@ app.openapi(mergeContact, async (c) => {
 	const result = await db.transaction(async (tx) => {
 		// Move channels from source to target in bulk (skip duplicates).
 		// Two queries total instead of N: first delete source rows whose
-		// (socialAccountId, identifier) already exists under target (would violate
-		// the unique index), then re-parent the rest.
+		// (socialAccountId, protected identifier hash) already exists under the
+		// target (would violate the unique index), then re-parent the rest.
 		await tx.execute(sql`
 			DELETE FROM contact_channels
 			WHERE contact_id = ${sourceId}
-				AND (social_account_id, identifier) IN (
-					SELECT social_account_id, identifier
+				AND (social_account_id, identifier_hash) IN (
+					SELECT social_account_id, identifier_hash
 					FROM contact_channels
 					WHERE contact_id = ${targetId}
 				)
@@ -2046,8 +2272,21 @@ app.openapi(mergeContact, async (c) => {
 			.returning({ id: broadcastRecipients.id });
 		const conversationResult = await tx
 			.update(inboxConversations)
-			.set({ contactId: targetId })
-			.where(eq(inboxConversations.contactId, sourceId))
+			.set({
+				contactId: targetId,
+				contactSubjectLocator: targetSubjectLocator.contactSubjectLocator,
+				contactSubjectIdentityKeyFingerprint:
+					targetSubjectLocator.contactSubjectIdentityKeyFingerprint,
+			})
+			.where(
+				or(
+					eq(inboxConversations.contactId, sourceId),
+					eq(
+						inboxConversations.contactSubjectLocator,
+						sourceSubjectLocator.contactSubjectLocator,
+					),
+				),
+			)
 			.returning({ id: inboxConversations.id });
 		const recipientsUpdated = recipientResult.length;
 		const conversationsUpdated = conversationResult.length;
@@ -2140,22 +2379,41 @@ app.openapi(mergeContact, async (c) => {
 			.set({ contactId: targetId })
 			.where(eq(contactSegmentMemberships.contactId, sourceId));
 
-		// Re-parent subscription-list rows. No FK (so the source delete would
-		// orphan them), PK is (contact_id, list_id). Drop source rows for lists
-		// the target is already on, then re-parent the rest.
+		// Existing target membership remains authoritative. For every source
+		// list, append a target-owned merge event and point the target projection
+		// at it; prior source/target events are never rewritten.
+		await mergeContactSubscriptionProjections(tx, {
+			organizationId: orgId,
+			scopeKey: workspaceScopeKey(target.workspaceId),
+			sourceContactId: sourceId,
+			targetContactId: targetId,
+			actorId: c.get("keyId"),
+			occurredAt: new Date(),
+		});
+
+		// Queue-failure locators participate in contact erasure. A merge is not
+		// erasure, so preserve the encrypted payload and re-point its locator to
+		// the surviving contact identity.
 		await tx.execute(sql`
-			DELETE FROM contact_subscriptions
-			WHERE contact_id = ${sourceId}
-				AND list_id IN (
-					SELECT list_id
-					FROM contact_subscriptions
-					WHERE contact_id = ${targetId}
-				)
+			UPDATE queue_failures
+			   SET contact_ids = ARRAY(
+				       SELECT DISTINCT
+				              CASE WHEN value = ${sourceId} THEN ${targetId} ELSE value END
+				         FROM unnest(contact_ids) AS value
+			       )
+			 WHERE organization_ids @> ARRAY[${orgId}]::text[]
+			   AND contact_ids @> ARRAY[${sourceId}]::text[]
 		`);
-		await tx
-			.update(contactSubscriptions)
-			.set({ contactId: targetId })
-			.where(eq(contactSubscriptions.contactId, sourceId));
+		await enqueueQueueRescueSubjectCleanup(
+			tx,
+			{
+				subjectKind: "contact",
+				subjectId: sourceId,
+				organizationId: orgId,
+				workspaceId: source.workspaceId,
+			},
+			new Date(),
+		);
 
 		// Delete the source contact (remaining cascade children, if any, are now
 		// empty or intentionally cascaded).
@@ -2390,7 +2648,8 @@ app.openapi(clearFieldValue, async (c) => {
 				eq(customFieldValues.definitionId, field.id),
 				eq(customFieldValues.contactId, id),
 			),
-		);
+		)
+		.returning({ id: customFieldValues.id });
 
 	return c.body(null, 204);
 });

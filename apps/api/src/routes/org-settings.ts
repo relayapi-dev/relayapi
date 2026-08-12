@@ -6,6 +6,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	adAccounts,
 	adAudiences,
+	adConnections,
 	aiAgents,
 	aiKnowledgeBases,
 	automations,
@@ -232,6 +233,24 @@ export async function getWorkspaceScopeBlockers(
 						.select({ value: count() })
 						.from(broadcasts)
 						.where(unscoped(broadcasts.organizationId, broadcasts.workspaceId)),
+				),
+		},
+		{
+			resourceType: "ad_connections",
+			count: () =>
+				countResult(
+					db
+						.select({ value: count() })
+						.from(adConnections)
+						.where(
+							and(
+								unscoped(
+									adConnections.organizationId,
+									adConnections.workspaceId,
+								),
+								ne(adConnections.status, "revoked"),
+							),
+						),
 				),
 		},
 		{

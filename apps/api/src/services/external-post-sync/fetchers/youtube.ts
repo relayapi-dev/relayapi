@@ -1,13 +1,14 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../../lib/provider-response";
 // ---------------------------------------------------------------------------
 // YouTube Channel Videos Fetcher
 // Docs: https://developers.google.com/youtube/v3/docs/search/list
 //       https://developers.google.com/youtube/v3/docs/videos/list
 // ---------------------------------------------------------------------------
 
-import type {
-	ExternalPostFetcher,
-	ExternalPostData,
-} from "../types";
+import type { ExternalPostFetcher, ExternalPostData } from "../types";
 import { RateLimitError } from "../types";
 import { parseRateLimitHeaders } from "../rate-limits";
 
@@ -70,10 +71,10 @@ async function ytFetch<T = unknown>(
 		);
 	}
 	if (!res.ok) {
-		const body = await res.text();
+		const body = await readProviderText(res);
 		throw new Error(`YouTube API ${res.status}: ${body}`);
 	}
-	return { data: (await res.json()) as T, headers: res.headers };
+	return { data: (await readProviderJson(res)) as T, headers: res.headers };
 }
 
 function parseVideo(
@@ -85,7 +86,10 @@ function parseVideo(
 		(typeof item.id === "string" ? item.id : item.id?.videoId) ?? "";
 	const thumbnails = snippet.thumbnails ?? {};
 	const thumbnailUrl =
-		thumbnails.high?.url ?? thumbnails.medium?.url ?? thumbnails.default?.url ?? null;
+		thumbnails.high?.url ??
+		thumbnails.medium?.url ??
+		thumbnails.default?.url ??
+		null;
 
 	const s = stats ?? {};
 

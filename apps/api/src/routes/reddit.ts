@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { socialAccounts } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
@@ -230,7 +231,7 @@ app.openapi(searchReddit, async (c) => {
 		return c.json(EMPTY_RESPONSE, 200);
 	}
 
-	const json = (await response.json()) as RedditApiResponse;
+	const json = (await readProviderJson(response)) as RedditApiResponse;
 	const data = mapRedditPosts(json.data.children);
 
 	return c.json(
@@ -308,7 +309,7 @@ app.openapi(getSubredditFeed, async (c) => {
 		return c.json(EMPTY_RESPONSE, 200);
 	}
 
-	const json = (await response.json()) as RedditApiResponse;
+	const json = (await readProviderJson(response)) as RedditApiResponse;
 	const data = mapRedditPosts(json.data.children);
 
 	return c.json(

@@ -15,7 +15,84 @@ export const ORGANIZATION_PROVISIONING_CONTRACT = {
 	workspaceTable: "workspaces",
 	ideaGroupTable: "idea_groups",
 	initialWorkspaceName: "General",
+	initialWorkspaceSlug: "general",
 	defaultIdeaGroupName: "Unassigned",
+} as const;
+
+/** Atomic identity and organization-ownership invariants in the auth schema. */
+export const AUTH_IDENTITY_INVARIANT_CONTRACTS = {
+	activeOrganizationOwner: {
+		functionSchema: "auth",
+		functionName: "enforce_active_organization_owner",
+		triggerName: "enforce_active_organization_owner_at_commit",
+		tableSchema: "auth",
+		tableName: "organization",
+		watchedColumns: ["lifecycle_status"],
+	},
+	activeMemberUser: {
+		functionSchema: "auth",
+		functionName: "enforce_active_member_user",
+		triggerName: "enforce_active_member_user_before_insert",
+		tableSchema: "auth",
+		tableName: "member",
+		watchedColumns: [],
+	},
+	memberOwnerAndCredentialExit: {
+		functionSchema: "auth",
+		functionName: "enforce_organization_owner_invariant",
+		triggerName: "enforce_organization_owner_before_write",
+		tableSchema: "auth",
+		tableName: "member",
+		watchedColumns: ["role", "organizationId"],
+	},
+	memberInvitationAuthorityInvalidation: {
+		functionSchema: "auth",
+		functionName: "invalidate_member_invitation_authority",
+		triggerName: "invalidate_member_invitation_authority",
+		tableSchema: "auth",
+		tableName: "member",
+		watchedColumns: ["role", "organizationId"],
+	},
+	userDashboardPrincipalCleanup: {
+		functionSchema: "auth",
+		functionName: "retire_dashboard_principals_before_user",
+		triggerName: "retire_dashboard_principals_before_user",
+		tableSchema: "auth",
+		tableName: "user",
+		watchedColumns: [],
+	},
+	userBanCredentialRotation: {
+		functionSchema: "auth",
+		functionName: "rotate_user_credential_version_on_ban",
+		triggerName: "rotate_user_credential_version_on_ban",
+		tableSchema: "auth",
+		tableName: "user",
+		watchedColumns: ["banned", "banExpires"],
+	},
+	administratorImpersonationRevocation: {
+		functionSchema: "auth",
+		functionName: "revoke_administrator_impersonation_sessions",
+		triggerName: "revoke_administrator_impersonation_sessions",
+		tableSchema: "auth",
+		tableName: "user",
+		watchedColumns: ["role", "banned", "banExpires"],
+	},
+	originatingSessionImpersonationRevocation: {
+		functionSchema: "auth",
+		functionName: "revoke_derived_impersonation_on_session_delete",
+		triggerName: "revoke_derived_impersonation_on_session_delete",
+		tableSchema: "auth",
+		tableName: "session",
+		watchedColumns: [],
+	},
+	invitationIssuerCredentialFence: {
+		functionSchema: "auth",
+		functionName: "enforce_invitation_issuer_credential_generation",
+		triggerName: "enforce_invitation_issuer_credential_generation",
+		tableSchema: "auth",
+		tableName: "invitation",
+		watchedColumns: ["status", "inviterId", "issuerCredentialVersion"],
+	},
 } as const;
 
 /**
@@ -107,12 +184,6 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 		"last_event_id",
 		workspaceProjection,
 	),
-	projection(
-		"contact_suppressions",
-		"contact_consent_events",
-		"source_event_id",
-		workspaceProjection,
-	),
 	projection("broadcasts", "social_accounts", "social_account_id", [
 		...workspaceProjection,
 		{ parentColumn: "platform", childColumn: "platform" },
@@ -168,7 +239,7 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 	]),
 	projection("idea_conversion_operations", "ideas", "idea_id", scopeProjection),
 	projection("idea_media", "ideas", "idea_id", workspaceProjection),
-	projection("idea_tags", "ideas", "idea_id", workspaceProjection),
+	projection("idea_tags", "ideas", "idea_id", scopeProjection),
 	projection("idea_tags", "tags", "tag_id", [
 		{ parentColumn: "scope_key", childColumn: "tag_scope_key" },
 	]),
@@ -180,6 +251,12 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 		"automation_entrypoints",
 		"automations",
 		"automation_id",
+		scopeProjection,
+	),
+	projection(
+		"automation_entrypoint_daily_counts",
+		"automation_entrypoints",
+		"entrypoint_id",
 		scopeProjection,
 	),
 	projection(
@@ -195,6 +272,12 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 		scopeProjection,
 	),
 	projection(
+		"automation_conversion_events",
+		"automation_runs",
+		"run_id",
+		scopeProjection,
+	),
+	projection(
 		"automation_node_executions",
 		"automation_runs",
 		"run_id",
@@ -206,14 +289,25 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 		"node_execution_id",
 		scopeProjection,
 	),
+	projection("automation_step_runs", "automation_runs", "run_id", [
+		{ parentColumn: "automation_id", childColumn: "automation_id" },
+		{ parentColumn: "scope_key", childColumn: "scope_key" },
+	]),
+	projection("contact_segment_memberships", "segments", "segment_id", [
+		...scopeProjection,
+		{
+			parentColumn: "is_dynamic",
+			childColumn: "segment_is_dynamic",
+		},
+	]),
 	projection(
-		"contact_segment_memberships",
-		"segments",
-		"segment_id",
+		"contact_subscriptions",
+		"subscription_lists",
+		"list_id",
 		scopeProjection,
 	),
 	projection(
-		"contact_subscriptions",
+		"contact_subscription_events",
 		"subscription_lists",
 		"list_id",
 		scopeProjection,
@@ -229,15 +323,10 @@ export const PARENT_IDENTITY_PROJECTIONS = [
 		{ parentColumn: "kb_id", childColumn: "kb_id" },
 	]),
 	projection("qr_codes", "ref_urls", "ref_url_id", scopeProjection),
-	projection(
-		"billing_operations",
-		"usage_bucket_settlements",
-		"usage_bucket_settlement_id",
-		[
-			{ parentColumn: "amount_cents", childColumn: "amount_cents" },
-			{ parentColumn: "currency", childColumn: "currency" },
-		],
-	),
+	projection("billing_operations", "billing_periods", "billing_period_id", [
+		{ parentColumn: "amount_cents_snapshot", childColumn: "amount_cents" },
+		{ parentColumn: "currency", childColumn: "currency" },
+	]),
 ] as const satisfies readonly ParentIdentityProjection[];
 
 /** Derived counter maintained from the authoritative membership relation. */

@@ -64,7 +64,7 @@ relayapi-plugins/
     {
       "name": "relayapi",
       "source": "./plugins/relayapi",
-      "description": "Post to 21 platforms via a single unified API"
+      "description": "Post to 22 platforms via a single unified API"
     }
   ]
 }

@@ -1,13 +1,15 @@
 name: CI — Lint
 
-# PR check — runs Biome lint across the whole repo (config in biome.json:
-# generated packages/sdk is excluded, .gitignore is respected).
+# PR and main-push check — runs Biome lint across the whole repo (config in
+# biome.json: generated packages/sdk is excluded, .gitignore is respected).
 #
 # Fails the build on lint ERRORS. Biome warnings do not fail by default; to
 # also enforce a zero-warning baseline, change the run step to:
 #   bunx biome lint --error-on-warnings .
 
 on:
+  push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -19,11 +21,37 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
+      - name: Test portable secrets workflow
+        run: bun run test:secrets
+      - name: Test production edge policy
+        run: bun run test:edge-policy
+      - name: Test Cloudflare Worker secret policy
+        run: bun run test:cloudflare-secret-policy
+      - name: Test repository-owned Cloudflare skill safety
+        run: bun run test:cloudflare-skill-safety
+      - name: Validate encrypted secret vaults
+        run: bun run secrets:validate
       - name: Test dependency audit policy
         run: bun test scripts/dependency-audit.test.ts
+      - name: Test baseline generation and cutover workflow guards
+        run: >-
+          bun test
+          scripts/check-live-baseline-generation.test.ts
+          scripts/generation-1-stamp-record.test.ts
+          scripts/prelive-baseline-cutover-workflow.test.ts
+          scripts/prelive-generation-1-stamp-workflow.test.ts
+          scripts/prelive-cloudflare-cutover.test.ts
+      - name: Test schema, privacy, and durable-store source contracts
+        run: bun run --cwd packages/db test:schema-invariants
+      - name: Verify migration source ownership
+        run: bun run --cwd packages/db migration:source-ownership
       - name: Dependency vulnerability audit
         run: bun scripts/dependency-audit.ts
       - name: Biome lint

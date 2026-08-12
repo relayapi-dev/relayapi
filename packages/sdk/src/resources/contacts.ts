@@ -253,9 +253,9 @@ export interface ContactSegmentMembership {
   source: string;
 
   /**
-   * Membership created timestamp
+   * Stored membership creation time, or null for a dynamically-derived match.
    */
-  created_at: string;
+  created_at: string | null;
 }
 
 export interface ContactConsent {
@@ -272,6 +272,9 @@ export interface ContactConsent {
   status: 'granted' | 'denied';
 
   identifier_hash: string;
+
+  /** HMAC key version used for this immutable evidence. */
+  identifier_key_version: string;
 
   identifier_masked: string | null;
 
@@ -625,9 +628,9 @@ export interface ContactAddSegmentResponse {
   source: string;
 
   /**
-   * Membership created timestamp
+   * Stored membership creation time, or null for a dynamically-derived match.
    */
-  created_at: string;
+  created_at: string | null;
 }
 
 export interface ContactSetFieldResponse {

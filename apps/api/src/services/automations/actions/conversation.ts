@@ -7,6 +7,7 @@
 import { type Database, inboxConversations, member } from "@relayapi/db";
 import { and, eq } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
+import { INBOX_CONTENT_RETENTION_MS } from "../../inbox-persistence";
 import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
@@ -38,9 +39,7 @@ async function resolveRoundRobinUserId(
 	return row?.userId ?? null;
 }
 
-async function requireConversationId(
-	ctx: RunContext,
-): Promise<string | null> {
+async function requireConversationId(ctx: RunContext): Promise<string | null> {
 	return ctx.conversationId ?? null;
 }
 
@@ -102,7 +101,12 @@ const conversationOpen: ActionHandler<ConversationOpenAction> = async (
 	if (!conversationId) return;
 	await db
 		.update(inboxConversations)
-		.set({ status: "open", updatedAt: new Date() })
+		.set({
+			status: "open",
+			closedAt: null,
+			contentExpiresAt: null,
+			updatedAt: new Date(),
+		})
 		.where(
 			and(
 				eq(inboxConversations.id, conversationId),
@@ -119,9 +123,17 @@ const conversationClose: ActionHandler<ConversationCloseAction> = async (
 	if (!db) throw new Error("conversation_close: db binding missing");
 	const conversationId = await requireConversationId(ctx);
 	if (!conversationId) return;
+	const closedAt = new Date();
 	await db
 		.update(inboxConversations)
-		.set({ status: "archived", updatedAt: new Date() })
+		.set({
+			status: "archived",
+			closedAt,
+			contentExpiresAt: new Date(
+				closedAt.getTime() + INBOX_CONTENT_RETENTION_MS,
+			),
+			updatedAt: closedAt,
+		})
 		.where(
 			and(
 				eq(inboxConversations.id, conversationId),
@@ -144,7 +156,12 @@ const conversationSnooze: ActionHandler<ConversationSnoozeAction> = async (
 	// payload only.
 	await db
 		.update(inboxConversations)
-		.set({ status: "snoozed", updatedAt: new Date() })
+		.set({
+			status: "snoozed",
+			closedAt: null,
+			contentExpiresAt: null,
+			updatedAt: new Date(),
+		})
 		.where(
 			and(
 				eq(inboxConversations.id, conversationId),

@@ -347,7 +347,7 @@ export function ChatThread({
 	}, [conversation?.id]);
 
 	useEffect(() => {
-		if (!conversation || !conversation.contact_id) {
+		if (!conversation?.contact_id) {
 			setAutomationControls([]);
 			setAutomationControlError(null);
 			setAutomationControlPending(false);

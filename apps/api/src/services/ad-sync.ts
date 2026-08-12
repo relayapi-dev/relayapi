@@ -5,17 +5,26 @@
 import {
 	adAccounts,
 	adCampaigns,
+	adConnections,
 	adSyncLogs,
 	ads,
 	createDb,
 	eq,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, inArray, sql } from "drizzle-orm";
+import { and, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import {
+	AD_ACCOUNT_POLL,
+	AD_METRICS_POLL,
+	classifyProviderReadError,
+	exponentialBackoffSeconds,
+	type ProviderReadErrorClass,
+} from "../lib/async-policy";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import { fetchAndStoreAdMetrics } from "./ad-analytics";
 import { getAdPlatformAdapter } from "./ad-platforms";
+import { requireAdCapability } from "./ad-platforms/unsupported";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 
 type SyncedCampaignObjective = (typeof adCampaigns.$inferInsert)["objective"];
 type SyncedAdStatus = (typeof ads.$inferInsert)["status"];
@@ -44,22 +53,25 @@ export async function syncExternalAds(
 	env: Env,
 	adAccountId: string,
 	orgId: string,
-	opts?: { windowDays?: number },
+	opts?: { windowDays?: number; syncGeneration?: number },
 ): Promise<{ adsCreated: number; adsUpdated: number; metricsUpdated: number }> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
 
 	const [ctx] = await db
 		.select({
 			adAccount: adAccounts,
+			adConnection: adConnections,
 			socialAccount: socialAccounts,
 		})
 		.from(adAccounts)
-		.innerJoin(
-			socialAccounts,
-			eq(adAccounts.socialAccountId, socialAccounts.id),
-		)
+		.leftJoin(adConnections, eq(adAccounts.adConnectionId, adConnections.id))
+		.leftJoin(socialAccounts, eq(adAccounts.socialAccountId, socialAccounts.id))
 		.where(
-			and(eq(adAccounts.id, adAccountId), eq(adAccounts.organizationId, orgId)),
+			and(
+				eq(adAccounts.id, adAccountId),
+				eq(adAccounts.organizationId, orgId),
+				eq(adAccounts.status, "active"),
+			),
 		)
 		.limit(1);
 
@@ -71,20 +83,98 @@ export async function syncExternalAds(
 	// Stable non-null reference so nested closures below don't lose the `ctx`
 	// narrowing from the early `if (!ctx)` return.
 	const adAccount = ctx.adAccount;
-	const accessToken = await resolveAdsAccessToken(ctx.socialAccount, env);
+	const claimStartedAt = new Date();
+	const leaseExpiresAt = new Date(
+		claimStartedAt.getTime() + AD_ACCOUNT_POLL.leaseSeconds * 1000,
+	);
+	const [claim] = await db
+		.update(adAccounts)
+		.set({
+			...(opts?.syncGeneration === undefined
+				? {
+						syncGeneration: sql`${adAccounts.syncGeneration} + 1`,
+						syncLeaseExpiresAt: leaseExpiresAt,
+					}
+				: {}),
+			syncStartedAt: claimStartedAt,
+			syncAttempts: sql`${adAccounts.syncAttempts} + 1`,
+			updatedAt: claimStartedAt,
+		})
+		.where(
+			and(
+				eq(adAccounts.id, adAccountId),
+				eq(adAccounts.organizationId, orgId),
+				eq(adAccounts.status, "active"),
+				...(opts?.syncGeneration === undefined
+					? [
+							or(
+								isNull(adAccounts.syncLeaseExpiresAt),
+								lte(adAccounts.syncLeaseExpiresAt, claimStartedAt),
+							),
+						]
+					: [
+							eq(adAccounts.syncGeneration, opts.syncGeneration),
+							isNull(adAccounts.syncStartedAt),
+							gt(adAccounts.syncLeaseExpiresAt, claimStartedAt),
+						]),
+			),
+		)
+		.returning({
+			generation: adAccounts.syncGeneration,
+			attempts: adAccounts.syncAttempts,
+		});
+	if (!claim) {
+		return { adsCreated: 0, adsUpdated: 0, metricsUpdated: 0 };
+	}
 
 	const adapter = getAdPlatformAdapter(adAccount.platform);
-	if (!adapter) return { adsCreated: 0, adsUpdated: 0, metricsUpdated: 0 };
+	if (!adapter) {
+		await finishAdAccountPollFailure(
+			db,
+			adAccountId,
+			orgId,
+			claim.generation,
+			claimStartedAt,
+			claim.attempts,
+			new Error(`No adapter for ad platform ${adAccount.platform}`),
+			"permanent",
+		);
+		return { adsCreated: 0, adsUpdated: 0, metricsUpdated: 0 };
+	}
+	try {
+		requireAdCapability(adapter, "external_sync");
+	} catch (error) {
+		await finishAdAccountPollFailure(
+			db,
+			adAccountId,
+			orgId,
+			claim.generation,
+			claimStartedAt,
+			claim.attempts,
+			error,
+			"permanent",
+		);
+		return { adsCreated: 0, adsUpdated: 0, metricsUpdated: 0 };
+	}
 
 	let adsCreated = 0;
 	let adsUpdated = 0;
-	let metricsUpdated = 0;
+	const metricsUpdated = 0;
 	let error: string | undefined;
 
 	try {
+		const credentials = await resolveAdProviderCredentials({
+			platform: adAccount.platform,
+			providerAdAccountId: adAccount.platformAdAccountId,
+			adConnection: ctx.adConnection,
+			legacySocialAccount: ctx.socialAccount,
+			env,
+		});
 		const result = await adapter.syncExternalAds(
-			accessToken,
+			credentials.accessToken,
 			adAccount.platformAdAccountId,
+			undefined,
+			credentials,
 		);
 
 		// Pre-fetch this ad account's existing remote ad IDs once for reporting.
@@ -166,7 +256,6 @@ export async function syncExternalAds(
 						lifetimeBudgetCents: campaignValues.lifetimeBudgetCents,
 						currency: campaignValues.currency,
 						metadata: campaignValues.metadata,
-						isExternal: true,
 						updatedAt: campaignValues.updatedAt,
 					},
 				})
@@ -231,7 +320,6 @@ export async function syncExternalAds(
 						lifetimeBudgetCents: adValues.lifetimeBudgetCents,
 						startDate: adValues.startDate,
 						endDate: adValues.endDate,
-						isExternal: true,
 						updatedAt: adValues.updatedAt,
 					},
 				});
@@ -243,68 +331,265 @@ export async function syncExternalAds(
 			}
 		}
 
-		// Refresh metrics for active ads only (with limit to avoid timeout)
-		const activeAds = await db
-			.select({ id: ads.id })
-			.from(ads)
+		const completedAt = new Date();
+		if (opts?.windowDays) {
+			// A manual "full" sync makes every active metric poll due. The common
+			// fair producer still claims and dispatches them, so this request does
+			// not restore the old 200-call inline fan-out. A successful manual
+			// account read is also the explicit operator action that reopens an
+			// exhausted metric budget; do not disturb a metric claim already in
+			// flight.
+			await db
+				.update(ads)
+				.set({
+					metricsNextPollAt: completedAt,
+					metricsPollAttempts: 0,
+					metricsPollLastError: null,
+					metricsPollLastErrorClass: null,
+					updatedAt: completedAt,
+				})
+				.where(
+					and(
+						eq(ads.adAccountId, adAccountId),
+						eq(ads.organizationId, orgId),
+						sql`${ads.status} NOT IN ('completed', 'rejected', 'cancelled')`,
+						or(
+							isNull(ads.metricsPollLeaseExpiresAt),
+							lte(ads.metricsPollLeaseExpiresAt, completedAt),
+						),
+					),
+				);
+		}
+		await db
+			.update(adAccounts)
+			.set({
+				lastSyncAt: completedAt,
+				nextSyncAt: new Date(
+					completedAt.getTime() + AD_ACCOUNT_POLL.successIntervalSeconds * 1000,
+				),
+				syncLeaseExpiresAt: null,
+				syncStartedAt: null,
+				syncAttempts: 0,
+				syncLastError: null,
+				syncLastErrorClass: null,
+				updatedAt: completedAt,
+			})
 			.where(
 				and(
-					eq(ads.adAccountId, adAccountId),
-					eq(ads.organizationId, orgId),
-					sql`${ads.status} NOT IN ('completed', 'rejected', 'cancelled')`,
-				),
-			)
-			.limit(200);
-
-		// An explicit windowDays (e.g. a user-triggered full sync) always wins.
-		// Otherwise the recurring */30 cron only needs a short window to catch
-		// Meta's attribution backfill; re-pulling the full 30 days every cycle
-		// re-fetches 29+ days of unchanged history and burns Meta's rate limit.
-		// Sweep the full 30-day window once per day (the single 00:00 UTC run —
-		// gated on minutes so the 00:30 run doesn't double-sweep) and use a 3-day
-		// window otherwise.
-		const now = new Date();
-		const windowDays =
-			opts?.windowDays ??
-			(now.getUTCHours() === 0 && now.getUTCMinutes() < 30 ? 30 : 3);
-		const windowStart = new Date(now);
-		windowStart.setDate(windowStart.getDate() - windowDays);
-		const endDate = now.toISOString().split("T")[0] ?? "";
-		const startDate = windowStart.toISOString().split("T")[0] ?? "";
-
-		// Process in batches of 5 for bounded concurrency. Reuse this sync's db
-		// client instead of opening a fresh postgres client per ad.
-		for (let i = 0; i < activeAds.length; i += 5) {
-			const batch = activeAds.slice(i, i + 5);
-			const results = await Promise.allSettled(
-				batch.map((ad) =>
-					fetchAndStoreAdMetrics(env, ad.id, startDate, endDate, db),
+					eq(adAccounts.id, adAccountId),
+					eq(adAccounts.organizationId, orgId),
+					eq(adAccounts.syncGeneration, claim.generation),
+					eq(adAccounts.syncStartedAt, claimStartedAt),
 				),
 			);
-			for (const r of results) {
-				if (r.status === "fulfilled") metricsUpdated++;
-				else console.error("[Ad Sync] Metrics fetch failed:", r.reason);
-			}
-		}
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
 		console.error(`[Ad Sync] Failed for ad account ${adAccountId}:`, error);
+		await finishAdAccountPollFailure(
+			db,
+			adAccountId,
+			orgId,
+			claim.generation,
+			claimStartedAt,
+			claim.attempts,
+			err,
+		);
 	}
 
-	// Log the sync
-	await db.insert(adSyncLogs).values({
-		organizationId: orgId,
-		adAccountId,
-		platform: adAccount.platform,
-		syncType: "full",
-		adsCreated,
-		adsUpdated,
-		metricsUpdated,
-		error,
-		completedAt: new Date(),
-	});
+	// Observability is downstream of the authoritative poll transition. A log
+	// insert failure must never replay provider reads.
+	try {
+		await db.insert(adSyncLogs).values({
+			organizationId: orgId,
+			adAccountId,
+			platform: adAccount.platform,
+			syncType: "external_listing",
+			adsCreated,
+			adsUpdated,
+			metricsUpdated,
+			error,
+			completedAt: new Date(),
+		});
+	} catch (logError) {
+		console.error("[Ad Sync] Failed to persist sync log", {
+			adAccountId,
+			error: logError instanceof Error ? logError.message : String(logError),
+		});
+	}
 
 	return { adsCreated, adsUpdated, metricsUpdated };
+}
+
+async function finishAdAccountPollFailure(
+	db: ReturnType<typeof createDb>,
+	adAccountId: string,
+	organizationId: string,
+	generation: number,
+	claimStartedAt: Date,
+	attempts: number,
+	error: unknown,
+	forcedClass?: ProviderReadErrorClass,
+): Promise<void> {
+	const failedAt = new Date();
+	const errorClass = forcedClass ?? classifyProviderReadError(error);
+	const delaySeconds = exponentialBackoffSeconds(
+		attempts,
+		AD_ACCOUNT_POLL.retry,
+		`${adAccountId}:${attempts}`,
+	);
+	const budgetExhausted = attempts >= AD_ACCOUNT_POLL.maxAutomaticAttempts;
+	const message = error instanceof Error ? error.message : String(error);
+	await db
+		.update(adAccounts)
+		.set({
+			nextSyncAt: new Date(
+				failedAt.getTime() +
+					(errorClass === "permanent" ? 24 * 60 * 60 : delaySeconds) * 1000,
+			),
+			syncLeaseExpiresAt: null,
+			syncStartedAt: null,
+			syncLastError: (budgetExhausted
+				? `Automatic ad-list poll attempt budget reached; polling is suspended until a manual sync succeeds. ${message}`
+				: message
+			).slice(0, 1000),
+			syncLastErrorClass: errorClass,
+			updatedAt: failedAt,
+		})
+		.where(
+			and(
+				eq(adAccounts.id, adAccountId),
+				eq(adAccounts.organizationId, organizationId),
+				eq(adAccounts.syncGeneration, generation),
+				eq(adAccounts.syncStartedAt, claimStartedAt),
+			),
+		);
+}
+
+export async function syncAdMetrics(
+	env: Env,
+	input: {
+		organizationId: string;
+		adId: string;
+		pollGeneration?: number;
+		windowDays?: number;
+	},
+): Promise<boolean> {
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	const claimStartedAt = new Date();
+	const leaseExpiresAt = new Date(
+		claimStartedAt.getTime() + AD_METRICS_POLL.leaseSeconds * 1000,
+	);
+	const [claim] = await db
+		.update(ads)
+		.set({
+			...(input.pollGeneration === undefined
+				? {
+						metricsPollGeneration: sql`${ads.metricsPollGeneration} + 1`,
+						metricsPollLeaseExpiresAt: leaseExpiresAt,
+					}
+				: {}),
+			metricsPollStartedAt: claimStartedAt,
+			metricsPollAttempts: sql`${ads.metricsPollAttempts} + 1`,
+			updatedAt: claimStartedAt,
+		})
+		.where(
+			and(
+				eq(ads.id, input.adId),
+				eq(ads.organizationId, input.organizationId),
+				sql`${ads.platformAdId} IS NOT NULL`,
+				sql`${ads.status} NOT IN ('completed', 'rejected', 'cancelled')`,
+				...(input.pollGeneration === undefined
+					? [
+							or(
+								isNull(ads.metricsPollLeaseExpiresAt),
+								lte(ads.metricsPollLeaseExpiresAt, claimStartedAt),
+							),
+						]
+					: [
+							eq(ads.metricsPollGeneration, input.pollGeneration),
+							isNull(ads.metricsPollStartedAt),
+							gt(ads.metricsPollLeaseExpiresAt, claimStartedAt),
+						]),
+			),
+		)
+		.returning({
+			generation: ads.metricsPollGeneration,
+			attempts: ads.metricsPollAttempts,
+		});
+	if (!claim) return false;
+
+	const windowDays = Math.max(1, Math.min(input.windowDays ?? 3, 30));
+	const now = new Date();
+	const windowStart = new Date(now);
+	windowStart.setUTCDate(windowStart.getUTCDate() - windowDays);
+	try {
+		await fetchAndStoreAdMetrics(
+			env,
+			input.adId,
+			windowStart.toISOString().slice(0, 10),
+			now.toISOString().slice(0, 10),
+			db,
+		);
+		await db
+			.update(ads)
+			.set({
+				metricsUpdatedAt: now,
+				metricsNextPollAt: new Date(
+					now.getTime() + AD_METRICS_POLL.successIntervalSeconds * 1000,
+				),
+				metricsPollLeaseExpiresAt: null,
+				metricsPollStartedAt: null,
+				metricsPollAttempts: 0,
+				metricsPollLastError: null,
+				metricsPollLastErrorClass: null,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(ads.id, input.adId),
+					eq(ads.organizationId, input.organizationId),
+					eq(ads.metricsPollGeneration, claim.generation),
+					eq(ads.metricsPollStartedAt, claimStartedAt),
+				),
+			);
+		return true;
+	} catch (error) {
+		const failedAt = new Date();
+		const errorClass = classifyProviderReadError(error);
+		const delaySeconds = exponentialBackoffSeconds(
+			claim.attempts,
+			AD_METRICS_POLL.retry,
+			`${input.adId}:${claim.attempts}`,
+		);
+		const budgetExhausted =
+			claim.attempts >= AD_METRICS_POLL.maxAutomaticAttempts;
+		const message = error instanceof Error ? error.message : String(error);
+		await db
+			.update(ads)
+			.set({
+				metricsNextPollAt: new Date(
+					failedAt.getTime() +
+						(errorClass === "permanent" ? 24 * 60 * 60 : delaySeconds) * 1000,
+				),
+				metricsPollLeaseExpiresAt: null,
+				metricsPollStartedAt: null,
+				metricsPollLastError: (budgetExhausted
+					? `Automatic ad-metrics poll attempt budget reached; polling is suspended until a manual sync succeeds. ${message}`
+					: message
+				).slice(0, 1000),
+				metricsPollLastErrorClass: errorClass,
+				updatedAt: failedAt,
+			})
+			.where(
+				and(
+					eq(ads.id, input.adId),
+					eq(ads.organizationId, input.organizationId),
+					eq(ads.metricsPollGeneration, claim.generation),
+					eq(ads.metricsPollStartedAt, claimStartedAt),
+				),
+			);
+		return false;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -313,49 +598,139 @@ export async function syncExternalAds(
 
 export async function syncAllExternalAds(env: Env): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
-	const PAGE_SIZE = 100;
-	let lastId: string | null = null;
-	let totalEnqueued = 0;
+	const now = new Date();
+	const accountLeaseExpiresAt = new Date(
+		now.getTime() + AD_ACCOUNT_POLL.leaseSeconds * 1000,
+	);
+	const dueAccounts = await db
+		.update(adAccounts)
+		.set({
+			syncGeneration: sql`${adAccounts.syncGeneration} + 1`,
+			syncLeaseExpiresAt: accountLeaseExpiresAt,
+			syncStartedAt: null,
+			updatedAt: now,
+		})
+		.where(
+			sql`${adAccounts.id} IN (
+				SELECT ranked.id
+				FROM (
+					SELECT
+						a.id,
+						a.organization_id,
+						a.next_sync_at,
+						row_number() OVER (
+							PARTITION BY a.organization_id
+							ORDER BY a.next_sync_at, a.id
+						) AS tenant_rank
+					FROM ad_accounts a
+					JOIN social_accounts sa
+						ON sa.id = a.social_account_id
+						AND sa.organization_id = a.organization_id
+						AND sa.lifecycle_status = 'active'
+					WHERE a.status = 'active'
+						AND a.next_sync_at <= ${now}
+						AND a.sync_attempts < ${AD_ACCOUNT_POLL.maxAutomaticAttempts}
+						AND (
+							a.sync_lease_expires_at IS NULL
+							OR a.sync_lease_expires_at <= ${now}
+						)
+				) ranked
+				WHERE ranked.tenant_rank <= ${AD_ACCOUNT_POLL.maxClaimsPerTenant}
+				ORDER BY
+					ranked.tenant_rank,
+					ranked.next_sync_at,
+					ranked.organization_id,
+					ranked.id
+				LIMIT ${AD_ACCOUNT_POLL.maxClaimsPerRun}
+			)`,
+		)
+		.returning({
+			id: adAccounts.id,
+			organizationId: adAccounts.organizationId,
+			generation: adAccounts.syncGeneration,
+		});
 
-	// Process accounts in pages to avoid loading all into memory
-	while (true) {
-		const conditions = [eq(adAccounts.status, "active")];
-		if (lastId) conditions.push(sql`${adAccounts.id} > ${lastId}`);
+	const metricLeaseExpiresAt = new Date(
+		now.getTime() + AD_METRICS_POLL.leaseSeconds * 1000,
+	);
+	const dueMetrics = await db
+		.update(ads)
+		.set({
+			metricsPollGeneration: sql`${ads.metricsPollGeneration} + 1`,
+			metricsPollLeaseExpiresAt: metricLeaseExpiresAt,
+			metricsPollStartedAt: null,
+			updatedAt: now,
+		})
+		.where(
+			sql`${ads.id} IN (
+				SELECT ranked.id
+				FROM (
+					SELECT
+						a.id,
+						a.organization_id,
+						a.metrics_next_poll_at,
+						row_number() OVER (
+							PARTITION BY a.organization_id
+							ORDER BY a.metrics_next_poll_at, a.id
+						) AS tenant_rank
+					FROM ads a
+					JOIN ad_accounts aa
+						ON aa.id = a.ad_account_id
+						AND aa.organization_id = a.organization_id
+						AND aa.status = 'active'
+					JOIN social_accounts sa
+						ON sa.id = aa.social_account_id
+						AND sa.organization_id = aa.organization_id
+						AND sa.lifecycle_status = 'active'
+					WHERE a.platform_ad_id IS NOT NULL
+						AND a.status NOT IN ('completed', 'rejected', 'cancelled')
+						AND a.metrics_next_poll_at <= ${now}
+						AND a.metrics_poll_attempts < ${AD_METRICS_POLL.maxAutomaticAttempts}
+						AND (
+							a.metrics_poll_lease_expires_at IS NULL
+							OR a.metrics_poll_lease_expires_at <= ${now}
+						)
+				) ranked
+				WHERE ranked.tenant_rank <= ${AD_METRICS_POLL.maxClaimsPerTenant}
+				ORDER BY
+					ranked.tenant_rank,
+					ranked.metrics_next_poll_at,
+					ranked.organization_id,
+					ranked.id
+				LIMIT ${AD_METRICS_POLL.maxClaimsPerRun}
+			)`,
+		)
+		.returning({
+			id: ads.id,
+			organizationId: ads.organizationId,
+			generation: ads.metricsPollGeneration,
+		});
 
-		const page = await db
-			.select({
-				id: adAccounts.id,
-				organizationId: adAccounts.organizationId,
-			})
-			.from(adAccounts)
-			.where(and(...conditions))
-			.orderBy(adAccounts.id)
-			.limit(PAGE_SIZE);
-
-		if (page.length === 0) break;
-
-		// Enqueue the whole page in a single sendBatch (CF limit is 100 messages,
-		// which matches PAGE_SIZE) instead of N serial send round trips.
-		try {
-			await env.ADS_QUEUE.sendBatch(
-				page.map((account) => ({
-					body: {
-						type: "sync_external",
-						org_id: account.organizationId,
-						ad_account_id: account.id,
-					},
-				})),
-			);
-			totalEnqueued += page.length;
-		} catch (err) {
-			console.error("[Ad Sync] Failed to enqueue page:", err);
-		}
-
-		const lastRow = page[page.length - 1];
-		if (!lastRow) break;
-		lastId = lastRow.id;
-		if (page.length < PAGE_SIZE) break;
+	const messages = [
+		...dueAccounts.map((account) => ({
+			body: {
+				type: "sync_external",
+				org_id: account.organizationId,
+				ad_account_id: account.id,
+				sync_generation: account.generation,
+			},
+		})),
+		...dueMetrics.map((ad) => ({
+			body: {
+				type: "sync_metrics",
+				org_id: ad.organizationId,
+				ad_id: ad.id,
+				metrics_poll_generation: ad.generation,
+				window_days:
+					now.getUTCHours() === 0 && now.getUTCMinutes() < 30 ? 30 : 3,
+			},
+		})),
+	];
+	for (let offset = 0; offset < messages.length; offset += 100) {
+		await env.ADS_QUEUE.sendBatch(messages.slice(offset, offset + 100));
 	}
-
-	console.log(`[Ad Sync] Enqueued ${totalEnqueued} ad accounts for sync`);
+	console.log("[Ad Sync] Enqueued bounded fair poll work", {
+		accountListings: dueAccounts.length,
+		adMetrics: dueMetrics.length,
+	});
 }

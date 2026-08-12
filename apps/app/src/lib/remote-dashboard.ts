@@ -4,6 +4,7 @@ const REMOTE_CONTEXT_PATH = "/api/dashboard-context";
 type RemoteUser = Record<string, unknown> & {
 	id: string;
 	email: string;
+	credentialVersion: string;
 };
 
 type RemoteSession = Record<string, unknown> & {
@@ -39,6 +40,7 @@ function isRemoteDashboardContext(
 	if (!isRecord(value)) return false;
 	if (!isRecord(value.user) || typeof value.user.id !== "string") return false;
 	if (typeof value.user.email !== "string") return false;
+	if (typeof value.user.credentialVersion !== "string") return false;
 	if (!isRecord(value.session) || typeof value.session.id !== "string") {
 		return false;
 	}
@@ -223,7 +225,11 @@ export async function fetchRemoteDashboardContext(
 	const userAgent = request.headers.get("user-agent");
 	if (userAgent) headers.set("user-agent", userAgent);
 
-	const response = await fetch(new URL(REMOTE_CONTEXT_PATH, remoteOrigin), {
+	const contextUrl = new URL(REMOTE_CONTEXT_PATH, remoteOrigin);
+	if (new URL(request.url).pathname.startsWith("/app/admin")) {
+		contextUrl.searchParams.set("authoritative", "1");
+	}
+	const response = await fetch(contextUrl, {
 		headers,
 		cache: "no-store",
 	});

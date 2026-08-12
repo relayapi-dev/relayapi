@@ -301,7 +301,11 @@ export function PostDetailModal({ postId, open, onOpenChange, onEdit, onDelete }
                 {(onDelete || onEdit) && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button type="button" className="rounded p-1.5 hover:bg-accent transition-colors border border-border">
+                      <button
+                        type="button"
+                        aria-label="Post actions"
+                        className="rounded p-1.5 hover:bg-accent transition-colors border border-border"
+                      >
                         <MoreHorizontal className="size-3.5 text-muted-foreground" />
                       </button>
                     </DropdownMenuTrigger>

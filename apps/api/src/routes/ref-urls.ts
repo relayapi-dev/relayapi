@@ -1,48 +1,191 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
-	automations as automationsTable,
-	contacts,
+	automations,
+	landingPages,
+	organization,
+	publicGrowthEvents,
 	refUrls,
+	workspaces,
 } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import type { Context } from "hono";
+import {
+	decodeTimestampIdCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	type TimestampIdCursor,
+} from "../lib/pagination-cursor";
+import { hasPostgresErrorCode } from "../lib/postgres-errors";
+import { type PublicResourceScope, refPublicUrl } from "../lib/public-growth";
 import { inheritOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
 	isWorkspaceScopeDenied,
 	WORKSPACE_ACCESS_DENIED_BODY,
 } from "../lib/workspace-scope";
-import { ErrorResponse, PaginationParams } from "../schemas/common";
+import { ErrorResponse } from "../schemas/common";
 import {
+	RefUrlClickSpec,
 	RefUrlCreateSpec,
 	RefUrlListResponse,
 	RefUrlResponse,
 	RefUrlUpdateSpec,
 } from "../schemas/ref-urls";
-import { emitInternalEvent } from "../services/automations/internal-events";
-import type { InboundEvent } from "../services/automations/trigger-matcher";
+import { recordRefVisit } from "../services/public-growth-events";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 const IdParams = z.object({ id: z.string() });
-const ListQuery = PaginationParams.extend({
+const ListQuery = z.object({
+	cursor: z.string().optional(),
+	limit: z.coerce.number().int().min(1).max(100).default(20),
 	workspace_id: z.string().optional(),
 	automation_id: z.string().optional(),
 });
 
-type Row = typeof refUrls.$inferSelect;
+type RefRow = typeof refUrls.$inferSelect;
+type RefWithScope = {
+	ref: RefRow;
+	organizationSlug: string;
+	workspaceSlug: string | null;
+	cursorTimestamp?: string;
+};
 
-function serialize(r: Row): z.infer<typeof RefUrlResponse> {
+function publicScope(row: RefWithScope): PublicResourceScope {
+	return row.ref.workspaceId && row.workspaceSlug
+		? {
+				kind: "workspace",
+				organizationId: row.ref.organizationId,
+				organizationSlug: row.organizationSlug,
+				workspaceId: row.ref.workspaceId,
+				workspaceSlug: row.workspaceSlug,
+			}
+		: {
+				kind: "organization",
+				organizationId: row.ref.organizationId,
+				organizationSlug: row.organizationSlug,
+			};
+}
+
+function serialize(
+	env: Env,
+	row: RefWithScope,
+): z.infer<typeof RefUrlResponse> {
+	const ref = row.ref;
 	return {
-		id: r.id,
-		organization_id: r.organizationId,
-		workspace_id: r.workspaceId,
-		slug: r.slug,
-		automation_id: r.automationId,
-		uses: r.uses,
-		enabled: r.enabled,
-		created_at: r.createdAt.toISOString(),
+		id: ref.id,
+		organization_id: ref.organizationId,
+		workspace_id: ref.workspaceId,
+		slug: ref.slug,
+		automation_id: ref.automationId,
+		destination:
+			ref.destinationType === "https_url"
+				? { type: "https_url", url: ref.destinationUrl ?? "" }
+				: {
+						type: "landing_page",
+						landing_page_id: ref.landingPageId ?? "",
+					},
+		public_url: refPublicUrl(env, publicScope(row), ref.id, ref.slug),
+		uses: ref.uses,
+		enabled: ref.enabled,
+		created_at: ref.createdAt.toISOString(),
+		updated_at: ref.updatedAt.toISOString(),
 	};
+}
+
+function joinedRefSelection() {
+	return {
+		ref: refUrls,
+		organizationSlug: organization.slug,
+		workspaceSlug: workspaces.slug,
+	};
+}
+
+async function loadRef(
+	db: Variables["db"],
+	organizationId: string,
+	id: string,
+): Promise<RefWithScope | undefined> {
+	const [row] = await db
+		.select(joinedRefSelection())
+		.from(refUrls)
+		.innerJoin(organization, eq(organization.id, refUrls.organizationId))
+		.leftJoin(
+			workspaces,
+			and(
+				eq(workspaces.id, refUrls.workspaceId),
+				eq(workspaces.organizationId, refUrls.organizationId),
+			),
+		)
+		.where(and(eq(refUrls.id, id), eq(refUrls.organizationId, organizationId)))
+		.limit(1);
+	return row;
+}
+
+async function automationWorkspace(
+	c: AppContext,
+	automationId: string,
+): Promise<
+	{ ok: true; workspaceId: string | null } | { ok: false; response: Response }
+> {
+	const [automation] = await c
+		.get("db")
+		.select({ workspaceId: automations.workspaceId })
+		.from(automations)
+		.where(
+			and(
+				eq(automations.id, automationId),
+				eq(automations.organizationId, c.get("orgId")),
+			),
+		)
+		.limit(1);
+	if (!automation) {
+		return {
+			ok: false,
+			response: c.json(
+				{ error: { code: "NOT_FOUND", message: "Automation not found" } },
+				404,
+			),
+		};
+	}
+	if (isWorkspaceScopeDenied(c, automation.workspaceId)) {
+		return { ok: false, response: c.json(WORKSPACE_ACCESS_DENIED_BODY, 403) };
+	}
+	return { ok: true, workspaceId: automation.workspaceId };
+}
+
+async function landingWorkspace(
+	c: AppContext,
+	landingPageId: string,
+): Promise<
+	{ ok: true; workspaceId: string | null } | { ok: false; response: Response }
+> {
+	const [page] = await c
+		.get("db")
+		.select({ workspaceId: landingPages.workspaceId })
+		.from(landingPages)
+		.where(
+			and(
+				eq(landingPages.id, landingPageId),
+				eq(landingPages.organizationId, c.get("orgId")),
+			),
+		)
+		.limit(1);
+	if (!page) {
+		return {
+			ok: false,
+			response: c.json(
+				{ error: { code: "NOT_FOUND", message: "Landing page not found" } },
+				404,
+			),
+		};
+	}
+	if (isWorkspaceScopeDenied(c, page.workspaceId)) {
+		return { ok: false, response: c.json(WORKSPACE_ACCESS_DENIED_BODY, 403) };
+	}
+	return { ok: true, workspaceId: page.workspaceId };
 }
 
 const createRefUrl = createRoute({
@@ -61,7 +204,7 @@ const createRefUrl = createRoute({
 			content: { "application/json": { schema: RefUrlResponse } },
 		},
 		400: {
-			description: "Invalid automation workspace",
+			description: "Scope conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
@@ -69,11 +212,11 @@ const createRefUrl = createRoute({
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
-			description: "Automation not found",
+			description: "Parent not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		409: {
-			description: "Slug already taken",
+			description: "Slug conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -81,70 +224,58 @@ const createRefUrl = createRoute({
 
 app.openapi(createRefUrl, async (c) => {
 	const body = c.req.valid("json");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-	const parentWorkspaceIds: Array<string | null> = [];
-
+	const parentWorkspaces: Array<string | null> = [];
 	if (body.automation_id) {
-		const [automation] = await db
-			.select({
-				id: automationsTable.id,
-				workspaceId: automationsTable.workspaceId,
-			})
-			.from(automationsTable)
-			.where(
-				and(
-					eq(automationsTable.id, body.automation_id),
-					eq(automationsTable.organizationId, orgId),
-				),
-			)
-			.limit(1);
-		if (!automation) {
-			return c.json(
-				{ error: { code: "NOT_FOUND", message: "Automation not found" } },
-				404,
-			);
-		}
-		if (isWorkspaceScopeDenied(c, automation.workspaceId)) {
-			return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
-		}
-		parentWorkspaceIds.push(automation.workspaceId);
+		const result = await automationWorkspace(c, body.automation_id);
+		if (!result.ok) return result.response as never;
+		parentWorkspaces.push(result.workspaceId);
 	}
+	if (body.destination.type === "landing_page") {
+		const result = await landingWorkspace(c, body.destination.landing_page_id);
+		if (!result.ok) return result.response as never;
+		parentWorkspaces.push(result.workspaceId);
+	}
+
 	const scope = await inheritOperationalCreateScope(
 		c,
 		body.workspace_id,
-		parentWorkspaceIds,
+		parentWorkspaces,
 		"reference URL",
 	);
 	if (!scope.ok) return scope.response as never;
-
-	const existing = await db.query.refUrls.findFirst({
-		where: and(eq(refUrls.organizationId, orgId), eq(refUrls.slug, body.slug)),
-	});
-	if (existing) {
+	const [created] = await c
+		.get("db")
+		.insert(refUrls)
+		.values({
+			organizationId: c.get("orgId"),
+			workspaceId: scope.workspaceId,
+			slug: body.slug,
+			automationId: body.automation_id ?? null,
+			destinationType: body.destination.type,
+			destinationUrl:
+				body.destination.type === "https_url" ? body.destination.url : null,
+			landingPageId:
+				body.destination.type === "landing_page"
+					? body.destination.landing_page_id
+					: null,
+			enabled: body.enabled,
+		})
+		.onConflictDoNothing()
+		.returning({ id: refUrls.id });
+	if (!created) {
 		return c.json(
 			{
 				error: {
-					code: "slug_conflict",
-					message: `Slug '${body.slug}' already exists in this organization`,
+					code: "SLUG_CONFLICT",
+					message: `Reference URL slug '${body.slug}' is already in use in this scope.`,
 				},
 			},
 			409,
 		);
 	}
-
-	const [row] = await db
-		.insert(refUrls)
-		.values({
-			organizationId: orgId,
-			workspaceId: scope.workspaceId,
-			slug: body.slug,
-			automationId: body.automation_id ?? null,
-			enabled: body.enabled,
-		})
-		.returning();
-	if (!row) throw new Error("Failed to create ref URL");
-	return c.json(serialize(row), 201);
+	const row = await loadRef(c.get("db"), c.get("orgId"), created.id);
+	if (!row) throw new Error("Created reference URL could not be read");
+	return c.json(serialize(c.env, row), 201);
 });
 
 const listRefUrls = createRoute({
@@ -157,52 +288,62 @@ const listRefUrls = createRoute({
 	request: { query: ListQuery },
 	responses: {
 		200: {
-			description: "List",
+			description: "Reference URLs",
 			content: { "application/json": { schema: RefUrlListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
 
 app.openapi(listRefUrls, async (c) => {
 	const { workspace_id, automation_id, cursor, limit } = c.req.valid("query");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	const conditions = [eq(refUrls.organizationId, orgId)];
+	let decoded: TimestampIdCursor | null = null;
+	try {
+		decoded = cursor ? decodeTimestampIdCursor(cursor) : null;
+	} catch {
+		return c.json(INVALID_CURSOR_BODY, 400);
+	}
+	const conditions: SQL[] = [eq(refUrls.organizationId, c.get("orgId"))];
 	applyWorkspaceScope(c, conditions, refUrls.workspaceId);
 	if (workspace_id) conditions.push(eq(refUrls.workspaceId, workspace_id));
 	if (automation_id) conditions.push(eq(refUrls.automationId, automation_id));
-
-	// Keyset pagination on (createdAt, id). Read the cursor row's created_at as raw
-	// text so it isn't round-tripped through a JS Date, which truncates Postgres
-	// microseconds to millisecond precision and would skip rows sharing the cursor's
-	// millisecond. Bind it back with an explicit ::timestamptz cast.
-	if (cursor) {
-		const cursorRow = await db
-			.select({ createdAt: sql<string>`${refUrls.createdAt}::text` })
-			.from(refUrls)
-			.where(eq(refUrls.id, cursor))
-			.limit(1);
-		if (cursorRow[0]) {
-			conditions.push(
-				sql`(${refUrls.createdAt}, ${refUrls.id}) < (${cursorRow[0].createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+	if (decoded) {
+		conditions.push(
+			sql`(${refUrls.createdAt}, ${refUrls.id})
+				< (${decoded.timestamp}::timestamptz, ${decoded.id})`,
+		);
 	}
-
-	const rows = await db
-		.select()
+	const rows = await c
+		.get("db")
+		.select({
+			...joinedRefSelection(),
+			cursorTimestamp: sql<string>`to_char(${refUrls.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(refUrls)
+		.innerJoin(organization, eq(organization.id, refUrls.organizationId))
+		.leftJoin(
+			workspaces,
+			and(
+				eq(workspaces.id, refUrls.workspaceId),
+				eq(workspaces.organizationId, refUrls.organizationId),
+			),
+		)
 		.where(and(...conditions))
 		.orderBy(desc(refUrls.createdAt), desc(refUrls.id))
 		.limit(limit + 1);
-
 	const hasMore = rows.length > limit;
-	const data = rows.slice(0, limit).map(serialize);
+	const page = rows.slice(0, limit);
+	const last = page.at(-1);
 	return c.json(
 		{
-			data,
-			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
+			data: page.map((row) => serialize(c.env, row)),
+			next_cursor:
+				hasMore && last
+					? encodeTimestampIdCursor(last.cursorTimestamp, last.ref.id)
+					: null,
 			has_more: hasMore,
 		},
 		200,
@@ -219,11 +360,11 @@ const getRefUrl = createRoute({
 	request: { params: IdParams },
 	responses: {
 		200: {
-			description: "Ref URL",
+			description: "Reference URL",
 			content: { "application/json": { schema: RefUrlResponse } },
 		},
 		403: {
-			description: "Forbidden",
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -234,21 +375,21 @@ const getRefUrl = createRoute({
 });
 
 app.openapi(getRefUrl, async (c) => {
-	const { id } = c.req.valid("param");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-	const row = await db.query.refUrls.findFirst({
-		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
-	});
-	if (!row)
+	const row = await loadRef(
+		c.get("db"),
+		c.get("orgId"),
+		c.req.valid("param").id,
+	);
+	if (!row) {
 		return c.json(
-			{ error: { code: "not_found", message: "Ref URL not found" } },
+			{ error: { code: "NOT_FOUND", message: "Reference URL not found" } },
 			404,
 		);
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+	}
+	if (isWorkspaceScopeDenied(c, row.ref.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
-	return c.json(serialize(row), 200);
+	return c.json(serialize(c.env, row), 200);
 });
 
 const updateRefUrl = createRoute({
@@ -267,8 +408,12 @@ const updateRefUrl = createRoute({
 			description: "Updated",
 			content: { "application/json": { schema: RefUrlResponse } },
 		},
+		400: {
+			description: "Scope conflict",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		403: {
-			description: "Forbidden",
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -285,54 +430,95 @@ const updateRefUrl = createRoute({
 app.openapi(updateRefUrl, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	const row = await db.query.refUrls.findFirst({
-		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
-	});
-	if (!row)
+	const existing = await loadRef(c.get("db"), c.get("orgId"), id);
+	if (!existing) {
 		return c.json(
-			{ error: { code: "not_found", message: "Ref URL not found" } },
+			{ error: { code: "NOT_FOUND", message: "Reference URL not found" } },
 			404,
 		);
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+	}
+	if (isWorkspaceScopeDenied(c, existing.ref.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
-
-	if (body.slug && body.slug !== row.slug) {
-		const conflict = await db.query.refUrls.findFirst({
-			where: and(
-				eq(refUrls.organizationId, orgId),
-				eq(refUrls.slug, body.slug),
-			),
-		});
-		if (conflict) {
+	if (body.automation_id) {
+		const result = await automationWorkspace(c, body.automation_id);
+		if (!result.ok) return result.response as never;
+		if (result.workspaceId !== existing.ref.workspaceId) {
 			return c.json(
 				{
 					error: {
-						code: "slug_conflict",
-						message: `Slug '${body.slug}' already exists`,
+						code: "WORKSPACE_SCOPE_CONFLICT",
+						message: "Automation and reference URL must share a scope.",
 					},
 				},
-				409,
+				400,
+			);
+		}
+	}
+	if (body.destination?.type === "landing_page") {
+		const result = await landingWorkspace(c, body.destination.landing_page_id);
+		if (!result.ok) return result.response as never;
+		if (result.workspaceId !== existing.ref.workspaceId) {
+			return c.json(
+				{
+					error: {
+						code: "WORKSPACE_SCOPE_CONFLICT",
+						message: "Landing page and reference URL must share a scope.",
+					},
+				},
+				400,
 			);
 		}
 	}
 
-	const updates: Partial<typeof refUrls.$inferInsert> = {};
+	const updates: Partial<typeof refUrls.$inferInsert> = {
+		updatedAt: new Date(),
+	};
 	if (body.slug !== undefined) updates.slug = body.slug;
-	if (body.automation_id !== undefined)
-		updates.automationId = body.automation_id ?? null;
+	if (body.automation_id !== undefined) {
+		updates.automationId = body.automation_id;
+	}
 	if (body.enabled !== undefined) updates.enabled = body.enabled;
-
-	const [updated] = await db
-		.update(refUrls)
-		.set(updates)
-		.where(eq(refUrls.id, id))
-		.returning();
-	if (!updated) throw new Error("Failed to update ref URL");
-	return c.json(serialize(updated), 200);
+	if (body.destination) {
+		updates.destinationType = body.destination.type;
+		updates.destinationUrl =
+			body.destination.type === "https_url" ? body.destination.url : null;
+		updates.landingPageId =
+			body.destination.type === "landing_page"
+				? body.destination.landing_page_id
+				: null;
+	}
+	let updated: { id: string } | undefined;
+	try {
+		[updated] = await c
+			.get("db")
+			.update(refUrls)
+			.set(updates)
+			.where(
+				and(eq(refUrls.id, id), eq(refUrls.organizationId, c.get("orgId"))),
+			)
+			.returning({ id: refUrls.id });
+	} catch (error) {
+		if (!hasPostgresErrorCode(error, "23505")) throw error;
+		return c.json(
+			{
+				error: {
+					code: "SLUG_CONFLICT",
+					message: `Reference URL slug '${body.slug}' is already in use in this scope.`,
+				},
+			},
+			409,
+		);
+	}
+	if (!updated) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Reference URL not found" } },
+			404,
+		);
+	}
+	const row = await loadRef(c.get("db"), c.get("orgId"), id);
+	if (!row) throw new Error("Updated reference URL could not be read");
+	return c.json(serialize(c.env, row), 200);
 });
 
 const deleteRefUrl = createRoute({
@@ -340,182 +526,182 @@ const deleteRefUrl = createRoute({
 	method: "delete",
 	path: "/{id}",
 	tags: ["Ref URLs"],
-	summary: "Delete a reference URL",
+	summary: "Delete a reference URL and its QR placements",
 	security: [{ Bearer: [] }],
 	request: { params: IdParams },
 	responses: {
 		204: { description: "Deleted" },
 		403: {
-			description: "Forbidden",
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
 			description: "Not found",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "Automation dispatch is still pending",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
 
 app.openapi(deleteRefUrl, async (c) => {
-	const { id } = c.req.valid("param");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-	const row = await db.query.refUrls.findFirst({
-		where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
-	});
-	if (!row)
+	const row = await loadRef(
+		c.get("db"),
+		c.get("orgId"),
+		c.req.valid("param").id,
+	);
+	if (!row) {
 		return c.json(
-			{ error: { code: "not_found", message: "Ref URL not found" } },
+			{ error: { code: "NOT_FOUND", message: "Reference URL not found" } },
 			404,
 		);
-	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
+	}
+	if (isWorkspaceScopeDenied(c, row.ref.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
+	const result = await c.get("db").transaction(async (tx) => {
+		const [locked] = await tx
+			.select({ id: refUrls.id })
+			.from(refUrls)
+			.where(
+				and(
+					eq(refUrls.id, row.ref.id),
+					eq(refUrls.organizationId, c.get("orgId")),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!locked) return "not_found" as const;
 
-	await db.delete(refUrls).where(eq(refUrls.id, id));
+		const [pendingDispatch] = await tx
+			.select({ id: publicGrowthEvents.id })
+			.from(publicGrowthEvents)
+			.where(
+				and(
+					eq(publicGrowthEvents.refUrlId, locked.id),
+					inArray(publicGrowthEvents.status, [
+						"pending",
+						"processing",
+						"retry",
+					]),
+				),
+			)
+			.limit(1);
+		if (pendingDispatch) return "pending_dispatch" as const;
+
+		await tx
+			.delete(refUrls)
+			.where(
+				and(
+					eq(refUrls.id, locked.id),
+					eq(refUrls.organizationId, c.get("orgId")),
+				),
+			);
+		return "deleted" as const;
+	});
+	if (result === "not_found") {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Reference URL not found" } },
+			404,
+		);
+	}
+	if (result === "pending_dispatch") {
+		return c.json(
+			{
+				error: {
+					code: "PUBLIC_GROWTH_DISPATCH_PENDING",
+					message:
+						"Wait for pending automation deliveries before deleting this reference URL.",
+				},
+			},
+			409,
+		);
+	}
 	return c.body(null, 204);
 });
 
-// ---------------------------------------------------------------------------
-// Click tracking — records a ref-url click and fires the `ref_link_click`
-// internal event so automations can enroll the contact. The ref URL itself
-// doesn't store a redirect target in this schema; external systems call this
-// endpoint after they've already redirected the user so the automation
-// engine can react.
-// ---------------------------------------------------------------------------
-
-const ClickBody = z.object({
-	contact_id: z.string(),
-});
-
-const recordRefUrlClick = createRoute({
+const recordClick = createRoute({
 	operationId: "recordRefUrlClick",
 	method: "post",
 	path: "/{id}/click",
 	tags: ["Ref URLs"],
-	summary: "Record a click on a ref URL",
+	summary: "Record an identified reference-URL visit",
 	description:
-		"Increments the click counter and, when a contact is supplied, fires a " +
-		"`ref_link_click` automation event so matching entrypoints enroll the " +
-		"contact.",
+		"Atomically fences the visit, increments its counter once, and commits durable automation dispatch.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: IdParams,
-		body: { content: { "application/json": { schema: ClickBody } } },
+		body: { content: { "application/json": { schema: RefUrlClickSpec } } },
 	},
 	responses: {
 		200: {
-			description: "Click recorded",
+			description: "Visit recorded or replayed",
 			content: { "application/json": { schema: RefUrlResponse } },
 		},
 		400: {
-			description: "Contact workspace does not match",
+			description: "Contact scope conflict",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
-			description: "Forbidden",
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
-			description: "Not found",
+			description: "Reference URL or contact not found",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
 
-app.openapi(recordRefUrlClick, async (c) => {
+app.openapi(recordClick, async (c) => {
 	const { id } = c.req.valid("param");
 	const body = c.req.valid("json");
-	const db = c.get("db");
-	const orgId = c.get("orgId");
-
-	const [existing, contact] = await Promise.all([
-		db.query.refUrls.findFirst({
-			where: and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)),
-		}),
-		db.query.contacts.findFirst({
-			where: and(
-				eq(contacts.id, body.contact_id),
-				eq(contacts.organizationId, orgId),
-			),
-		}),
-	]);
-	if (!existing || !contact) {
+	const existing = await loadRef(c.get("db"), c.get("orgId"), id);
+	if (!existing) {
 		return c.json(
-			{ error: { code: "not_found", message: "Ref URL or contact not found" } },
+			{ error: { code: "NOT_FOUND", message: "Reference URL not found" } },
 			404,
 		);
 	}
-	if (isWorkspaceScopeDenied(c, existing.workspaceId)) {
+	if (isWorkspaceScopeDenied(c, existing.ref.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
-	if (existing.workspaceId !== contact.workspaceId) {
+	const result = await recordRefVisit(c.get("db"), {
+		organizationId: c.get("orgId"),
+		refUrlId: id,
+		contactId: body.contact_id,
+		idempotencyKey: body.idempotency_key,
+	});
+	if (!result.ok) {
+		if (result.reason === "contact_scope_conflict") {
+			return c.json(
+				{
+					error: {
+						code: "WORKSPACE_SCOPE_CONFLICT",
+						message: "Contact and reference URL must share a scope.",
+					},
+				},
+				400,
+			);
+		}
 		return c.json(
 			{
 				error: {
-					code: "WORKSPACE_SCOPE_CONFLICT",
-					message: "Contact and reference URL must share a workspace.",
+					code: "NOT_FOUND",
+					message: "Reference URL or contact not found",
 				},
 			},
-			400,
-		);
-	}
-
-	const [updated] = await db
-		.update(refUrls)
-		.set({ uses: sql`${refUrls.uses} + 1` })
-		.where(and(eq(refUrls.id, id), eq(refUrls.organizationId, orgId)))
-		.returning();
-
-	if (!updated)
-		return c.json(
-			{ error: { code: "not_found", message: "Ref URL not found" } },
 			404,
 		);
-
-	// The already-authorized click is durable. Channel lookup and event dispatch
-	// are best-effort and can run after the response.
-	c.executionCtx.waitUntil(
-		(async () => {
-			try {
-				// Look up the bound automation's channel (if any) so `ref_link_click`
-				// entrypoints for that channel match; fall back to "instagram".
-				let channel: InboundEvent["channel"] = "instagram";
-				const auto = updated.automationId
-					? await db.query.automations.findFirst({
-							where: and(
-								eq(automationsTable.id, updated.automationId),
-								eq(automationsTable.organizationId, orgId),
-							),
-						})
-					: undefined;
-				if (auto?.channel) channel = auto.channel as InboundEvent["channel"];
-
-				await emitInternalEvent(
-					db,
-					{
-						kind: "ref_link_click",
-						channel,
-						organizationId: orgId,
-						socialAccountId: null,
-						contactId: body.contact_id,
-						conversationId: null,
-						refUrlId: updated.id,
-						payload: {
-							source: "ref_url_click",
-							slug: updated.slug,
-							ref_url_id: updated.id,
-						},
-					},
-					c.env as unknown as Record<string, unknown>,
-				);
-			} catch (err) {
-				console.error("[ref-urls] deferred click emit failed:", err);
-			}
-		})(),
+	}
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome(
+		result.inserted ? { kind: "committed", units: 1 } : { kind: "not_applied" },
 	);
-
-	return c.json(serialize(updated), 200);
+	const row = await loadRef(c.get("db"), c.get("orgId"), id);
+	if (!row) throw new Error("Recorded reference URL could not be read");
+	return c.json(serialize(c.env, row), 200);
 });
 
 export default app;

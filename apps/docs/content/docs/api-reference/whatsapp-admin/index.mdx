@@ -1,0 +1,35 @@
+---
+title: Whatsapp Admin
+---
+
+Probe `/v1/whatsapp/admin/capabilities` for the exact account before exposing administration actions. `supported` is returned only after a feature-specific non-mutating read succeeds; `requires_eligibility`, `unavailable`, and `unverified` are conservative states, not guarantees about a later mutation. Group writes require a supported Groups probe, and eligible groups require an Official Business Account without coexistence. Writes are idempotency-keyed durable operations, and asynchronous group create/delete lifecycle is finalized by signed webhooks. The surface covers groups, invite/join/participant-removal operations, group messages/pins, block lists, business usernames, and template library/editing; it does not provide telephony, manual participant addition, or a proprietary sandbox/version history. See [WhatsApp](/platforms/whatsapp#business-administration).
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | [Approve Whats App Group Join Requests](/api-reference/whatsapp-admin/approveWhatsAppGroupJoinRequests) | Approve Whats App Group Join Requests |
+| `POST` | [Block Whats App Users](/api-reference/whatsapp-admin/blockWhatsAppUsers) | Block Whats App Users |
+| `POST` | [Create Whats App Group](/api-reference/whatsapp-admin/createWhatsAppGroup) | Create Whats App Group |
+| `POST` | [Create Whats App Template From Library](/api-reference/whatsapp-admin/createWhatsAppTemplateFromLibrary) | Create Whats App Template From Library |
+| `DELETE` | [Delete Whats App Business Username](/api-reference/whatsapp-admin/deleteWhatsAppBusinessUsername) | Delete Whats App Business Username |
+| `DELETE` | [Delete Whats App Group](/api-reference/whatsapp-admin/deleteWhatsAppGroup) | Delete Whats App Group |
+| `PATCH` | [Edit Whats App Template](/api-reference/whatsapp-admin/editWhatsAppTemplate) | Edit Whats App Template |
+| `GET` | [Get Whats App Admin Capabilities](/api-reference/whatsapp-admin/getWhatsAppAdminCapabilities) | Get Whats App Admin Capabilities |
+| `GET` | [Get Whats App Admin Operation](/api-reference/whatsapp-admin/getWhatsAppAdminOperation) | Get Whats App Admin Operation |
+| `GET` | [Get Whats App Business Username](/api-reference/whatsapp-admin/getWhatsAppBusinessUsername) | Get Whats App Business Username |
+| `GET` | [Get Whats App Group](/api-reference/whatsapp-admin/getWhatsAppGroup) | Get Whats App Group |
+| `GET` | [Get Whats App Group Invite Link](/api-reference/whatsapp-admin/getWhatsAppGroupInviteLink) | Get Whats App Group Invite Link |
+| `GET` | [Get Whats App Username Suggestions](/api-reference/whatsapp-admin/getWhatsAppUsernameSuggestions) | Get Whats App Username Suggestions |
+| `GET` | [List Blocked Whats App Users](/api-reference/whatsapp-admin/listBlockedWhatsAppUsers) | List Blocked Whats App Users |
+| `GET` | [List Whats App Group Join Requests](/api-reference/whatsapp-admin/listWhatsAppGroupJoinRequests) | List Whats App Group Join Requests |
+| `GET` | [List Whats App Groups](/api-reference/whatsapp-admin/listWhatsAppGroups) | List Whats App Groups |
+| `GET` | [List Whats App Template Library](/api-reference/whatsapp-admin/listWhatsAppTemplateLibrary) | List Whats App Template Library |
+| `POST` | [Pin Whats App Group Message](/api-reference/whatsapp-admin/pinWhatsAppGroupMessage) | Pin Whats App Group Message |
+| `POST` | [Reject Whats App Group Join Requests](/api-reference/whatsapp-admin/rejectWhatsAppGroupJoinRequests) | Reject Whats App Group Join Requests |
+| `POST` | [Remove Whats App Group Participants](/api-reference/whatsapp-admin/removeWhatsAppGroupParticipants) | Remove Whats App Group Participants |
+| `POST` | [Reset Whats App Group Invite Link](/api-reference/whatsapp-admin/resetWhatsAppGroupInviteLink) | Reset Whats App Group Invite Link |
+| `POST` | [Send Whats App Group Message](/api-reference/whatsapp-admin/sendWhatsAppGroupMessage) | Send Whats App Group Message |
+| `PUT` | [Set Whats App Business Username](/api-reference/whatsapp-admin/setWhatsAppBusinessUsername) | Set Whats App Business Username |
+| `DELETE` | [Unblock Whats App Users](/api-reference/whatsapp-admin/unblockWhatsAppUsers) | Unblock Whats App Users |
+| `PATCH` | [Update Whats App Group](/api-reference/whatsapp-admin/updateWhatsAppGroup) | Update Whats App Group |

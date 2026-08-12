@@ -1,238 +1,455 @@
-import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
 } from "@/components/ui/dialog";
 import { useMutation } from "@/hooks/use-api";
 import { cn } from "@/lib/utils";
+import type { AdAccountOption } from "./ad-account-combobox";
 import { AdAccountCombobox } from "./ad-account-combobox";
+import {
+	type AdPlatformCapabilities,
+	liveWriteCapability,
+	parseAudienceRule,
+} from "./provider-contract";
 
 interface AudienceItem {
-  id: string;
-  name: string;
+	id: string;
+	name: string;
 }
 
+type AudienceAdAccount = AdAccountOption;
+
 interface CreateAudienceDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  existingAudiences: AudienceItem[];
-  onCreated: () => void;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	existingAudiences: AudienceItem[];
+	adAccounts: readonly AudienceAdAccount[];
+	platformCapabilities: readonly AdPlatformCapabilities[];
+	initialAdAccountId?: string;
+	onCreated: () => void;
 }
 
 type AudienceType = "customer_list" | "website" | "lookalike";
 
 const inputClass =
-  "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+	"flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 export function CreateAudienceDialog({
-  open,
-  onOpenChange,
-  existingAudiences,
-  onCreated,
+	open,
+	onOpenChange,
+	existingAudiences,
+	adAccounts,
+	platformCapabilities,
+	initialAdAccountId,
+	onCreated,
 }: CreateAudienceDialogProps) {
-  const [type, setType] = useState<AudienceType>("customer_list");
-  const [adAccountId, setAdAccountId] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [customerFileSource, setCustomerFileSource] = useState("");
-  const [pixelId, setPixelId] = useState("");
-  const [retentionDays, setRetentionDays] = useState(30);
-  const [rule, setRule] = useState("");
-  const [sourceAudienceId, setSourceAudienceId] = useState("");
-  const [country, setCountry] = useState("");
-  const [ratio, setRatio] = useState(0.1);
-  const [error, setError] = useState<string | null>(null);
+	const [type, setType] = useState<AudienceType>("customer_list");
+	const [adAccountId, setAdAccountId] = useState("");
+	const [name, setName] = useState("");
+	const [description, setDescription] = useState("");
+	const [customerFileSource, setCustomerFileSource] = useState("");
+	const [pixelId, setPixelId] = useState("");
+	const [retentionDays, setRetentionDays] = useState(30);
+	const [rule, setRule] = useState("");
+	const [sourceAudienceId, setSourceAudienceId] = useState("");
+	const [country, setCountry] = useState("");
+	const [ratio, setRatio] = useState(0.1);
+	const [error, setError] = useState<string | null>(null);
+	const [selectedAccountSnapshot, setSelectedAccountSnapshot] =
+		useState<AudienceAdAccount | null>(null);
 
-  const createMutation = useMutation<{ id: string }>("ads/audiences", "POST");
+	const createMutation = useMutation<{ id: string }>("ads/audiences", "POST");
 
-  useEffect(() => {
-    if (!open) {
-      setType("customer_list");
-      setAdAccountId("");
-      setName("");
-      setDescription("");
-      setCustomerFileSource("");
-      setPixelId("");
-      setRetentionDays(30);
-      setRule("");
-      setSourceAudienceId("");
-      setCountry("");
-      setRatio(0.1);
-      setError(null);
-    }
-  }, [open]);
+	const selectedAccount = useMemo(
+		() =>
+			selectedAccountSnapshot?.id === adAccountId
+				? selectedAccountSnapshot
+				: (adAccounts.find((account) => account.id === adAccountId) ?? null),
+		[adAccountId, adAccounts, selectedAccountSnapshot],
+	);
+	const audienceCreateCapability = liveWriteCapability(
+		selectedAccount?.platform,
+		"audience_create",
+		platformCapabilities,
+	);
+	const canCreateAudience = audienceCreateCapability.state === "supported";
 
-  const handleSubmit = async () => {
-    setError(null);
-    if (!adAccountId || !name.trim()) {
-      setError("Ad account and name are required.");
-      return;
-    }
+	useEffect(() => {
+		if (open) {
+			setAdAccountId(initialAdAccountId ?? "");
+			setSelectedAccountSnapshot(null);
+		} else {
+			setType("customer_list");
+			setAdAccountId("");
+			setName("");
+			setDescription("");
+			setCustomerFileSource("");
+			setPixelId("");
+			setRetentionDays(30);
+			setRule("");
+			setSourceAudienceId("");
+			setCountry("");
+			setRatio(0.1);
+			setError(null);
+			setSelectedAccountSnapshot(null);
+		}
+	}, [initialAdAccountId, open]);
 
-    const body: Record<string, unknown> = {
-      ad_account_id: adAccountId,
-      type,
-      name: name.trim(),
-    };
+	const handleSubmit = async () => {
+		setError(null);
+		if (!adAccountId || !name.trim()) {
+			setError("Ad account and name are required.");
+			return;
+		}
+		if (!canCreateAudience) {
+			setError(
+				audienceCreateCapability.reason ??
+					"Audience creation is not supported for this ad platform.",
+			);
+			return;
+		}
 
-    if (type === "customer_list") {
-      if (description.trim()) body.description = description.trim();
-      if (customerFileSource.trim()) body.customer_file_source = customerFileSource.trim();
-    } else if (type === "website") {
-      if (!pixelId.trim()) {
-        setError("Pixel ID is required for website audiences.");
-        return;
-      }
-      if (description.trim()) body.description = description.trim();
-      body.pixel_id = pixelId.trim();
-      body.retention_days = retentionDays;
-      if (rule.trim()) body.rule = rule.trim();
-    } else {
-      if (!sourceAudienceId) {
-        setError("Source audience is required for lookalike audiences.");
-        return;
-      }
-      if (!country.trim() || country.trim().length !== 2) {
-        setError("Country must be a 2-character code.");
-        return;
-      }
-      body.source_audience_id = sourceAudienceId;
-      body.country = country.trim().toUpperCase();
-      body.ratio = ratio;
-    }
+		const body: Record<string, unknown> = {
+			ad_account_id: adAccountId,
+			type,
+			name: name.trim(),
+		};
 
-    const result = await createMutation.mutate(body);
-    if (result) {
-      onCreated();
-      onOpenChange(false);
-    }
-  };
+		if (type === "customer_list") {
+			if (description.trim()) body.description = description.trim();
+			if (customerFileSource.trim())
+				body.customer_file_source = customerFileSource.trim();
+		} else if (type === "website") {
+			if (!pixelId.trim()) {
+				setError("Pixel ID is required for website audiences.");
+				return;
+			}
+			if (description.trim()) body.description = description.trim();
+			body.pixel_id = pixelId.trim();
+			body.retention_days = retentionDays;
+			const parsedRule = parseAudienceRule(rule);
+			if (parsedRule.error) {
+				setError(parsedRule.error);
+				return;
+			}
+			if (parsedRule.value) body.rule = parsedRule.value;
+		} else {
+			if (!sourceAudienceId) {
+				setError("Source audience is required for lookalike audiences.");
+				return;
+			}
+			if (country.trim().length !== 2) {
+				setError("Country must be a 2-character code.");
+				return;
+			}
+			body.source_audience_id = sourceAudienceId;
+			body.country = country.trim().toUpperCase();
+			body.ratio = ratio;
+		}
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="text-base">Create Audience</DialogTitle>
-          <DialogDescription className="text-xs">
-            Define a custom audience for ad targeting.
-          </DialogDescription>
-        </DialogHeader>
+		const result = await createMutation.mutate(body);
+		if (result) {
+			onCreated();
+			onOpenChange(false);
+		}
+	};
 
-        <div className="space-y-3 py-2">
-          {/* Type selector */}
-          <div className="flex gap-1">
-            {(["customer_list", "website", "lookalike"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setType(t)}
-                className={cn(
-                  "px-3 py-1.5 text-xs rounded-md transition-colors",
-                  type === t
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {t === "customer_list" ? "Customer List" : t === "website" ? "Website" : "Lookalike"}
-              </button>
-            ))}
-          </div>
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle className="text-base">Create Audience</DialogTitle>
+					<DialogDescription className="text-xs">
+						Define a custom audience for ad targeting.
+					</DialogDescription>
+				</DialogHeader>
 
-          {/* Ad Account */}
-          <div>
-            <span className="text-xs font-medium text-muted-foreground">Ad Account</span>
-            <div className="mt-1">
-              <AdAccountCombobox value={adAccountId} onSelect={setAdAccountId} />
-            </div>
-          </div>
+				<div className="space-y-3 py-2">
+					{/* Resolve the account first so unsupported provider operations are never exposed. */}
+					<div>
+						<span className="text-xs font-medium text-muted-foreground">
+							Ad Account
+						</span>
+						<div className="mt-1">
+							<AdAccountCombobox
+								value={adAccountId}
+								onSelect={setAdAccountId}
+								onSelectAccount={setSelectedAccountSnapshot}
+							/>
+						</div>
+					</div>
 
-          {/* Name */}
-          <div>
-            <label htmlFor="audience-name" className="text-xs font-medium text-muted-foreground">Name</label>
-            <input id="audience-name" type="text" placeholder="Audience name" value={name} onChange={(e) => setName(e.target.value)} className={cn(inputClass, "mt-1")} />
-          </div>
+					{adAccountId && !canCreateAudience && (
+						<div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+							{audienceCreateCapability.reason ??
+								"Audience creation is not supported for this ad platform."}
+						</div>
+					)}
 
-          {/* Customer List fields */}
-          {type === "customer_list" && (
-            <>
-              <div>
-                <label htmlFor="audience-cl-description" className="text-xs font-medium text-muted-foreground">Description</label>
-                <input id="audience-cl-description" type="text" placeholder="Optional description" value={description} onChange={(e) => setDescription(e.target.value)} className={cn(inputClass, "mt-1")} />
-              </div>
-              <div>
-                <label htmlFor="audience-cl-source" className="text-xs font-medium text-muted-foreground">Customer File Source</label>
-                <input id="audience-cl-source" type="text" placeholder="Optional source" value={customerFileSource} onChange={(e) => setCustomerFileSource(e.target.value)} className={cn(inputClass, "mt-1")} />
-              </div>
-            </>
-          )}
+					{canCreateAudience && (
+						<>
+							{/* Type selector */}
+							<div className="flex gap-1">
+								{(["customer_list", "website", "lookalike"] as const).map(
+									(t) => (
+										<button
+											key={t}
+											type="button"
+											onClick={() => setType(t)}
+											className={cn(
+												"px-3 py-1.5 text-xs rounded-md transition-colors",
+												type === t
+													? "bg-primary text-primary-foreground"
+													: "text-muted-foreground hover:text-foreground",
+											)}
+										>
+											{t === "customer_list"
+												? "Customer List"
+												: t === "website"
+													? "Website"
+													: "Lookalike"}
+										</button>
+									),
+								)}
+							</div>
 
-          {/* Website fields */}
-          {type === "website" && (
-            <>
-              <div>
-                <label htmlFor="audience-web-description" className="text-xs font-medium text-muted-foreground">Description</label>
-                <input id="audience-web-description" type="text" placeholder="Optional description" value={description} onChange={(e) => setDescription(e.target.value)} className={cn(inputClass, "mt-1")} />
-              </div>
-              <div>
-                <label htmlFor="audience-web-pixel" className="text-xs font-medium text-muted-foreground">Pixel ID *</label>
-                <input id="audience-web-pixel" type="text" placeholder="Pixel ID" value={pixelId} onChange={(e) => setPixelId(e.target.value)} className={cn(inputClass, "mt-1")} />
-              </div>
-              <div>
-                <label htmlFor="audience-web-retention" className="text-xs font-medium text-muted-foreground">Retention Days</label>
-                <input id="audience-web-retention" type="number" min={1} max={180} value={retentionDays} onChange={(e) => setRetentionDays(Number(e.target.value))} className={cn(inputClass, "mt-1")} />
-              </div>
-              <div>
-                <label htmlFor="audience-web-rule" className="text-xs font-medium text-muted-foreground">Rule</label>
-                <input id="audience-web-rule" type="text" placeholder="Optional rule" value={rule} onChange={(e) => setRule(e.target.value)} className={cn(inputClass, "mt-1")} />
-              </div>
-            </>
-          )}
+							{/* Name */}
+							<div>
+								<label
+									htmlFor="audience-name"
+									className="text-xs font-medium text-muted-foreground"
+								>
+									Name
+								</label>
+								<input
+									id="audience-name"
+									type="text"
+									placeholder="Audience name"
+									value={name}
+									onChange={(e) => setName(e.target.value)}
+									className={cn(inputClass, "mt-1")}
+								/>
+							</div>
 
-          {/* Lookalike fields */}
-          {type === "lookalike" && (
-            <>
-              <div>
-                <label htmlFor="audience-ll-source" className="text-xs font-medium text-muted-foreground">Source Audience</label>
-                <select id="audience-ll-source" value={sourceAudienceId} onChange={(e) => setSourceAudienceId(e.target.value)} className={cn(inputClass, "mt-1")}>
-                  <option value="">Select source audience</option>
-                  {existingAudiences.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="audience-ll-country" className="text-xs font-medium text-muted-foreground">Country (2-char code)</label>
-                <input id="audience-ll-country" type="text" maxLength={2} placeholder="US" value={country} onChange={(e) => setCountry(e.target.value)} className={cn(inputClass, "mt-1")} />
-              </div>
-              <div>
-                <label htmlFor="audience-ll-ratio" className="text-xs font-medium text-muted-foreground">Ratio</label>
-                <input id="audience-ll-ratio" type="number" min={0.01} max={0.2} step={0.01} value={ratio} onChange={(e) => setRatio(Number(e.target.value))} className={cn(inputClass, "mt-1")} />
-              </div>
-            </>
-          )}
+							{/* Customer List fields */}
+							{type === "customer_list" && (
+								<>
+									<div>
+										<label
+											htmlFor="audience-cl-description"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Description
+										</label>
+										<input
+											id="audience-cl-description"
+											type="text"
+											placeholder="Optional description"
+											value={description}
+											onChange={(e) => setDescription(e.target.value)}
+											className={cn(inputClass, "mt-1")}
+										/>
+									</div>
+									<div>
+										<label
+											htmlFor="audience-cl-source"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Customer File Source
+										</label>
+										<input
+											id="audience-cl-source"
+											type="text"
+											placeholder="Optional source"
+											value={customerFileSource}
+											onChange={(e) => setCustomerFileSource(e.target.value)}
+											className={cn(inputClass, "mt-1")}
+										/>
+									</div>
+								</>
+							)}
 
-          {/* Error */}
-          {(error || createMutation.error) && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              {error || createMutation.error}
-            </div>
-          )}
-        </div>
+							{/* Website fields */}
+							{type === "website" && (
+								<>
+									<div>
+										<label
+											htmlFor="audience-web-description"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Description
+										</label>
+										<input
+											id="audience-web-description"
+											type="text"
+											placeholder="Optional description"
+											value={description}
+											onChange={(e) => setDescription(e.target.value)}
+											className={cn(inputClass, "mt-1")}
+										/>
+									</div>
+									<div>
+										<label
+											htmlFor="audience-web-pixel"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Pixel ID *
+										</label>
+										<input
+											id="audience-web-pixel"
+											type="text"
+											placeholder="Pixel ID"
+											value={pixelId}
+											onChange={(e) => setPixelId(e.target.value)}
+											className={cn(inputClass, "mt-1")}
+										/>
+									</div>
+									<div>
+										<label
+											htmlFor="audience-web-retention"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Retention Days
+										</label>
+										<input
+											id="audience-web-retention"
+											type="number"
+											min={1}
+											max={180}
+											value={retentionDays}
+											onChange={(e) => setRetentionDays(Number(e.target.value))}
+											className={cn(inputClass, "mt-1")}
+										/>
+									</div>
+									<div>
+										<label
+											htmlFor="audience-web-rule"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Rule
+										</label>
+										<textarea
+											id="audience-web-rule"
+											rows={3}
+											placeholder='Optional JSON object, for example {"url":{"contains":"pricing"}}'
+											value={rule}
+											onChange={(e) => setRule(e.target.value)}
+											className={cn(
+												inputClass,
+												"mt-1 h-auto resize-y py-2 font-mono",
+											)}
+										/>
+									</div>
+								</>
+							)}
 
-        <div className="flex justify-end gap-2 pt-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={createMutation.loading}>
-            Cancel
-          </Button>
-          <Button type="button" size="sm" onClick={handleSubmit} disabled={createMutation.loading || !adAccountId || !name.trim()}>
-            {createMutation.loading ? <Loader2 className="size-3.5 animate-spin" /> : "Create Audience"}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
+							{/* Lookalike fields */}
+							{type === "lookalike" && (
+								<>
+									<div>
+										<label
+											htmlFor="audience-ll-source"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Source Audience
+										</label>
+										<select
+											id="audience-ll-source"
+											value={sourceAudienceId}
+											onChange={(e) => setSourceAudienceId(e.target.value)}
+											className={cn(inputClass, "mt-1")}
+										>
+											<option value="">Select source audience</option>
+											{existingAudiences.map((a) => (
+												<option key={a.id} value={a.id}>
+													{a.name}
+												</option>
+											))}
+										</select>
+									</div>
+									<div>
+										<label
+											htmlFor="audience-ll-country"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Country (2-char code)
+										</label>
+										<input
+											id="audience-ll-country"
+											type="text"
+											maxLength={2}
+											placeholder="US"
+											value={country}
+											onChange={(e) => setCountry(e.target.value)}
+											className={cn(inputClass, "mt-1")}
+										/>
+									</div>
+									<div>
+										<label
+											htmlFor="audience-ll-ratio"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Ratio
+										</label>
+										<input
+											id="audience-ll-ratio"
+											type="number"
+											min={0.01}
+											max={0.2}
+											step={0.01}
+											value={ratio}
+											onChange={(e) => setRatio(Number(e.target.value))}
+											className={cn(inputClass, "mt-1")}
+										/>
+									</div>
+								</>
+							)}
+						</>
+					)}
+
+					{/* Error */}
+					{(error || createMutation.error) && (
+						<div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+							{error || createMutation.error}
+						</div>
+					)}
+				</div>
+
+				<div className="flex justify-end gap-2 pt-2">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => onOpenChange(false)}
+						disabled={createMutation.loading}
+					>
+						Cancel
+					</Button>
+					<Button
+						type="button"
+						size="sm"
+						onClick={handleSubmit}
+						disabled={
+							createMutation.loading ||
+							!canCreateAudience ||
+							!adAccountId ||
+							!name.trim()
+						}
+					>
+						{createMutation.loading ? (
+							<Loader2 className="size-3.5 animate-spin" />
+						) : (
+							"Create Audience"
+						)}
+					</Button>
+				</div>
+			</DialogContent>
+		</Dialog>
+	);
 }

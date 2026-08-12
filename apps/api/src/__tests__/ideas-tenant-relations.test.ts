@@ -153,6 +153,7 @@ function invalidRelationApp(relationRows: RelationRow[]) {
 	app.use("*", async (c, next) => {
 		c.set("orgId", "org_a");
 		c.set("keyId", "key_a");
+		c.set("principalId", "prn_a");
 		c.set("workspaceScope", "all");
 		c.set("db", db as never);
 		await next();
@@ -189,20 +190,23 @@ describe("Ideas transactional relation rejection", () => {
 			body: { group_id: "idg_foreign", expected_revision: 0 },
 			rows: [] as RelationRow[],
 		},
-	])("rejects foreign relations before any $name mutation", async (testCase) => {
-		const { app, calls } = invalidRelationApp(testCase.rows);
-		const response = await app.request(
-			testCase.path,
-			{
-				method: testCase.method,
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(testCase.body),
-			},
-			{} as Env,
-		);
+	])(
+		"rejects foreign relations before any $name mutation",
+		async (testCase) => {
+			const { app, calls } = invalidRelationApp(testCase.rows);
+			const response = await app.request(
+				testCase.path,
+				{
+					method: testCase.method,
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(testCase.body),
+				},
+				{} as Env,
+			);
 
-		expect(response.status).toBe(400);
-		expect(calls.transactions).toBe(1);
-		expect(calls.mutations).toBe(0);
-	});
+			expect(response.status).toBe(400);
+			expect(calls.transactions).toBe(1);
+			expect(calls.mutations).toBe(0);
+		},
+	);
 });

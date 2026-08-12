@@ -8,6 +8,22 @@ import { type HeadersLike } from './headers';
 
 export type FinalRequestOptions = RequestOptions & { method: HTTPMethod; path: string };
 
+export type MultipartFormDataOptions = {
+  /**
+   * How nested object property names are encoded in multipart field names.
+   *
+   * @default 'brackets'
+   */
+  objectFormat?: 'brackets' | 'dots';
+
+  /**
+   * How array values are encoded in multipart field names.
+   *
+   * @default 'brackets'
+   */
+  arrayFormat?: 'brackets' | 'indices' | 'repeat';
+};
+
 export type RequestOptions = {
   /**
    * The HTTP method for the request (e.g., 'get', 'post', 'put', 'delete').
@@ -30,6 +46,13 @@ export type RequestOptions = {
    * The request body. Can be a string, JSON object, FormData, or other supported types.
    */
   body?: unknown;
+
+  /**
+   * Controls nested multipart/form-data field names for upload requests.
+   * The defaults preserve Stainless's bracket encoding (`metadata[name]`,
+   * `tags[]`).
+   */
+  multipartFormData?: MultipartFormDataOptions;
 
   /**
    * HTTP headers to include with the request. Can be a Headers object, plain object, or array of tuples.

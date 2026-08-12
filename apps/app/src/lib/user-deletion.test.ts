@@ -1,32 +1,80 @@
 import { describe, expect, it } from "bun:test";
-import { apikey, member, session } from "@relayapi/db";
-import { prepareUserDeletion } from "./user-deletion";
+import {
+	account,
+	apikey,
+	emailDeliveries,
+	inviteTokens,
+	media,
+	member,
+	organization,
+	posts,
+	session,
+	user,
+} from "@relayapi/db";
+import type { AvatarObjectBucket } from "./avatar-object-keys";
+import type { QueueRescueErasureBucket } from "./queue-rescue-erasure";
+import { deleteUserAtomically } from "./user-deletion";
 
 type Row = Record<string, unknown>;
 
+function emptyQueueRescueBucket(): QueueRescueErasureBucket {
+	return {
+		list: async () => ({ objects: [], truncated: false }),
+		delete: async () => undefined,
+	};
+}
+
+function emptyAvatarBucket(): AvatarObjectBucket {
+	return {
+		list: async () => ({ objects: [], truncated: false }),
+		delete: async () => undefined,
+	};
+}
+
 function fakeDatabase(seed: {
+	users?: Row[];
 	memberships?: Row[];
 	ownerCandidates?: Row[];
+	activeOrganizations?: Row[];
 	keys?: Row[];
 }) {
 	let memberSelects = 0;
 	const deletedTables: unknown[] = [];
 	const updatedTables: Array<{ table: unknown; values: Row }> = [];
+	const rowsFor = (table: unknown): Row[] => {
+		if (table === user) return seed.users ?? [{ id: "user_1" }];
+		if (table === member) {
+			memberSelects += 1;
+			return memberSelects === 1
+				? (seed.memberships ?? [])
+				: (seed.ownerCandidates ?? []);
+		}
+		if (table === apikey) {
+			return (seed.keys ?? []).filter((key) => key.principalKind === "member");
+		}
+		if (table === organization) {
+			return (
+				seed.activeOrganizations ??
+				(seed.memberships ?? []).map((membership) => ({
+					id: membership.organizationId,
+				}))
+			);
+		}
+		return [];
+	};
 	const tx = {
 		select: () => ({
 			from: (table: unknown) => ({
-				where: () => ({
-					for: async () => {
-						if (table === member) {
-							memberSelects += 1;
-							return memberSelects === 1
-								? (seed.memberships ?? [])
-								: (seed.ownerCandidates ?? []);
-						}
-						if (table === apikey) return seed.keys ?? [];
-						return [];
-					},
-				}),
+				where: () => {
+					const selectedRows = rowsFor(table);
+					const query = Promise.resolve(selectedRows) as Promise<Row[]> & {
+						for: () => Promise<Row[]>;
+						limit: () => { for: () => Promise<Row[]> };
+					};
+					query.for = async () => selectedRows;
+					query.limit = () => ({ for: async () => selectedRows });
+					return query;
+				},
 			}),
 		}),
 		execute: async () => undefined,
@@ -45,8 +93,9 @@ function fakeDatabase(seed: {
 	};
 	return {
 		db: {
-			transaction: async <T>(callback: (transaction: typeof tx) => Promise<T>) =>
-				callback(tx),
+			transaction: async <T>(
+				callback: (transaction: typeof tx) => Promise<T>,
+			) => callback(tx),
 		},
 		deletedTables,
 		updatedTables,
@@ -57,7 +106,13 @@ describe("user deletion preparation", () => {
 	it("fails closed when cache invalidation is unavailable", async () => {
 		const { db } = fakeDatabase({});
 		await expect(
-			prepareUserDeletion(db as never, undefined, "user_1"),
+			deleteUserAtomically(
+				db as never,
+				undefined,
+				undefined,
+				undefined,
+				"user_1",
+			),
 		).rejects.toMatchObject({
 			status: "SERVICE_UNAVAILABLE",
 			body: { code: "IDENTITY_DELETION_UNAVAILABLE" },
@@ -74,7 +129,13 @@ describe("user deletion preparation", () => {
 		const kv = { delete: async () => undefined };
 
 		await expect(
-			prepareUserDeletion(db as never, kv, "user_1"),
+			deleteUserAtomically(
+				db as never,
+				kv,
+				emptyAvatarBucket(),
+				emptyQueueRescueBucket(),
+				"user_1",
+			),
 		).rejects.toMatchObject({
 			status: "CONFLICT",
 			body: {
@@ -85,7 +146,55 @@ describe("user deletion preparation", () => {
 		expect(deletedTables).toHaveLength(0);
 	});
 
-	it("revokes user-bound keys and detaches service-key attribution", async () => {
+	it("allows a sole owner to leave an organization already being erased", async () => {
+		const { db, deletedTables } = fakeDatabase({
+			memberships: [{ organizationId: "org_1", role: "owner" }],
+			activeOrganizations: [],
+		});
+		const kv = { delete: async () => undefined };
+
+		await deleteUserAtomically(
+			db as never,
+			kv,
+			emptyAvatarBucket(),
+			emptyQueueRescueBucket(),
+			"user_1",
+		);
+		expect(deletedTables).toContain(user);
+	});
+
+	it("does not mutate the database when KV invalidation fails", async () => {
+		const { db, deletedTables, updatedTables } = fakeDatabase({
+			keys: [
+				{
+					id: "key_1",
+					key: "hash_1",
+					organizationId: "org_1",
+					principalId: "prn_member_1",
+					principalKind: "member",
+				},
+			],
+		});
+		const kv = {
+			delete: async () => {
+				throw new Error("KV unavailable");
+			},
+		};
+
+		await expect(
+			deleteUserAtomically(
+				db as never,
+				kv,
+				emptyAvatarBucket(),
+				emptyQueueRescueBucket(),
+				"user_1",
+			),
+		).rejects.toThrow("KV unavailable");
+		expect(deletedTables).toHaveLength(0);
+		expect(updatedTables).toHaveLength(0);
+	});
+
+	it("atomically removes login data and preserves content attribution safely", async () => {
 		const { db, deletedTables, updatedTables } = fakeDatabase({
 			memberships: [{ organizationId: "org_1", role: "owner" }],
 			ownerCandidates: [
@@ -97,13 +206,15 @@ describe("user deletion preparation", () => {
 					id: "key_1",
 					key: "hash_1",
 					organizationId: "org_1",
-					metadata: { principal_type: "dashboard_user" },
+					principalId: "prn_member_1",
+					principalKind: "member",
 				},
 				{
 					id: "key_2",
 					key: "hash_2",
 					organizationId: "org_1",
-					metadata: { principal_type: "service" },
+					principalId: "prn_service_1",
+					principalKind: "service",
 				},
 			],
 		});
@@ -114,13 +225,44 @@ describe("user deletion preparation", () => {
 			},
 		};
 
-		await prepareUserDeletion(db as never, kv, "user_1");
+		await deleteUserAtomically(
+			db as never,
+			kv,
+			emptyAvatarBucket(),
+			emptyQueueRescueBucket(),
+			"user_1",
+		);
 
 		expect(deletedTables).toContain(apikey);
+		expect(deletedTables).toContain(inviteTokens);
 		expect(deletedTables).toContain(session);
+		expect(deletedTables).toContain(account);
+		expect(deletedTables).toContain(user);
+		expect(deletedTables).not.toContain(member);
 		expect(updatedTables).toContainEqual({
 			table: apikey,
 			values: expect.objectContaining({ referenceId: null }),
+		});
+		expect(updatedTables).toContainEqual({
+			table: inviteTokens,
+			values: { redeemedByUserId: null },
+		});
+		expect(updatedTables).toContainEqual({
+			table: media,
+			values: { uploadedBy: null },
+		});
+		expect(updatedTables).toContainEqual({
+			table: posts,
+			values: { createdBy: null },
+		});
+		expect(updatedTables).toContainEqual({
+			table: emailDeliveries,
+			values: expect.objectContaining({
+				subjectUserId: null,
+				envelopeCiphertext: null,
+				envelopeKeyId: null,
+				error: "recipient_identity_erased",
+			}),
 		});
 		expect(deletedCacheKeys.sort()).toEqual([
 			"apikey:hash_1",

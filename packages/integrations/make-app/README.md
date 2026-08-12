@@ -1,18 +1,18 @@
 # RelayAPI Make.com App
 
-Official Make.com (formerly Integromat) app for RelayAPI — post to 21 platforms.
+Official Make.com (formerly Integromat) app for RelayAPI — post to 22 platforms.
 
 ## Modules
 
 ### Actions (9)
-- **Create Post** — Publish or schedule to any platform
+- **Create Post** — Publish or schedule to any platform with validated JSON `target_options` and image, video, GIF, document, or audio media
 - **Get Post** — Retrieve by ID
 - **List Posts** — Filter by status, paginated
 - **Update Post** — Edit draft/scheduled posts
 - **Delete Post** — Remove draft/scheduled/failed posts
 - **List Accounts** — All connected social accounts
 - **Get Account Health** — Token & permission status
-- **Presign Media URL** — Upload media files
+- **Presign Media URL** — Create a pending upload intent; the scenario must PUT the bytes and confirm it
 - **Get Usage** — Plan & usage stats
 
 ### Instant Triggers (4)
@@ -24,7 +24,7 @@ Official Make.com (formerly Integromat) app for RelayAPI — post to 21 platform
 ### RPCs (3)
 - **List Accounts** — Dynamic dropdown for target selection
 - **List Platforms** — Static platform list
-- **List Workspaces** — Dynamic dropdown for groups
+- **List Workspaces** — Dynamic dropdown for workspaces
 
 ## Publishing
 

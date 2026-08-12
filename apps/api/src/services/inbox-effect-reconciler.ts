@@ -1,44 +1,20 @@
 import { createDb, inboxEventEffects, queueFailures } from "@relayapi/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { mapConcurrently } from "../lib/concurrency";
+import { encryptQueueFailurePayload } from "../queues/failures";
 import type { NormalizedInboxQueueMessage } from "../routes/platform-webhooks";
 import type { Env } from "../types";
+import { processInboxEvent } from "./inbox-event-processor";
 
 const MAX_RECONCILE_BATCH = 100;
 const REPLAY_RESERVATION_MS = 5 * 60_000;
 const REPLAY_FAILURE_DELAY_MS = 30_000;
 const INBOX_QUEUE_NAME = "relayapi-inbox";
-const MAX_QUEUE_MESSAGE_BYTES = 120 * 1024;
-const MAX_QUEUE_BATCH_BYTES = 240 * 1024;
-
-export function chunkInboxReplayEntries<T extends { bytes: number }>(
-	entries: T[],
-): { chunks: T[][]; oversized: T[] } {
-	const chunks: T[][] = [];
-	const oversized: T[] = [];
-	let chunk: T[] = [];
-	let chunkBytes = 0;
-	for (const entry of entries) {
-		if (entry.bytes > MAX_QUEUE_MESSAGE_BYTES) {
-			oversized.push(entry);
-			continue;
-		}
-		if (
-			chunk.length >= 100 ||
-			(chunk.length > 0 && chunkBytes + entry.bytes > MAX_QUEUE_BATCH_BYTES)
-		) {
-			chunks.push(chunk);
-			chunk = [];
-			chunkBytes = 0;
-		}
-		chunk.push(entry);
-		chunkBytes += entry.bytes;
-	}
-	if (chunk.length > 0) chunks.push(chunk);
-	return { chunks, oversized };
-}
+const REPLAY_CONCURRENCY = 4;
 
 async function recordUnknownInboxEffects(
 	db: ReturnType<typeof createDb>,
+	env: Env,
 	limit: number,
 ): Promise<number> {
 	return db.transaction(async (tx) => {
@@ -70,23 +46,33 @@ async function recordUnknownInboxEffects(
 			error: string | null;
 		}>;
 		if (unknown.length === 0) return 0;
+		const encryptedPayloads = await Promise.all(
+			unknown.map((effect) =>
+				encryptQueueFailurePayload(
+					env,
+					INBOX_QUEUE_NAME,
+					`effect:${effect.id}`,
+					{
+						type: "inbox_effect_reconciliation",
+						effect_id: effect.id,
+						effect: effect.effect,
+						replay_payload: effect.replay_payload,
+					},
+				),
+			),
+		);
 
 		await tx
 			.insert(queueFailures)
 			.values(
-				unknown.map((effect) => ({
+				unknown.map((effect, index) => ({
 					queueName: INBOX_QUEUE_NAME,
 					messageId: `effect:${effect.id}`,
 					organizationIds: [effect.organization_id],
 					operationId: effect.id,
 					failureKind: "unknown_external_outcome" as const,
 					attempts: effect.attempts,
-					payload: {
-						type: "inbox_effect_reconciliation",
-						effect_id: effect.id,
-						effect: effect.effect,
-						replay_payload: effect.replay_payload,
-					},
+					...encryptedPayloads[index],
 					error:
 						effect.error ?? "Inbound effect outcome requires reconciliation",
 				})),
@@ -107,10 +93,10 @@ async function recordUnknownInboxEffects(
 }
 
 /**
- * Recover inbox effects that died before their side-effect boundary and enqueue
- * their persisted source message. Effects whose boundary marker was written are
- * moved to `unknown`; replaying those automatically could duplicate a message,
- * automation action, or realtime notification.
+ * Recover inbox effects that died before their side-effect boundary and replay
+ * their persisted source directly. The database row already owns the payload;
+ * another Queue copy would duplicate personal data without adding durability.
+ * Effects whose boundary marker was written move to `unknown`.
  */
 export async function reconcileInboxEventEffects(
 	env: Env,
@@ -186,7 +172,7 @@ export async function reconcileInboxEventEffects(
 	// persisted payloads before handoff so reconciliation does not amplify load.
 	const uniqueMessages = new Map<
 		string,
-		{ body: NormalizedInboxQueueMessage; effectIds: string[]; bytes: number }
+		{ body: NormalizedInboxQueueMessage; effectIds: string[] }
 	>();
 	for (const row of due) {
 		const key = JSON.stringify(row.replay_payload);
@@ -197,7 +183,6 @@ export async function reconcileInboxEventEffects(
 			uniqueMessages.set(key, {
 				body: row.replay_payload,
 				effectIds: [row.id],
-				bytes: new TextEncoder().encode(key).byteLength,
 			});
 		}
 	}
@@ -205,57 +190,40 @@ export async function reconcileInboxEventEffects(
 	let replayedMessages = 0;
 	if (uniqueMessages.size > 0) {
 		const entries = [...uniqueMessages.values()];
-		const { chunks, oversized } = chunkInboxReplayEntries(entries);
-		if (oversized.length > 0) {
+		const outcomes = await mapConcurrently(
+			entries,
+			REPLAY_CONCURRENCY,
+			async (entry) => {
+				try {
+					await processInboxEvent(entry.body, env, db);
+					return { entry, error: null };
+				} catch (error) {
+					return { entry, error };
+				}
+			},
+		);
+		for (const outcome of outcomes) {
+			if (!outcome.error) {
+				replayedMessages += 1;
+				continue;
+			}
 			await db
 				.update(inboxEventEffects)
 				.set({
-					status: "unknown",
-					error: "Persisted inbox replay payload exceeds Queue size limit",
+					nextAttemptAt: new Date(Date.now() + REPLAY_FAILURE_DELAY_MS),
+					error: (outcome.error instanceof Error
+						? outcome.error.message
+						: String(outcome.error)
+					).slice(0, 1_000),
 					updatedAt: new Date(),
 				})
 				.where(
 					and(
-						inArray(
-							inboxEventEffects.id,
-							oversized.flatMap(({ effectIds }) => effectIds),
-						),
+						inArray(inboxEventEffects.id, outcome.entry.effectIds),
 						eq(inboxEventEffects.status, "pending"),
 						eq(inboxEventEffects.lastEnqueuedAt, reservedAt),
 					),
 				);
-		}
-
-		for (let index = 0; index < chunks.length; index++) {
-			const current = chunks[index] ?? [];
-			try {
-				await env.INBOX_QUEUE.sendBatch(current.map(({ body }) => ({ body })));
-				replayedMessages += current.length;
-			} catch (error) {
-				const unsentIds = chunks
-					.slice(index)
-					.flatMap((batch) => batch.flatMap(({ effectIds }) => effectIds));
-				if (unsentIds.length > 0) {
-					await db
-						.update(inboxEventEffects)
-						.set({
-							nextAttemptAt: new Date(Date.now() + REPLAY_FAILURE_DELAY_MS),
-							error: (error instanceof Error
-								? error.message
-								: String(error)
-							).slice(0, 1_000),
-							updatedAt: new Date(),
-						})
-						.where(
-							and(
-								inArray(inboxEventEffects.id, unsentIds),
-								eq(inboxEventEffects.status, "pending"),
-								eq(inboxEventEffects.lastEnqueuedAt, reservedAt),
-							),
-						);
-				}
-				throw error;
-			}
 		}
 	}
 
@@ -270,7 +238,7 @@ export async function reconcileInboxEventEffects(
 			}),
 		);
 	}
-	const unknownRecorded = await recordUnknownInboxEffects(db, batchSize);
+	const unknownRecorded = await recordUnknownInboxEffects(db, env, batchSize);
 	return {
 		recoveredPending: recovered.length - markedUnknown,
 		markedUnknown,

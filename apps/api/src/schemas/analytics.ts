@@ -18,7 +18,41 @@ const optionalDateString = (description: string) =>
 		.optional()
 		.describe(description);
 
+const MAX_TIME_SERIES_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
+
+function validateTimeSeriesDateRange(
+	value: { from_date?: string; to_date?: string },
+	ctx: {
+		addIssue: (issue: {
+			code: "custom";
+			message: string;
+			path: string[];
+		}) => void;
+	},
+): void {
+	const to = value.to_date ? Date.parse(value.to_date) : Date.now();
+	const from = value.from_date
+		? Date.parse(value.from_date)
+		: to - MAX_TIME_SERIES_RANGE_MS;
+	if (from > to) {
+		ctx.addIssue({
+			code: "custom",
+			message: "to_date must be on or after from_date",
+			path: ["to_date"],
+		});
+		return;
+	}
+	if (to - from > MAX_TIME_SERIES_RANGE_MS) {
+		ctx.addIssue({
+			code: "custom",
+			message: "Analytics time-series ranges cannot exceed 366 days",
+			path: ["to_date"],
+		});
+	}
+}
+
 export const AnalyticsQuery = z.object({
+	workspace_id: z.string().optional().describe("Filter by workspace ID"),
 	platform: PlatformEnum.optional().describe("Filter by platform"),
 	account_id: z.string().optional().describe("Filter by account ID"),
 	post_id: z.string().optional().describe("Filter by post ID"),
@@ -34,12 +68,15 @@ export const AnalyticsQuery = z.object({
 	offset: z.coerce.number().int().min(0).default(0).describe("Offset"),
 });
 
-export const DailyMetricsQuery = z.object({
-	platform: PlatformEnum.optional().describe("Filter by platform"),
-	account_id: z.string().optional().describe("Filter by account ID"),
-	from_date: optionalDateString("Start date (ISO 8601)"),
-	to_date: optionalDateString("End date (ISO 8601)"),
-});
+export const DailyMetricsQuery = z
+	.object({
+		workspace_id: z.string().optional().describe("Filter by workspace ID"),
+		platform: PlatformEnum.optional().describe("Filter by platform"),
+		account_id: z.string().optional().describe("Filter by account ID"),
+		from_date: optionalDateString("Start date (ISO 8601)"),
+		to_date: optionalDateString("End date (ISO 8601)"),
+	})
+	.superRefine(validateTimeSeriesDateRange);
 
 export const ContentDecayQuery = z.object({
 	post_id: z.string().describe("Post ID to analyze decay for"),
@@ -52,24 +89,31 @@ export const ContentDecayQuery = z.object({
 		.describe("Number of days to analyze"),
 });
 
-export const PostTimelineQuery = z.object({
-	post_id: z.string().describe("Post ID"),
-	from_date: optionalDateString("Start date (ISO 8601)"),
-	to_date: optionalDateString("End date (ISO 8601)"),
-});
+export const PostTimelineQuery = z
+	.object({
+		post_id: z.string().describe("Post ID"),
+		from_date: optionalDateString("Start date (ISO 8601)"),
+		to_date: optionalDateString("End date (ISO 8601)"),
+	})
+	.superRefine(validateTimeSeriesDateRange);
 
-export const PostingFrequencyQuery = z.object({
-	platform: PlatformEnum.optional().describe("Filter by platform"),
-	account_id: z.string().optional().describe("Filter by account ID"),
-	from_date: optionalDateString("Start date (ISO 8601)"),
-	to_date: optionalDateString("End date (ISO 8601)"),
-});
+export const PostingFrequencyQuery = z
+	.object({
+		workspace_id: z.string().optional().describe("Filter by workspace ID"),
+		platform: PlatformEnum.optional().describe("Filter by platform"),
+		account_id: z.string().optional().describe("Filter by account ID"),
+		from_date: optionalDateString("Start date (ISO 8601)"),
+		to_date: optionalDateString("End date (ISO 8601)"),
+	})
+	.superRefine(validateTimeSeriesDateRange);
 
-export const YouTubeDailyViewsQuery = z.object({
-	account_id: z.string().describe("YouTube account ID"),
-	from_date: optionalDateString("Start date (ISO 8601)"),
-	to_date: optionalDateString("End date (ISO 8601)"),
-});
+export const YouTubeDailyViewsQuery = z
+	.object({
+		account_id: z.string().describe("YouTube account ID"),
+		from_date: optionalDateString("Start date (ISO 8601)"),
+		to_date: optionalDateString("End date (ISO 8601)"),
+	})
+	.superRefine(validateTimeSeriesDateRange);
 
 // --- Response schemas ---
 
@@ -100,6 +144,12 @@ export const AnalyticsOverview = z.object({
 export const AnalyticsResponse = z.object({
 	data: z.array(PostAnalytics),
 	overview: AnalyticsOverview.optional(),
+	has_more: z.boolean().describe("Whether another result page is available"),
+	next_offset: z
+		.number()
+		.int()
+		.nullable()
+		.describe("Offset for the next page, or null when complete"),
 	truncated: z
 		.boolean()
 		.optional()

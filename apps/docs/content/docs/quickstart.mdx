@@ -6,15 +6,15 @@ icon: Rocket
 
 ## Overview
 
-RelayAPI is a unified API that lets you post to 21 social media platforms with a single API call. Connect your social accounts, create posts, and publish everywhere — all through one consistent interface.
+RelayAPI is a unified API that lets you publish to 22 social, messaging, SMS, and newsletter channels with a single API call. Connect your accounts, create posts, and publish everywhere through one consistent interface.
 
 ## Authentication
 
-Sign up at [relayapi.dev](https://relayapi.dev) and create an API key from your dashboard.
+Hosted signup is currently invite-only. Existing hosted users can [sign in](https://relayapi.dev/login); everyone else can [request early access](mailto:support@relayapi.dev?subject=RelayAPI%20early%20access) or follow the [self-hosting guide](/guides/self-hosting). After you have an instance, create an API key from its dashboard.
 
 ### Getting Your API Key
 
-1. Log in to your RelayAPI account at [relayapi.dev](https://relayapi.dev)
+1. Log in to your hosted or self-hosted RelayAPI dashboard
 2. Go to **Settings > API Keys**
 3. Click **Create API Key**
 4. Copy the key immediately — you won't be able to see it again
@@ -23,7 +23,9 @@ Sign up at [relayapi.dev](https://relayapi.dev) and create an API key from your 
 
 API keys are prefixed with `rlay_live_` for production or `rlay_test_` for testing. Keys are stored as SHA-256 hashes and are only shown once at creation.
 
-## Install the SDK
+## Choose a client
+
+The TypeScript SDK is the canonical current client. Go and Java clients are generated and released separately. RelayAPI does not currently publish a Python package; the Python examples below use the REST API directly.
 
 <Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
 <Tab value="TypeScript">
@@ -32,9 +34,7 @@ npm install @relayapi/sdk
 ```
 </Tab>
 <Tab value="Python">
-```bash
-pip install relay
-```
+No package installation is required when using Python's standard library. See [Python REST and OpenAPI](/sdks/python) for a reusable helper and client-generation guidance.
 </Tab>
 <Tab value="Go">
 ```bash
@@ -66,9 +66,26 @@ const client = new Relay(); // reads RELAY_API_KEY from environment
 </Tab>
 <Tab value="Python">
 ```python
-from relay import Relay
+import json
+import os
+from urllib.request import Request, urlopen
 
-client = Relay()  # reads RELAY_API_KEY from environment
+base_url = os.getenv("RELAY_BASE_URL", "https://api.relayapi.dev").rstrip("/")
+api_key = os.environ["RELAY_API_KEY"]
+
+def relay_request(method, path, payload=None):
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        f"{base_url}{path}",
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        },
+    )
+    with urlopen(request, timeout=60) as response:
+        return json.load(response)
 ```
 </Tab>
 <Tab value="Go">
@@ -107,8 +124,8 @@ const flow = await client.connect.startOAuthFlow('twitter');
 </Tab>
 <Tab value="Python">
 ```python
-flow = client.connect.start_oauth_flow('twitter')
-# Redirect user to flow.auth_url to authorize
+flow = relay_request("GET", "/v1/connect/twitter")
+# Redirect user to flow["auth_url"] to authorize
 ```
 </Tab>
 <Tab value="Go">
@@ -152,14 +169,18 @@ console.log(post.status); // "published"
 </Tab>
 <Tab value="Python">
 ```python
-post = client.posts.create(
-    content='Hello from RelayAPI!',
-    targets=['twitter', 'linkedin'],
-    scheduled_at='now',
+post = relay_request(
+    "POST",
+    "/v1/posts",
+    {
+        "content": "Hello from RelayAPI!",
+        "targets": ["twitter", "linkedin"],
+        "scheduled_at": "now",
+    },
 )
 
-print(post.id)      # "post_abc123"
-print(post.status)  # "published"
+print(post["id"])      # "post_abc123"
+print(post["status"])  # "published"
 ```
 </Tab>
 <Tab value="Go">
@@ -222,11 +243,15 @@ const post = await client.posts.create({
 </Tab>
 <Tab value="Python">
 ```python
-post = client.posts.create(
-    content='Scheduled post!',
-    targets=['twitter'],
-    scheduled_at='2024-01-16T12:00:00',
-    timezone='America/New_York',
+post = relay_request(
+    "POST",
+    "/v1/posts",
+    {
+        "content": "Scheduled post!",
+        "targets": ["twitter"],
+        "scheduled_at": "2024-01-16T12:00:00",
+        "timezone": "America/New_York",
+    },
 )
 ```
 </Tab>
@@ -279,13 +304,20 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 | Reddit | ✅ | ✅ | ✅ | ✅ |
 | Bluesky | ✅ | ✅ | ✅ | ✅ |
 | Threads | ✅ | ✅ | ✅ | ✅ |
-| Telegram | ✅ | ✅ | ✅ | ✅ |
-| Snapchat | ✅ | ✅ | ✅ | ✅ |
+| Telegram | ✅ | ✅ | ✅ | — |
+| Snapchat | ✅ | ✅ | ✅ | — |
 | Discord | ✅ | ✅ | ✅ | — |
+| Slack | ✅ | ✅ | ✅ | — |
 | Mastodon | ✅ | ✅ | ✅ | — |
-| WhatsApp | ✅ | ✅ | ✅ | — |
+| WhatsApp | ✅ | ✅ | ✅ | ✅ |
 | Google Business | ✅ | ✅ | ✅ | ✅ |
 | SMS | ✅ | ✅ | ✅ | — |
+| Beehiiv | ✅ | ✅ | Varies | — |
+| Kit (ConvertKit) | ✅ | ✅ | Varies | — |
+| Mailchimp | ✅ | ✅ | Varies | — |
+| Listmonk | ✅ | ✅ | Varies | — |
+
+The Analytics column means a live native account adapter. Stored cross-platform post metrics may still be available when RelayAPI has collected a snapshot. Provider account type, review, scopes, and media policy can narrow any capability; consult the relevant [platform guide](/platforms) before depending on it.
 
 ## What's Next?
 

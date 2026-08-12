@@ -1,19 +1,19 @@
 ---
-title: SDKs
-description: Official SDKs and client libraries for the RelayAPI — TypeScript, Python, Go, and Java.
+title: SDKs and client options
+description: Use RelayAPI from the canonical TypeScript SDK, separately released Go and Java clients, Python REST, or any OpenAPI-compatible tool.
 icon: Package
 ---
 
-RelayAPI ships official, fully-typed client libraries for four languages. Each SDK reads your API key from the `RELAY_API_KEY` environment variable and gives you the same surface — posts, accounts, media, analytics, and connections — across all 21 platforms.
+`@relayapi/sdk` is the canonical, current client for this repository and tracks the checked-in RelayAPI OpenAPI contract. Go and Java clients are generated and released separately from their own repositories; use their release notes as the authority for the exact surface in a published version. RelayAPI does not currently publish a Python package. Python users should call the REST API directly or generate a private client from the OpenAPI document.
 
 | SDK | Guide | Package / Repo |
 |---|---|---|
 | TypeScript / Node.js | [TypeScript SDK](/sdks/typescript) | [`@relayapi/sdk`](https://www.npmjs.com/package/@relayapi/sdk) |
-| Python | [Python SDK](/sdks/python) | [`relay`](https://pypi.org/project/relay/) |
-| Go | [Go SDK](/sdks/go) | [relay-go](https://github.com/relayapi-dev/relay-go) |
-| Java | [Java SDK](/sdks/java) | [relay-java](https://github.com/relayapi-dev/relay-java) |
+| Python | [Python REST/OpenAPI](/sdks/python) | No RelayAPI package is currently published |
+| Go | [Go SDK](/sdks/go) | [Separately released relay-go](https://github.com/relayapi-dev/relay-go) |
+| Java | [Java SDK](/sdks/java) | [Separately released relay-java](https://github.com/relayapi-dev/relay-java) |
 
-New to RelayAPI? Start with the [Quickstart](/quickstart) for a side-by-side walkthrough in every language.
+New to RelayAPI? Start with the [Quickstart](/quickstart) for TypeScript, Python REST, Go, Java, and curl examples.
 
 ## REST API
 

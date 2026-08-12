@@ -6,15 +6,18 @@ import {
 	adAccounts,
 	adAudiences,
 	adAudienceUsers,
+	adConnections,
 	createDb,
 	eq,
 	socialAccounts,
 } from "@relayapi/db";
 import { and, sql } from "drizzle-orm";
+import { normalizeContactPhone } from "../lib/contact-phone";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import { getAdPlatformAdapter } from "./ad-platforms";
 import { AdPlatformError } from "./ad-platforms/types";
+import { requireAdCapability } from "./ad-platforms/unsupported";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,10 +41,12 @@ async function getAdAccountWithToken(
 	const [result] = await db
 		.select({
 			adAccount: adAccounts,
+			adConnection: adConnections,
 			socialAccount: socialAccounts,
 		})
 		.from(adAccounts)
-		.innerJoin(
+		.leftJoin(adConnections, eq(adAccounts.adConnectionId, adConnections.id))
+		.leftJoin(
 			socialAccounts,
 			and(
 				eq(adAccounts.socialAccountId, socialAccounts.id),
@@ -49,15 +54,25 @@ async function getAdAccountWithToken(
 			),
 		)
 		.where(
-			and(eq(adAccounts.id, adAccountId), eq(adAccounts.organizationId, orgId)),
+			and(
+				eq(adAccounts.id, adAccountId),
+				eq(adAccounts.organizationId, orgId),
+				eq(adAccounts.status, "active"),
+			),
 		)
 		.limit(1);
 
 	if (!result) return null;
 
-	const accessToken = await resolveAdsAccessToken(result.socialAccount, env);
+	const credentials = await resolveAdProviderCredentials({
+		platform: result.adAccount.platform,
+		providerAdAccountId: result.adAccount.platformAdAccountId,
+		adConnection: result.adConnection,
+		legacySocialAccount: result.socialAccount,
+		env,
+	});
 
-	return { ...result, accessToken };
+	return { ...result, accessToken: credentials.accessToken, credentials };
 }
 
 // ---------------------------------------------------------------------------
@@ -89,12 +104,14 @@ export async function discoverAudiences(
 			`No adapter for ad platform "${ctx.adAccount.platform}"`,
 		);
 	}
+	requireAdCapability(adapter, "audience_discovery");
 
 	// Pass the platform-side ad account id (e.g. Meta "act_…"), but store rows
 	// under the internal adAccountId so the list query matches.
 	const platformAudiences = await adapter.listAudiences(
 		ctx.accessToken,
 		ctx.adAccount.platformAdAccountId,
+		ctx.credentials,
 	);
 
 	if (platformAudiences.length === 0) return;
@@ -158,6 +175,7 @@ export async function createAudience(
 
 	const adapter = getAdPlatformAdapter(ctx.adAccount.platform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
+	requireAdCapability(adapter, "audience_create");
 
 	// Resolve source audience's platform ID for lookalike
 	let platformSourceAudienceId: string | undefined;
@@ -203,6 +221,7 @@ export async function createAudience(
 			ratio: params.ratio,
 			customerFileSource: params.customerFileSource,
 		},
+		ctx.credentials,
 	);
 
 	const [audience] = await db
@@ -241,6 +260,29 @@ export async function createAudience(
 // Upload users to audience
 // ---------------------------------------------------------------------------
 
+export interface HashedAudienceUser {
+	emailHash?: string;
+	phoneHash?: string;
+}
+
+/**
+ * Preserve SQL NULL for an absent identifier. Empty-string sentinels make the
+ * partial unique index treat every email-only (or phone-only) member as the
+ * same opposite identifier and silently discard valid audience members.
+ */
+export function storedAudienceUsers(
+	audienceId: string,
+	hashedUsers: readonly HashedAudienceUser[],
+) {
+	return hashedUsers
+		.filter((user) => user.emailHash || user.phoneHash)
+		.map((user) => ({
+			audienceId,
+			emailHash: user.emailHash ?? null,
+			phoneHash: user.phoneHash ?? null,
+		}));
+}
+
 export async function addUsersToAudience(
 	env: Env,
 	orgId: string,
@@ -276,24 +318,25 @@ export async function addUsersToAudience(
 
 	// Hash user data
 	const hashedUsers = await Promise.all(
-		users.map(async (u) => ({
-			emailHash: u.email
-				? await sha256(u.email.trim().toLowerCase())
-				: undefined,
-			phoneHash: u.phone ? await sha256(u.phone.replace(/\D/g, "")) : undefined,
-		})),
+		users.map(async (u) => {
+			const phoneCanonical = u.phone
+				? normalizeContactPhone(u.phone, { allowBareInternational: true })
+				: null;
+			return {
+				emailHash: u.email
+					? await sha256(u.email.trim().toLowerCase())
+					: undefined,
+				// Meta expects country-code digits before hashing, without the E.164
+				// presentation plus. Canonicalize first so formatting variants agree.
+				phoneHash: phoneCanonical
+					? await sha256(phoneCanonical.slice(1))
+					: undefined,
+			};
+		}),
 	);
 
-	// Batch insert into DB (dedup via unique index)
-	// Use empty string instead of NULL so the unique index deduplicates correctly
-	// (PostgreSQL treats NULLs as distinct in unique indexes)
-	const validUsers = hashedUsers
-		.filter((hu) => hu.emailHash || hu.phoneHash)
-		.map((hu) => ({
-			audienceId,
-			emailHash: hu.emailHash ?? "",
-			phoneHash: hu.phoneHash ?? "",
-		}));
+	// Batch insert into DB (dedup via the per-identifier partial unique indexes).
+	const validUsers = storedAudienceUsers(audienceId, hashedUsers);
 
 	let storedCount = 0;
 	const CHUNK = 500;
@@ -313,11 +356,13 @@ export async function addUsersToAudience(
 
 	const adapter = getAdPlatformAdapter(ctx.adAccount.platform);
 	if (!adapter) throw new AdPlatformError("UNSUPPORTED_PLATFORM", "No adapter");
+	requireAdCapability(adapter, "audience_upload");
 
 	const platformResult = await adapter.addUsersToAudience(
 		ctx.accessToken,
 		audience.platformAudienceId,
 		hashedUsers.filter((u) => u.emailHash || u.phoneHash),
+		ctx.credentials,
 	);
 
 	return {
@@ -359,19 +404,27 @@ export async function deleteAudience(
 			orgId,
 			env,
 		);
-		if (ctx) {
-			const adapter = getAdPlatformAdapter(ctx.adAccount.platform);
-			if (adapter) {
-				try {
-					await adapter.deleteAudience(
-						ctx.accessToken,
-						audience.platformAudienceId,
-					);
-				} catch {
-					// Best effort
-				}
-			}
+		if (!ctx) {
+			throw new AdPlatformError(
+				"NOT_FOUND",
+				"Ad account credentials are unavailable; provider audience was not deleted",
+			);
 		}
+		const adapter = getAdPlatformAdapter(ctx.adAccount.platform);
+		if (!adapter) {
+			throw new AdPlatformError(
+				"UNSUPPORTED_PLATFORM",
+				"Provider audience deletion is unavailable for this platform",
+			);
+		}
+		requireAdCapability(adapter, "audience_create");
+		// Provider deletion is authoritative. Never report local success while
+		// the provider may still retain and use the audience.
+		await adapter.deleteAudience(
+			ctx.accessToken,
+			audience.platformAudienceId,
+			ctx.credentials,
+		);
 	}
 
 	// Delete from DB (cascades to ad_audience_users)

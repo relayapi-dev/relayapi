@@ -1,6 +1,11 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { type createDb, signatures } from "@relayapi/db";
-import { and, desc, eq, lt, ne } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, lt, ne, sql } from "drizzle-orm";
+import {
+	decodeKeysetCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
 import { assertAllWorkspaceScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -78,6 +83,10 @@ const listSignatures = createRoute({
 		200: {
 			description: "List of signatures",
 			content: { "application/json": { schema: SignatureListResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -269,14 +278,23 @@ app.openapi(listSignatures, async (c) => {
 		conditions.push(eq(signatures.workspaceId, workspace_id));
 	}
 	if (cursor) {
-		conditions.push(lt(signatures.createdAt, new Date(cursor)));
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			decoded.kind === "composite"
+				? sql`(${signatures.createdAt}, ${signatures.id}) < (${decoded.timestamp}::timestamptz, ${decoded.id})`
+				: lt(signatures.createdAt, new Date(decoded.timestamp)),
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(signatures),
+			cursorTimestamp: sql<string>`to_char(${signatures.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(signatures)
 		.where(and(...conditions))
-		.orderBy(desc(signatures.createdAt))
+		.orderBy(desc(signatures.createdAt), desc(signatures.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -286,7 +304,12 @@ app.openapi(listSignatures, async (c) => {
 		{
 			data: data.map(serialize),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},

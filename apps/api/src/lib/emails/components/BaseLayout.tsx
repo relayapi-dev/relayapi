@@ -1,7 +1,6 @@
 import {
 	Body,
 	Container,
-	Font,
 	Head,
 	Hr,
 	Html,
@@ -21,18 +20,7 @@ interface BaseLayoutProps {
 export function BaseLayout({ preview, children }: BaseLayoutProps) {
 	return (
 		<Html>
-			<Head>
-				<Font
-					fontFamily="Inter"
-					fallbackFontFamily="Helvetica"
-					webFont={{
-						url: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
-						format: "woff2",
-					}}
-					fontWeight={400}
-					fontStyle="normal"
-				/>
-			</Head>
+			<Head />
 			<Preview>{preview}</Preview>
 			<Tailwind>
 				<Body className="bg-gray-50 my-0 mx-auto font-sans">

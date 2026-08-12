@@ -1,6 +1,11 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { segments } from "@relayapi/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { contactSegmentMemberships, segments } from "@relayapi/db";
+import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { resolveOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -10,10 +15,12 @@ import {
 import { ErrorResponse, PaginationParams } from "../schemas/common";
 import {
 	SegmentCreateSpec,
+	SegmentFilter,
 	SegmentListResponse,
 	SegmentResponse,
 	SegmentUpdateSpec,
 } from "../schemas/segments";
+import { getSegmentMemberCounts } from "../services/dynamic-segments";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -25,16 +32,19 @@ const ListQuery = PaginationParams.extend({
 
 type Row = typeof segments.$inferSelect;
 
-function serialize(s: Row): z.infer<typeof SegmentResponse> {
+function serialize(
+	s: Row,
+	memberCount = s.memberCount,
+): z.infer<typeof SegmentResponse> {
 	return {
 		id: s.id,
 		organization_id: s.organizationId,
 		workspace_id: s.workspaceId,
 		name: s.name,
 		description: s.description ?? null,
-		filter: s.filter,
+		filter: s.filter === null ? null : SegmentFilter.parse(s.filter),
 		is_dynamic: s.isDynamic,
-		member_count: s.memberCount,
+		member_count: memberCount,
 		created_at: s.createdAt.toISOString(),
 		updated_at: s.updatedAt.toISOString(),
 	};
@@ -80,13 +90,14 @@ app.openapi(createSegment, async (c) => {
 			workspaceId: scope.workspaceId,
 			name: body.name,
 			description: body.description,
-			filter: body.filter,
+			filter: body.filter ?? null,
 			isDynamic: body.is_dynamic,
 		})
 		.returning();
 
 	if (!row) throw new Error("Failed to create segment");
-	return c.json(serialize(row), 201);
+	const counts = await getSegmentMemberCounts(db, [row]);
+	return c.json(serialize(row, counts.get(row.id)), 201);
 });
 
 const listSegments = createRoute({
@@ -101,6 +112,10 @@ const listSegments = createRoute({
 		200: {
 			description: "List",
 			content: { "application/json": { schema: SegmentListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
 });
@@ -119,31 +134,36 @@ app.openapi(listSegments, async (c) => {
 	// microseconds to millisecond precision and would skip rows sharing the cursor's
 	// millisecond. Bind it back with an explicit ::timestamptz cast.
 	if (cursor) {
-		const cursorRow = await db
-			.select({ createdAt: sql<string>`${segments.createdAt}::text` })
-			.from(segments)
-			.where(eq(segments.id, cursor))
-			.limit(1);
-		if (cursorRow[0]) {
-			conditions.push(
-				sql`(${segments.createdAt}, ${segments.id}) < (${cursorRow[0].createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${segments.createdAt}, ${segments.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(segments),
+			cursorTimestamp: sql<string>`to_char(${segments.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(segments)
 		.where(and(...conditions))
 		.orderBy(desc(segments.createdAt), desc(segments.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
-	const data = rows.slice(0, limit).map(serialize);
+	const pageRows = rows.slice(0, limit);
+	const last = pageRows.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
+	const counts = await getSegmentMemberCounts(db, pageRows);
+	const data = pageRows.map((row) => serialize(row, counts.get(row.id)));
 	return c.json(
 		{
 			data,
-			next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,
@@ -189,7 +209,8 @@ app.openapi(getSegment, async (c) => {
 	if (isWorkspaceScopeDenied(c, row.workspaceId)) {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
-	return c.json(serialize(row), 200);
+	const counts = await getSegmentMemberCounts(db, [row]);
+	return c.json(serialize(row, counts.get(row.id)), 200);
 });
 
 const updateSegment = createRoute({
@@ -207,6 +228,10 @@ const updateSegment = createRoute({
 		200: {
 			description: "Updated",
 			content: { "application/json": { schema: SegmentResponse } },
+		},
+		400: {
+			description: "Invalid segment definition",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		403: {
 			description: "Forbidden",
@@ -237,21 +262,71 @@ app.openapi(updateSegment, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
+	const nextIsDynamic = body.is_dynamic ?? row.isDynamic;
+	const nextFilter =
+		body.is_dynamic === false && body.filter === undefined
+			? null
+			: body.filter === undefined
+				? row.filter
+				: body.filter;
+	if (nextIsDynamic) {
+		const parsed = SegmentFilter.safeParse(nextFilter);
+		if (!parsed.success) {
+			return c.json(
+				{
+					error: {
+						code: "validation_error",
+						message: "A dynamic segment requires a valid filter",
+						details: parsed.error.flatten(),
+					},
+				},
+				400,
+			);
+		}
+	} else if (nextFilter !== null) {
+		return c.json(
+			{
+				error: {
+					code: "validation_error",
+					message: "Static segments store memberships, not a filter",
+				},
+			},
+			400,
+		);
+	}
+
 	const updates: Partial<typeof segments.$inferInsert> = {
 		updatedAt: new Date(),
+		filter: nextFilter,
+		isDynamic: nextIsDynamic,
 	};
 	if (body.name !== undefined) updates.name = body.name;
 	if (body.description !== undefined) updates.description = body.description;
-	if (body.filter !== undefined) updates.filter = body.filter;
-	if (body.is_dynamic !== undefined) updates.isDynamic = body.is_dynamic;
 
-	const [updated] = await db
-		.update(segments)
-		.set(updates)
-		.where(eq(segments.id, id))
-		.returning();
+	const updated = await db.transaction(async (tx) => {
+		// A static segment's stored rows stop being authoritative at the exact
+		// transaction that turns it dynamic. Delete them before the parent mode
+		// changes so the database's static-membership FK remains satisfied.
+		if (!row.isDynamic && nextIsDynamic) {
+			await tx
+				.delete(contactSegmentMemberships)
+				.where(
+					and(
+						eq(contactSegmentMemberships.organizationId, orgId),
+						eq(contactSegmentMemberships.segmentId, id),
+					),
+				);
+		}
+		const [result] = await tx
+			.update(segments)
+			.set(updates)
+			.where(and(eq(segments.id, id), eq(segments.organizationId, orgId)))
+			.returning();
+		return result;
+	});
 	if (!updated) throw new Error("Failed to update segment");
-	return c.json(serialize(updated), 200);
+	const counts = await getSegmentMemberCounts(db, [updated]);
+	return c.json(serialize(updated, counts.get(updated.id)), 200);
 });
 
 const deleteSegment = createRoute({

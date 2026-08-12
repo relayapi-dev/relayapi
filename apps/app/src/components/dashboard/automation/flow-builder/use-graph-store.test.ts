@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import {
-	EMPTY_GRAPH,
-	__test__,
-	generateNodeKey,
-} from "./use-graph-store";
 import type { AutomationGraph, AutomationNode } from "./graph-types";
+import { __test__, EMPTY_GRAPH, generateNodeKey } from "./use-graph-store";
 
 const { reducer, initialState, HISTORY_LIMIT, cloneGraph } = __test__;
 
@@ -19,12 +15,7 @@ function makeNode(key: string, x = 0, y = 0): AutomationNode {
 	};
 }
 
-function makeKindNode(
-	key: string,
-	kind: string,
-	x = 0,
-	y = 0,
-): AutomationNode {
+function makeKindNode(key: string, kind: string, x = 0, y = 0): AutomationNode {
 	return {
 		key,
 		kind,
@@ -35,7 +26,10 @@ function makeKindNode(
 	};
 }
 
-function graphWith(nodes: AutomationNode[], edges: AutomationGraph["edges"] = []): AutomationGraph {
+function graphWith(
+	nodes: AutomationNode[],
+	edges: AutomationGraph["edges"] = [],
+): AutomationGraph {
 	return {
 		schema_version: 1,
 		root_node_key: nodes[0]?.key ?? null,
@@ -87,10 +81,7 @@ describe("useGraphStore reducer — addNode", () => {
 
 	it("replaces an existing source edge and preserves the downstream target for single-output inserts", () => {
 		const graph = graphWith(
-			[
-				makeKindNode("source", "message"),
-				makeKindNode("done", "end"),
-			],
+			[makeKindNode("source", "message"), makeKindNode("done", "end")],
 			[
 				{
 					from_node: "source",
@@ -103,7 +94,7 @@ describe("useGraphStore reducer — addNode", () => {
 		const initial = initialState(graph);
 		const action = __test__.planAddNode(
 			graph,
-			"message",
+			"delay",
 			"n2",
 			{ x: 120, y: 40 },
 			{ sourceNodeKey: "source", sourcePortKey: "next" },
@@ -111,7 +102,11 @@ describe("useGraphStore reducer — addNode", () => {
 
 		const next = reducer(initial, action);
 
-		expect(next.graph.nodes.map((n) => n.key)).toEqual(["source", "done", "n2"]);
+		expect(next.graph.nodes.map((n) => n.key)).toEqual([
+			"source",
+			"done",
+			"n2",
+		]);
 		expect(next.graph.edges).toEqual([
 			{
 				from_node: "source",
@@ -131,10 +126,7 @@ describe("useGraphStore reducer — addNode", () => {
 
 	it("drops a terminal end node when replacing it with a multi-output insert", () => {
 		const graph = graphWith(
-			[
-				makeKindNode("source", "message"),
-				makeKindNode("done", "end"),
-			],
+			[makeKindNode("source", "message"), makeKindNode("done", "end")],
 			[
 				{
 					from_node: "source",

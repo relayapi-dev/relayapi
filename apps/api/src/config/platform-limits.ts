@@ -12,8 +12,12 @@ export interface PlatformMediaLimit {
 	maxImageSize: number; // bytes
 	maxGifSize?: number; // bytes — if different from maxImageSize
 	maxVideoSize: number; // bytes
+	maxDocumentSize?: number;
+	maxAudioSize?: number;
 	allowedImageTypes: string[];
 	allowedVideoTypes: string[];
+	allowedDocumentTypes?: string[];
+	allowedAudioTypes?: string[];
 }
 
 export interface PlatformLimits {
@@ -38,7 +42,8 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 		chars: { maxChars: 2200 },
 		media: {
 			maxImages: 10,
-			maxVideos: 1,
+			// Carousel containers support up to ten mixed image/video children.
+			maxVideos: 10,
 			maxImageSize: 8 * 1024 * 1024,
 			maxVideoSize: 100 * 1024 * 1024,
 			allowedImageTypes: ["image/jpeg", "image/png"],
@@ -65,6 +70,14 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 			maxVideoSize: 500 * 1024 * 1024,
 			allowedImageTypes: ["image/jpeg", "image/png", "image/gif"],
 			allowedVideoTypes: ["video/mp4"],
+			maxDocumentSize: 100 * 1024 * 1024,
+			allowedDocumentTypes: [
+				"application/pdf",
+				"application/msword",
+				"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+				"application/vnd.ms-powerpoint",
+				"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+			],
 		},
 	},
 	tiktok: {
@@ -73,15 +86,16 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 			maxImages: 35,
 			maxVideos: 1,
 			maxImageSize: 20 * 1024 * 1024,
-			maxVideoSize: 4 * 1024 * 1024 * 1024,
-			allowedImageTypes: [],
-			allowedVideoTypes: ["video/mp4", "video/webm"],
+			maxVideoSize: 4_000_000_000,
+			allowedImageTypes: ["image/jpeg", "image/webp"],
+			allowedVideoTypes: ["video/mp4", "video/quicktime", "video/webm"],
 		},
 	},
 	youtube: {
 		chars: { maxChars: 5000 },
 		media: {
-			maxImages: 0,
+			// One image may be supplied as the custom thumbnail alongside the video.
+			maxImages: 1,
 			maxVideos: 1,
 			maxImageSize: 2 * 1024 * 1024,
 			maxVideoSize: 256 * 1024 * 1024 * 1024,
@@ -95,9 +109,12 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 		},
 	},
 	pinterest: {
-		chars: { maxChars: 500 },
+		// Pinterest API v5 create-pin contract: description <= 800 chars;
+		// carousel media sources contain 2-5 images.
+		// https://developers.pinterest.com/docs/api/v5/pins-create/
+		chars: { maxChars: 800 },
 		media: {
-			maxImages: 1,
+			maxImages: 5,
 			maxVideos: 1,
 			maxImageSize: 20 * 1024 * 1024,
 			maxVideoSize: 2 * 1024 * 1024 * 1024,
@@ -108,10 +125,13 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 	reddit: {
 		chars: { maxChars: 40000 },
 		media: {
-			maxImages: 20,
+			// The generic OAuth publisher currently creates text/link submissions.
+			// One attachment may supply that link; native gallery/video upload is not
+			// claimed until Reddit documents it for this third-party app class.
+			maxImages: 1,
 			maxVideos: 1,
-			maxImageSize: 20 * 1024 * 1024,
-			maxVideoSize: 1024 * 1024 * 1024,
+			maxImageSize: Number.MAX_SAFE_INTEGER,
+			maxVideoSize: Number.MAX_SAFE_INTEGER,
 			allowedImageTypes: ["image/jpeg", "image/png", "image/gif"],
 			allowedVideoTypes: ["video/mp4"],
 		},
@@ -121,9 +141,11 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 		media: {
 			maxImages: 4,
 			maxVideos: 1,
-			maxImageSize: 1 * 1024 * 1024,
+			// Canonical app.bsky.embed.images Lexicon maxSize (decimal bytes):
+			// https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/embed/images.json
+			maxImageSize: 2_000_000,
 			maxVideoSize: 100 * 1024 * 1024,
-			allowedImageTypes: ["image/jpeg", "image/png"],
+			allowedImageTypes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
 			allowedVideoTypes: ["video/mp4"],
 		},
 	},
@@ -131,7 +153,8 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 		chars: { maxChars: 500 },
 		media: {
 			maxImages: 20,
-			maxVideos: 1,
+			// Threads carousels support 2-20 mixed image/video children.
+			maxVideos: 20,
 			maxImageSize: 8 * 1024 * 1024,
 			maxVideoSize: 100 * 1024 * 1024,
 			allowedImageTypes: ["image/jpeg", "image/png"],
@@ -142,11 +165,14 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 		chars: { maxChars: 4096 },
 		media: {
 			maxImages: 10,
-			maxVideos: 1,
+			// sendMediaGroup accepts 2-10 mixed photo/video items.
+			maxVideos: 10,
 			maxImageSize: 10 * 1024 * 1024,
 			maxVideoSize: 50 * 1024 * 1024,
 			allowedImageTypes: ["image/jpeg", "image/png", "image/gif"],
 			allowedVideoTypes: ["video/mp4"],
+			maxDocumentSize: 50 * 1024 * 1024,
+			allowedDocumentTypes: ["*/*"],
 		},
 	},
 	snapchat: {
@@ -163,7 +189,9 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 	googlebusiness: {
 		chars: { maxChars: 1500 },
 		media: {
-			maxImages: 10,
+			// The LocalPost adapter accepts one media item (photo or video) and
+			// sends it as the resource's media[] sourceUrl entry.
+			maxImages: 1,
 			maxVideos: 1,
 			maxImageSize: 5 * 1024 * 1024,
 			maxVideoSize: 75 * 1024 * 1024,
@@ -180,6 +208,25 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 			maxVideoSize: 16 * 1024 * 1024,
 			allowedImageTypes: ["image/jpeg", "image/png"],
 			allowedVideoTypes: ["video/mp4", "video/3gpp"],
+			maxDocumentSize: 100 * 1024 * 1024,
+			maxAudioSize: 16 * 1024 * 1024,
+			allowedDocumentTypes: [
+				"application/pdf",
+				"application/msword",
+				"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+				"application/vnd.ms-excel",
+				"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+				"application/vnd.ms-powerpoint",
+				"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+				"text/plain",
+			],
+			allowedAudioTypes: [
+				"audio/aac",
+				"audio/amr",
+				"audio/mpeg",
+				"audio/mp4",
+				"audio/ogg",
+			],
 		},
 	},
 	mastodon: {
@@ -208,11 +255,34 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 		chars: { maxChars: 2000 },
 		media: {
 			maxImages: 10,
-			maxVideos: 1,
-			maxImageSize: 25 * 1024 * 1024,
-			maxVideoSize: 25 * 1024 * 1024,
+			maxVideos: 10,
+			// Discord's default webhook per-file limit is 10 MiB. Higher guild
+			// tiers are not assumed unless the connector can prove that limit.
+			// https://docs.discord.com/developers/reference#uploading-files
+			maxImageSize: 10 * 1024 * 1024,
+			// Video attachments are represented as public links, not uploaded bytes.
+			maxVideoSize: Number.MAX_SAFE_INTEGER,
 			allowedImageTypes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
 			allowedVideoTypes: ["video/mp4", "video/webm", "video/quicktime"],
+			maxDocumentSize: 10 * 1024 * 1024,
+			allowedDocumentTypes: ["*/*"],
+		},
+	},
+	slack: {
+		// Slack recommends shorter text but truncates messages above 40,000;
+		// Relay rejects instead so publishing never reports success after truncation.
+		chars: { maxChars: 40_000 },
+		media: {
+			// Incoming webhooks reference public URLs in Block Kit; Relay does not
+			// upload these bytes to Slack. The 50-message-block limit is authoritative.
+			maxImages: 50,
+			maxVideos: 50,
+			maxImageSize: Number.MAX_SAFE_INTEGER,
+			maxVideoSize: Number.MAX_SAFE_INTEGER,
+			allowedImageTypes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
+			allowedVideoTypes: ["video/mp4", "video/webm", "video/quicktime"],
+			maxDocumentSize: Number.MAX_SAFE_INTEGER,
+			allowedDocumentTypes: ["*/*"],
 		},
 	},
 	beehiiv: {
@@ -229,33 +299,33 @@ export const PLATFORM_LIMITS: Record<Platform, PlatformLimits> = {
 	convertkit: {
 		chars: { maxChars: 100_000 },
 		media: {
-			maxImages: 50,
+			maxImages: 0,
 			maxVideos: 0,
-			maxImageSize: 10 * 1024 * 1024,
+			maxImageSize: 0,
 			maxVideoSize: 0,
-			allowedImageTypes: ["image/jpeg", "image/png", "image/gif"],
+			allowedImageTypes: [],
 			allowedVideoTypes: [],
 		},
 	},
 	mailchimp: {
 		chars: { maxChars: 100_000 },
 		media: {
-			maxImages: 50,
+			maxImages: 0,
 			maxVideos: 0,
-			maxImageSize: 10 * 1024 * 1024,
+			maxImageSize: 0,
 			maxVideoSize: 0,
-			allowedImageTypes: ["image/jpeg", "image/png", "image/gif"],
+			allowedImageTypes: [],
 			allowedVideoTypes: [],
 		},
 	},
 	listmonk: {
 		chars: { maxChars: 100_000 },
 		media: {
-			maxImages: 50,
+			maxImages: 0,
 			maxVideos: 0,
-			maxImageSize: 10 * 1024 * 1024,
+			maxImageSize: 0,
 			maxVideoSize: 0,
-			allowedImageTypes: ["image/jpeg", "image/png", "image/gif"],
+			allowedImageTypes: [],
 			allowedVideoTypes: [],
 		},
 	},
@@ -274,8 +344,7 @@ const TWITTER_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
  * - URLs are collapsed to 23 characters (t.co shortening)
  */
 function countTwitterChars(content: string): number {
-	const hasUrl =
-		content.includes("http://") || content.includes("https://");
+	const hasUrl = content.includes("http://") || content.includes("https://");
 	if (!hasUrl && !NON_ASCII_REGEX.test(content)) {
 		return content.length;
 	}
@@ -288,7 +357,7 @@ function countTwitterChars(content: string): number {
 		? normalized.replace(URL_REGEX, () => {
 				urlAdjustment += 23;
 				return "";
-		})
+			})
 		: normalized;
 
 	// Count remaining characters using grapheme segmentation
@@ -307,10 +376,7 @@ function countTwitterChars(content: string): number {
  * Twitter uses weighted counting (NFC, emoji=2, CJK=2, URLs=23).
  * All other platforms use simple string length with optional URL shortening.
  */
-export function countChars(
-	content: string,
-	platform: Platform,
-): number {
+export function countChars(content: string, platform: Platform): number {
 	if (platform === "twitter") {
 		return countTwitterChars(content);
 	}

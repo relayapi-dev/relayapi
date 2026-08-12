@@ -3,7 +3,6 @@ import {
 	contactChannels,
 	contactConsentEvents,
 	contactConsentStates,
-	contactSuppressions,
 	type Database,
 } from "@relayapi/db";
 import { subscriptionHandlers } from "../services/automations/actions/subscription";
@@ -12,15 +11,39 @@ import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "../services/contact-consent";
+import { protectedContactChannelFieldsFixture } from "./helpers/protected-contact-fixtures";
 
 interface ConsentMemory {
 	state: {
+		logicalIdentifierHash: string;
 		identifierHash: string;
+		identifierKeyVersion: string;
+		identityKeyFingerprint: string;
 		status: "granted" | "denied";
 	} | null;
-	suppression: { identifierHash: string } | null;
-	recipients?: Array<{ identifier: string; workspaceId: string }>;
+	recipients?: Array<{
+		id: string;
+		organizationId: string;
+		identifierCiphertext: string;
+		identifierHash: string;
+		identityKeyFingerprint: string;
+		workspaceId: string;
+	}>;
 	eventIdentifierHashes?: string[];
+}
+
+const TEST_ENCRYPTION_KEY = `active=${"a".repeat(64)},identity=${"b".repeat(64)}`;
+
+async function protectedRecipient(id: string, identifier: string) {
+	return {
+		id,
+		organizationId: "org_1",
+		workspaceId: "ws_1",
+		...(await protectedContactChannelFieldsFixture(
+			{ id, organizationId: "org_1", identifier },
+			TEST_ENCRYPTION_KEY,
+		)),
+	};
 }
 
 function queryResult(rows: () => unknown[]) {
@@ -44,20 +67,25 @@ function consentDb(memory: ConsentMemory): Database {
 			from: (table: unknown) =>
 				queryResult(() => {
 					if (table === contactChannels) {
-						return (
-							memory.recipients ?? [
-								{ identifier: "+44 7700 900123", workspaceId: "ws_1" },
-							]
-						);
+						return memory.recipients ?? [];
 					}
 					if (table === contactConsentStates) {
 						return memory.state ? [memory.state] : [];
 					}
-					if (table === contactSuppressions) {
-						return memory.suppression ? [memory.suppression] : [];
-					}
 					return [];
 				}),
+		}),
+		selectDistinct: () => ({
+			from: () =>
+				queryResult(() =>
+					memory.state
+						? [
+								{
+									identityKeyFingerprint: memory.state.identityKeyFingerprint,
+								},
+							]
+						: [],
+				),
 		}),
 		insert: (table: unknown) => {
 			let value: Record<string, unknown> = {};
@@ -69,12 +97,11 @@ function consentDb(memory: ConsentMemory): Database {
 				onConflictDoUpdate: () => {
 					if (table === contactConsentStates) {
 						memory.state = {
+							logicalIdentifierHash: String(value.logicalIdentifierHash),
 							identifierHash: String(value.identifierHash),
+							identifierKeyVersion: String(value.identifierKeyVersion),
+							identityKeyFingerprint: String(value.identityKeyFingerprint),
 							status: value.status as "granted" | "denied",
-						};
-					} else if (table === contactSuppressions) {
-						memory.suppression = {
-							identifierHash: String(value.identifierHash),
 						};
 					}
 					return chain;
@@ -88,13 +115,15 @@ function consentDb(memory: ConsentMemory): Database {
 								scopeKey: value.workspaceId
 									? `ws/${String(value.workspaceId)}`
 									: "org",
-								ingestionSequence: 1n,
 							},
 						];
 					}
 					if (table === contactConsentStates) {
 						memory.state = {
+							logicalIdentifierHash: String(value.logicalIdentifierHash),
 							identifierHash: String(value.identifierHash),
+							identifierKeyVersion: String(value.identifierKeyVersion),
+							identityKeyFingerprint: String(value.identityKeyFingerprint),
 							status: value.status as "granted" | "denied",
 						};
 						return [memory.state];
@@ -109,11 +138,6 @@ function consentDb(memory: ConsentMemory): Database {
 			};
 			return chain;
 		},
-		delete: (table: unknown) => ({
-			where: async () => {
-				if (table === contactSuppressions) memory.suppression = null;
-			},
-		}),
 		execute: async () => {},
 		transaction: async (callback: (tx: unknown) => unknown) => callback(db),
 	};
@@ -133,7 +157,7 @@ function context(db: Database): RunContext {
 		context: {},
 		now: new Date("2026-07-13T12:00:00.000Z"),
 		db,
-		env: {},
+		env: { ENCRYPTION_KEY: TEST_ENCRYPTION_KEY },
 	};
 }
 
@@ -141,11 +165,10 @@ describe("automation consent actions feed send-time enforcement", () => {
 	it("records channel-wide consent for every matching contact identifier", async () => {
 		const memory: ConsentMemory = {
 			state: null,
-			suppression: null,
-			recipients: [
-				{ identifier: "+44 7700 900123", workspaceId: "ws_1" },
-				{ identifier: "+44 7700 900456", workspaceId: "ws_1" },
-			],
+			recipients: await Promise.all([
+				protectedRecipient("cc_1", "+44 7700 900123"),
+				protectedRecipient("cc_2", "+44 7700 900456"),
+			]),
 			eventIdentifierHashes: [],
 		};
 		const ctx = context(consentDb(memory));
@@ -164,11 +187,20 @@ describe("automation consent actions feed send-time enforcement", () => {
 	});
 
 	it("allows after opt-in and suppresses the same recipient after opt-out", async () => {
-		const memory: ConsentMemory = { state: null, suppression: null };
+		const memory: ConsentMemory = {
+			state: null,
+			recipients: [await protectedRecipient("cc_1", "+44 7700 900123")],
+		};
 		const db = consentDb(memory);
 		const ctx = context(db);
 		const recipient = "+44 7700 900123";
-		const recipientHash = await hashRecipientIdentifier("whatsapp", recipient);
+		const recipientHash = await hashRecipientIdentifier(
+			TEST_ENCRYPTION_KEY,
+			"org_1",
+			"whatsapp",
+			"automation",
+			recipient,
+		);
 
 		await subscriptionHandlers.opt_in_channel?.(
 			{
@@ -181,6 +213,7 @@ describe("automation consent actions feed send-time enforcement", () => {
 		);
 		const allowedAfterOptIn = await getAllowedRecipientHashes(
 			db,
+			TEST_ENCRYPTION_KEY,
 			"org_1",
 			"whatsapp",
 			"automation",
@@ -199,6 +232,7 @@ describe("automation consent actions feed send-time enforcement", () => {
 		);
 		const allowedAfterOptOut = await getAllowedRecipientHashes(
 			db,
+			TEST_ENCRYPTION_KEY,
 			"org_1",
 			"whatsapp",
 			"automation",
@@ -206,6 +240,6 @@ describe("automation consent actions feed send-time enforcement", () => {
 		);
 		expect(allowedAfterOptOut.size).toBe(0);
 		expect(memory.state?.status).toBe("denied");
-		expect(memory.suppression?.identifierHash).toBe(recipientHash);
+		expect(memory.state?.logicalIdentifierHash).toBe(recipientHash);
 	});
 });

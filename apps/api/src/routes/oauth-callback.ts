@@ -1,8 +1,11 @@
 import { createDb } from "@relayapi/db";
 import { Hono } from "hono";
 import { parseApiKeyWorkspaceScope } from "../lib/api-key-workspace-scope";
+import { maybeEncrypt } from "../lib/crypto";
 import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
+import { appPublicOrigin } from "../lib/deployment-mode";
 import { validatePersistedOperationalScope } from "../lib/request-access";
+import type { MastodonOAuthState } from "../services/mastodon-oauth";
 import { claimOneTimeCapability } from "../services/one-time-capability";
 import type { Env } from "../types";
 import { exchangeAndSaveAccount } from "./connect";
@@ -12,6 +15,7 @@ const app = new Hono<{ Bindings: Env }>();
 interface OAuthState {
 	org_id: string;
 	initiator_key_id: string;
+	authority_session_id: string | null;
 	initial_workspace_scope: "all" | string[];
 	workspace_id: string | null;
 	workspace_id_was_explicit?: boolean;
@@ -19,6 +23,7 @@ interface OAuthState {
 	platform: string;
 	connection_operation_id: string;
 	method?: string | null;
+	mastodon_oauth?: MastodonOAuthState | null;
 	redirect_url: string;
 	code_verifier: string | null;
 	headless?: boolean;
@@ -59,20 +64,34 @@ app.get("/callback", async (c) => {
 	const {
 		org_id,
 		initiator_key_id,
+		authority_session_id,
 		initial_workspace_scope,
 		workspace_id,
 		workspace_id_was_explicit,
 		platform,
 		connection_operation_id,
 		method,
+		mastodon_oauth,
 		redirect_url,
 		code_verifier,
 		headless,
 	} = stateData;
-	if (!isAllowedCustomerRedirectUrl(redirect_url)) {
+	if (!("authority_session_id" in stateData)) {
+		return c.text("Invalid or expired state token", 400);
+	}
+	if (
+		!isAllowedCustomerRedirectUrl(
+			redirect_url,
+			new URL(appPublicOrigin(c.env)).hostname,
+		)
+	) {
 		return c.text("Invalid redirect target", 400);
 	}
 	const redirectUrl = new URL(redirect_url);
+	const authoritySessionCiphertext = await maybeEncrypt(
+		authority_session_id,
+		c.env.ENCRYPTION_KEY,
+	);
 
 	// In headless mode there is no customer redirect to forward query params to:
 	// the OAuth result is stored under `pending-oauth:{state}` for the caller to
@@ -86,6 +105,7 @@ app.get("/callback", async (c) => {
 			JSON.stringify({
 				organization_id: org_id,
 				initiator_key_id,
+				authority_session_ciphertext: authoritySessionCiphertext,
 				initial_workspace_scope,
 				workspace_id,
 				platform,
@@ -145,6 +165,7 @@ app.get("/callback", async (c) => {
 	const validation = initiator_key_id
 		? await validatePersistedOperationalScope(db, {
 				apiKeyId: initiator_key_id,
+				authoritySessionId: authority_session_id,
 				organizationId: org_id,
 				workspaceId: workspace_id,
 				resourceName: "connected account",
@@ -178,6 +199,7 @@ app.get("/callback", async (c) => {
 			env: c.env,
 			orgId: org_id,
 			initiatorKeyId: initiator_key_id,
+			authoritySessionId: authority_session_id,
 			authorizedWorkspaceScope: initialWorkspaceScope,
 			workspaceId: workspace_id,
 			workspaceWasExplicit: workspace_id_was_explicit ?? workspace_id !== null,
@@ -186,6 +208,7 @@ app.get("/callback", async (c) => {
 			redirectUri: oauthRedirectUri,
 			codeVerifier: code_verifier ?? undefined,
 			method: method ?? undefined,
+			mastodonOAuth: mastodon_oauth ?? undefined,
 			connectionOperationId: connection_operation_id,
 			waitUntil: (p) => c.executionCtx.waitUntil(p),
 		});

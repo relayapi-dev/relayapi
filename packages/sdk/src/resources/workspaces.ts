@@ -68,6 +68,7 @@ export class Workspaces extends APIResource {
 export interface WorkspaceResponse {
   id: string;
   name: string;
+  slug: string;
   description: string | null;
   lifecycle_status: 'active' | 'archived' | 'erasing';
   revision: number;
@@ -85,7 +86,7 @@ export type WorkspaceUpdateResponse = WorkspaceResponse;
 export interface WorkspaceDeleteResponse {
   workspace_id: string;
   erasure_operation_id: string;
-  status: 'pending' | 'processing' | 'manual_review' | 'failed' | 'purged';
+  status: 'pending' | 'processing' | 'held' | 'manual_review' | 'failed' | 'purged';
   requested_at: string;
 }
 
@@ -97,12 +98,14 @@ export interface WorkspaceListResponse {
 
 export interface WorkspaceCreateParams {
   name: string;
+  slug?: string;
   description?: string;
 }
 
 export interface WorkspaceUpdateParams {
   expected_revision: number;
   name?: string;
+  slug?: string;
   description?: string | null;
 }
 

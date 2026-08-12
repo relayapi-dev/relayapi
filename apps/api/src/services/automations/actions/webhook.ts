@@ -11,14 +11,20 @@
 //   - basic: Authorization: Basic base64(username:password)
 //   - hmac: X-Signature: sha256=<hex hmac of body using secret>
 
-import { fetchPublicUrl } from "../../../lib/fetch-public-url";
+import {
+	BlockedPublicUrlError,
+	fetchPublicUrl,
+} from "../../../lib/fetch-public-url";
 import type { Action } from "../../../schemas/automation-actions";
 import {
 	loadAutomationWebhookSecret,
 	type WebhookSecretBundle,
 } from "../graph-secrets";
 import { applyMergeTags } from "../merge-tags";
-import type { RunContext } from "../types";
+import {
+	AutomationExternalEffectKnownFailureError,
+	type RunContext,
+} from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
 
 type WebhookOutAction = Extract<Action, { type: "webhook_out" }>;
@@ -116,14 +122,9 @@ const webhookOut: ActionHandler<WebhookOutAction> = async (action, ctx) => {
 	for (const [k, v] of Object.entries(secret.headers ?? {})) {
 		headers[k] = applyMergeTags(v, mergeCtx);
 	}
-	if (
-		ctx.effectIdempotencyKey &&
-		!Object.keys(headers).some((key) => key.toLowerCase() === "idempotency-key")
-	) {
-		headers["Idempotency-Key"] =
-			ctx.effectIdempotencyKeyFor?.(`action:${action.id}`) ??
-			`${ctx.effectIdempotencyKey}:action:${encodeURIComponent(action.id)}`;
-	}
+	const hasConfiguredIdempotencyKey = Object.keys(headers).some(
+		(key) => key.toLowerCase() === "idempotency-key",
+	);
 	const body = secret.body ? applyMergeTags(secret.body, mergeCtx) : undefined;
 	if (body && bodyByteLength(body) > MAX_WEBHOOK_BODY_BYTES) {
 		throw new Error("webhook_out: request body exceeds 256 KiB");
@@ -150,28 +151,54 @@ const webhookOut: ActionHandler<WebhookOutAction> = async (action, ctx) => {
 		headers["X-Signature"] = `sha256=${sig}`;
 	}
 
-	try {
-		const response = await fetchPublicUrl(url, {
-			method,
-			headers,
-			body,
-			timeout: 15_000,
-		});
+	const dispatch = async (
+		providerIdempotencyKey = ctx.effectIdempotencyKeyFor?.(
+			`action:${action.id}`,
+		),
+	) => {
+		const requestHeaders = { ...headers };
+		if (providerIdempotencyKey && !hasConfiguredIdempotencyKey) {
+			requestHeaders["Idempotency-Key"] = providerIdempotencyKey;
+		}
+		let response: Response;
+		try {
+			response = await fetchPublicUrl(url, {
+				method,
+				headers: requestHeaders,
+				body,
+				timeout: 15_000,
+			});
+		} catch (error) {
+			if (error instanceof BlockedPublicUrlError) {
+				throw new AutomationExternalEffectKnownFailureError(error.message);
+			}
+			throw error;
+		}
 		await response.body?.cancel();
 		if (!response.ok) {
-			const retryable = response.status === 429 || response.status >= 500;
-			throw new Error(
-				`webhook_out: ${retryable ? "retryable" : "terminal"} HTTP ${response.status}`,
+			if (response.status >= 500) {
+				throw new Error(`webhook_out: ambiguous HTTP ${response.status}`);
+			}
+			throw new AutomationExternalEffectKnownFailureError(
+				`webhook_out: rejected HTTP ${response.status}`,
 			);
 		}
-	} catch (err) {
-		if (err instanceof Error && err.message.startsWith("webhook_out:")) {
-			throw err;
-		}
-		// The request may have crossed the provider boundary. Surface an unknown
-		// outcome so action_group persists the failure instead of acknowledging it
-		// as a successful side effect.
-		throw new Error("webhook_out: unknown external outcome");
+		return { status: response.status };
+	};
+
+	if (ctx.executeExternalEffect) {
+		await ctx.executeExternalEffect(
+			{
+				effectKey: `action:${action.id}`,
+				kind: "automation_action",
+			},
+			async (providerIdempotencyKey) => ({
+				outcome: "succeeded",
+				value: await dispatch(providerIdempotencyKey),
+			}),
+		);
+	} else {
+		await dispatch();
 	}
 };
 

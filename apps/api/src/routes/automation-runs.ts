@@ -9,11 +9,30 @@
 // - POST /v1/automation-runs/{id}/stop  — force-exit an active/waiting run
 
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { automationRuns, automationStepRuns, automations } from "@relayapi/db";
-import { and, asc, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import {
+	AUTOMATION_NODE_KINDS,
+	automationRuns,
+	automationStepRuns,
+	automations,
+} from "@relayapi/db";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	getTableColumns,
+	type SQL,
+	sql,
+} from "drizzle-orm";
 import type { Context } from "hono";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { assertWorkspaceScope } from "../lib/workspace-scope";
 import { ErrorResponse } from "../schemas/common";
+import { transitionRunTerminal } from "../services/automations/runner";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -52,7 +71,7 @@ const StepResponseSchema = z.object({
 	run_id: z.string(),
 	automation_id: z.string(),
 	node_key: z.string(),
-	node_kind: z.string(),
+	node_kind: z.enum(AUTOMATION_NODE_KINDS),
 	entered_via_port_key: z.string().nullable(),
 	exited_via_port_key: z.string().nullable(),
 	outcome: z.string(),
@@ -178,6 +197,10 @@ const listRuns = createRoute({
 			description: "Runs list",
 			content: { "application/json": { schema: ListRunsResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Automation not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -217,26 +240,23 @@ automationScopedRuns.openapi(listRuns, async (c) => {
 			sql`${automationRuns.startedAt} <= ${query.started_before}`,
 		);
 	}
-	// Keyset pagination (composite: startedAt DESC, id DESC). Read the cursor row's
-	// started_at as raw text so it isn't round-tripped through a JS Date, which
-	// truncates Postgres microseconds to millisecond precision and would skip rows
-	// sharing the cursor's millisecond. Bind it back with an explicit ::timestamptz
-	// cast to keep the keyset comparison exact.
+	// Composite keyset on (started_at, id), carried in the cursor itself. Run
+	// status flips constantly while a listing is being walked, so resolving the
+	// boundary row under the status filter would 400 a cursor issued seconds
+	// earlier. `to_char` keeps Postgres microseconds exact.
 	if (query.cursor) {
-		const [cursorRow] = await db
-			.select({ startedAt: sql<string>`${automationRuns.startedAt}::text` })
-			.from(automationRuns)
-			.where(eq(automationRuns.id, query.cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${automationRuns.startedAt}, ${automationRuns.id}) < (${cursorRow.startedAt}::timestamptz, ${query.cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(query.cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${automationRuns.startedAt}, ${automationRuns.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(automationRuns),
+			cursorTimestamp: sql<string>`to_char(${automationRuns.startedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(automationRuns)
 		.where(and(...conditions))
 		.orderBy(desc(automationRuns.startedAt), desc(automationRuns.id))
@@ -244,12 +264,16 @@ automationScopedRuns.openapi(listRuns, async (c) => {
 
 	const hasMore = rows.length > query.limit;
 	const data = rows.slice(0, query.limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	return c.json(
 		{
 			data: data.map(serializeRun),
-			next_cursor:
-				hasMore && data.length > 0 ? (data[data.length - 1]?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,
@@ -314,6 +338,10 @@ const listSteps = createRoute({
 			description: "Steps list",
 			content: { "application/json": { schema: ListStepsResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -334,30 +362,29 @@ app.openapi(listSteps, async (c) => {
 	// The query orders by (executedAt ASC, id ASC), so the cursor must be applied
 	// as a composite keyset on those same columns — comparing on id alone would not
 	// match the sort order when steps share an executed_at. cursor is the serialized
-	// bigint id; ignore a non-numeric cursor instead of throwing.
-	const cursorId =
-		query.cursor && /^\d+$/.test(query.cursor) ? BigInt(query.cursor) : null;
-	if (cursorId !== null) {
-		// Read the cursor row's executed_at as raw text so it isn't round-tripped
-		// through a JS Date (which truncates Postgres microseconds and would skip
-		// rows sharing the millisecond); bind it back with an explicit ::timestamptz
-		// cast to keep the keyset comparison exact.
-		const [cursorRow] = await db
-			.select({
-				executedAt: sql<string>`${automationStepRuns.executedAt}::text`,
-			})
-			.from(automationStepRuns)
-			.where(eq(automationStepRuns.id, cursorId))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${automationStepRuns.executedAt}, ${automationStepRuns.id}) > (${cursorRow.executedAt}::timestamptz, ${cursorId})`,
-			);
+	// positive PostgreSQL bigint id.
+	if (query.cursor) {
+		const key = tryDecodeTimestampIdCursor(query.cursor);
+		// Step-run ids are bigserial, so the decoded id needs an explicit
+		// ::bigint cast or Postgres compares it as text. The range guard keeps an
+		// out-of-range value a 400 rather than letting the cast raise a 500.
+		if (!key || !/^\d+$/.test(key.id)) {
+			return c.json(INVALID_CURSOR_BODY, 400);
 		}
+		const cursorId = BigInt(key.id);
+		if (cursorId <= 0n || cursorId > 9_223_372_036_854_775_807n) {
+			return c.json(INVALID_CURSOR_BODY, 400);
+		}
+		conditions.push(
+			sql`(${automationStepRuns.executedAt}, ${automationStepRuns.id}) > (${key.timestamp}::timestamptz, ${key.id}::bigint)`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(automationStepRuns),
+			cursorTimestamp: sql<string>`to_char(${automationStepRuns.executedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(automationStepRuns)
 		.where(and(...conditions))
 		.orderBy(asc(automationStepRuns.executedAt), asc(automationStepRuns.id))
@@ -365,14 +392,16 @@ app.openapi(listSteps, async (c) => {
 
 	const hasMore = rows.length > query.limit;
 	const data = rows.slice(0, query.limit);
+	const lastStep = data.at(-1);
+	const nextStepCursor =
+		hasMore && lastStep
+			? encodeTimestampIdCursor(lastStep.cursorTimestamp, String(lastStep.id))
+			: null;
 
 	return c.json(
 		{
 			data: data.map(serializeStep),
-			next_cursor:
-				hasMore && data.length > 0
-					? String(data[data.length - 1]?.id ?? "")
-					: null,
+			next_cursor: nextStepCursor,
 			has_more: hasMore,
 		},
 		200,
@@ -423,24 +452,16 @@ app.openapi(stopRun, async (c) => {
 	}
 
 	const db = c.get("db");
-	const [updated] = await db
-		.update(automationRuns)
-		.set({
-			status: "exited",
-			exitReason: "admin_stopped",
-			completedAt: new Date(),
-			revision: sql`${automationRuns.revision} + 1`,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(automationRuns.id, id),
-				eq(automationRuns.revision, run.revision),
-				inArray(automationRuns.status, ["active", "waiting"]),
-			),
-		)
-		.returning();
-	if (!updated) {
+	const stopped = await transitionRunTerminal(
+		db,
+		id,
+		run.revision,
+		run.automationId,
+		"exited",
+		"admin_stopped",
+		{ waitingFor: null, waitingUntil: null },
+	);
+	if (!stopped) {
 		return c.json(
 			{
 				error: {
@@ -451,6 +472,10 @@ app.openapi(stopRun, async (c) => {
 			422,
 		);
 	}
+	const updated = await db.query.automationRuns.findFirst({
+		where: eq(automationRuns.id, id),
+	});
+	if (!updated) return notFound(c);
 	return c.json(serializeRun(updated), 200);
 });
 

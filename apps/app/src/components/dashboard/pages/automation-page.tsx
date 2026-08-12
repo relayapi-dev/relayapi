@@ -261,7 +261,7 @@ const QUICK_STARTS: Array<{
 	{
 		slug: "follow_to_dm",
 		title: "Follow to DM",
-		description: "DM new followers automatically.",
+		description: "Welcome verified followers when they first DM you.",
 	},
 ];
 

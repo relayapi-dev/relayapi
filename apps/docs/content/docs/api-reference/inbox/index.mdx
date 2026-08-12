@@ -2,6 +2,8 @@
 title: Inbox
 ---
 
+Provider-backed message edits, read receipts, comment edits/moderation, post engagement, and mention listing are available only on the documented platform/action matrix. Every provider mutation requires an `Idempotency-Key`, returns a durable operation, validates the provider-specific acknowledgement instead of trusting HTTP `2xx` alone, and never automatically replays an ambiguous provider request. Mention listing returns normalized events already persisted through webhook ingestion, not live provider history. See [Published Edits and Social Actions](/guides/published-edits-and-social-actions).
+
 ## Endpoints
 
 | Method | Endpoint | Description |
@@ -13,7 +15,11 @@ title: Inbox
 | `DELETE` | [Delete a message](/api-reference/inbox/deleteConversationMessage) | Delete a message |
 | `DELETE` | [Delete an internal note](/api-reference/inbox/deleteInboxNote) | Delete an internal note |
 | `DELETE` | [Delete a review reply](/api-reference/inbox/deleteReviewReply) | Delete a review reply |
+| `PATCH` | [Edit a provider message](/api-reference/inbox/editConversationMessage) | Edit a provider message |
+| `PATCH` | [Edit an owned provider comment](/api-reference/inbox/editInboxComment) | Edit an owned provider comment |
+| `PUT` | [Set a provider-native post reaction, vote, or rating](/api-reference/inbox/engageProviderPost) | Set a provider-native post reaction, vote, or rating |
 | `GET` | [Get full conversation thread with messages](/api-reference/inbox/getInboxConversation) | Get full conversation thread with messages |
+| `GET` | [Get a durable inbox social mutation](/api-reference/inbox/getInboxSocialMutationOperation) | Get a durable inbox social mutation |
 | `GET` | [Aggregated inbox metrics](/api-reference/inbox/getInboxStats) | Aggregated inbox metrics |
 | `GET` | [Get comments for a specific post](/api-reference/inbox/getPostComments) | Get comments for a specific post |
 | `POST` | [Hide a comment](/api-reference/inbox/hideComment) | Hide a comment |
@@ -21,14 +27,17 @@ title: Inbox
 | `GET` | [List comments across platforms](/api-reference/inbox/listComments) | List comments across platforms |
 | `GET` | [List internal notes on a conversation](/api-reference/inbox/listConversationNotes) | List internal notes on a conversation |
 | `GET` | [List inbox conversations](/api-reference/inbox/listInboxConversations) | List inbox conversations |
+| `GET` | [List normalized mention events for one connected account](/api-reference/inbox/listInboxMentions) | List normalized mention events for one connected account |
 | `GET` | [List posts with comment counts](/api-reference/inbox/listPostsByComments) | List posts with comment counts |
 | `GET` | [List reviews across platforms](/api-reference/inbox/listReviews) | List reviews across platforms |
+| `POST` | [Apply a typed provider moderation action](/api-reference/inbox/moderateInboxComment) | Apply a typed provider moderation action |
 | `POST` | [Send a private reply to a commenter](/api-reference/inbox/privateReplyToComment) | Send a private reply to a commenter |
 | `DELETE` | [Remove a reaction from a message](/api-reference/inbox/removeConversationReaction) | Remove a reaction from a message |
 | `POST` | [Reply to a comment](/api-reference/inbox/replyToComment) | Reply to a comment |
 | `POST` | [Reply to a review](/api-reference/inbox/replyToReview) | Reply to a review |
 | `GET` | [Full-text search across inbox messages](/api-reference/inbox/searchInboxMessages) | Full-text search across inbox messages |
 | `POST` | [Send a message in a conversation](/api-reference/inbox/sendConversationMessage) | Send a message in a conversation |
+| `POST` | [Send a provider read receipt](/api-reference/inbox/sendConversationReadReceipt) | Send a provider read receipt |
 | `POST` | [Send a typing indicator](/api-reference/inbox/sendConversationTyping) | Send a typing indicator |
 | `DELETE` | [Unhide a comment](/api-reference/inbox/unhideComment) | Unhide a comment |
 | `DELETE` | [Unlike a comment](/api-reference/inbox/unlikeComment) | Unlike a comment |

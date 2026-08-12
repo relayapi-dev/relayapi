@@ -9,7 +9,7 @@
  */
 
 interface QueryCall {
-	type: "select" | "update" | "insert";
+	type: "select" | "update" | "insert" | "delete";
 	table?: string;
 	set?: Record<string, unknown>;
 	values?: Record<string, unknown>;
@@ -33,6 +33,15 @@ export function createMockDb() {
 		if (tableRef && typeof tableRef === "object" && "_.name" in tableRef) {
 			return (tableRef as { "_.name": string })["_.name"];
 		}
+		if (tableRef && typeof tableRef === "object") {
+			const nameSymbol = Object.getOwnPropertySymbols(tableRef).find(
+				(symbol) => String(symbol) === "Symbol(drizzle:Name)",
+			);
+			if (nameSymbol) {
+				const name = (tableRef as Record<symbol, unknown>)[nameSymbol];
+				if (name === "queue_schedules") return "queueSchedules";
+			}
+		}
 		// Fallback: stringify
 		const s = String(tableRef);
 		if (s.includes("organization_subscriptions"))
@@ -42,12 +51,17 @@ export function createMockDb() {
 		if (s.includes("stripe_events")) return "stripeEvents";
 		if (s.includes("subscription_checkout_operations"))
 			return "subscriptionCheckoutOperations";
+		if (s.includes("billing_operation_attempts"))
+			return "billingOperationAttempts";
 		if (s.includes("billing_operations")) return "billingOperations";
-		if (s.includes("usage_bucket_settlements")) return "usageBucketSettlements";
+		if (s.includes("billing_periods")) return "billingPeriods";
 		if (s.includes("usage_buckets")) return "usageBuckets";
 		if (s.includes("apikey")) return "apikey";
-		if (s.includes("usage_records")) return "usageRecords";
+		if (s.includes("organization_principals")) return "organizationPrincipals";
+		if (s.includes("principal_workspace_grants"))
+			return "principalWorkspaceGrants";
 		if (s.includes("api_request_logs")) return "apiRequestLogs";
+		if (s.includes("queue_schedules")) return "queueSchedules";
 		if (s.includes("connection_logs")) return "connectionLogs";
 		if (s.includes("social_accounts")) return "socialAccounts";
 		if (s.includes("social_account_sync_state"))
@@ -139,6 +153,36 @@ export function createMockDb() {
 					if (fields && Object.keys(fields).length === 1 && "total" in fields) {
 						calls.push({ type: "select", table: tableName });
 						resolve([{ total: rows.length }]);
+						return;
+					}
+					const aggregateSources: Record<string, string> = {
+						committedUnits: "committedUnitsSnapshot",
+						includedUnits: "cycleAllowance",
+						overageUnits: "overageUnitsSnapshot",
+						amountCents: "amountCentsSnapshot",
+					};
+					if (
+						fields &&
+						Object.entries(fields).some(
+							([alias, colRef]) =>
+								alias in aggregateSources &&
+								colRef !== null &&
+								typeof colRef === "object" &&
+								"mockSql" in colRef,
+						)
+					) {
+						const summary: Row = {};
+						for (const alias of Object.keys(fields)) {
+							const source = aggregateSources[alias];
+							if (!source) continue;
+							const values = rows.map((row) => Number(row[source] ?? 0));
+							summary[alias] =
+								alias === "includedUnits"
+									? Math.max(0, ...values)
+									: values.reduce((sum, value) => sum + value, 0);
+						}
+						calls.push({ type: "select", table: tableName });
+						resolve([summary]);
 						return;
 					}
 					if (fields) {
@@ -300,10 +344,55 @@ export function createMockDb() {
 		return chain;
 	}
 
+	function deleteChain(table: unknown) {
+		const tableName = resolveTable(table);
+		let filterFn: ((row: Row) => boolean) | null = null;
+		const applyDelete = (): Row[] => {
+			const rows = data.get(tableName) ?? [];
+			const deleted = rows.filter((row) => !filterFn || filterFn(row));
+			data.set(
+				tableName,
+				rows.filter((row) => filterFn && !filterFn(row)),
+			);
+			calls.push({ type: "delete", table: tableName });
+			return deleted;
+		};
+		const chain = {
+			where(condition: unknown) {
+				if (
+					condition &&
+					typeof condition === "object" &&
+					"_filter" in condition
+				) {
+					filterFn = (condition as { _filter: (row: Row) => boolean })._filter;
+				}
+				return chain;
+			},
+			returning() {
+				return Promise.resolve(applyDelete());
+			},
+			// biome-ignore lint/suspicious/noThenProperty: intentional thenable to make the mock query builder awaitable
+			then(
+				resolve: (value: undefined) => void,
+				reject?: (err: unknown) => void,
+			) {
+				try {
+					applyDelete();
+					resolve(undefined);
+				} catch (error) {
+					reject?.(error);
+				}
+			},
+		};
+		return chain;
+	}
+
 	const dbApi = {
 		select: (fields?: Record<string, unknown>) => selectChain(fields),
 		update: (table: unknown) => updateChain(table),
 		insert: (table: unknown) => insertChain(table),
+		delete: (table: unknown) => deleteChain(table),
+		execute: async () => [],
 
 		// Test helpers
 		_seed(tableName: string, rows: Row[]) {

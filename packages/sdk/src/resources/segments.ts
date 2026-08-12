@@ -39,25 +39,49 @@ export class Segments extends APIResource {
   }
 }
 
-export interface SegmentFilterPredicate {
-  field: string;
-  op:
-    | 'eq'
-    | 'neq'
-    | 'contains'
-    | 'not_contains'
-    | 'starts_with'
-    | 'ends_with'
-    | 'gt'
-    | 'gte'
-    | 'lt'
-    | 'lte'
-    | 'in'
-    | 'not_in'
-    | 'exists'
-    | 'not_exists';
-  value?: unknown;
-}
+export type SegmentFilterPredicate =
+  | {
+      field: 'tags' | 'contact.tags';
+      op: 'contains' | 'not_contains';
+      value: string;
+    }
+  | {
+      field: 'opted_in' | 'contact.opted_in';
+      op: 'eq' | 'neq';
+      value: boolean;
+    }
+  | {
+      field: 'created_at' | 'contact.created_at' | 'updated_at' | 'contact.updated_at';
+      op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte';
+      value: string;
+    }
+  | {
+      field: `fields.${string}`;
+      op: 'exists' | 'not_exists';
+    }
+  | {
+      field: `fields.${string}`;
+      op: 'gt' | 'gte' | 'lt' | 'lte';
+      value: number;
+    }
+  | {
+      field: `fields.${string}`;
+      op: 'eq' | 'neq';
+      value: string | number | boolean;
+      case_sensitive?: boolean;
+    }
+  | {
+      field: `fields.${string}`;
+      op: 'contains' | 'not_contains' | 'starts_with' | 'ends_with';
+      value: string;
+      case_sensitive?: boolean;
+    }
+  | {
+      field: `fields.${string}`;
+      op: 'in' | 'not_in';
+      value: Array<string | number | boolean>;
+      case_sensitive?: boolean;
+    };
 
 export interface SegmentFilter {
   all?: SegmentFilterPredicate[];
@@ -69,7 +93,10 @@ export interface SegmentCreateParams {
   name: string;
   description?: string;
   workspace_id?: string;
-  filter: SegmentFilter;
+  /**
+   * Required for dynamic segments and omitted/null for static segments.
+   */
+  filter?: SegmentFilter | null;
   is_dynamic?: boolean;
 }
 
@@ -87,7 +114,7 @@ export interface SegmentResponse {
   workspace_id: string | null;
   name: string;
   description: string | null;
-  filter: SegmentFilter;
+  filter: SegmentFilter | null;
   is_dynamic: boolean;
   member_count: number;
   created_at: string;

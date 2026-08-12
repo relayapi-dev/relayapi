@@ -6,6 +6,7 @@ import { Hide, HideCreateResponse, HideDeleteResponse } from './hide';
 import * as LikeAPI from './like';
 import { Like, LikeCreateResponse, LikeDeleteResponse } from './like';
 import { APIPromise } from '../../../core/api-promise';
+import { buildHeaders } from '../../../internal/headers';
 import { RequestOptions } from '../../../internal/request-options';
 import { path } from '../../../internal/utils/path';
 
@@ -49,6 +50,43 @@ export class Comments extends APIResource {
    */
   delete(commentID: string, options?: RequestOptions): APIPromise<CommentDeleteResponse> {
     return this._client.delete(path`/v1/inbox/comments/${commentID}`, options);
+  }
+
+  /** Edit an owned provider comment. */
+  edit(
+    commentID: string,
+    params: CommentEditParams,
+    options?: RequestOptions,
+  ): APIPromise<CommentSocialMutationOperation> {
+    const { idempotency_key, ...body } = params;
+    return this._client.patch(path`/v1/inbox/comments/${commentID}`, {
+      body,
+      ...options,
+      headers: buildHeaders([
+        { 'Idempotency-Key': idempotency_key },
+        options?.headers,
+      ]),
+    });
+  }
+
+  /** Apply a typed provider-native moderation action. */
+  moderate(
+    commentID: string,
+    params: CommentModerateParams,
+    options?: RequestOptions,
+  ): APIPromise<CommentSocialMutationOperation> {
+    const { idempotency_key, ...body } = params;
+    return this._client.post(
+      path`/v1/inbox/comments/${commentID}/moderation`,
+      {
+        body,
+        ...options,
+        headers: buildHeaders([
+          { 'Idempotency-Key': idempotency_key },
+          options?.headers,
+        ]),
+      },
+    );
   }
 
   /**
@@ -98,12 +136,45 @@ export interface CommentRetrieveResponse {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   /**
    * Post ID if filtered by post
    */
   post_id?: string;
+}
+
+export interface CommentSocialMutationOperation {
+  id: string;
+  target_id: string;
+  account_id: string;
+  platform: string;
+  kind: string;
+  status: 'pending' | 'processing' | 'request_may_have_been_sent' | 'unknown' | 'completed' | 'failed';
+  provider_operation_id: string | null;
+  provider_post_id: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface CommentEditParams {
+  idempotency_key: string;
+  account_id: string;
+  text: string;
+}
+
+export interface CommentModerateParams {
+  idempotency_key: string;
+  account_id: string;
+  action: 'hide' | 'unhide' | 'approve' | 'hold_for_review' | 'reject';
 }
 
 export namespace CommentRetrieveResponse {
@@ -140,7 +211,12 @@ export namespace CommentRetrieveResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     /**
      * Comment text
@@ -193,7 +269,12 @@ export interface CommentListResponse {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 
   /**
    * Post ID if filtered by post
@@ -235,7 +316,12 @@ export namespace CommentListResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     /**
      * Comment text
@@ -336,7 +422,12 @@ export namespace CommentListByPostResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     platform_url: string | null;
 
@@ -418,7 +509,12 @@ export interface CommentRetrieveParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 }
 
 export interface CommentListParams {
@@ -457,7 +553,12 @@ export interface CommentListParams {
     | 'whatsapp'
     | 'mastodon'
     | 'discord'
-    | 'sms';
+    | 'sms'
+    | 'beehiiv'
+    | 'convertkit'
+    | 'mailchimp'
+    | 'listmonk'
+    | 'slack';
 }
 
 export interface CommentListByPostParams extends CommentListParams {}
@@ -502,11 +603,14 @@ export declare namespace Comments {
     type CommentDeleteResponse as CommentDeleteResponse,
     type CommentPrivateReplyResponse as CommentPrivateReplyResponse,
     type CommentReplyResponse as CommentReplyResponse,
+    type CommentSocialMutationOperation as CommentSocialMutationOperation,
     type CommentRetrieveParams as CommentRetrieveParams,
     type CommentListParams as CommentListParams,
     type CommentListByPostParams as CommentListByPostParams,
     type CommentPrivateReplyParams as CommentPrivateReplyParams,
     type CommentReplyParams as CommentReplyParams,
+    type CommentEditParams as CommentEditParams,
+    type CommentModerateParams as CommentModerateParams,
   };
 
   export {

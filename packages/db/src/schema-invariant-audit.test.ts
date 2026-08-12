@@ -71,3 +71,27 @@ test("PostgreSQL enums and CHECK constraints satisfy the audit", () => {
 
 	expect(auditSchemaInvariants([getTableConfig(safe)], []).failures).toEqual([]);
 });
+
+test("a text workflow CHECK must equal its Drizzle enum vocabulary", () => {
+	const drifted = pgTable(
+		"__schema_invariant_drifted",
+		{
+			id: text("id").primaryKey(),
+			status: text("status", {
+				enum: ["pending", "complete"],
+			}).notNull(),
+		},
+		(table) => [
+			check(
+				"__schema_invariant_drifted_status_check",
+				sql`${table.status} IN ('pending', 'failed')`,
+			),
+		],
+	);
+
+	expect(
+		auditSchemaInvariants([getTableConfig(drifted)], []).failures,
+	).toContain(
+		'__schema_invariant_drifted.status CHECK domain [["pending","failed"]] does not equal its Drizzle enum ["pending","complete"]',
+	);
+});

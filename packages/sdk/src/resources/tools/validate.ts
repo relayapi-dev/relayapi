@@ -3,6 +3,7 @@
 import { APIResource } from '../../core/resource';
 import { APIPromise } from '../../core/api-promise';
 import { RequestOptions } from '../../internal/request-options';
+import type { PostMediaInput, PublisherTargetOptions } from '../posts/publisher-options';
 
 export class Validate extends APIResource {
   /**
@@ -838,7 +839,7 @@ export interface ValidateValidatePostParams {
   /**
    * Per-target customizations keyed by target value (account ID or platform name)
    */
-  target_options?: { [key: string]: { [key: string]: unknown } };
+  target_options?: PublisherTargetOptions;
 
   /**
    * IANA timezone for scheduling
@@ -847,17 +848,7 @@ export interface ValidateValidatePostParams {
 }
 
 export namespace ValidateValidatePostParams {
-  export interface Media {
-    /**
-     * Public URL of the media file
-     */
-    url: string;
-
-    /**
-     * Media type. Inferred from URL extension if omitted.
-     */
-    type?: 'image' | 'video' | 'gif' | 'document';
-  }
+  export type Media = PostMediaInput;
 }
 
 export declare namespace Validate {

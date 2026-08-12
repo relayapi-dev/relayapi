@@ -11,6 +11,7 @@ import {
 	and,
 	desc,
 	eq,
+	getTableColumns,
 	inArray,
 	isNotNull,
 	isNull,
@@ -18,6 +19,11 @@ import {
 	sql,
 } from "drizzle-orm";
 import { decryptAccountToken } from "../lib/account-token-crypto";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { inheritOperationalCreateScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -44,6 +50,7 @@ import {
 	getAllowedRecipientHashes,
 	hashRecipientIdentifier,
 } from "../services/contact-consent";
+import { decryptContactChannelRows } from "../services/contact-protection";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -166,6 +173,10 @@ const listBroadcasts = createRoute({
 			description: "Broadcasts list",
 			content: { "application/json": { schema: BroadcastListResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -284,6 +295,10 @@ const listRecipients = createRoute({
 		200: {
 			description: "Recipients list",
 			content: { "application/json": { schema: RecipientListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
 			description: "Not found",
@@ -472,39 +487,45 @@ app.openapi(listBroadcasts, async (c) => {
 	if (account_id) conditions.push(eq(broadcasts.socialAccountId, account_id));
 	if (status) conditions.push(eq(broadcasts.status, status));
 
-	// Cursor pagination (composite: createdAt DESC, id DESC to handle timestamp ties).
-	// Read the cursor row's created_at as raw text so we don't round-trip it through
-	// a JS Date, which truncates Postgres microseconds to millisecond precision and
-	// would skip rows sharing the cursor's millisecond. Bind it back with an explicit
-	// ::timestamptz cast to keep the keyset comparison exact.
+	// Composite keyset on (created_at, id), carried in the cursor itself so the
+	// walk survives the boundary broadcast changing status or being deleted
+	// between pages. `to_char` keeps Postgres microseconds exact, which a JS
+	// Date round-trip would truncate.
 	if (cursor) {
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${broadcasts.createdAt}::text` })
-			.from(broadcasts)
-			.where(eq(broadcasts.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${broadcasts.createdAt}, ${broadcasts.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${broadcasts.createdAt}, ${broadcasts.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(broadcasts),
+			cursorTimestamp: sql<string>`to_char(${broadcasts.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(broadcasts)
 		.where(and(...conditions))
 		.orderBy(desc(broadcasts.createdAt), desc(broadcasts.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
-	const data = rows.slice(0, limit).map(serializeBroadcast);
+	const pageRows = rows.slice(0, limit);
+	const lastRow = pageRows.at(-1);
+	const nextCursor =
+		hasMore && lastRow
+			? encodeTimestampIdCursor(lastRow.cursorTimestamp, lastRow.id)
+			: null;
+	const data = pageRows.map(serializeBroadcast);
 
-	return c.json({
-		data,
-		next_cursor: hasMore ? (data[data.length - 1]?.id ?? null) : null,
-		has_more: hasMore,
-	});
+	return c.json(
+		{
+			data,
+			next_cursor: nextCursor,
+			has_more: hasMore,
+		},
+		200,
+	);
 });
 
 // @ts-expect-error — Hono strict return types
@@ -725,8 +746,12 @@ app.openapi(addRecipients, async (c) => {
 	if (body.contact_ids?.length) {
 		const contactRows = await db
 			.select({
-				id: contacts.id,
-				identifier: contactChannels.identifier,
+				contactId: contacts.id,
+				id: contactChannels.id,
+				organizationId: contactChannels.organizationId,
+				identifierCiphertext: contactChannels.identifierCiphertext,
+				identifierHash: contactChannels.identifierHash,
+				identityKeyFingerprint: contactChannels.identityKeyFingerprint,
 			})
 			.from(contacts)
 			.innerJoin(contactChannels, eq(contactChannels.contactId, contacts.id))
@@ -739,9 +764,13 @@ app.openapi(addRecipients, async (c) => {
 				),
 			);
 
-		for (const row of contactRows) {
+		const plaintextRows = await decryptContactChannelRows(
+			c.env.ENCRYPTION_KEY,
+			contactRows,
+		);
+		for (const row of plaintextRows) {
 			toInsert.push({
-				contactId: row.id,
+				contactId: row.contactId,
 				contactIdentifier: row.identifier,
 			});
 		}
@@ -762,6 +791,7 @@ app.openapi(addRecipients, async (c) => {
 
 	const allowedHashes = await getAllowedRecipientHashes(
 		db,
+		c.env.ENCRYPTION_KEY,
 		orgId,
 		broadcast.platform,
 		"marketing",
@@ -775,7 +805,10 @@ app.openapi(addRecipients, async (c) => {
 			toInsert.map(async (item) => ({
 				...item,
 				contactIdentifierHash: await hashRecipientIdentifier(
+					c.env.ENCRYPTION_KEY,
+					orgId,
 					broadcast.platform,
+					"marketing",
 					item.contactIdentifier,
 				),
 			})),
@@ -884,22 +917,29 @@ app.openapi(listRecipients, async (c) => {
 	const denied = assertWorkspaceScope(c, broadcast.workspaceId);
 	if (denied) return denied;
 
-	const conditions = [
+	// The immutable scope this listing is anchored in. Recipient status flips
+	// pending -> sent/failed during the very send being paginated, so it must
+	// stay out of the cursor validation below.
+	const scopeConditions = [
 		eq(broadcastRecipients.broadcastId, id),
 		eq(broadcastRecipients.organizationId, orgId),
 		eq(broadcastRecipients.scopeKey, broadcast.scopeKey),
 	];
+	const conditions = [...scopeConditions];
 	if (status) conditions.push(eq(broadcastRecipients.status, status));
 
+	// Recipients are ordered by id alone (the supporting indexes are all
+	// (broadcast_id, status, id)), so the id cursor is already the complete sort
+	// key and needs no row lookup to interpret. The existence check below is
+	// purely cursor validation, scoped to the immutable conditions.
 	if (cursor) {
 		const [cursorRow] = await db
 			.select({ id: broadcastRecipients.id })
 			.from(broadcastRecipients)
-			.where(eq(broadcastRecipients.id, cursor))
+			.where(and(...scopeConditions, eq(broadcastRecipients.id, cursor)))
 			.limit(1);
-		if (cursorRow) {
-			conditions.push(sql`${broadcastRecipients.id} < ${cursorRow.id}`);
-		}
+		if (!cursorRow) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(sql`${broadcastRecipients.id} < ${cursor}`);
 	}
 
 	const rows = await db

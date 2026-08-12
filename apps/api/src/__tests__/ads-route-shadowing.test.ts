@@ -65,12 +65,15 @@ describe("ads route registration order (no /{id} shadowing)", () => {
 	it("routes GET /v1/ads/interests to searchInterests, not getAd", async () => {
 		const app = await makeApp();
 		const res = await app.request(
-			"/v1/ads/interests?social_account_id=acc_test&q=test",
+			"/v1/ads/interests?ad_account_id=acc_test&q=test",
 		);
-		// searchInterests → 200 { data: [] }. If shadowed by getAd → 404.
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as Record<string, unknown>;
-		expect(Array.isArray(body.data)).toBe(true);
+		// Interest search authorizes its explicit ad-account parent first, so the
+		// empty DB returns its distinct 404. A shadowed getAd says "Ad not found".
+		expect(res.status).toBe(404);
+		const body = (await res.json()) as {
+			error?: { code?: string; message?: string };
+		};
+		expect(body.error?.message).toBe("Ad account not found");
 	});
 
 	it("still routes GET /v1/ads/{id} to getAd (404 for unknown id)", async () => {

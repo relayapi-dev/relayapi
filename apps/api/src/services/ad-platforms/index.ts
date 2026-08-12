@@ -1,15 +1,20 @@
-import type { AdPlatform, AdPlatformAdapter } from "./types";
+import { googleAdAdapter } from "./google";
+import { linkedinAdAdapter } from "./linkedin";
 import { metaAdAdapter } from "./meta";
+import { pinterestAdAdapter } from "./pinterest";
+import { tiktokAdAdapter } from "./tiktok";
+import { twitterAdAdapter } from "./twitter";
+import type { AdPlatform, AdPlatformAdapter } from "./types";
 
 const adapters = new Map<AdPlatform, AdPlatformAdapter>();
 
 // Register platform adapters
 adapters.set("meta", metaAdAdapter);
-// Future: adapters.set("google", googleAdAdapter);
-// Future: adapters.set("tiktok", tiktokAdAdapter);
-// Future: adapters.set("linkedin", linkedinAdAdapter);
-// Future: adapters.set("pinterest", pinterestAdAdapter);
-// Future: adapters.set("twitter", twitterAdAdapter);
+adapters.set("google", googleAdAdapter);
+adapters.set("tiktok", tiktokAdAdapter);
+adapters.set("linkedin", linkedinAdAdapter);
+adapters.set("pinterest", pinterestAdAdapter);
+adapters.set("twitter", twitterAdAdapter);
 
 export function getAdPlatformAdapter(
 	platform: AdPlatform,
@@ -19,6 +24,10 @@ export function getAdPlatformAdapter(
 
 export function getSupportedAdPlatforms(): AdPlatform[] {
 	return Array.from(adapters.keys());
+}
+
+export function getAdPlatformAdapters(): readonly AdPlatformAdapter[] {
+	return [...adapters.values()];
 }
 
 /**

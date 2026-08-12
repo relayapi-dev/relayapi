@@ -1,4 +1,5 @@
 import { createRoute, OpenAPIHono } from "@hono/zod-openapi";
+import { DASHBOARD_SESSION_AUTHORITY_HEADER } from "@relayapi/config";
 import {
 	createDb,
 	type Database,
@@ -19,19 +20,34 @@ import { encryptAccountToken } from "../lib/account-token-crypto";
 import { parseApiKeyWorkspaceScope } from "../lib/api-key-workspace-scope";
 import { maybeDecrypt, maybeEncrypt } from "../lib/crypto";
 import { isAllowedCustomerRedirectUrl } from "../lib/customer-redirect";
+import { appPublicOrigin } from "../lib/deployment-mode";
+import { parseDiscordWebhookUrl } from "../lib/discord-webhook";
 import { sha256Hex } from "../lib/durable-operation";
+import { fetchPublicUrl, readResponseJson } from "../lib/fetch-public-url";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
+import {
+	listmonkApiUrl,
+	parseListmonkInstanceUrl,
+} from "../lib/listmonk-instance";
 import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
+import { isDefinitiveProviderMutationRejection } from "../lib/mutation-provider-boundary";
+import { readProviderJson, readProviderText } from "../lib/provider-response";
 import {
 	assertWriteAccess,
 	resolveOperationalCreateScope,
 	validatePersistedOperationalScope,
 } from "../lib/request-access";
+import { parseSlackWebhookUrl } from "../lib/slack-webhook";
 import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
+import { parseTikTokVerifiedUrlPrefix } from "../lib/tiktok-verified-url";
 import {
 	assertWorkspaceScope,
 	canAccessWorkspaceScope,
 } from "../lib/workspace-scope";
+import {
+	returnMutationInputNotApplied as connectionInputNotApplied,
+	markMutationInputNotApplied,
+} from "../middleware/mutation-validation";
 import type { Platform } from "../schemas/common";
 import { ErrorResponse } from "../schemas/common";
 import {
@@ -41,8 +57,11 @@ import {
 	ConnectBeehiivBody,
 	ConnectBlueskyBody,
 	ConnectConvertKitBody,
+	ConnectDiscordBody,
 	ConnectListMonkBody,
 	ConnectMailchimpBody,
+	ConnectSlackBody,
+	ConnectSmsBody,
 	FacebookPagesResponse,
 	GBPLocationsResponse,
 	InitTelegramQuery,
@@ -80,8 +99,15 @@ import {
 import { socialPlatformToAdPlatform } from "../services/ad-platforms";
 import { discoverAdAccounts } from "../services/ad-service";
 import { rehostAvatar } from "../services/avatar-store";
+import { resolveBlueskyPds } from "../services/bluesky-identity";
 import { getSupportedSyncPlatforms } from "../services/external-post-sync/index";
 import type { SyncPostsMessage } from "../services/external-post-sync/types";
+import {
+	MastodonOAuthSetupError,
+	type MastodonOAuthState,
+	mastodonOAuthConfigFromState,
+	registerMastodonOAuthClient,
+} from "../services/mastodon-oauth";
 import {
 	claimOneTimeCapability,
 	issueOneTimeCapability,
@@ -99,6 +125,7 @@ import {
 import {
 	subscribeFacebookPage,
 	subscribeInstagramAccount,
+	subscribeWhatsAppBusinessAccount,
 	verifyInstagramWebhookSubscription,
 	verifyWhatsAppWebhookSubscription,
 } from "../services/webhook-subscription";
@@ -107,9 +134,51 @@ import { logConnectionEvent } from "./connections";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
+function configuredTikTokVerifiedUrlPrefixes(env: Env): string[] {
+	// TikTok Content Posting API — Media Transfer Guide, "Pull from URL" /
+	// "Prerequisites" and "URL Prefix" sections:
+	// https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide
+	// PULL_FROM_URL media must use HTTPS, must not redirect, and must be beneath
+	// a Domain or URL Prefix property verified for this developer application.
+	const configured = env.TIKTOK_VERIFIED_URL_PREFIXES?.split(/[\n,]/u)
+		.map((value) => value.trim())
+		.filter(Boolean);
+	if (!configured?.length) return [];
+	return configured.map((value) => {
+		try {
+			return parseTikTokVerifiedUrlPrefix(value);
+		} catch {
+			throw new Error(
+				"TIKTOK_VERIFIED_URL_PREFIXES must contain HTTPS domain URL prefixes whose paths end in '/', without credentials, IP hosts, non-default ports, query strings, or fragments.",
+			);
+		}
+	});
+}
+
+function connectionAuthoritySessionId(
+	c: Parameters<typeof assertWriteAccess>[0],
+): string | null {
+	if (c.get("principalType") !== "dashboard_user") return null;
+	return c.req.header(DASHBOARD_SESSION_AUTHORITY_HEADER)?.trim() || null;
+}
+
 app.use("*", async (c, next) => {
 	const denied = assertWriteAccess(c);
 	if (denied) return denied;
+	if (
+		c.get("principalType") === "dashboard_user" &&
+		connectionAuthoritySessionId(c) === null
+	) {
+		return c.json(
+			{
+				error: {
+					code: "SESSION_NO_LONGER_AUTHORIZED",
+					message: "The initiating dashboard session is no longer authorized.",
+				},
+			},
+			401,
+		);
+	}
 	return next();
 });
 
@@ -124,7 +193,7 @@ const startOAuth = createRoute({
 	tags: ["Connect"],
 	summary: "Start OAuth flow",
 	description:
-		"Returns an auth_url and binds the initiating API key plus its workspace grant to one-time OAuth state. workspace_id is required only when Require Workspace ID is enabled.",
+		"Returns an auth_url and binds the initiating API key, exact dashboard session (when applicable), and workspace grant to one-time OAuth state. workspace_id is required only when Require Workspace ID is enabled.",
 	security: [{ Bearer: [] }],
 	request: { params: StartOAuthParams, query: StartOAuthQuery },
 	responses: {
@@ -146,7 +215,7 @@ const completeOAuth = createRoute({
 	tags: ["Connect"],
 	summary: "Complete OAuth callback",
 	description:
-		"Exchange an OAuth code and save the account after revalidating both the flow's initial workspace grant and the initiating API key's live authorization. Reconnects never move an existing identity implicitly.",
+		"Exchange an OAuth code and save the account after revalidating the flow's initial workspace grant, initiating API key, and exact dashboard session (when applicable). Reconnects never move an existing identity implicitly.",
 	security: [{ Bearer: [] }],
 	request: {
 		params: CompleteOAuthParams,
@@ -160,6 +229,10 @@ const completeOAuth = createRoute({
 		201: {
 			description: "Account connected",
 			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Invalid, expired, or mismatched OAuth state",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -290,6 +363,91 @@ const connectBluesky = createRoute({
 	},
 });
 
+const connectDiscord = createRoute({
+	operationId: "connectDiscord",
+	method: "post",
+	path: "/discord",
+	tags: ["Connect"],
+	summary: "Connect a Discord incoming webhook",
+	description:
+		"Validates a Discord-issued incoming webhook and saves its channel-bound bearer URL as an encrypted account credential.",
+	security: [{ Bearer: [] }],
+	request: {
+		body: { content: { "application/json": { schema: ConnectDiscordBody } } },
+	},
+	responses: {
+		201: {
+			description: "Discord webhook connected",
+			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Invalid webhook URL or credential",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "The webhook is already connected in another workspace",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+const connectSms = createRoute({
+	operationId: "connectSms",
+	method: "post",
+	path: "/sms",
+	tags: ["Connect"],
+	summary: "Connect a Twilio SMS account",
+	description:
+		"Validates Twilio Account SID/Auth Token credentials and verifies that the selected default sender belongs to the account and is SMS-capable.",
+	security: [{ Bearer: [] }],
+	request: {
+		body: { content: { "application/json": { schema: ConnectSmsBody } } },
+	},
+	responses: {
+		201: {
+			description: "Twilio SMS account connected",
+			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Invalid credentials or sender",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description:
+				"The Twilio account is already connected in another workspace",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
+const connectSlack = createRoute({
+	operationId: "connectSlack",
+	method: "post",
+	path: "/slack",
+	tags: ["Connect"],
+	summary: "Connect a Slack incoming webhook",
+	description:
+		"Validates the Slack-issued bearer URL shape and stores it encrypted. Slack incoming webhooks expose no read-only probe; activation and channel policy are authoritatively checked on the first publish.",
+	security: [{ Bearer: [] }],
+	request: {
+		body: { content: { "application/json": { schema: ConnectSlackBody } } },
+	},
+	responses: {
+		201: {
+			description: "Slack webhook connected",
+			content: { "application/json": { schema: CompleteOAuthResponse } },
+		},
+		400: {
+			description: "Invalid Slack webhook URL",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		409: {
+			description: "The webhook is already connected in another workspace",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+	},
+});
+
 // ===========================================================================
 // Telegram
 // ===========================================================================
@@ -357,7 +515,7 @@ const getPendingData = createRoute({
 	tags: ["Connect"],
 	summary: "Fetch pending OAuth data",
 	description:
-		"One-time use, expires after 10 minutes, and may only be polled by the API key that initiated the headless OAuth flow.",
+		"One-time use, expires after 10 minutes, and may only be polled by the API key and exact dashboard session (when applicable) that initiated the headless OAuth flow.",
 	security: [{ Bearer: [] }],
 	request: { query: PendingDataQuery },
 	responses: {
@@ -674,6 +832,7 @@ function accountWorkspaceConflictResponse(
 	error: unknown,
 ): Response | undefined {
 	if (isAccountWorkspaceAccessError(error)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -685,6 +844,7 @@ function accountWorkspaceConflictResponse(
 		);
 	}
 	if (!isAccountWorkspaceConflictError(error)) return undefined;
+	markMutationInputNotApplied(c);
 	return c.json(
 		{
 			error: {
@@ -753,11 +913,98 @@ const SECONDARY_SELECTION_PLATFORMS = new Set([
 	"snapchat",
 ]);
 
+const PROVEN_NOT_APPLIED_OAUTH_ERRORS = new Set([
+	"OAUTH_NOT_SUPPORTED",
+	"MISSING_CREDENTIALS",
+	"ACCOUNT_WORKSPACE_CONFLICT",
+	"WORKSPACE_ACCESS_DENIED",
+]);
+
 type PendingSecondaryScope = {
 	initiator_key_id: string;
 	initial_workspace_scope: "all" | string[];
 	workspace_id: string | null;
+	authority_session_ciphertext: string | null;
 };
+
+type SnapchatOwnProfile = {
+	id: string;
+	organization_id?: string;
+	display_name?: string;
+	snap_user_name?: string;
+	logo_urls?: {
+		original_logo_url?: string;
+		manage_profile_logo_url?: string;
+	};
+};
+
+type WhatsAppPhoneNumber = {
+	id: string;
+	display_phone_number?: string;
+	verified_name?: string;
+	code_verification_status?: string;
+};
+
+/**
+ * Official Meta collection: WhatsApp Business Platform / Phone Numbers
+ * GET https://graph.facebook.com/{{Version}}/{{WABA-ID}}/phone_numbers
+ * Header: Authorization: Bearer {{User-Access-Token}}
+ */
+async function fetchWhatsAppPhoneNumbers(
+	wabaId: string,
+	accessToken: string,
+): Promise<WhatsAppPhoneNumber[] | null> {
+	const url = new URL(
+		`${GRAPH_BASE.facebook}/${encodeURIComponent(wabaId)}/phone_numbers`,
+	);
+	url.searchParams.set(
+		"fields",
+		"id,display_phone_number,verified_name,code_verification_status",
+	);
+	const response = await fetch(url, {
+		headers: { Authorization: `Bearer ${accessToken}` },
+		redirect: "error",
+	});
+	if (!response.ok) {
+		void response.body?.cancel().catch(() => undefined);
+		return null;
+	}
+	const payload = await readResponseJson<{ data?: WhatsAppPhoneNumber[] }>(
+		response,
+		512 * 1024,
+	);
+	return payload.data ?? [];
+}
+
+/**
+ * Resolve the exact creator-owned Public Profile represented by a
+ * snapchat-profile-api access token.
+ *
+ * Official docs: https://developers.snap.com/marketing-api/Public-Profile-API/Profiles
+ * Section: "Get Profile ID by Auth Token"
+ * GET https://businessapi.snapchat.com/v1/public_profiles/my_profile
+ */
+async function fetchSnapchatOwnProfile(
+	accessToken: string,
+): Promise<SnapchatOwnProfile | null> {
+	const response = await fetch(
+		"https://businessapi.snapchat.com/v1/public_profiles/my_profile",
+		{
+			headers: { Authorization: `Bearer ${accessToken}` },
+			redirect: "error",
+		},
+	);
+	if (!response.ok) {
+		void response.body?.cancel().catch(() => undefined);
+		return null;
+	}
+	const payload = await readResponseJson<{
+		request_status?: string;
+		public_profile?: SnapchatOwnProfile;
+	}>(response, 256 * 1024);
+	const profile = payload.public_profile;
+	return profile?.id ? profile : null;
+}
 
 function pendingSecondaryKey(
 	organizationId: string,
@@ -771,23 +1018,37 @@ async function authorizePendingSecondary(
 	c: Parameters<typeof assertWriteAccess>[0],
 	data: PendingSecondaryScope,
 ): Promise<
-	| { ok: true; initialWorkspaceScope: "all" | string[] }
+	| {
+			ok: true;
+			initialWorkspaceScope: "all" | string[];
+			authoritySessionId: string | null;
+	  }
 	| { ok: false; response: Response }
 > {
+	const authoritySessionId = data.authority_session_ciphertext
+		? await maybeDecrypt(
+				data.authority_session_ciphertext,
+				c.env.ENCRYPTION_KEY,
+			)
+		: null;
 	if (
 		data.initiator_key_id !== c.get("keyId") ||
+		authoritySessionId !== connectionAuthoritySessionId(c) ||
 		!("initial_workspace_scope" in data)
 	) {
 		return {
 			ok: false,
-			response: c.json(
-				{
-					error: {
-						code: "NO_PENDING_DATA",
-						message: "No pending OAuth selection was found.",
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{
+						error: {
+							code: "NO_PENDING_DATA",
+							message: "No pending OAuth selection was found.",
+						},
 					},
-				},
-				404,
+					404,
+				),
 			),
 		};
 	}
@@ -797,34 +1058,41 @@ async function authorizePendingSecondary(
 	if (initialWorkspaceScope === null) {
 		return {
 			ok: false,
-			response: c.json(
-				{
-					error: {
-						code: "NO_PENDING_DATA",
-						message: "No pending OAuth selection was found.",
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{
+						error: {
+							code: "NO_PENDING_DATA",
+							message: "No pending OAuth selection was found.",
+						},
 					},
-				},
-				404,
+					404,
+				),
 			),
 		};
 	}
 	if (!canAccessWorkspaceScope(initialWorkspaceScope, data.workspace_id)) {
 		return {
 			ok: false,
-			response: c.json(
-				{
-					error: {
-						code: "WORKSPACE_ACCESS_DENIED",
-						message:
-							"The initiating API key did not authorize this connection scope.",
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{
+						error: {
+							code: "WORKSPACE_ACCESS_DENIED",
+							message:
+								"The initiating API key did not authorize this connection scope.",
+						},
 					},
-				},
-				403,
+					403,
+				),
 			),
 		};
 	}
 	const validation = await validatePersistedOperationalScope(c.get("db"), {
 		apiKeyId: data.initiator_key_id,
+		authoritySessionId,
 		organizationId: c.get("orgId"),
 		workspaceId: data.workspace_id,
 		resourceName: "connected account",
@@ -832,13 +1100,16 @@ async function authorizePendingSecondary(
 	if (!validation.ok) {
 		return {
 			ok: false,
-			response: c.json(
-				{ error: { code: validation.code, message: validation.message } },
-				validation.status,
+			response: connectionInputNotApplied(
+				c,
+				c.json(
+					{ error: { code: validation.code, message: validation.message } },
+					validation.status,
+				),
 			),
 		};
 	}
-	return { ok: true, initialWorkspaceScope };
+	return { ok: true, initialWorkspaceScope, authoritySessionId };
 }
 
 export type OAuthExchangeResult =
@@ -857,6 +1128,7 @@ export async function exchangeAndSaveAccount(params: {
 	env: Env;
 	orgId: string;
 	initiatorKeyId: string;
+	authoritySessionId: string | null;
 	authorizedWorkspaceScope: "all" | string[];
 	/** Scope accepted at authenticated initiation and carried by one-time state. */
 	workspaceId?: string | null;
@@ -871,6 +1143,8 @@ export async function exchangeAndSaveAccount(params: {
 	redirectUri: string;
 	codeVerifier?: string;
 	method?: string;
+	/** Encrypted one-time dynamic client registration for a Mastodon instance. */
+	mastodonOAuth?: MastodonOAuthState;
 	/** Stable identifier created when this OAuth flow starts. */
 	connectionOperationId?: string;
 	/**
@@ -887,6 +1161,7 @@ export async function exchangeAndSaveAccount(params: {
 		env,
 		orgId,
 		initiatorKeyId,
+		authoritySessionId,
 		authorizedWorkspaceScope,
 		workspaceId = null,
 		platform,
@@ -913,9 +1188,11 @@ export async function exchangeAndSaveAccount(params: {
 	};
 
 	const isInstagramDirect = platform === "instagram" && method === "direct";
-	const oauthConfig = isInstagramDirect
-		? INSTAGRAM_DIRECT_CONFIG
-		: OAUTH_CONFIGS[platform as Platform];
+	const oauthConfig = params.mastodonOAuth
+		? mastodonOAuthConfigFromState(params.mastodonOAuth)
+		: isInstagramDirect
+			? INSTAGRAM_DIRECT_CONFIG
+			: OAUTH_CONFIGS[platform as Platform];
 	if (!oauthConfig) {
 		return {
 			status: "error",
@@ -955,7 +1232,7 @@ export async function exchangeAndSaveAccount(params: {
 				`https://graph.threads.net/access_token?grant_type=th_exchange_token&client_secret=${clientSecret}&access_token=${tokens.access_token}`,
 			);
 			if (llRes.ok) {
-				const llData = (await llRes.json()) as {
+				const llData = (await readProviderJson(llRes)) as {
 					access_token: string;
 					expires_in?: number;
 				};
@@ -981,7 +1258,7 @@ export async function exchangeAndSaveAccount(params: {
 				`${GRAPH_BASE.instagram}/access_token?${llParams}`,
 			);
 			if (llRes.ok) {
-				const llData = (await llRes.json()) as {
+				const llData = (await readProviderJson(llRes)) as {
 					access_token: string;
 					expires_in?: number;
 				};
@@ -989,7 +1266,7 @@ export async function exchangeAndSaveAccount(params: {
 				tokens.expires_in = llData.expires_in;
 			} else {
 				console.warn(
-					`[oauth][${platform}] Long-lived token exchange failed: ${llRes.status} ${await llRes.text()}`,
+					`[oauth][${platform}] Long-lived token exchange failed: ${llRes.status} ${await readProviderText(llRes)}`,
 				);
 			}
 		} catch (err) {
@@ -1012,7 +1289,7 @@ export async function exchangeAndSaveAccount(params: {
 				`${GRAPH_BASE.facebook}/oauth/access_token?grant_type=fb_exchange_token&client_id=${clientId}&client_secret=${clientSecret}&fb_exchange_token=${tokens.access_token}`,
 			);
 			if (llRes.ok) {
-				const llData = (await llRes.json()) as {
+				const llData = (await readProviderJson(llRes)) as {
 					access_token: string;
 					expires_in?: number;
 				};
@@ -1044,14 +1321,22 @@ export async function exchangeAndSaveAccount(params: {
 		console.log(
 			`[oauth][${platform}] Profile fetch URL: ${profileUrl.replace(/access_token=[^&]+/, "access_token=REDACTED")}`,
 		);
-		const profileRes = await fetch(
-			profileUrl,
-			isInstagramDirect
-				? {}
-				: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
-		);
+		const profileRequest = isInstagramDirect
+			? {}
+			: { headers: { Authorization: `Bearer ${tokens.access_token}` } };
+		const profileRes = oauthConfig.requiresPublicEndpointValidation
+			? await fetchPublicUrl(profileUrl, {
+					...profileRequest,
+					timeout: 10_000,
+					timeoutThroughBody: true,
+					maxBytes: 512 * 1024,
+				})
+			: await fetch(profileUrl, profileRequest);
 		if (profileRes.ok) {
-			const profile = (await profileRes.json()) as Record<string, unknown>;
+			const profile = await readResponseJson<Record<string, unknown>>(
+				profileRes,
+				512 * 1024,
+			);
 			console.log(`[oauth][${platform}] Profile fetched: id=${profile.id}`);
 
 			if (platform === "twitter") {
@@ -1102,7 +1387,7 @@ export async function exchangeAndSaveAccount(params: {
 						`${GRAPH_BASE.facebook}/me/accounts?fields=instagram_business_account{id,username,name,profile_picture_url}&access_token=${tokens.access_token}`,
 					);
 					if (pagesRes.ok) {
-						const pagesData = (await pagesRes.json()) as {
+						const pagesData = (await readProviderJson(pagesRes)) as {
 							data: Array<{
 								instagram_business_account?: {
 									id: string;
@@ -1169,6 +1454,17 @@ export async function exchangeAndSaveAccount(params: {
 				avatarUrl =
 					(profile as { threads_profile_picture_url?: string })
 						.threads_profile_picture_url ?? null;
+			} else if (platform === "snapchat") {
+				const publicProfile = (
+					profile as { public_profile?: SnapchatOwnProfile }
+				).public_profile;
+				profileId = publicProfile?.id ?? null;
+				username = publicProfile?.snap_user_name ?? null;
+				displayName = publicProfile?.display_name ?? username ?? displayName;
+				avatarUrl =
+					publicProfile?.logo_urls?.manage_profile_logo_url ??
+					publicProfile?.logo_urls?.original_logo_url ??
+					null;
 			} else {
 				profileId =
 					(profile as { id?: string }).id ??
@@ -1181,9 +1477,9 @@ export async function exchangeAndSaveAccount(params: {
 				displayName = username ?? displayName;
 			}
 		} else {
-			const errBody = await profileRes.text().catch(() => "");
+			void profileRes.body?.cancel().catch(() => undefined);
 			console.error(
-				`[oauth][${platform}] Profile fetch failed: ${profileRes.status} ${errBody}`,
+				`[oauth][${platform}] Profile fetch failed: ${profileRes.status}`,
 			);
 		}
 	} catch (err) {
@@ -1226,10 +1522,12 @@ export async function exchangeAndSaveAccount(params: {
 	const tokenExpiresAt = tokens.expires_in
 		? new Date(Date.now() + tokens.expires_in * 1000)
 		: null;
+	const db = createDb(env.HYPERDRIVE.connectionString);
 
 	// Multi-select platforms: store token for secondary selection step
 	if (SECONDARY_SELECTION_PLATFORMS.has(platform)) {
 		const connectToken = crypto.randomUUID();
+		const pendingKey = pendingSecondaryKey(orgId, platform, connectToken);
 		// SECURITY: Encrypt access token AND refresh token before storing in KV
 		// (consistent with DB encryption at rest). The refresh_token and expires_at
 		// MUST be carried through to the select handler — without them the saved
@@ -1243,21 +1541,66 @@ export async function exchangeAndSaveAccount(params: {
 			tokens.refresh_token,
 			env.ENCRYPTION_KEY,
 		);
-		await env.KV.put(
-			pendingSecondaryKey(orgId, platform, connectToken),
-			JSON.stringify({
-				connection_operation_id: connectionOperationId,
-				initiator_key_id: initiatorKeyId,
-				initial_workspace_scope: authorizedWorkspaceScope,
-				workspace_id: workspaceId,
-				workspace_id_was_explicit: workspaceWasExplicit,
-				access_token: encryptedToken,
-				refresh_token: encryptedRefreshToken,
-				profile_id: profileId,
-				expires_at: tokenExpiresAt?.toISOString() ?? null,
-			}),
-			{ expirationTtl: 600 },
+		const authoritySessionCiphertext = await maybeEncrypt(
+			authoritySessionId,
+			env.ENCRYPTION_KEY,
 		);
+		const pendingPayload = JSON.stringify({
+			connection_operation_id: connectionOperationId,
+			initiator_key_id: initiatorKeyId,
+			authority_session_ciphertext: authoritySessionCiphertext,
+			initial_workspace_scope: authorizedWorkspaceScope,
+			workspace_id: workspaceId,
+			workspace_id_was_explicit: workspaceWasExplicit,
+			access_token: encryptedToken,
+			refresh_token: encryptedRefreshToken,
+			profile_id: profileId,
+			expires_at: tokenExpiresAt?.toISOString() ?? null,
+		});
+		try {
+			const admission = await db.transaction(async (tx) => {
+				const validation = await validatePersistedOperationalScope(tx, {
+					apiKeyId: initiatorKeyId,
+					authoritySessionId,
+					organizationId: orgId,
+					workspaceId,
+					resourceName: "connected account",
+				});
+				if (!validation.ok) return validation;
+				if (
+					!canAccessWorkspaceScope(authorizedWorkspaceScope, workspaceId) ||
+					!canAccessWorkspaceScope(
+						validation.authorization.workspaceScope,
+						workspaceId,
+					)
+				) {
+					return {
+						ok: false as const,
+						code: "WORKSPACE_ACCESS_DENIED",
+						message:
+							"The initiating credential no longer has access to this workspace.",
+					};
+				}
+
+				// Keep the PostgreSQL share locks until the encrypted KV write
+				// completes. Revocation therefore linearizes either before this
+				// write (and rejects it) or after the pending credential exists.
+				await env.KV.put(pendingKey, pendingPayload, { expirationTtl: 600 });
+				return { ok: true as const };
+			});
+			if (!admission.ok) {
+				return {
+					status: "error",
+					code: admission.code,
+					message: admission.message,
+				};
+			}
+		} catch (error) {
+			// A commit failure after KV.put must not leave an uncommitted
+			// pending credential reachable. Retrieval also revalidates authority.
+			await env.KV.delete(pendingKey).catch(() => undefined);
+			throw error;
+		}
 		return { status: "pending_selection", platform, connectToken };
 	}
 
@@ -1265,17 +1608,25 @@ export async function exchangeAndSaveAccount(params: {
 	console.log(
 		`[oauth][${platform}] Upserting account: orgId=${orgId}, profileId=${profileId}`,
 	);
-	const db = createDb(env.HYPERDRIVE.connectionString);
-
 	const encKey = env.ENCRYPTION_KEY;
 	// Record the Instagram connection method so the token-refresh cron can pick
 	// the correct refresh grant. Instagram via Facebook Login stores a Facebook
 	// user token that the ig_refresh_token grant can never refresh — flagging it
 	// here lets refreshToken() skip the doomed call instead of looping on it.
-	const igMetadata: { ig_login_method: "direct" | "facebook" } | null =
+	const accountMetadata: Record<string, unknown> | null =
 		platform === "instagram"
 			? { ig_login_method: isInstagramDirect ? "direct" : "facebook" }
-			: null;
+			: platform === "tiktok"
+				? {
+						tiktok_verified_url_prefixes:
+							configuredTikTokVerifiedUrlPrefixes(env),
+					}
+				: platform === "mastodon" && params.mastodonOAuth
+					? {
+							instance_url: params.mastodonOAuth.instance_url,
+							auth_mode: "dynamic_oauth",
+						}
+					: null;
 	let account: ConnectedSocialAccount;
 	let persistedWebhook: PersistedWebhookEvent;
 	try {
@@ -1286,6 +1637,7 @@ export async function exchangeAndSaveAccount(params: {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, encKey, {
 					apiKeyId: initiatorKeyId,
+					authoritySessionId,
 					authorizedWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -1297,7 +1649,7 @@ export async function exchangeAndSaveAccount(params: {
 						avatarUrl,
 						tokenExpiresAt,
 						scopes: oauthConfig.scopes,
-						...(igMetadata ? { metadata: igMetadata } : {}),
+						...(accountMetadata ? { metadata: accountMetadata } : {}),
 						...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
 					},
 					update: {
@@ -1306,7 +1658,7 @@ export async function exchangeAndSaveAccount(params: {
 						avatarUrl,
 						tokenExpiresAt,
 						scopes: oauthConfig.scopes,
-						...(igMetadata ? { metadata: igMetadata } : {}),
+						...(accountMetadata ? { metadata: accountMetadata } : {}),
 						...(igAppScopedId ? { webhookAccountId: igAppScopedId } : {}),
 					},
 					preserveExistingWorkspaceOnOmission: !workspaceWasExplicit,
@@ -1505,7 +1857,7 @@ app.openapi(connectBeehiiv, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		// Validate credentials by fetching publication info
@@ -1516,6 +1868,8 @@ app.openapi(connectBeehiiv, async (c) => {
 			},
 		);
 		if (!res.ok) {
+			void res.body?.cancel().catch(() => undefined);
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1526,7 +1880,7 @@ app.openapi(connectBeehiiv, async (c) => {
 				400 as never,
 			);
 		}
-		const pub = (await res.json()) as { data?: { name?: string } };
+		const pub = (await readProviderJson(res)) as { data?: { name?: string } };
 		const pubName = pub.data?.name ?? "Beehiiv Newsletter";
 
 		const { account, webhook } = await persistConnectedAccount({
@@ -1536,6 +1890,7 @@ app.openapi(connectBeehiiv, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1604,13 +1959,14 @@ app.openapi(connectConvertKit, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		const res = await fetch("https://api.kit.com/v4/account", {
 			headers: { "X-Kit-Api-Key": api_key },
 		});
 		if (!res.ok) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1621,7 +1977,7 @@ app.openapi(connectConvertKit, async (c) => {
 				400 as never,
 			);
 		}
-		const accountInfo = (await res.json()) as {
+		const accountInfo = (await readProviderJson(res)) as {
 			account?: {
 				id?: number;
 				name?: string;
@@ -1639,6 +1995,7 @@ app.openapi(connectConvertKit, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1703,11 +2060,12 @@ app.openapi(connectMailchimp, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
 		const datacenter = getMailchimpDatacenter(api_key);
 		if (!datacenter) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1723,6 +2081,7 @@ app.openapi(connectMailchimp, async (c) => {
 			headers: { Authorization: authHeader },
 		});
 		if (!res.ok) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: { code: "AUTH_FAILED", message: "Invalid Mailchimp API key." },
@@ -1730,7 +2089,7 @@ app.openapi(connectMailchimp, async (c) => {
 				400 as never,
 			);
 		}
-		const info = (await res.json()) as {
+		const info = (await readProviderJson(res)) as {
 			account_name?: string;
 			login_id?: string;
 			account_id?: string;
@@ -1745,6 +2104,7 @@ app.openapi(connectMailchimp, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1809,13 +2169,29 @@ app.openapi(connectListMonk, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
-		const cleanUrl = instance_url.replace(/\/$/, "");
+		let cleanUrl: string;
+		try {
+			cleanUrl = parseListmonkInstanceUrl(instance_url);
+		} catch {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "BAD_REQUEST",
+						message:
+							"instance_url must be a valid public HTTPS URL without credentials, a query, or a fragment.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
 
 		// SSRF protection: block private/reserved IPs and non-HTTPS URLs
 		if (await isBlockedUrlWithDns(cleanUrl)) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1827,37 +2203,18 @@ app.openapi(connectListMonk, async (c) => {
 				400 as never,
 			);
 		}
-		try {
-			const parsed = new URL(cleanUrl);
-			if (parsed.protocol !== "https:") {
-				return c.json(
-					{
-						error: {
-							code: "BAD_REQUEST",
-							message: "instance_url must use HTTPS.",
-						},
-					} as never,
-					400 as never,
-				);
-			}
-		} catch {
-			return c.json(
-				{
-					error: {
-						code: "BAD_REQUEST",
-						message: "instance_url is not a valid URL.",
-					},
-				} as never,
-				400 as never,
-			);
-		}
-
 		const basicAuth = btoa(`${user}:${password}`);
-		const res = await fetch(`${cleanUrl}/api/settings`, {
-			headers: { Authorization: `Basic ${basicAuth}` },
-			redirect: "error",
-		});
+		const res = await fetchPublicUrl(
+			listmonkApiUrl(cleanUrl, "/api/settings"),
+			{
+				headers: { Authorization: `Basic ${basicAuth}` },
+				redirect: "error",
+				timeout: 30_000,
+				maxBytes: 512 * 1024,
+			},
+		);
 		if (!res.ok) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -1868,6 +2225,7 @@ app.openapi(connectListMonk, async (c) => {
 				400 as never,
 			);
 		}
+		void res.body?.cancel().catch(() => undefined);
 
 		const name = `ListMonk (${new URL(cleanUrl).hostname})`;
 		const { account, webhook } = await persistConnectedAccount({
@@ -1877,6 +2235,7 @@ app.openapi(connectListMonk, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -1935,13 +2294,17 @@ app.openapi(connectBluesky, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	try {
-		// Bluesky: Create an authenticated session using handle + app password
-		// https://docs.bsky.app/docs/api/com-atproto-server-create-session
+		// Bluesky/AT Protocol: resolve the account's DID and authoritative PDS,
+		// then create the password session on that PDS. Official host guidance:
+		// https://docs.bsky.app/docs/advanced-guides/api-directory
+		// Record writes and authenticated account requests go to the PDS resolved
+		// from the account's DID document, not a hard-coded Bluesky entryway.
+		const identity = await resolveBlueskyPds(handle);
 		const res = await fetch(
-			"https://bsky.social/xrpc/com.atproto.server.createSession",
+			`${identity.pdsUrl}/xrpc/com.atproto.server.createSession`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -1953,6 +2316,10 @@ app.openapi(connectBluesky, async (c) => {
 		);
 
 		if (!res.ok) {
+			void res.body?.cancel().catch(() => undefined);
+			if (isDefinitiveProviderMutationRejection(res.status)) {
+				markMutationInputNotApplied(c);
+			}
 			return c.json(
 				{
 					error: {
@@ -1965,11 +2332,23 @@ app.openapi(connectBluesky, async (c) => {
 			);
 		}
 
-		const session = (await res.json()) as {
+		const session = await readResponseJson<{
 			did: string;
 			handle: string;
 			email?: string;
-		};
+		}>(res, 256 * 1024);
+		if (session.did !== identity.did) {
+			return c.json(
+				{
+					error: {
+						code: "IDENTITY_MISMATCH",
+						message:
+							"The authenticated PDS session did not match the resolved Bluesky identity.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
 
 		// Atomic upsert: update if already connected
 		let account: ConnectedSocialAccount;
@@ -1982,6 +2361,7 @@ app.openapi(connectBluesky, async (c) => {
 				upsert: async (tx) =>
 					upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 						apiKeyId: c.get("keyId"),
+						authoritySessionId: connectionAuthoritySessionId(c),
 						authorizedWorkspaceScope: c.get("workspaceScope"),
 						insert: {
 							organizationId: orgId,
@@ -1990,10 +2370,20 @@ app.openapi(connectBluesky, async (c) => {
 							platformAccountId: session.did,
 							username: session.handle,
 							displayName: session.handle,
+							metadata: {
+								pds_url: identity.pdsUrl,
+								did: identity.did,
+								auth_mode: "app_password",
+							},
 						},
 						update: {
 							username: session.handle,
 							displayName: session.handle,
+							metadata: {
+								pds_url: identity.pdsUrl,
+								did: identity.did,
+								auth_mode: "app_password",
+							},
 						},
 						preserveExistingWorkspaceOnOmission: workspace_id === undefined,
 						accessToken: app_password,
@@ -2043,6 +2433,433 @@ app.openapi(connectBluesky, async (c) => {
 	}
 });
 
+// --- Discord incoming webhook ---
+// Official docs: https://docs.discord.com/developers/resources/webhook
+// Section "Get Webhook with Token":
+// GET /webhooks/{webhook.id}/{webhook.token}
+// Section "Execute Webhook":
+// POST /webhooks/{webhook.id}/{webhook.token}
+// The webhook token is the credential; neither endpoint requires a separate
+// Authorization header.
+app.openapi(connectDiscord, async (c) => {
+	const orgId = c.get("orgId");
+	const { webhook_url, workspace_id } = c.req.valid("json");
+	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
+
+	let webhook: ReturnType<typeof parseDiscordWebhookUrl>;
+	try {
+		webhook = parseDiscordWebhookUrl(webhook_url);
+	} catch (error) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "INVALID_WEBHOOK_URL",
+					message:
+						error instanceof Error
+							? error.message
+							: "Invalid Discord webhook URL.",
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	try {
+		const response = await fetch(webhook.url, {
+			method: "GET",
+			redirect: "error",
+		});
+		if (!response.ok) {
+			void response.body?.cancel().catch(() => undefined);
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "AUTH_FAILED",
+						message:
+							"Discord rejected the webhook URL. Confirm that it has not been deleted or regenerated.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
+		const info = await readResponseJson<{
+			id?: string;
+			type?: number;
+			guild_id?: string | null;
+			channel_id?: string | null;
+			name?: string | null;
+			avatar?: string | null;
+		}>(response, 256 * 1024);
+		if (
+			info.id !== webhook.webhookId ||
+			info.type !== 1 ||
+			!info.channel_id?.trim()
+		) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "INVALID_WEBHOOK",
+						message:
+							"The URL must identify a Discord Incoming Webhook bound to a channel.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
+
+		const displayName = info.name?.trim() || `Discord webhook ${info.id}`;
+		const { account, webhook: persistedWebhook } =
+			await persistConnectedAccount({
+				db,
+				orgId,
+				connectionOperationId: crypto.randomUUID(),
+				upsert: async (tx) =>
+					upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+						apiKeyId: c.get("keyId"),
+						authoritySessionId: connectionAuthoritySessionId(c),
+						authorizedWorkspaceScope: c.get("workspaceScope"),
+						insert: {
+							organizationId: orgId,
+							workspaceId: scope.workspaceId,
+							platform: "discord",
+							platformAccountId: webhook.webhookId,
+							username: displayName,
+							displayName,
+							metadata: {
+								webhook_id: webhook.webhookId,
+								guild_id: info.guild_id ?? null,
+								channel_id: info.channel_id,
+							},
+						},
+						update: {
+							username: displayName,
+							displayName,
+							metadata: {
+								webhook_id: webhook.webhookId,
+								guild_id: info.guild_id ?? null,
+								channel_id: info.channel_id,
+							},
+						},
+						preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+						accessToken: webhook.url,
+						refreshToken: null,
+					}),
+			});
+		c.executionCtx.waitUntil(
+			enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+		);
+		c.executionCtx.waitUntil(
+			logConnectionEvent(c.env, orgId, {
+				account_id: account.id,
+				platform: "discord",
+				event: "connected",
+				message: `Connected ${displayName}`,
+			}),
+		);
+		return c.json(formatAccountResponse(account) as never, 201 as never);
+	} catch (error) {
+		const conflict = accountWorkspaceConflictResponse(c, error);
+		if (conflict) return conflict as never;
+		console.error("[connect][discord] Connection failed", error);
+		return c.json(
+			{
+				error: {
+					code: "CONNECTION_FAILED",
+					message: "Failed to validate or save the Discord webhook.",
+				},
+			} as never,
+			502 as never,
+		);
+	}
+});
+
+// --- Twilio SMS ---
+// Official docs: https://www.twilio.com/docs/iam/api/account
+// Section "Fetch an Account resource":
+// GET https://api.twilio.com/2010-04-01/Accounts/{Sid}.json
+// Official docs:
+// https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource
+// Section "Read multiple IncomingPhoneNumber resources":
+// GET https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers.json
+// Query fields used here: PhoneNumber and PageSize.
+app.openapi(connectSms, async (c) => {
+	const orgId = c.get("orgId");
+	const { account_sid, auth_token, from_number, workspace_id } =
+		c.req.valid("json");
+	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
+
+	const authorization = `Basic ${btoa(`${account_sid}:${auth_token}`)}`;
+	try {
+		const accountResponse = await fetch(
+			`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(account_sid)}.json`,
+			{ headers: { Authorization: authorization }, redirect: "error" },
+		);
+		if (!accountResponse.ok) {
+			void accountResponse.body?.cancel().catch(() => undefined);
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "AUTH_FAILED",
+						message: "Twilio rejected the Account SID or Auth Token.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
+		const twilioAccount = await readResponseJson<{
+			sid?: string;
+			friendly_name?: string;
+			status?: string;
+		}>(accountResponse, 256 * 1024);
+		if (
+			twilioAccount.sid !== account_sid ||
+			twilioAccount.status !== "active"
+		) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "ACCOUNT_NOT_ACTIVE",
+						message: "The Twilio account is not active.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
+
+		const numbersUrl = new URL(
+			`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(account_sid)}/IncomingPhoneNumbers.json`,
+		);
+		numbersUrl.searchParams.set("PhoneNumber", from_number);
+		numbersUrl.searchParams.set("PageSize", "1");
+		const numberResponse = await fetch(numbersUrl, {
+			headers: { Authorization: authorization },
+			redirect: "error",
+		});
+		if (!numberResponse.ok) {
+			void numberResponse.body?.cancel().catch(() => undefined);
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "SENDER_LOOKUP_FAILED",
+						message:
+							"Twilio could not verify the selected sender for this account.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
+		const numberPayload = await readResponseJson<{
+			incoming_phone_numbers?: Array<{
+				phone_number?: string;
+				friendly_name?: string;
+				capabilities?: { sms?: boolean; mms?: boolean };
+			}>;
+		}>(numberResponse, 512 * 1024);
+		const sender = numberPayload.incoming_phone_numbers?.find(
+			(item) => item.phone_number === from_number,
+		);
+		if (!sender?.capabilities?.sms) {
+			markMutationInputNotApplied(c);
+			return c.json(
+				{
+					error: {
+						code: "INVALID_SENDER",
+						message:
+							"from_number must be an SMS-capable Twilio number owned by this account.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
+
+		const displayName = twilioAccount.friendly_name?.trim() || account_sid;
+		const { account, webhook: persistedWebhook } =
+			await persistConnectedAccount({
+				db,
+				orgId,
+				connectionOperationId: crypto.randomUUID(),
+				upsert: async (tx) =>
+					upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+						apiKeyId: c.get("keyId"),
+						authoritySessionId: connectionAuthoritySessionId(c),
+						authorizedWorkspaceScope: c.get("workspaceScope"),
+						insert: {
+							organizationId: orgId,
+							workspaceId: scope.workspaceId,
+							platform: "sms",
+							platformAccountId: account_sid,
+							username: sender.friendly_name ?? from_number,
+							displayName,
+							metadata: {
+								default_from_number: from_number,
+								from_number,
+								mms_capable: sender.capabilities?.mms === true,
+							},
+						},
+						update: {
+							username: sender.friendly_name ?? from_number,
+							displayName,
+							metadata: {
+								default_from_number: from_number,
+								from_number,
+								mms_capable: sender.capabilities?.mms === true,
+							},
+						},
+						preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+						accessToken: auth_token,
+						refreshToken: null,
+					}),
+			});
+		c.executionCtx.waitUntil(
+			enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+		);
+		c.executionCtx.waitUntil(
+			logConnectionEvent(c.env, orgId, {
+				account_id: account.id,
+				platform: "sms",
+				event: "connected",
+				message: `Connected Twilio sender ${from_number}`,
+			}),
+		);
+		return c.json(formatAccountResponse(account) as never, 201 as never);
+	} catch (error) {
+		const conflict = accountWorkspaceConflictResponse(c, error);
+		if (conflict) return conflict as never;
+		console.error("[connect][sms] Connection failed", error);
+		return c.json(
+			{
+				error: {
+					code: "CONNECTION_FAILED",
+					message: "Failed to validate or save the Twilio SMS account.",
+				},
+			} as never,
+			502 as never,
+		);
+	}
+});
+
+// --- Slack incoming webhook ---
+// Official docs:
+// https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks
+// Section "4. Use your incoming webhook URL to post a message":
+// POST https://hooks.slack.com/services/T00000000/B00000000/SECRET
+// Content-Type: application/json; field: text. The URL is a secret tied to one
+// workspace and channel. Slack exposes no non-mutating webhook probe.
+app.openapi(connectSlack, async (c) => {
+	const orgId = c.get("orgId");
+	const { webhook_url, workspace_id } = c.req.valid("json");
+	const db = c.get("db");
+	const scope = await resolveOperationalCreateScope(
+		c,
+		workspace_id,
+		"connected account",
+	);
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
+
+	let webhook: ReturnType<typeof parseSlackWebhookUrl>;
+	try {
+		webhook = parseSlackWebhookUrl(webhook_url);
+	} catch (error) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "INVALID_WEBHOOK_URL",
+					message:
+						error instanceof Error
+							? error.message
+							: "Invalid Slack webhook URL.",
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	try {
+		const displayName = `Slack ${webhook.teamId}`;
+		const { account, webhook: persistedWebhook } =
+			await persistConnectedAccount({
+				db,
+				orgId,
+				connectionOperationId: crypto.randomUUID(),
+				upsert: async (tx) =>
+					upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
+						apiKeyId: c.get("keyId"),
+						authoritySessionId: connectionAuthoritySessionId(c),
+						authorizedWorkspaceScope: c.get("workspaceScope"),
+						insert: {
+							organizationId: orgId,
+							workspaceId: scope.workspaceId,
+							platform: "slack",
+							platformAccountId: `${webhook.teamId}:${webhook.serviceId}`,
+							username: webhook.teamId,
+							displayName,
+							metadata: {
+								team_id: webhook.teamId,
+								service_id: webhook.serviceId,
+								auth_mode: "incoming_webhook",
+							},
+						},
+						update: {
+							username: webhook.teamId,
+							displayName,
+							metadata: {
+								team_id: webhook.teamId,
+								service_id: webhook.serviceId,
+								auth_mode: "incoming_webhook",
+							},
+						},
+						preserveExistingWorkspaceOnOmission: workspace_id === undefined,
+						accessToken: webhook.url,
+						refreshToken: null,
+					}),
+			});
+		c.executionCtx.waitUntil(
+			enqueuePersistedWebhookEvent(c.env, db, persistedWebhook),
+		);
+		c.executionCtx.waitUntil(
+			logConnectionEvent(c.env, orgId, {
+				account_id: account.id,
+				platform: "slack",
+				event: "connected",
+				message: `Connected ${displayName} incoming webhook`,
+			}),
+		);
+		return c.json(formatAccountResponse(account) as never, 201 as never);
+	} catch (error) {
+		const conflict = accountWorkspaceConflictResponse(c, error);
+		if (conflict) return conflict as never;
+		console.error("[connect][slack] Connection failed", error);
+		return c.json(
+			{
+				error: {
+					code: "CONNECTION_FAILED",
+					message: "Failed to save the Slack incoming webhook.",
+				},
+			} as never,
+			500 as never,
+		);
+	}
+});
+
 // --- Telegram ---
 app.openapi(initTelegram, async (c) => {
 	const { workspace_id } = c.req.valid("query");
@@ -2051,11 +2868,12 @@ app.openapi(initTelegram, async (c) => {
 		workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 	const { code, expiresAt } = await issueTelegramConnectionChallenge(
 		c.get("db"),
 		c.get("orgId"),
 		c.get("keyId"),
+		connectionAuthoritySessionId(c),
 		c.get("workspaceScope"),
 		scope.workspaceId,
 	);
@@ -2111,6 +2929,7 @@ app.openapi(getPendingData, async (c) => {
 		Record<string, unknown> & {
 			organization_id?: string;
 			initiator_key_id?: string;
+			authority_session_ciphertext?: string | null;
 			initial_workspace_scope?: "all" | string[];
 			workspace_id?: string | null;
 		}
@@ -2120,6 +2939,7 @@ app.openapi(getPendingData, async (c) => {
 		!data ||
 		data.organization_id !== c.get("orgId") ||
 		data.initiator_key_id !== c.get("keyId") ||
+		!("authority_session_ciphertext" in data) ||
 		!("initial_workspace_scope" in data) ||
 		!("workspace_id" in data)
 	) {
@@ -2141,8 +2961,23 @@ app.openapi(getPendingData, async (c) => {
 			404 as never,
 		);
 	}
+	const authoritySessionId = data.authority_session_ciphertext
+		? await maybeDecrypt(
+				data.authority_session_ciphertext,
+				c.env.ENCRYPTION_KEY,
+			)
+		: null;
+	if (authoritySessionId !== connectionAuthoritySessionId(c)) {
+		return c.json(
+			{
+				error: { code: "NOT_FOUND", message: "Token not found or expired" },
+			} as never,
+			404 as never,
+		);
+	}
 	const validation = await validatePersistedOperationalScope(c.get("db"), {
 		apiKeyId: data.initiator_key_id,
+		authoritySessionId,
 		organizationId: c.get("orgId"),
 		workspaceId: data.workspace_id ?? null,
 		resourceName: "connected account",
@@ -2162,6 +2997,7 @@ app.openapi(getPendingData, async (c) => {
 	const {
 		organization_id: _organizationId,
 		initiator_key_id: _initiatorKeyId,
+		authority_session_ciphertext: _authoritySessionCiphertext,
 		initial_workspace_scope: _initialWorkspaceScope,
 		...response
 	} = data;
@@ -2204,12 +3040,13 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 		body.workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 
 	const appId = c.env.WHATSAPP_APP_ID;
 	const appSecret = c.env.WHATSAPP_APP_SECRET;
 
 	if (!appId || !appSecret) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2230,12 +3067,18 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	tokenUrl.searchParams.set("code", body.code);
 
 	const tokenRes = await fetch(tokenUrl.toString());
-	const tokenData = (await tokenRes.json()) as {
+	const tokenData = (await readProviderJson(tokenRes)) as {
 		access_token?: string;
 		error?: { message: string };
 	};
 
 	if (!tokenRes.ok || !tokenData.access_token) {
+		if (
+			!tokenRes.ok &&
+			isDefinitiveProviderMutationRejection(tokenRes.status)
+		) {
+			markMutationInputNotApplied(c);
+		}
 		return c.json(
 			{
 				error: {
@@ -2259,7 +3102,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	debugUrl.searchParams.set("access_token", appAccessToken);
 
 	const debugRes = await fetch(debugUrl.toString());
-	const debugData = (await debugRes.json()) as {
+	const debugData = (await readProviderJson(debugRes)) as {
 		data?: {
 			granular_scopes?: Array<{
 				scope: string;
@@ -2285,65 +3128,79 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 	const wabaScope = debugData.data.granular_scopes?.find(
 		(s) => s.scope === "whatsapp_business_management",
 	);
-	const wabaId = wabaScope?.target_ids?.[0];
+	const permittedWabaIds = wabaScope?.target_ids ?? [];
+	const wabaId = body.waba_id ?? permittedWabaIds[0];
 
-	if (!wabaId) {
+	if (!wabaId || !permittedWabaIds.includes(wabaId)) {
 		return c.json(
 			{
 				error: {
-					code: "WABA_NOT_FOUND",
+					code: body.waba_id ? "WABA_ACCESS_DENIED" : "WABA_NOT_FOUND",
 					message:
-						"No WhatsApp Business Account found in token permissions. Ensure whatsapp_business_management scope was granted.",
+						"The selected WhatsApp Business Account is not included in the token's whatsapp_business_management grant.",
 				},
 			} as never,
 			400 as never,
 		);
 	}
 
-	// Step 3: Fetch phone number ID from WABA
-	// https://developers.facebook.com/docs/whatsapp/business-management-api/manage-phone-numbers
-	const phoneUrl = new URL(`${GRAPH_BASE.facebook}/${wabaId}/phone_numbers`);
-	phoneUrl.searchParams.set("access_token", accessToken);
-
-	const phoneRes = await fetch(phoneUrl.toString());
-	const phoneData = (await phoneRes.json()) as {
-		data?: Array<{
-			id: string;
-			display_phone_number: string;
-		}>;
-		error?: { message: string };
-	};
-
-	if (!phoneRes.ok || !phoneData.data?.length) {
+	// Step 3: Fetch the phone numbers owned by the selected WABA. When the
+	// Embedded Signup event provides an exact phone ID, never silently replace it
+	// with the first number returned by Graph.
+	const phoneNumbers = await fetchWhatsAppPhoneNumbers(wabaId, accessToken);
+	if (!phoneNumbers?.length) {
 		return c.json(
 			{
 				error: {
 					code: "PHONE_NUMBER_NOT_FOUND",
 					message:
-						phoneData.error?.message ||
-						"No phone numbers found for this WhatsApp Business Account",
+						"No phone numbers accessible to this token were found for the selected WhatsApp Business Account.",
 				},
 			} as never,
 			400 as never,
 		);
 	}
 
-	const phone = phoneData.data?.[0];
+	const phone = body.phone_number_id
+		? phoneNumbers.find((item) => item.id === body.phone_number_id)
+		: phoneNumbers[0];
 	if (!phone) {
 		return c.json(
 			{
 				error: {
-					code: "PHONE_NUMBER_NOT_FOUND",
-					message: "No phone numbers found for this WhatsApp Business Account",
+					code: "PHONE_NUMBER_ACCESS_DENIED",
+					message:
+						"The selected phone number does not belong to the selected WhatsApp Business Account.",
 				},
 			} as never,
 			400 as never,
 		);
 	}
 	const phoneNumberId = phone.id;
-	const displayPhoneNumber = phone.display_phone_number;
+	const displayPhoneNumber = phone.display_phone_number ?? phone.verified_name;
 
-	// Step 4: Atomic upsert to handle re-connections gracefully
+	// Step 4: WABA-level subscription is mandatory in addition to the app-level
+	// webhook configuration. This operation is idempotent and must succeed before
+	// RelayAPI exposes a publishable account.
+	const wabaSubscription = await subscribeWhatsAppBusinessAccount(
+		wabaId,
+		accessToken,
+	);
+	if (!wabaSubscription.success) {
+		return c.json(
+			{
+				error: {
+					code: "WABA_SUBSCRIPTION_FAILED",
+					message:
+						wabaSubscription.error ??
+						"Could not subscribe the app to the WhatsApp Business Account.",
+				},
+			} as never,
+			502 as never,
+		);
+	}
+
+	// Step 5: Atomic upsert to handle re-connections gracefully
 	let account: ConnectedSocialAccount;
 	let persistedWebhook: PersistedWebhookEvent;
 	try {
@@ -2354,6 +3211,7 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
@@ -2364,6 +3222,8 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 						metadata: {
 							waba_id: wabaId,
 							phone_number: displayPhoneNumber,
+							verified_name: phone.verified_name ?? null,
+							code_verification_status: phone.code_verification_status ?? null,
 						},
 					},
 					update: {
@@ -2371,6 +3231,8 @@ app.openapi(whatsappEmbeddedSignup, async (c) => {
 						metadata: {
 							waba_id: wabaId,
 							phone_number: displayPhoneNumber,
+							verified_name: phone.verified_name ?? null,
+							code_verification_status: phone.code_verification_status ?? null,
 						},
 					},
 					preserveExistingWorkspaceOnOmission: body.workspace_id === undefined,
@@ -2434,7 +3296,45 @@ app.openapi(whatsappCredentials, async (c) => {
 		body.workspace_id,
 		"connected account",
 	);
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
+
+	// Validate the token against the exact WABA and phone number before storing
+	// credentials. A caller-supplied ID alone is not proof of ownership.
+	const phoneNumbers = await fetchWhatsAppPhoneNumbers(
+		body.waba_id,
+		body.access_token,
+	).catch(() => null);
+	const phone = phoneNumbers?.find((item) => item.id === body.phone_number_id);
+	if (!phone) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "AUTH_FAILED",
+					message:
+						"The token cannot access this phone number under the selected WhatsApp Business Account.",
+				},
+			} as never,
+			400 as never,
+		);
+	}
+	const wabaSubscription = await subscribeWhatsAppBusinessAccount(
+		body.waba_id,
+		body.access_token,
+	);
+	if (!wabaSubscription.success) {
+		return c.json(
+			{
+				error: {
+					code: "WABA_SUBSCRIPTION_FAILED",
+					message:
+						wabaSubscription.error ??
+						"Could not subscribe the app to the WhatsApp Business Account.",
+				},
+			} as never,
+			502 as never,
+		);
+	}
 
 	let account: ConnectedSocialAccount;
 	let persistedWebhook: PersistedWebhookEvent;
@@ -2446,18 +3346,35 @@ app.openapi(whatsappCredentials, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: c.get("keyId"),
+					authoritySessionId: connectionAuthoritySessionId(c),
 					authorizedWorkspaceScope: c.get("workspaceScope"),
 					insert: {
 						organizationId: orgId,
 						workspaceId: scope.workspaceId,
 						platform: "whatsapp",
 						platformAccountId: body.phone_number_id,
-						displayName: "WhatsApp Business",
-						metadata: { waba_id: body.waba_id },
+						displayName:
+							phone.verified_name ??
+							phone.display_phone_number ??
+							"WhatsApp Business",
+						metadata: {
+							waba_id: body.waba_id,
+							phone_number: phone.display_phone_number ?? null,
+							verified_name: phone.verified_name ?? null,
+							code_verification_status: phone.code_verification_status ?? null,
+						},
 					},
 					update: {
-						displayName: "WhatsApp Business",
-						metadata: { waba_id: body.waba_id },
+						displayName:
+							phone.verified_name ??
+							phone.display_phone_number ??
+							"WhatsApp Business",
+						metadata: {
+							waba_id: body.waba_id,
+							phone_number: phone.display_phone_number ?? null,
+							verified_name: phone.verified_name ?? null,
+							code_verification_status: phone.code_verification_status ?? null,
+						},
 					},
 					preserveExistingWorkspaceOnOmission: body.workspace_id === undefined,
 					accessToken: body.access_token,
@@ -2538,7 +3455,7 @@ async function fetchAllFacebookPages(
 		guard++;
 		const res: Response = await fetch(url);
 		if (!res.ok) break;
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data?: FacebookPage[];
 			paging?: { next?: string };
 		};
@@ -2608,6 +3525,7 @@ app.openapi(selectFacebookPage, async (c) => {
 	>(pendingSecondaryKey(orgId, "facebook", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2621,7 +3539,7 @@ app.openapi(selectFacebookPage, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 	// SECURITY: Decrypt token from KV
 	const decryptedFbToken =
 		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
@@ -2636,6 +3554,7 @@ app.openapi(selectFacebookPage, async (c) => {
 		const page = allPages.find((p) => p.id === body.page_id);
 
 		if (!page) {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -2654,7 +3573,9 @@ app.openapi(selectFacebookPage, async (c) => {
 				`${GRAPH_BASE.facebook}/${page.id}/picture?redirect=false&type=small&access_token=${page.access_token}`,
 			);
 			if (picRes.ok) {
-				const picJson = (await picRes.json()) as { data?: { url?: string } };
+				const picJson = (await readProviderJson(picRes)) as {
+					data?: { url?: string };
+				};
 				pageAvatarUrl = picJson.data?.url ?? null;
 			}
 		} catch {
@@ -2679,6 +3600,7 @@ app.openapi(selectFacebookPage, async (c) => {
 						c.env.ENCRYPTION_KEY,
 						{
 							apiKeyId: pendingData.initiator_key_id,
+							authoritySessionId: authorization.authoritySessionId,
 							authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 							insert: {
 								organizationId: orgId,
@@ -2882,6 +3804,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 	>(pendingSecondaryKey(orgId, "linkedin", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2895,7 +3818,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 	// SECURITY: Decrypt the one-time KV payload; the account writer seals it to
 	// the stable database id inside the transaction.
 	const decryptedLiSetToken =
@@ -2926,6 +3849,7 @@ app.openapi(selectLinkedInOrg, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -3033,7 +3957,7 @@ app.openapi(listPinterestBoards, async (c) => {
 		if (!res.ok) {
 			return c.json({ boards: [] } as never, 200 as never);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items: Array<{
 				id: string;
 				name: string;
@@ -3074,6 +3998,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 	>(pendingSecondaryKey(orgId, "pinterest", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3087,7 +4012,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 
 	// SECURITY: Decrypt token from KV, then re-encrypt for DB storage
 	const decryptedPinSetToken =
@@ -3115,7 +4040,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 			},
 		);
 		if (profileRes.ok) {
-			const profile = (await profileRes.json()) as {
+			const profile = (await readProviderJson(profileRes)) as {
 				username?: string;
 				id?: string;
 			};
@@ -3140,6 +4065,7 @@ app.openapi(selectPinterestBoard, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -3252,7 +4178,7 @@ app.openapi(listGBPLocations, async (c) => {
 		if (!accountsRes.ok) {
 			return c.json({ locations: [] } as never, 200 as never);
 		}
-		const accountsJson = (await accountsRes.json()) as {
+		const accountsJson = (await readProviderJson(accountsRes)) as {
 			accounts: Array<{ name: string }>;
 		};
 		const gmbAccount = accountsJson.accounts?.[0];
@@ -3278,7 +4204,7 @@ app.openapi(listGBPLocations, async (c) => {
 		if (!locationsRes.ok) {
 			return c.json({ locations: [] } as never, 200 as never);
 		}
-		const locationsJson = (await locationsRes.json()) as {
+		const locationsJson = (await readProviderJson(locationsRes)) as {
 			locations: Array<{
 				name: string;
 				title: string;
@@ -3319,6 +4245,7 @@ app.openapi(selectGBPLocation, async (c) => {
 	>(pendingSecondaryKey(orgId, "googlebusiness", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3333,9 +4260,10 @@ app.openapi(selectGBPLocation, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 
 	if (!pendingData.google_account_name) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3374,6 +4302,7 @@ app.openapi(selectGBPLocation, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
@@ -3473,30 +4402,25 @@ app.openapi(listSnapchatProfiles, async (c) => {
 		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
 
 	try {
-		// Snapchat Marketing API: List organizations the authenticated user belongs to
-		// https://developers.snap.com/api/marketing-api/general/Myself
-		const res = await fetch("https://adsapi.snapchat.com/v1/me/organizations", {
-			headers: { Authorization: `Bearer ${decryptedSnapListToken}` },
-		});
-		if (!res.ok) {
-			return c.json({ profiles: [] } as never, 200 as never);
-		}
-		const json = (await res.json()) as {
-			organizations: Array<{
-				organization: {
-					id: string;
-					name: string;
-				};
-			}>;
-		};
+		const profile = await fetchSnapchatOwnProfile(decryptedSnapListToken);
+		if (!profile) return c.json({ profiles: [] } as never, 200 as never);
 		return c.json(
 			{
-				profiles: (json.organizations ?? []).map((o) => ({
-					id: o.organization.id,
-					display_name: o.organization.name,
-					username: o.organization.name,
-					profile_image_url: null,
-				})),
+				profiles: [
+					{
+						id: profile.id,
+						display_name:
+							profile.display_name ??
+							profile.snap_user_name ??
+							"Snapchat profile",
+						username:
+							profile.snap_user_name ?? profile.display_name ?? profile.id,
+						profile_image_url:
+							profile.logo_urls?.manage_profile_logo_url ??
+							profile.logo_urls?.original_logo_url ??
+							null,
+					},
+				],
 			} as never,
 			200 as never,
 		);
@@ -3521,6 +4445,7 @@ app.openapi(selectSnapchatProfile, async (c) => {
 	>(pendingSecondaryKey(orgId, "snapchat", body.connect_token), "json");
 
 	if (!pendingData?.access_token) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3534,11 +4459,25 @@ app.openapi(selectSnapchatProfile, async (c) => {
 	const authorization = await authorizePendingSecondary(c, pendingData);
 	if (!authorization.ok) return authorization.response as never;
 	const denied = assertWorkspaceScope(c, pendingData.workspace_id);
-	if (denied) return denied as never;
+	if (denied) return connectionInputNotApplied(c, denied) as never;
 
 	// SECURITY: Decrypt the one-time KV payload; the account writer seals it.
 	const decryptedSnapSetToken =
 		(await maybeDecrypt(pendingData.access_token, c.env.ENCRYPTION_KEY)) ?? "";
+	const verifiedProfile = await fetchSnapchatOwnProfile(decryptedSnapSetToken);
+	if (!verifiedProfile || verifiedProfile.id !== body.profile_id) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "SNAPCHAT_PROFILE_MISMATCH",
+					message:
+						"The selected Public Profile is not authorized by this Snapchat OAuth token.",
+				},
+			} as never,
+			400 as never,
+		);
+	}
 	const connectionOperationId = pendingData.connection_operation_id;
 	// Carry through the refresh token + expiry so the account can auto-refresh
 	// (Snapchat access tokens expire in ~1 hour).
@@ -3562,18 +4501,43 @@ app.openapi(selectSnapchatProfile, async (c) => {
 			upsert: async (tx) =>
 				upsertConnectedAccountWithCredentials(tx, c.env.ENCRYPTION_KEY, {
 					apiKeyId: pendingData.initiator_key_id,
+					authoritySessionId: authorization.authoritySessionId,
 					authorizedWorkspaceScope: authorization.initialWorkspaceScope,
 					insert: {
 						organizationId: orgId,
 						workspaceId: pendingData.workspace_id,
 						platform: "snapchat",
 						platformAccountId: body.profile_id,
-						displayName: `Snapchat ${body.profile_id}`,
+						username: verifiedProfile.snap_user_name ?? null,
+						displayName:
+							verifiedProfile.display_name ??
+							verifiedProfile.snap_user_name ??
+							`Snapchat ${body.profile_id}`,
+						avatarUrl:
+							verifiedProfile.logo_urls?.manage_profile_logo_url ??
+							verifiedProfile.logo_urls?.original_logo_url ??
+							null,
+						metadata: {
+							organization_id: verifiedProfile.organization_id ?? null,
+							snapchat_public_profile_verified: true,
+						},
 						tokenExpiresAt: snapTokenExpiresAt,
 						scopes: snapchatConfig.scopes,
 					},
 					update: {
-						displayName: `Snapchat ${body.profile_id}`,
+						username: verifiedProfile.snap_user_name ?? null,
+						displayName:
+							verifiedProfile.display_name ??
+							verifiedProfile.snap_user_name ??
+							`Snapchat ${body.profile_id}`,
+						avatarUrl:
+							verifiedProfile.logo_urls?.manage_profile_logo_url ??
+							verifiedProfile.logo_urls?.original_logo_url ??
+							null,
+						metadata: {
+							organization_id: verifiedProfile.organization_id ?? null,
+							snapchat_public_profile_verified: true,
+						},
 						tokenExpiresAt: snapTokenExpiresAt,
 						scopes: snapchatConfig.scopes,
 					},
@@ -3645,13 +4609,17 @@ app.openapi(startOAuth, async (c) => {
 	const method = query.method ?? undefined;
 	const headless = query.headless === "true";
 	// Customer's redirect URL — where we redirect after the OAuth exchange completes.
-	// Default to app.relayapi.dev (which is in the redirect allowlist); api.relayapi.dev
-	// is intentionally NOT allowlisted, so it cannot be used as a fallback.
+	const instanceAppOrigin = appPublicOrigin(c.env);
 	const customerRedirectUrl =
-		query.redirect_url ?? "https://app.relayapi.dev/connect/callback";
+		query.redirect_url ?? `${instanceAppOrigin}/connect/callback`;
 
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
-	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
+	if (
+		!isAllowedCustomerRedirectUrl(
+			customerRedirectUrl,
+			new URL(instanceAppOrigin).hostname,
+		)
+	) {
 		return c.json(
 			{
 				error: {
@@ -3666,10 +4634,58 @@ app.openapi(startOAuth, async (c) => {
 	// RelayAPI's own callback URL — this is what we register with OAuth providers
 	const apiBaseUrl = c.env.API_BASE_URL || "https://api.relayapi.dev";
 	const oauthRedirectUri = `${apiBaseUrl}/connect/oauth/callback`;
+	if (query.instance_url && platform !== "mastodon") {
+		return c.json(
+			{
+				error: {
+					code: "INSTANCE_URL_NOT_APPLICABLE",
+					message: "instance_url is supported only for Mastodon OAuth.",
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	let mastodonOAuth: MastodonOAuthState | undefined;
+	if (platform === "mastodon") {
+		if (!query.instance_url) {
+			return c.json(
+				{
+					error: {
+						code: "INSTANCE_URL_REQUIRED",
+						message: "instance_url is required to connect a Mastodon account.",
+					},
+				} as never,
+				400 as never,
+			);
+		}
+		try {
+			mastodonOAuth = await registerMastodonOAuthClient({
+				instanceUrl: query.instance_url,
+				redirectUri: oauthRedirectUri,
+				website: new URL(instanceAppOrigin).origin,
+			});
+		} catch (error) {
+			const setupError =
+				error instanceof MastodonOAuthSetupError
+					? error
+					: new MastodonOAuthSetupError(
+							"INSTANCE_UNREACHABLE",
+							"The selected Mastodon instance could not be reached safely.",
+						);
+			return c.json(
+				{
+					error: { code: setupError.code, message: setupError.message },
+				} as never,
+				400 as never,
+			);
+		}
+	}
 
 	// Use Instagram direct config when method=direct, otherwise standard config
-	const oauthConfig =
-		platform === "instagram" && method === "direct"
+	const oauthConfig = mastodonOAuth
+		? mastodonOAuthConfigFromState(mastodonOAuth)
+		: platform === "instagram" && method === "direct"
 			? INSTAGRAM_DIRECT_CONFIG
 			: OAUTH_CONFIGS[platform as Platform];
 	if (!oauthConfig) {
@@ -3721,6 +4737,7 @@ app.openapi(startOAuth, async (c) => {
 		payload: {
 			org_id: orgId,
 			initiator_key_id: c.get("keyId"),
+			authority_session_id: connectionAuthoritySessionId(c),
 			initial_workspace_scope: c.get("workspaceScope"),
 			workspace_id: scope.workspaceId,
 			workspace_id_was_explicit: query.workspace_id !== undefined,
@@ -3728,6 +4745,7 @@ app.openapi(startOAuth, async (c) => {
 			platform,
 			connection_operation_id: connectionOperationId,
 			method: method ?? null,
+			mastodon_oauth: mastodonOAuth ?? null,
 			redirect_url: customerRedirectUrl,
 			code_verifier: codeVerifier ?? null,
 			headless,
@@ -3761,13 +4779,18 @@ app.openapi(completeOAuth, async (c) => {
 	const { platform } = c.req.valid("param");
 	const body = c.req.valid("json");
 
-	// Default to app.relayapi.dev (allowlisted); api.relayapi.dev is intentionally
-	// not in the redirect allowlist, so it cannot be used as a fallback.
+	const instanceAppOrigin = appPublicOrigin(c.env);
 	const customerRedirectUrl =
-		body.redirect_url ?? "https://app.relayapi.dev/connect/callback";
+		body.redirect_url ?? `${instanceAppOrigin}/connect/callback`;
 
 	// SECURITY: Validate redirect_url against allowed domains and protocols.
-	if (!isAllowedCustomerRedirectUrl(customerRedirectUrl)) {
+	if (
+		!isAllowedCustomerRedirectUrl(
+			customerRedirectUrl,
+			new URL(instanceAppOrigin).hostname,
+		)
+	) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3784,19 +4807,24 @@ app.openapi(completeOAuth, async (c) => {
 	const oauthRedirectUri = `${apiBaseUrl}/connect/oauth/callback`;
 	const oauthConfig = OAUTH_CONFIGS[platform as Platform];
 
-	// Retrieve code_verifier and method from KV state if available
+	// Dashboard completions must consume the one-time state so the provider code
+	// remains bound to the exact initiating session. Service credentials retain
+	// the published direct-completion flow; PKCE and Instagram still require state.
 	let codeVerifier: string | undefined;
 	let method: string | undefined;
+	let mastodonOAuth: MastodonOAuthState | undefined;
 	let connectionOperationId: string | undefined;
 	let workspaceId: string | null = null;
 	let workspaceWasExplicit = false;
 	let initiatorKeyId = c.get("keyId");
+	let authoritySessionId = connectionAuthoritySessionId(c);
 	let authorizedWorkspaceScope: "all" | string[] = c.get("workspaceScope");
 
 	if (body.state) {
 		const stateData = await claimOneTimeCapability<{
 			org_id: string;
 			initiator_key_id: string;
+			authority_session_id: string | null;
 			initial_workspace_scope: "all" | string[];
 			workspace_id: string | null;
 			workspace_id_was_explicit?: boolean;
@@ -3804,18 +4832,21 @@ app.openapi(completeOAuth, async (c) => {
 			platform: string;
 			connection_operation_id: string;
 			method?: string | null;
+			mastodon_oauth?: MastodonOAuthState | null;
 			redirect_url?: string;
 			code_verifier: string | null;
 		}>(c.get("db"), c.env.ENCRYPTION_KEY, "oauth_state", body.state);
 		if (
 			stateData?.org_id === orgId &&
 			stateData?.platform === platform &&
-			stateData.initiator_key_id === c.get("keyId")
+			stateData.initiator_key_id === c.get("keyId") &&
+			stateData.authority_session_id === connectionAuthoritySessionId(c)
 		) {
 			if (
 				body.workspace_id !== undefined &&
 				body.workspace_id !== stateData.workspace_id
 			) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -3828,11 +4859,12 @@ app.openapi(completeOAuth, async (c) => {
 				);
 			}
 			const denied = assertWorkspaceScope(c, stateData.workspace_id);
-			if (denied) return denied as never;
+			if (denied) return connectionInputNotApplied(c, denied) as never;
 			const initialWorkspaceScope = parseApiKeyWorkspaceScope({
 				workspace_scope: stateData.initial_workspace_scope,
 			});
 			if (initialWorkspaceScope === null) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -3845,11 +4877,13 @@ app.openapi(completeOAuth, async (c) => {
 			}
 			const validation = await validatePersistedOperationalScope(c.get("db"), {
 				apiKeyId: stateData.initiator_key_id,
+				authoritySessionId: stateData.authority_session_id,
 				organizationId: orgId,
 				workspaceId: stateData.workspace_id,
 				resourceName: "connected account",
 			});
 			if (!validation.ok) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: { code: validation.code, message: validation.message },
@@ -3859,6 +4893,7 @@ app.openapi(completeOAuth, async (c) => {
 			}
 			workspaceId = stateData.workspace_id;
 			initiatorKeyId = stateData.initiator_key_id;
+			authoritySessionId = stateData.authority_session_id;
 			authorizedWorkspaceScope = initialWorkspaceScope;
 			workspaceWasExplicit =
 				stateData.workspace_id_was_explicit ?? stateData.workspace_id !== null;
@@ -3866,6 +4901,7 @@ app.openapi(completeOAuth, async (c) => {
 				stateData.redirect_url &&
 				stateData.redirect_url !== customerRedirectUrl
 			) {
+				markMutationInputNotApplied(c);
 				return c.json(
 					{
 						error: {
@@ -3879,8 +4915,10 @@ app.openapi(completeOAuth, async (c) => {
 			}
 			codeVerifier = stateData.code_verifier ?? undefined;
 			method = stateData.method ?? undefined;
+			mastodonOAuth = stateData.mastodon_oauth ?? undefined;
 			connectionOperationId = stateData.connection_operation_id;
 		} else {
+			markMutationInputNotApplied(c);
 			return c.json(
 				{
 					error: {
@@ -3891,7 +4929,20 @@ app.openapi(completeOAuth, async (c) => {
 				400 as never,
 			);
 		}
-	} else if (oauthConfig?.requiresPkce) {
+	} else if (c.get("principalType") === "dashboard_user") {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "STATE_REQUIRED",
+					message:
+						"state is required to complete a dashboard OAuth flow securely.",
+				},
+			} as never,
+			400 as never,
+		);
+	} else if (oauthConfig?.requiresPkce || platform === "mastodon") {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3909,14 +4960,16 @@ app.openapi(completeOAuth, async (c) => {
 			body.workspace_id,
 			"connected account",
 		);
-		if (!scope.ok) return scope.response as never;
+		if (!scope.ok) return connectionInputNotApplied(c, scope.response) as never;
 		workspaceId = scope.workspaceId;
 		workspaceWasExplicit = body.workspace_id !== undefined;
 		initiatorKeyId = c.get("keyId");
+		authoritySessionId = connectionAuthoritySessionId(c);
 		authorizedWorkspaceScope = c.get("workspaceScope");
 	}
 
 	if (platform === "instagram" && !body.state) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3929,6 +4982,7 @@ app.openapi(completeOAuth, async (c) => {
 	}
 
 	if (platform === "instagram" && !method && body.state) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -3940,11 +4994,62 @@ app.openapi(completeOAuth, async (c) => {
 		);
 	}
 
+	const selectedOAuthConfig = mastodonOAuth
+		? mastodonOAuthConfigFromState(mastodonOAuth)
+		: platform === "instagram" && method === "direct"
+			? INSTAGRAM_DIRECT_CONFIG
+			: oauthConfig;
+	if (platform === "mastodon" && !mastodonOAuth) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "INVALID_STATE",
+					message:
+						"Mastodon OAuth state is missing instance registration data.",
+				},
+			} as never,
+			400 as never,
+		);
+	}
+	if (!selectedOAuthConfig) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "OAUTH_NOT_SUPPORTED",
+					message: `OAuth is not configured for ${platform}.`,
+				},
+			} as never,
+			400 as never,
+		);
+	}
+	if (
+		!selectedOAuthConfig.getClientId(c.env) ||
+		!selectedOAuthConfig.getClientSecret(c.env)
+	) {
+		markMutationInputNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "MISSING_CREDENTIALS",
+					message: `OAuth credentials not configured for ${platform}.`,
+				},
+			} as never,
+			400 as never,
+		);
+	}
+
+	// Provider/token mutation boundary: ambiguous provider and save outcomes park.
+	// A typed workspace rejection still proves that the requested RelayAPI account
+	// connection rolled back (K=0), even though the provider may have minted a
+	// single-use token. That deliberate under-charge policy is owner-reviewable.
 	try {
 		const result = await exchangeAndSaveAccount({
 			env: c.env,
 			orgId,
 			initiatorKeyId,
+			authoritySessionId,
 			authorizedWorkspaceScope,
 			workspaceId,
 			workspaceWasExplicit,
@@ -3953,11 +5058,15 @@ app.openapi(completeOAuth, async (c) => {
 			redirectUri: oauthRedirectUri,
 			codeVerifier,
 			method,
+			mastodonOAuth,
 			connectionOperationId,
 			waitUntil: (p) => c.executionCtx.waitUntil(p),
 		});
 
 		if (result.status === "error") {
+			if (PROVEN_NOT_APPLIED_OAUTH_ERRORS.has(result.code)) {
+				markMutationInputNotApplied(c);
+			}
 			const statusCode =
 				result.code === "INTERNAL_ERROR"
 					? 500

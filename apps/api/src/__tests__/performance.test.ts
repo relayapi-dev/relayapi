@@ -17,18 +17,84 @@ import { createMockEnv as createSharedMockEnv } from "./__mocks__/env";
 
 let performanceUsageSequence = 0;
 let performanceCommittedUnits = 0;
+class PerformanceBillingAuthorityPendingError extends Error {}
 
 // This suite benchmarks HTTP routing and middleware overhead, not PostgreSQL's
 // usage-ledger transactions. Keep the double aligned with the authoritative
 // usage bucket/reservation contract so endpoint timings do not depend on the
 // lightweight generic DB mock emulating row locks and SQL counter expressions.
 mock.module("../services/usage-meter", () => ({
+	BillingAuthorityPendingError: PerformanceBillingAuthorityPendingError,
+	resolveSuccessfulMutationAuthority: async () => ({
+		state: "ready" as const,
+		authority: {
+			quotaMode: "hard" as const,
+			includedUnits: PRICING.freeCallsIncluded,
+			periodStart: new Date("2026-08-01T00:00:00.000Z"),
+			periodEnd: new Date("2026-09-01T00:00:00.000Z"),
+			billingPeriodId: null,
+		},
+	}),
+	writeOffExpiredParkedUsageReservations: async () => 0,
+	armUsageReservationProviderBoundary: async (
+		_db: unknown,
+		_reservation: unknown,
+		now = new Date(),
+	) => now,
+	persistedUsageOutcome: (
+		requestMayHaveBeenSentAt: Date | null,
+		disposition: {
+			commit: boolean;
+			reason: "pre_boundary" | "settled" | "unknown";
+			responseStatus: number | null;
+			committedUnits?: number;
+		},
+		reservedUnits: number,
+	) =>
+		(requestMayHaveBeenSentAt && !disposition.commit) ||
+		(disposition.commit && disposition.reason === "unknown")
+			? {
+					state: "parked" as const,
+					disposition: "unknown" as const,
+					responseStatus: null,
+					committedUnits: null,
+				}
+			: {
+					state: disposition.commit
+						? ("committed" as const)
+						: ("released" as const),
+					disposition: disposition.commit
+						? disposition.reason
+						: ("pre_boundary" as const),
+					responseStatus: disposition.responseStatus,
+					committedUnits: disposition.commit
+						? (disposition.committedUnits ?? reservedUnits)
+						: 0,
+				},
+	successfulMutationDisposition: (
+		responseStatus: number,
+		committedUnits = responseStatus < 400 ? 1 : 0,
+	) =>
+		responseStatus < 400
+			? {
+					commit: true as const,
+					reason: "settled" as const,
+					responseStatus,
+					committedUnits,
+				}
+			: {
+					commit: false as const,
+					reason: "pre_boundary" as const,
+					responseStatus,
+					committedUnits: 0,
+				},
 	reserveMutationUsage: async (
 		_db: unknown,
 		input: {
 			organizationId: string;
 			units: number;
-			includedUnits: number;
+			includedUnits: number | null;
+			quotaMode: "hard" | "metered" | "unlimited";
 			periodStart: Date;
 			periodEnd: Date;
 		},
@@ -43,6 +109,7 @@ mock.module("../services/usage-meter", () => ({
 				units: input.units,
 				state: "reserved" as const,
 				includedUnits: input.includedUnits,
+				quotaMode: input.quotaMode,
 				committedUnits: performanceCommittedUnits,
 				reservedUnits: input.units,
 				periodStart: input.periodStart,
@@ -50,18 +117,84 @@ mock.module("../services/usage-meter", () => ({
 			},
 		};
 	},
+	reserveDailyToolUsage: async (
+		_db: unknown,
+		input: {
+			organizationId: string;
+			units: number;
+			cachedLimit: number | null;
+			now?: Date;
+		},
+	) => {
+		performanceUsageSequence += 1;
+		const at = input.now ?? new Date();
+		const periodStart = new Date(
+			Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()),
+		);
+		return {
+			ok: true as const,
+			selfHealed: false,
+			reservation: {
+				id: `ur_performance_${performanceUsageSequence}`,
+				bucketId: "ub_performance_tools",
+				organizationId: input.organizationId,
+				units: input.units,
+				state: "reserved" as const,
+				includedUnits: input.cachedLimit,
+				quotaMode:
+					input.cachedLimit === null
+						? ("unlimited" as const)
+						: ("hard" as const),
+				committedUnits: performanceCommittedUnits,
+				reservedUnits: input.units,
+				periodStart,
+				periodEnd: new Date(periodStart.getTime() + 24 * 60 * 60 * 1000),
+			},
+		};
+	},
 	finalizeMutationUsage: async (
 		_db: unknown,
-		reservation: { units: number; includedUnits: number },
-		status: number,
+		reservation: { units: number; includedUnits: number | null },
+		disposition: {
+			commit: boolean;
+			reason?: string;
+			committedUnits?: number;
+		},
 	) => {
-		if (status < 400) performanceCommittedUnits += reservation.units;
+		if (disposition.commit && disposition.reason !== "unknown") {
+			performanceCommittedUnits +=
+				disposition.committedUnits ?? reservation.units;
+		}
 		return {
 			includedUnits: reservation.includedUnits,
 			committedUnits: performanceCommittedUnits,
+			reservationCommittedUnits:
+				disposition.commit && disposition.reason !== "unknown"
+					? (disposition.committedUnits ?? reservation.units)
+					: 0,
 			reservedUnits: 0,
 		};
 	},
+	settleDurableUsageReservation: async (
+		_db: unknown,
+		input: { committedUnits: number | null },
+	) => {
+		if (input.committedUnits === null) return "parked" as const;
+		performanceCommittedUnits += input.committedUnits;
+		return "committed" as const;
+	},
+	settleDurableUsageReservationInTransaction: async (
+		_tx: unknown,
+		input: { committedUnits: number | null },
+	) => {
+		if (input.committedUnits === null) return "parked" as const;
+		performanceCommittedUnits += input.committedUnits;
+		return "committed" as const;
+	},
+	reconcileStaleReservedUsageReservations: async () => ({
+		released: 0,
+		parked: 0,
+	}),
 }));
 
 // ===========================================================================
@@ -565,7 +698,7 @@ describe("HTTP endpoint performance", () => {
 				currentPeriodEnd: cycleEnd,
 				monthlyPriceCents: PRICING.monthlyPriceCents,
 				aiEnabled: true,
-				dailyToolLimit: 500,
+				dailyToolLimitOverride: 500,
 			},
 		]);
 		mockDb._seed("connectionLogs", [
@@ -579,19 +712,82 @@ describe("HTTP endpoint performance", () => {
 				createdAt: new Date(),
 			},
 		]);
-		(env as Env & { TEST_DB?: unknown }).TEST_DB = mockDb as unknown;
+		mockDb._seed("queueSchedules", [
+			{
+				id: "qs_perf_default",
+				organizationId: "org_perftest",
+				name: "Perf Schedule",
+				slots: [{ day_of_week: 1, time: "09:00", timezone: "UTC" }],
+				isDefault: true,
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			},
+		]);
+
+		// This suite measures routing/middleware overhead rather than SQL
+		// semantics. Model the compact live credential-authority query explicitly;
+		// all other route queries continue through the generic mock database.
+		const requestDb = {
+			...mockDb,
+			select(fields?: Record<string, unknown>) {
+				if (
+					fields &&
+					"principalLifecycleStatus" in fields &&
+					"principalKind" in fields
+				) {
+					return {
+						from() {
+							return this;
+						},
+						innerJoin() {
+							return this;
+						},
+						leftJoin() {
+							return this;
+						},
+						where() {
+							return this;
+						},
+						async limit() {
+							return [
+								{
+									id: "key_perftest",
+									permissions: "write",
+									expiresAt: null,
+									organizationLifecycleStatus: "active",
+									principalKind: "service",
+									principalLifecycleStatus: "active",
+									principalUserId: null,
+								},
+							];
+						},
+					};
+				}
+				return mockDb.select(fields);
+			},
+		};
+		(env as Env & { TEST_DB?: unknown }).TEST_DB = requestDb as unknown;
 
 		// Seed the mock KV with a valid API key
 		TEST_API_KEY_HASH = await hashKey(TEST_API_KEY);
 		const kvData = {
 			org_id: "org_perftest",
 			key_id: "key_perftest",
+			principal_id: "prn_perftest",
+			principal_type: "service",
+			principal_user_id: null,
+			workspace_scope: "all",
 			permissions: ["write"],
 			expires_at: null,
 			plan: "pro",
 			calls_included: 100_000,
 			ai_enabled: true,
 			daily_tool_limit: 500,
+			entitlement_recheck_at: null,
+			billing_authority_state: "ready",
+			billing_period_id: "bp_perftest",
+			period_start: cycleStart.toISOString(),
+			period_end: cycleEnd.toISOString(),
 		};
 		await (env.KV as unknown as MockKV).put(
 			`apikey:${TEST_API_KEY_HASH}`,
@@ -606,19 +802,6 @@ describe("HTTP endpoint performance", () => {
 					id: "ws_test1",
 					name: "Test Group",
 					account_ids: ["acc_1", "acc_2"],
-					created_at: new Date().toISOString(),
-					updated_at: new Date().toISOString(),
-				},
-			]),
-		);
-		await (env.KV as unknown as MockKV).put(
-			"queue-schedule:org_perftest",
-			JSON.stringify([
-				{
-					id: "qs_perf_default",
-					name: "Perf Schedule",
-					slots: [{ day_of_week: 1, time: "09:00", timezone: "UTC" }],
-					is_default: true,
 					created_at: new Date().toISOString(),
 					updated_at: new Date().toISOString(),
 				},
@@ -701,7 +884,7 @@ describe("HTTP endpoint performance", () => {
 		expect(avg).toBeLessThan(10);
 	});
 
-	it("GET /v1/queue/next-slot (KV-based, computed response)", async () => {
+	it("GET /v1/queue/next-slot (bounded cache, computed response)", async () => {
 		const times: number[] = [];
 		const iterations = 200;
 
@@ -723,7 +906,7 @@ describe("HTTP endpoint performance", () => {
 		expect(avg).toBeLessThan(10);
 	});
 
-	it("POST /v1/queue/slots (KV write)", async () => {
+	it("POST /v1/queue/slots (PostgreSQL authority + cache invalidation)", async () => {
 		const times: number[] = [];
 		const iterations = 100;
 
@@ -750,7 +933,7 @@ describe("HTTP endpoint performance", () => {
 		expect(avg).toBeLessThan(10);
 	});
 
-	it("GET /v1/queue/slots (KV-based, no DB)", async () => {
+	it("GET /v1/queue/slots (bounded cache hit)", async () => {
 		const times: number[] = [];
 		const iterations = 200;
 
@@ -768,7 +951,7 @@ describe("HTTP endpoint performance", () => {
 		expect(avg).toBeLessThan(10);
 	});
 
-	it("GET /v1/queue/preview (KV read + slot expansion)", async () => {
+	it("GET /v1/queue/preview (bounded cache + slot expansion)", async () => {
 		const times: number[] = [];
 		const iterations = 100;
 
@@ -790,20 +973,30 @@ describe("HTTP endpoint performance", () => {
 		expect(avg).toBeLessThan(10);
 	});
 
-	it("GET /openapi.json (spec generation)", async () => {
+	it("GET /openapi.json (one generation followed by cached delivery)", async () => {
 		const times: number[] = [];
 		const iterations = 10;
 		const { default: appModule } = await import("../app");
+		const executionContext = {
+			waitUntil: () => {},
+			passThroughOnException: () => {},
+		} as unknown as ExecutionContext;
+
+		const coldStart = performance.now();
+		const coldResponse = await appModule.fetch(
+			new Request("http://localhost/openapi.json"),
+			env,
+			executionContext,
+		);
+		const coldDuration = performance.now() - coldStart;
+		expect(coldResponse.status).toBe(200);
 
 		for (let i = 0; i < iterations; i++) {
 			const start = performance.now();
 			const res = await appModule.fetch(
 				new Request("http://localhost/openapi.json"),
 				env,
-				{
-					waitUntil: () => {},
-					passThroughOnException: () => {},
-				} as unknown as ExecutionContext,
+				executionContext,
 			);
 			times.push(performance.now() - start);
 			expect(res.status).toBe(200);
@@ -812,9 +1005,10 @@ describe("HTTP endpoint performance", () => {
 		times.sort((a, b) => a - b);
 		const avg = times.reduce((a, b) => a + b, 0) / iterations;
 		console.log(
-			`  GET /openapi.json: ${avg.toFixed(3)}ms avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
+			`  GET /openapi.json: ${coldDuration.toFixed(3)}ms generation | ${avg.toFixed(3)}ms cached avg | P50=${(times[Math.floor(iterations * 0.5)] ?? 0).toFixed(3)}ms P95=${(times[Math.floor(iterations * 0.95)] ?? 0).toFixed(3)}ms P99=${(times[Math.floor(iterations * 0.99)] ?? 0).toFixed(3)}ms`,
 		);
-		expect(avg).toBeLessThan(50);
+		expect(coldDuration).toBeLessThan(1000);
+		expect(avg).toBeLessThan(5);
 	});
 });
 

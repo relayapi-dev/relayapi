@@ -3,6 +3,7 @@ import {
 	fetchPublicUrl,
 } from "../lib/fetch-public-url";
 import { createStreamingMultipartBody } from "../lib/multipart-stream";
+import { readPublisherJson } from "./provider-response";
 import {
 	classifyPublishError,
 	PublishError,
@@ -144,13 +145,16 @@ export const pinterestPublisher: Publisher = {
 			}
 
 			// Board ID
-			const boardId = opts.board_id as string | undefined;
+			const boardId =
+				(opts.board_id as string | undefined) ??
+				(request.account.metadata?.default_board_id as string | undefined);
 			if (!boardId) {
 				return {
 					success: false,
 					error: {
 						code: "BOARD_REQUIRED",
-						message: "Pinterest requires a board_id in target_options.",
+						message:
+							"Pinterest requires a board_id in target_options or the connected account's default_board_id.",
 					},
 				};
 			}
@@ -239,14 +243,14 @@ export const pinterestPublisher: Publisher = {
 					},
 				);
 				if (!registerRes.ok) {
-					const err = await registerRes.json().catch(() => ({}));
+					const err = await readPublisherJson(registerRes).catch(() => ({}));
 					const raw = `HTTP ${registerRes.status}\n${JSON.stringify(err)}`;
 					throw new PublishError(
 						`Pinterest media register failed: ${(err as { message?: string }).message ?? registerRes.statusText}`,
 						{ statusCode: registerRes.status, detail: raw },
 					);
 				}
-				const registerData = (await registerRes.json()) as {
+				const registerData = (await readPublisherJson(registerRes)) as {
 					media_id: string;
 					upload_url: string;
 					upload_parameters: Record<string, string>;
@@ -317,7 +321,7 @@ export const pinterestPublisher: Publisher = {
 						accessToken,
 					);
 					if (!statusRes.ok) continue;
-					const statusData = (await statusRes.json()) as {
+					const statusData = (await readPublisherJson(statusRes)) as {
 						status: string;
 					};
 					if (statusData.status === "succeeded") {
@@ -369,7 +373,7 @@ export const pinterestPublisher: Publisher = {
 			});
 
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({}));
+				const err = await readPublisherJson(res).catch(() => ({}));
 				const raw = `HTTP ${res.status}\n${JSON.stringify(err)}`;
 				const detail = (err as { message?: string }).message ?? res.statusText;
 				throw new PublishError(`Pinterest pin creation failed: ${detail}`, {
@@ -378,7 +382,7 @@ export const pinterestPublisher: Publisher = {
 				});
 			}
 
-			const result = (await res.json()) as {
+			const result = (await readPublisherJson(res)) as {
 				id?: string;
 				link?: string;
 			};

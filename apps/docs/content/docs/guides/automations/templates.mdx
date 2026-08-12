@@ -1,177 +1,197 @@
 ---
 title: Templates
-description: Starter scaffolds for new automations — 4 quick-automation wizards and 4 generic blueprints.
+description: Eight validated starter graphs, including four channel-specific quick automations.
 icon: Sparkles
 ---
 
-## Why templates
+## How templates work
 
-A full automation graph is a handful of nodes wired together with port-based edges. For the common patterns — comment-to-DM, welcome flows, FAQ routing, lead capture — the graph is mostly boilerplate. Templates capture those patterns: pass a small config object and the server generates a complete graph + entrypoint for you.
+Pass `template` to `POST /v1/automations`. RelayAPI validates the template's exact config shape, builds a canonical graph, creates any generated entrypoints, and stores the original wizard input in `template_config` for reference. The resulting automation starts as `draft`; activate it explicitly after reviewing the graph.
 
-Templates are not a separate resource. You pass a `template` field to `POST /v1/automations`; the server runs `buildGraphFromTemplate(kind, config)`, saves the resulting `graph`, creates matching entrypoints, and stores the original wizard input in `automations.template_config` (observability only — the graph is authoritative after creation).
+Template output is ordinary automation data. After creation, edit the graph and entrypoints directly—there is no separate template runtime or “regenerate” operation.
 
-## Creating an automation from a template
-
-```bash
-POST /v1/automations
+```json
 {
   "name": "Pizza promo",
   "channel": "instagram",
   "template": {
     "kind": "comment_to_dm",
     "config": {
+      "social_account_id": "acc_...",
       "post_ids": ["17895..."],
-      "public_reply": "Sent!",
+      "keyword_filter": ["link", "menu"],
+      "public_reply": "Sent—check your DMs!",
       "dm_message": {
-        "blocks": [{ "id": "b1", "type": "text", "text": "Here's the link, {{contact.first_name}}!" }]
+        "blocks": [
+          { "id": "b1", "type": "text", "text": "Here is the link, {{contact.name}}!" }
+        ]
       },
-      "once_per_user": true
+      "once_per_user": true,
+      "daily_cap": 500
     }
   }
 }
 ```
 
-The response is a full automation with:
+## Generic scaffolds
 
-- `status: "draft"` (activate explicitly via `POST /v1/automations/{id}/activate`)
-- `graph` — the generated node/edge structure
-- `created_from_template: "comment_to_dm"` — used later for template-aggregated insights
-- `template_config` — the wizard input, preserved for reference
+These templates work on every automation channel. They intentionally create no entrypoint, so attach a trigger or binding before activation.
 
-After creation you own the graph completely. Edit it with `PUT /v1/automations/{id}/graph` exactly like a hand-built automation; there is no "regenerate from template" concept.
+| Kind | Config | Generated graph |
+|---|---|---|
+| `blank` | `{}` | Empty canvas |
+| `welcome_flow` | `{}` | Greeting message → end |
+| `faq_bot` | Optional FAQ list and fallback | Greeting → input → keyword conditions → reply → end |
+| `lead_capture` | Optional contact field and tag | Message → validated input → persist contact field + tag → confirmation |
 
-## The 8 templates
-
-### Generic scaffolds
-
-Work on any channel, provide a minimal starting structure to edit.
-
-| Kind | Description |
-|---|---|
-| `blank` | Empty graph, no entrypoint. Point of departure when you want to author everything yourself |
-| `welcome_flow` | Greeting message scaffold + basic info capture |
-| `faq_bot` | Keyword-routed FAQ scaffold with common question branches |
-| `lead_capture` | Generic email/phone capture → tag → confirmation |
-
-Config shape for `blank`:
-
-```json
-{ "kind": "blank", "config": {} }
-```
-
-Config shape for `welcome_flow`, `faq_bot`, `lead_capture`:
+### `faq_bot`
 
 ```json
 {
-  "kind": "welcome_flow",
+  "kind": "faq_bot",
   "config": {
-    "welcome_message": { "blocks": [{ "id": "b1", "type": "text", "text": "Welcome {{contact.first_name}}!" }] },
-    "dm_received_entrypoint": true
+    "keywords": [
+      { "label": "hours", "keyword": "hours", "reply": "We are open 9–6." },
+      { "label": "price", "keyword": "price", "reply": "See our pricing page." }
+    ],
+    "fallback_reply": "Try asking about hours or pricing."
   }
 }
 ```
 
-Exact field sets vary per template; the server validates the config and returns a `422` with specific errors on mismatch.
+Omit `keywords` to use the built-in hours, price, and location examples.
 
-### Quick-automation wizards
+### `lead_capture`
 
-Channel-specific patterns that ship the full end-to-end graph.
+```json
+{
+  "kind": "lead_capture",
+  "config": {
+    "capture_field": "email",
+    "tag": "lead"
+  }
+}
+```
 
-| Kind | Channels | What it does |
+`capture_field` is `email` or `phone`. The input validator checks that type, then `contact_field_set` persists the value on the contact and `tag_add` adds the configured tag.
+
+## Quick-automation presets
+
+| Kind | Channels | Generated trigger and behavior |
 |---|---|---|
-| `comment_to_dm` | IG, FB | Reply publicly on matching post comments + DM the commenter |
-| `story_leads` | IG | Capture leads from story replies |
-| `follower_growth` | IG | Contest flow — comment keyword triggers public reply + DM with contest rules + optional share mechanic |
-| `follow_to_dm` | IG | Welcome DM on new follow |
+| `comment_to_dm` | Instagram, Facebook | Matching comment → optional public reply → provider private reply |
+| `story_leads` | Instagram | Story reply → capture email/phone → persist + tag |
+| `follower_growth` | Instagram | Contest comment → validate mentions → private reply → optional story-mention wait → qualify |
+| `follow_to_dm` | Instagram | First inbound DM → live follow check → welcome confirmed follower |
 
-### `comment_to_dm` config
+### `comment_to_dm`
 
 ```json
 {
   "kind": "comment_to_dm",
   "config": {
-    "post_ids": ["17895..."],                        // specific posts, or omit for all
-    "keywords": ["link", "info"],                    // optional — filter by comment keyword
-    "public_reply": "Sent!",                         // optional comment reply
+    "social_account_id": "acc_...",
+    "post_ids": ["17895..."],
+    "keyword_filter": ["link", "info"],
+    "public_reply": "Sent!",
     "dm_message": {
       "blocks": [
-        { "id": "b1", "type": "text", "text": "Here's the link, {{contact.first_name}}!" }
+        { "id": "b1", "type": "text", "text": "Here is the information you requested." }
       ]
     },
-    "once_per_user": true
+    "once_per_user": true,
+    "fallback_message": "I could not send the private reply—please message us.",
+    "daily_cap": 500
   }
 }
 ```
 
-Builds a `comment_created` entrypoint and a graph with a public-reply action (if `public_reply` is set) + a `message` node sending the DM.
+The generated `comment_created` entrypoint stores `keyword_filter` as its runtime `keywords` config. `once_per_user: true` disables re-entry. A private reply must contain exactly one button-free text block because that is the provider-supported comment-reply shape. If provider delivery fails and `fallback_message` is set, the graph routes through its `error` port and posts the public fallback.
 
-### `story_leads` config
+### `story_leads`
 
 ```json
 {
   "kind": "story_leads",
   "config": {
-    "story_ids": null,                               // null = any story
-    "dm_message": { "blocks": [{ "id": "b1", "type": "text", "text": "Thanks! Drop your email:" }] },
-    "capture_field": "email",                        // custom field slug
-    "success_tag": "story_lead"
+    "social_account_id": "acc_...",
+    "story_ids": null,
+    "keyword_filter": ["guide"],
+    "dm_message": {
+      "blocks": [
+        { "id": "b1", "type": "text", "text": "Reply with your email and we will follow up." }
+      ]
+    },
+    "capture_field": "email",
+    "success_tag": "story_lead",
+    "daily_cap": 200
   }
 }
 ```
 
-Builds a `story_reply` entrypoint + a graph that sends the DM, asks for an email via an `input` node, and on `captured` runs an `action_group` to set the custom field and add the tag.
+`story_ids: null` matches any story. `capture_field` is `email` or `phone`; the captured value is persisted to that built-in contact field.
 
-### `follower_growth` config
+### `follower_growth`
 
 ```json
 {
   "kind": "follower_growth",
   "config": {
-    "contest_post_id": "17895...",
-    "keywords": ["entry", "count me in"],
-    "public_reply": "Entered!",
+    "social_account_id": "acc_...",
+    "post_ids": ["17895..."],
+    "trigger_keyword": "enter",
+    "public_reply": "Entry received!",
     "dm_message": {
       "blocks": [
-        { "id": "b1", "type": "text", "text": "You're in! Share with a friend to double your chances." }
+        { "id": "b1", "type": "text", "text": "Thanks for entering." }
       ]
     },
-    "entry_tag": "contest_entry",
-    "require_tag_friend": false
+    "entry_requirements": {
+      "must_tag_friends": 2,
+      "must_share_story": true
+    },
+    "winner_tag": "contest_qualified",
+    "daily_cap": 1000
   }
 }
 ```
 
-### `follow_to_dm` config
+The preset counts `@mentions` in the triggering comment when `must_tag_friends` is non-zero. When `must_share_story` is true, it waits up to seven days for a `story_mention` event from the same contact before adding `winner_tag`; timeout exits through the incomplete branch.
+
+### `follow_to_dm`
 
 ```json
 {
   "kind": "follow_to_dm",
   "config": {
+    "social_account_id": "acc_...",
     "dm_message": {
-      "blocks": [{ "id": "b1", "type": "text", "text": "Thanks for following, {{contact.first_name}}!" }]
+      "blocks": [
+        { "id": "b1", "type": "text", "text": "Thanks for following, {{contact.name}}!" }
+      ]
     },
     "daily_cap": 200,
-    "cooldown_min": 1440
+    "cooldown_hours": 24
   }
 }
 ```
 
-Builds a `follow` entrypoint with the cap + cooldown baked into re-entry rules.
+Instagram does not provide a reliable “new follower” automation webhook for this flow. The preset therefore starts only on the contact's first inbound DM, queries the live `is_user_follow_business` profile field for the triggering account, and sends the message only when the relationship is confirmed. It never initiates an unsolicited DM merely because someone followed the account.
 
-## Insights aggregation
+## Safety and admission controls
 
-`automations.created_from_template` stays on the row forever, which lets insights roll up across every automation created from the same template:
+- Template configs are strict: misspelled or retired fields return validation errors instead of being ignored.
+- Preset messages reject unwired branch buttons. Comment private replies additionally reject quick replies, multiple blocks, and buttons.
+- `daily_cap` is enforced atomically per generated entrypoint and UTC day.
+- Re-entry and cooldown checks are serialized per contact and automation, preventing concurrent events from double-enrolling the same contact.
+- Reactive messages use explicit automation consent or the bounded customer-service reply window opened by the triggering inbound conversation; a suppression remains an absolute veto.
+
+## Insights and editing
+
+`created_from_template` remains on the automation, so insights can be rolled up by preset:
 
 ```bash
 GET /v1/automations/insights?created_from_template=comment_to_dm&period=30d
 ```
 
-Returns aggregate run counts, completion rate, and exit-reason breakdown across every `comment_to_dm` flow in the organization.
-
-## Editing a template's output
-
-The automation returned by a template call is a normal automation. Use `PUT /v1/automations/{id}/graph` to change the graph, `PATCH /v1/automation-entrypoints/{id}` to tune the generated entrypoint, or `DELETE /v1/automation-entrypoints/{id}` + `POST …/entrypoints` to replace it. Nothing is special about template-generated automations at runtime.
-
-## Adding a template
-
-Templates live under `apps/api/src/services/automations/templates/`. Each is a `TemplateBuilder` — a function `(TemplateBuildInput) => { graph, entrypoints, name, description? }`. Register it in `templates/index.ts` and the `POST /v1/automations` dispatcher picks it up automatically. No enum change, no migration.
+Use `PUT /v1/automations/{id}/graph` to edit the generated graph and the automation-entrypoint endpoints to tune or replace its trigger.

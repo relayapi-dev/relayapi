@@ -29,7 +29,13 @@ type TelegramChat = {
 	username?: string;
 };
 
-type TelegramChatMember = { status: string };
+type TelegramChatMember = {
+	status: string;
+	can_post_messages?: boolean;
+	can_send_messages?: boolean;
+};
+
+type TelegramBotUser = { id: number; is_bot?: boolean };
 
 type BotApiResponse<T> = {
 	ok: boolean;
@@ -59,6 +65,7 @@ export async function issueTelegramConnectionChallenge(
 	db: Database,
 	organizationId: string,
 	apiKeyId: string,
+	authoritySessionId: string | null,
 	initialWorkspaceScope: "all" | string[],
 	workspaceId: string | null,
 ): Promise<{ code: string; expiresAt: Date }> {
@@ -69,6 +76,7 @@ export async function issueTelegramConnectionChallenge(
 		id,
 		organizationId,
 		apiKeyId,
+		authoritySessionId,
 		initialWorkspaceScope,
 		workspaceId,
 		expiresAt,
@@ -163,7 +171,7 @@ export async function cleanupExpiredTelegramConnectionChallenges(
 
 async function callTelegramBotApi<T>(
 	env: Env,
-	method: "getChat" | "getChatMember",
+	method: "getMe" | "getChat" | "getChatMember",
 	payload: Record<string, string | number>,
 ): Promise<T | null> {
 	const token = env.TELEGRAM_BOT_TOKEN;
@@ -191,6 +199,22 @@ async function callTelegramBotApi<T>(
 		throw new Error("Telegram Bot API returned an invalid response");
 	}
 	return response.ok && parsed.ok && parsed.result ? parsed.result : null;
+}
+
+export function canTelegramBotPublish(
+	chatType: string,
+	member: TelegramChatMember,
+): boolean {
+	if (chatType === "channel") {
+		return (
+			["creator", "administrator"].includes(member.status) &&
+			member.can_post_messages === true
+		);
+	}
+	if (["creator", "administrator", "member"].includes(member.status)) {
+		return true;
+	}
+	return member.status === "restricted" && member.can_send_messages === true;
 }
 
 async function dispatchConnectedOccurrence(
@@ -270,6 +294,22 @@ export async function processTelegramConnectionChallenge(
 		return true;
 	}
 
+	// Official Bot API: https://core.telegram.org/bots/api
+	// Sections "getMe" and "getChatMember":
+	// POST https://api.telegram.org/bot<token>/getMe
+	// POST https://api.telegram.org/bot<token>/getChatMember
+	// getChatMember fields: chat_id, user_id. ChatMemberAdministrator field
+	// can_post_messages is specific to channels. Verify the managed RelayAPI bot,
+	// not only the human challenge sender, before making the account publishable.
+	const bot = await callTelegramBotApi<TelegramBotUser>(env, "getMe", {});
+	if (!bot?.id || bot.is_bot === false) return true;
+	const botMember = await callTelegramBotApi<TelegramChatMember>(
+		env,
+		"getChatMember",
+		{ chat_id: chat.id, user_id: bot.id },
+	);
+	if (!botMember || !canTelegramBotPublish(chat.type, botMember)) return true;
+
 	const now = new Date();
 	const outcome = await db.transaction(async (tx) => {
 		// Tenant deletion takes an exclusive lock on this row before it snapshots
@@ -296,6 +336,7 @@ export async function processTelegramConnectionChallenge(
 			tx as unknown as Database,
 			{
 				apiKeyId: challenge.apiKeyId,
+				authoritySessionId: challenge.authoritySessionId,
 				organizationId: challenge.organizationId,
 				workspaceId: challenge.workspaceId,
 				resourceName: "connected account",

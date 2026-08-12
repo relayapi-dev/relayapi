@@ -1,4 +1,5 @@
-import { createDb } from "@relayapi/db";
+import { createDb, publishOutbox } from "@relayapi/db";
+import { sql } from "drizzle-orm";
 import { mapConcurrently } from "../lib/concurrency";
 import { scheduleFirstMetricsRefresh } from "../services/analytics-refresh";
 import { dispatchPublishOutbox } from "../services/publish-outbox";
@@ -33,7 +34,13 @@ function isNotificationType(value: unknown): value is NotificationType {
 	return typeof value === "string" && NOTIFICATION_TYPES.has(value);
 }
 
-interface PublishMessage {
+interface PublishQueueEnvelope {
+	type: "publish_outbox";
+	outbox_id: string;
+	org_id: string;
+}
+
+interface PublishOperation {
 	type: string;
 	post_id?: string;
 	org_id?: string;
@@ -58,8 +65,8 @@ interface PublishMessage {
 }
 
 function isPostCompletionMessage(
-	body: PublishMessage | null,
-): body is PublishMessage & {
+	body: PublishOperation | null,
+): body is PublishOperation & {
 	post_id: string;
 	org_id: string;
 	occurrence_id: string;
@@ -90,15 +97,79 @@ function isPostCompletionMessage(
 	);
 }
 
+function isPublishQueueEnvelope(value: unknown): value is PublishQueueEnvelope {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const body = value as Partial<PublishQueueEnvelope>;
+	return (
+		body.type === "publish_outbox" &&
+		typeof body.outbox_id === "string" &&
+		body.outbox_id.length > 0 &&
+		typeof body.org_id === "string" &&
+		body.org_id.length > 0
+	);
+}
+
+async function loadPublishOperation(
+	env: Env,
+	envelope: PublishQueueEnvelope,
+): Promise<PublishOperation | null> {
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	const rows = (await db.execute(sql`
+		SELECT payload
+		  FROM ${publishOutbox}
+		 WHERE id = ${envelope.outbox_id}
+		   AND organization_id = ${envelope.org_id}
+		   AND status IN ('dispatching', 'dispatched')
+		 LIMIT 1
+	`)) as unknown as Array<{ payload: unknown }>;
+	const payload = rows[0]?.payload;
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+		return null;
+	}
+	const operation = payload as PublishOperation;
+	if (operation.org_id !== envelope.org_id) return null;
+	return operation;
+}
+
 export async function consumePublishQueue(
-	batch: MessageBatch<PublishMessage>,
+	batch: MessageBatch<PublishQueueEnvelope>,
 	env: Env,
 ): Promise<void> {
 	await mapConcurrently(
 		batch.messages,
 		PUBLISH_CONCURRENCY,
 		async (message) => {
-			const body = message.body as PublishMessage | null;
+			const envelope: unknown = message.body;
+			if (!isPublishQueueEnvelope(envelope)) {
+				await recordQueueFailure(
+					env,
+					batch.queue,
+					message,
+					"permanent_input",
+					"Malformed publish outbox reference",
+				);
+				message.ack();
+				return;
+			}
+
+			let body: PublishOperation | null;
+			try {
+				body = await loadPublishOperation(env, envelope);
+			} catch {
+				message.retry({ delaySeconds: 2 ** message.attempts });
+				return;
+			}
+			if (!body) {
+				await recordQueueFailure(
+					env,
+					batch.queue,
+					message,
+					"permanent_input",
+					"Publish outbox reference is missing or invalid",
+				);
+				message.ack();
+				return;
+			}
 
 			if (
 				body &&
@@ -109,13 +180,16 @@ export async function consumePublishQueue(
 			) {
 				await handleThreadPublish(
 					message,
-					body as PublishMessage & { org_id: string; thread_group_id: string },
+					body as PublishOperation & {
+						org_id: string;
+						thread_group_id: string;
+					},
 					env,
 				);
 			} else if (body?.type === "publish" && body.post_id && body.org_id) {
 				await handlePostPublish(
 					message,
-					body as PublishMessage & { post_id: string; org_id: string },
+					body as PublishOperation & { post_id: string; org_id: string },
 					env,
 				);
 			} else if (isPostCompletionMessage(body)) {
@@ -130,7 +204,7 @@ export async function consumePublishQueue(
 			) {
 				await handleNotification(
 					message,
-					body as PublishMessage & {
+					body as PublishOperation & {
 						org_id: string;
 						notification_type: NotificationType;
 						title: string;
@@ -161,8 +235,8 @@ export async function consumePublishQueue(
 }
 
 async function handlePostCompletion(
-	message: Message<PublishMessage>,
-	body: PublishMessage & {
+	message: Message<PublishQueueEnvelope>,
+	body: PublishOperation & {
 		post_id: string;
 		org_id: string;
 		occurrence_id: string;
@@ -202,8 +276,8 @@ async function handlePostCompletion(
 }
 
 async function handleNotification(
-	message: Message<PublishMessage>,
-	body: PublishMessage & {
+	message: Message<PublishQueueEnvelope>,
+	body: PublishOperation & {
 		org_id: string;
 		notification_type: NotificationType;
 		title: string;
@@ -237,8 +311,8 @@ async function handleNotification(
 }
 
 async function handleThreadPublish(
-	message: Message<PublishMessage>,
-	body: PublishMessage & { org_id: string; thread_group_id: string },
+	message: Message<PublishQueueEnvelope>,
+	body: PublishOperation & { org_id: string; thread_group_id: string },
 	env: Env,
 ): Promise<void> {
 	try {
@@ -277,8 +351,8 @@ async function handleThreadPublish(
 }
 
 async function handlePostPublish(
-	message: Message<PublishMessage>,
-	body: PublishMessage & { post_id: string; org_id: string },
+	message: Message<PublishQueueEnvelope>,
+	body: PublishOperation & { post_id: string; org_id: string },
 	env: Env,
 ): Promise<void> {
 	try {

@@ -1,6 +1,7 @@
 /**
  * Merge-tag substitution for message text.
- * Supports {{first_name}}, {{contact.email}}, {{state.captured_field}}.
+ * Supports persisted contact fields plus run-context values through either
+ * {{context.captured_field}} or the legacy {{state.captured_field}} alias.
  */
 
 export function applyMergeTags(
@@ -8,6 +9,7 @@ export function applyMergeTags(
 	ctx: {
 		contact?: Record<string, unknown> | null;
 		state?: Record<string, unknown>;
+		context?: Record<string, unknown>;
 	},
 ): string {
 	if (!template) return "";
@@ -17,11 +19,14 @@ export function applyMergeTags(
 		if (path[0] === "contact") {
 			root = ctx.contact;
 			path.shift();
+		} else if (path[0] === "context") {
+			root = ctx.context ?? ctx.state;
+			path.shift();
 		} else if (path[0] === "state") {
-			root = ctx.state;
+			root = ctx.state ?? ctx.context;
 			path.shift();
 		} else {
-			// shortcut: {{first_name}} → contact.first_name
+			// Shortcut: {{name}} → contact.name.
 			root = ctx.contact;
 		}
 		let cur: unknown = root;

@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
+import { auditDurableDomains } from "../src/domain-contract-audit";
 import {
 	ORGANIZATION_PROVISIONING_CONTRACT,
 	PARENT_IDENTITY_PROJECTION_FUNCTION,
@@ -12,24 +15,31 @@ import {
 import * as schema from "../src/schema";
 import { SCHEMA_SCOPE_CONTRACTS } from "../src/schema-contracts";
 import { auditSchemaInvariants } from "../src/schema-invariant-audit";
+import { USAGE_BUCKET_PROJECTION_CONTRACT } from "../src/usage-projection-contract";
+import { stripSqlComments } from "./migration-policy-contract";
+import { readBaselineGeneration } from "./rebuild-baseline";
+import { AUTOMATION_CONVERSION_EVENT_FACT_CONTRACT } from "./render-automation-conversion-event-invariant-sql";
 import {
+	auditDatabaseExtensionLifecycle,
+	auditDatabasePrerequisiteRegistries,
 	BASELINE_PREAMBLE_MARKER,
-	REQUIRED_BASELINE_EXTENSION_SCHEMAS,
-	REQUIRED_BASELINE_EXTENSIONS,
-	REQUIRED_BASELINE_SCHEMAS,
+	COLLAPSE_BASELINE_EXTENSION_SCHEMAS,
+	COLLAPSE_BASELINE_EXTENSIONS,
+	COLLAPSE_BASELINE_SCHEMAS,
 	renderBaselinePreambleSql,
 } from "./render-baseline-preamble-sql";
+import { CONTACT_SUBSCRIPTION_EVENT_APPEND_ONLY_CONTRACT } from "./render-contact-subscription-event-invariant-sql";
 import { CUSTOM_MIGRATION_SQL_MARKER } from "./render-custom-migration-sql";
 
 const failures: string[] = [];
+failures.push(...auditDatabasePrerequisiteRegistries());
 
 type MigrationJournal = {
 	entries: Array<{ tag: string }>;
 };
 
 function normalizeMigrationSql(source: string): string {
-	return source
-		.replace(/--[^\n]*/g, " ")
+	return stripSqlComments(source)
 		.replace(/"([a-z_][a-z0-9_]*)"/gi, "$1")
 		.toLowerCase()
 		.replace(/\s+/g, " ")
@@ -47,66 +57,85 @@ function countOccurrences(source: string, fragment: string): number {
 	}
 }
 
+const migrationDirectory = process.env.RELAYAPI_VERIFY_MIGRATION_DIRECTORY
+	? resolve(process.env.RELAYAPI_VERIFY_MIGRATION_DIRECTORY)
+	: fileURLToPath(new URL("../drizzle", import.meta.url));
+const baselineGenerationPath = process.env.RELAYAPI_VERIFY_BASELINE_GENERATION
+	? resolve(process.env.RELAYAPI_VERIFY_BASELINE_GENERATION)
+	: fileURLToPath(new URL("../baseline-generation.json", import.meta.url));
+const baselineGeneration = readBaselineGeneration(baselineGenerationPath);
+const baselineFilename = `${baselineGeneration.baseline.tag}.sql`;
 const baselineSqlSource = readFileSync(
-	new URL("../drizzle/0000_baseline.sql", import.meta.url),
+	join(migrationDirectory, baselineFilename),
 	"utf8",
 );
 const migrationJournal = JSON.parse(
-	readFileSync(
-		new URL("../drizzle/meta/_journal.json", import.meta.url),
-		"utf8",
-	),
+	readFileSync(join(migrationDirectory, "meta", "_journal.json"), "utf8"),
 ) as MigrationJournal;
-const migrationSql = normalizeMigrationSql(
-	migrationJournal.entries
-		.map(({ tag }) =>
-			readFileSync(new URL(`../drizzle/${tag}.sql`, import.meta.url), "utf8"),
-		)
-		.join("\n"),
+const rawMigrationSqlByTag = Object.fromEntries(
+	migrationJournal.entries.map(({ tag }) => [
+		tag,
+		readFileSync(join(migrationDirectory, `${tag}.sql`), "utf8"),
+	]),
+);
+const migrationSqlByTag = Object.fromEntries(
+	Object.entries(rawMigrationSqlByTag).map(([tag, source]) => [
+		tag,
+		normalizeMigrationSql(source),
+	]),
+);
+const migrationSql = Object.values(migrationSqlByTag).join(" ");
+const provisioning = ORGANIZATION_PROVISIONING_CONTRACT;
+const workspaceRequirement = WORKSPACE_REQUIREMENT_CONTRACT;
+
+failures.push(
+	...auditDatabaseExtensionLifecycle(rawMigrationSqlByTag, {
+		migrationOrder: migrationJournal.entries.map(({ tag }) => tag),
+	}),
 );
 if (!baselineSqlSource.startsWith(renderBaselinePreambleSql())) {
 	failures.push(
-		"0000_baseline.sql must start with the generated database preamble",
+		`${baselineFilename} must start with the generated database preamble`,
 	);
 }
 if (countOccurrences(baselineSqlSource, BASELINE_PREAMBLE_MARKER) !== 1) {
 	failures.push(
-		"0000_baseline.sql must contain exactly one generated database preamble marker",
+		`${baselineFilename} must contain exactly one generated database preamble marker`,
 	);
 }
-for (const schemaName of REQUIRED_BASELINE_SCHEMAS) {
+for (const schemaName of COLLAPSE_BASELINE_SCHEMAS) {
 	const statement = `CREATE SCHEMA IF NOT EXISTS "${schemaName}";`;
 	if (countOccurrences(baselineSqlSource, statement) !== 1) {
 		failures.push(
-			`0000_baseline.sql must contain exactly one required preamble statement: ${statement}`,
+			`${baselineFilename} must contain exactly one required preamble statement: ${statement}`,
 		);
 	}
 }
-for (const extensionName of REQUIRED_BASELINE_EXTENSIONS) {
-	const statement = `CREATE EXTENSION IF NOT EXISTS "${extensionName}" WITH SCHEMA "${REQUIRED_BASELINE_EXTENSION_SCHEMAS[extensionName]}";`;
+for (const extensionName of COLLAPSE_BASELINE_EXTENSIONS) {
+	const statement = `CREATE EXTENSION IF NOT EXISTS "${extensionName}" WITH SCHEMA "${COLLAPSE_BASELINE_EXTENSION_SCHEMAS[extensionName]}";`;
 	if (countOccurrences(baselineSqlSource, statement) !== 1) {
 		failures.push(
-			`0000_baseline.sql must contain exactly one required preamble statement: ${statement}`,
+			`${baselineFilename} must contain exactly one required preamble statement: ${statement}`,
 		);
 	}
 }
 if (countOccurrences(baselineSqlSource, CUSTOM_MIGRATION_SQL_MARKER) !== 1) {
 	failures.push(
-		"0000_baseline.sql must contain exactly one generated non-declarative contract block",
+		`${baselineFilename} must contain exactly one generated non-declarative contract block`,
 	);
 }
-const provisioning = ORGANIZATION_PROVISIONING_CONTRACT;
 const requiredBaselineFragments = [
 	`function ${provisioning.functionSchema}.${provisioning.functionName}`,
 	`trigger ${provisioning.triggerName}`,
 	`after insert on ${provisioning.organizationSchema}.${provisioning.organizationTable}`,
 	`for each row execute function ${provisioning.functionSchema}.${provisioning.functionName}()`,
 	`insert into public.${provisioning.settingsTable} (organization_id)`,
-	`insert into public.${provisioning.workspaceTable} (id, organization_id, name, lifecycle_status)`,
+	`insert into public.${provisioning.workspaceTable} (id, organization_id, name, slug, lifecycle_status)`,
 	`insert into public.${provisioning.ideaGroupTable} (id, organization_id, workspace_id, name, position, is_default, revision)`,
 	"on conflict (organization_id) do nothing",
 	"gen_random_uuid()",
 	`'${provisioning.initialWorkspaceName.toLowerCase()}'`,
+	`'${provisioning.initialWorkspaceSlug.toLowerCase()}'`,
 	`'${provisioning.defaultIdeaGroupName.toLowerCase()}'`,
 	"where not exists",
 	"select id from auth.organization",
@@ -161,7 +190,6 @@ for (const contract of PARENT_IDENTITY_PROJECTIONS) {
 	}
 }
 
-const workspaceRequirement = WORKSPACE_REQUIREMENT_CONTRACT;
 for (const fragment of [
 	`function ${workspaceRequirement.functionSchema}.${workspaceRequirement.functionName}`,
 	`from public.${workspaceRequirement.settingsTable} as settings_row`,
@@ -213,6 +241,63 @@ for (const fragment of [
 	}
 }
 
+const usageProjection = USAGE_BUCKET_PROJECTION_CONTRACT;
+for (const fragment of [
+	`function ${usageProjection.projectionFunctionSchema}.${usageProjection.projectionFunctionName}`,
+	`trigger ${usageProjection.triggers.insert.name}`,
+	`trigger ${usageProjection.triggers.update.name}`,
+	`trigger ${usageProjection.triggers.delete.name}`,
+	`trigger ${usageProjection.triggers.bucketGuard.name}`,
+	`referencing new table as ${usageProjection.triggers.insert.newTransitionTable}`,
+	`referencing old table as ${usageProjection.triggers.update.oldTransitionTable} new table as ${usageProjection.triggers.update.newTransitionTable}`,
+	"for each statement",
+	"sum(reserved_delta)::bigint",
+	"sum(committed_delta)::bigint",
+	`set_config('${usageProjection.ownershipMarker}', 'on', true)`,
+	`set_config('${usageProjection.ownershipMarker}', 'off', true)`,
+	"pg_trigger_depth() < 2",
+	`coalesce(current_setting('${usageProjection.ownershipMarker}', true), 'off') <> 'on'`,
+	`function ${usageProjection.guardFunctionSchema}.${usageProjection.guardFunctionName}`,
+	"usage bucket counters are owned by usage_reservations",
+]) {
+	if (!migrationSql.includes(fragment)) {
+		failures.push(
+			`migration history lacks usage bucket projection fragment: ${fragment}`,
+		);
+	}
+}
+
+const conversionFact = AUTOMATION_CONVERSION_EVENT_FACT_CONTRACT;
+for (const fragment of [
+	`function ${conversionFact.functionSchema}.${conversionFact.functionName}`,
+	`trigger ${conversionFact.triggerName}`,
+	`before update on ${conversionFact.tableSchema}.${conversionFact.tableName}`,
+	"automation conversion fact columns are immutable",
+	...conversionFact.immutableColumns.map(
+		(column) => `old.${column} is distinct from new.${column}`,
+	),
+]) {
+	if (!migrationSql.includes(fragment)) {
+		failures.push(
+			`migration history lacks automation conversion fact invariant fragment: ${fragment}`,
+		);
+	}
+}
+
+const subscriptionEvent = CONTACT_SUBSCRIPTION_EVENT_APPEND_ONLY_CONTRACT;
+for (const fragment of [
+	`function ${subscriptionEvent.functionSchema}.${subscriptionEvent.functionName}`,
+	`trigger ${subscriptionEvent.triggerName}`,
+	`before update on ${subscriptionEvent.tableSchema}.${subscriptionEvent.tableName}`,
+	"contact subscription events are append-only",
+]) {
+	if (!migrationSql.includes(fragment)) {
+		failures.push(
+			`migration history lacks contact subscription event invariant fragment: ${fragment}`,
+		);
+	}
+}
+
 const configs: Array<ReturnType<typeof getTableConfig>> = [];
 for (const value of Object.values(schema)) {
 	if (!is(value, PgTable)) continue;
@@ -222,6 +307,12 @@ for (const value of Object.values(schema)) {
 const tables = new Map(configs.map((table) => [table.name, table]));
 const invariantAudit = auditSchemaInvariants(configs);
 failures.push(...invariantAudit.failures);
+const domainAudit = auditDurableDomains(
+	Object.values(schema)
+		.filter((value) => is(value, PgTable))
+		.map((value) => getTableConfig(value)),
+);
+failures.push(...domainAudit.failures);
 
 const projectionTriggerNames = new Set<string>();
 for (const contract of PARENT_IDENTITY_PROJECTIONS) {
@@ -336,10 +427,40 @@ for (const contract of SCHEMA_SCOPE_CONTRACTS) {
 	if (!table || contract.class === "tombstone") continue;
 	const columns = new Map(table.columns.map((column) => [column.name, column]));
 
-	for (const required of ["organization_id", "scope_key"]) {
+	const requiredColumns =
+		contract.class === "organization_definition"
+			? ["organization_id"]
+			: ["organization_id", "scope_key"];
+	for (const required of requiredColumns) {
 		if (!columns.has(required)) {
 			failures.push(`${table.name} (${contract.class}) lacks ${required}`);
 		}
+	}
+
+	if (contract.class === "organization_definition") {
+		for (const forbidden of ["workspace_id", "scope_key"]) {
+			if (columns.has(forbidden)) {
+				failures.push(
+					`${table.name} (${contract.class}) must remain organization-global and cannot expose ${forbidden}`,
+				);
+			}
+		}
+		const hasOrganizationIdentity = table.uniqueConstraints.some(
+			(constraint) => {
+				const names = constraint.columns.map((column) => column.name);
+				return (
+					names.length === 2 &&
+					names[0] === "id" &&
+					names[1] === "organization_id"
+				);
+			},
+		);
+		if (!hasOrganizationIdentity) {
+			failures.push(
+				`${table.name} lacks UNIQUE (id, organization_id) organization-global identity`,
+			);
+		}
+		continue;
 	}
 
 	if (
@@ -384,9 +505,17 @@ for (const contract of SCHEMA_SCOPE_CONTRACTS) {
 			localNames.includes("workspace_id") &&
 			foreignKey.onDelete === "set null"
 		) {
-			failures.push(
-				`${table.name}.${foreignKey.getName()} promotes workspace ownership with ON DELETE SET NULL`,
-			);
+			const contract = contracts.get(table.name);
+			const intentionalAuditDetach =
+				contract?.class === "audit_evidence" &&
+				"workspaceDetachOnDelete" in contract &&
+				contract.workspaceDetachOnDelete === true &&
+				localNames.length === 1;
+			if (!intentionalAuditDetach) {
+				failures.push(
+					`${table.name}.${foreignKey.getName()} promotes workspace ownership with ON DELETE SET NULL`,
+				);
+			}
 		}
 	}
 }
@@ -400,5 +529,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-	`Schema contracts verified (${SCHEMA_SCOPE_CONTRACTS.length} contracts, ${configs.length} public tables, ${invariantAudit.candidates.length} invariant candidates, ${invariantAudit.exceptionCount} documented exceptions).`,
+	`Schema contracts verified (${SCHEMA_SCOPE_CONTRACTS.length} scope contracts, ${configs.length} public tables, ${invariantAudit.candidates.length} invariant candidates, ${invariantAudit.exceptionCount} documented exceptions, ${domainAudit.candidates.length} durable domain contracts).`,
 );

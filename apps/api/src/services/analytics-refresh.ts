@@ -17,7 +17,14 @@ import {
 	postTargets,
 	socialAccounts,
 } from "@relayapi/db";
-import { and, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import {
+	classifyProviderReadError,
+	exponentialBackoffSeconds,
+	EXTERNAL_METRICS_POLL,
+	INTERNAL_METRICS_POLL,
+	type ProviderReadErrorClass,
+} from "../lib/async-policy";
 import { PLATFORMS, type Platform } from "../schemas/common";
 import type { Env } from "../types";
 import { getPlatformFetcher } from "./platform-analytics";
@@ -34,6 +41,7 @@ export interface RefreshInternalMetricsMessage {
 	type: "refresh_internal_metrics";
 	organization_id: string;
 	post_id: string;
+	observation_window_start: string;
 }
 
 export interface RefreshExternalMetricsBatchMessage {
@@ -42,6 +50,7 @@ export interface RefreshExternalMetricsBatchMessage {
 	social_account_id: string;
 	platform: string;
 	external_post_ids: string[];
+	poll_generation: number;
 }
 
 export type AnalyticsQueueMessage =
@@ -59,25 +68,26 @@ const SCHEDULE_INTERVALS = [
 	{ maxAge: 14 * 86400_000, interval: 24 * 3600_000 }, // 7-14d: every 24h
 ];
 
-function getRefreshInterval(publishedAt: Date): number | null {
-	const age = Date.now() - publishedAt.getTime();
+const OBSERVATION_WINDOW_MS = 5 * 60_000;
+const INTERNAL_REFRESH_LEASE_MS = INTERNAL_METRICS_POLL.leaseSeconds * 1_000;
+
+export function analyticsObservationWindowStart(at: Date): Date {
+	return new Date(
+		Math.floor(at.getTime() / OBSERVATION_WINDOW_MS) * OBSERVATION_WINDOW_MS,
+	);
+}
+
+function getRefreshInterval(publishedAt: Date, at = new Date()): number | null {
+	const age = at.getTime() - publishedAt.getTime();
 	for (const tier of SCHEDULE_INTERVALS) {
 		if (age < tier.maxAge) return tier.interval;
 	}
 	return null; // Post is older than 14 days — stop refreshing
 }
 
-function needsRefresh(
-	publishedAt: Date,
-	lastCollectedAt: Date | null,
-): boolean {
-	const interval = getRefreshInterval(publishedAt);
-	if (interval == null) return false; // Too old
-
-	if (!lastCollectedAt) return true; // Never collected
-
-	const elapsed = Date.now() - lastCollectedAt.getTime();
-	return elapsed >= interval;
+function nextMetricsPollAt(publishedAt: Date, collectedAt: Date): Date | null {
+	const interval = getRefreshInterval(publishedAt, collectedAt);
+	return interval === null ? null : new Date(collectedAt.getTime() + interval);
 }
 
 // ---------------------------------------------------------------------------
@@ -85,9 +95,6 @@ function needsRefresh(
 // ---------------------------------------------------------------------------
 
 const BATCH_SIZE = 100;
-const MAX_INTERNAL_PER_RUN = 200;
-const MAX_EXTERNAL_PER_RUN = 500;
-const EXTERNAL_BATCH_SIZE = 50;
 
 function parsePlatform(value: string): Platform | null {
 	return (PLATFORMS as readonly string[]).includes(value)
@@ -112,50 +119,109 @@ async function enqueueInternalPostRefresh(
 	_now: Date,
 	maxAge: Date,
 ): Promise<void> {
-	// Find published internal posts within 14 days that need a metrics refresh
-	const candidates = await db
-		.select({
-			id: posts.id,
-			organizationId: posts.organizationId,
-			publishedAt: posts.publishedAt,
-			metricsCollectedAt: posts.metricsCollectedAt,
+	const observationWindowStart = analyticsObservationWindowStart(_now);
+	const leaseExpiresAt = new Date(_now.getTime() + INTERNAL_REFRESH_LEASE_MS);
+	const claimed = await db
+		.update(posts)
+		.set({
+			metricsRefreshWindowStart: observationWindowStart,
+			metricsRefreshLeaseExpiresAt: leaseExpiresAt,
+			metricsRefreshStartedAt: null,
+			revision: sql`${posts.revision} + 1`,
+			updatedAt: _now,
 		})
-		.from(posts)
 		.where(
 			and(
 				eq(posts.status, "published"),
 				gt(posts.publishedAt, maxAge),
-				// Has at least one published target with a platformPostId
-				sql`EXISTS (
-					SELECT 1 FROM post_targets
-					WHERE post_targets.post_id = posts.id
-					AND post_targets.status = 'published'
-					AND post_targets.platform_post_id IS NOT NULL
+				lte(posts.metricsNextPollAt, _now),
+				sql`${posts.metricsPollAttempts} < ${INTERNAL_METRICS_POLL.maxAutomaticAttempts}`,
+				or(
+					isNull(posts.metricsRefreshLeaseExpiresAt),
+					lte(posts.metricsRefreshLeaseExpiresAt, _now),
+				),
+				sql`${posts.id} IN (
+					SELECT ranked.id
+					FROM (
+						SELECT
+							p.id,
+							p.organization_id,
+							p.metrics_next_poll_at,
+							row_number() OVER (
+								PARTITION BY p.organization_id
+								ORDER BY p.metrics_next_poll_at, p.id
+							) AS tenant_rank
+						FROM posts p
+						WHERE p.status = 'published'
+							AND p.published_at > ${maxAge}
+							AND p.metrics_next_poll_at <= ${_now}
+							AND p.metrics_poll_attempts < ${INTERNAL_METRICS_POLL.maxAutomaticAttempts}
+							AND (
+								p.metrics_refresh_lease_expires_at IS NULL
+								OR p.metrics_refresh_lease_expires_at <= ${_now}
+							)
+							AND EXISTS (
+								SELECT 1
+								FROM post_targets pt
+								JOIN social_accounts sa
+									ON sa.id = pt.social_account_id
+									AND sa.organization_id = pt.organization_id
+									AND sa.lifecycle_status = 'active'
+								WHERE pt.post_id = p.id
+									AND pt.organization_id = p.organization_id
+									AND pt.status = 'published'
+									AND pt.platform_post_id IS NOT NULL
+							)
+					) ranked
+					WHERE ranked.tenant_rank <= ${INTERNAL_METRICS_POLL.maxClaimsPerTenant}
+					ORDER BY
+						ranked.tenant_rank,
+						ranked.metrics_next_poll_at,
+						ranked.organization_id,
+						ranked.id
+					LIMIT ${INTERNAL_METRICS_POLL.maxClaimsPerRun}
 				)`,
 			),
 		)
-		.orderBy(posts.metricsCollectedAt) // nulls first, then oldest
-		.limit(MAX_INTERNAL_PER_RUN);
-
-	const dueMessages: { body: RefreshInternalMetricsMessage }[] = [];
-
-	for (const post of candidates) {
-		if (!post.publishedAt) continue;
-		if (!needsRefresh(post.publishedAt, post.metricsCollectedAt)) continue;
-
-		dueMessages.push({
+		.returning({ id: posts.id, organizationId: posts.organizationId });
+	const dueMessages: { body: RefreshInternalMetricsMessage }[] = claimed.map(
+		(post) => ({
 			body: {
 				type: "refresh_internal_metrics",
 				organization_id: post.organizationId,
 				post_id: post.id,
+				observation_window_start: observationWindowStart.toISOString(),
 			},
-		});
-	}
+		}),
+	);
 
 	if (dueMessages.length === 0) return;
 
-	for (let i = 0; i < dueMessages.length; i += BATCH_SIZE) {
-		await env.SYNC_QUEUE.sendBatch(dueMessages.slice(i, i + BATCH_SIZE));
+	try {
+		for (let i = 0; i < dueMessages.length; i += BATCH_SIZE) {
+			await env.SYNC_QUEUE.sendBatch(dueMessages.slice(i, i + BATCH_SIZE));
+		}
+	} catch (error) {
+		await db
+			.update(posts)
+			.set({
+				metricsNextPollAt: _now,
+				metricsRefreshLeaseExpiresAt: null,
+				metricsRefreshStartedAt: null,
+				revision: sql`${posts.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					inArray(
+						posts.id,
+						claimed.map(({ id }) => id),
+					),
+					eq(posts.metricsRefreshWindowStart, observationWindowStart),
+					isNull(posts.metricsRefreshStartedAt),
+				),
+			);
+		throw error;
 	}
 
 	console.log(
@@ -169,41 +235,93 @@ async function enqueueExternalPostRefresh(
 	_now: Date,
 	maxAge: Date,
 ): Promise<void> {
-	// Find external posts within 14 days needing metrics refresh
-	const candidates = await db
-		.select({
+	// Claim and return due rows in one statement. Freshness
+	// (metrics_updated_at) is never used as a reservation marker.
+	const leaseExpiresAt = new Date(
+		_now.getTime() + EXTERNAL_METRICS_POLL.leaseSeconds * 1000,
+	);
+	const due = await db
+		.update(externalPosts)
+		.set({
+			metricsPollGeneration: sql`${externalPosts.metricsPollGeneration} + 1`,
+			metricsPollLeaseExpiresAt: leaseExpiresAt,
+			metricsPollStartedAt: null,
+			updatedAt: _now,
+		})
+		.where(
+			and(
+				gt(externalPosts.publishedAt, maxAge),
+				lte(externalPosts.metricsNextPollAt, _now),
+				or(
+					isNull(externalPosts.metricsPollLeaseExpiresAt),
+					lte(externalPosts.metricsPollLeaseExpiresAt, _now),
+				),
+				sql`${externalPosts.metricsPollAttempts} < ${EXTERNAL_METRICS_POLL.maxAutomaticAttempts}`,
+				sql`${externalPosts.id} IN (
+					SELECT ranked.id
+					FROM (
+						SELECT
+							ep.id,
+							ep.organization_id,
+							ep.metrics_next_poll_at,
+							row_number() OVER (
+								PARTITION BY ep.organization_id
+								ORDER BY ep.metrics_next_poll_at, ep.id
+							) AS tenant_rank
+						FROM external_posts ep
+						JOIN social_accounts sa
+							ON sa.id = ep.social_account_id
+							AND sa.organization_id = ep.organization_id
+							AND sa.lifecycle_status = 'active'
+						WHERE ep.published_at > ${maxAge}
+							AND ep.metrics_next_poll_at <= ${_now}
+							AND ep.metrics_poll_attempts < ${EXTERNAL_METRICS_POLL.maxAutomaticAttempts}
+							AND (
+								ep.metrics_poll_lease_expires_at IS NULL
+								OR ep.metrics_poll_lease_expires_at <= ${_now}
+							)
+					) ranked
+					WHERE ranked.tenant_rank <= ${EXTERNAL_METRICS_POLL.maxClaimsPerTenant}
+					ORDER BY
+						ranked.tenant_rank,
+						ranked.metrics_next_poll_at,
+						ranked.organization_id,
+						ranked.id
+					LIMIT ${EXTERNAL_METRICS_POLL.maxClaimsPerRun}
+				)`,
+			),
+		)
+		.returning({
 			id: externalPosts.id,
 			socialAccountId: externalPosts.socialAccountId,
 			organizationId: externalPosts.organizationId,
 			platform: externalPosts.platform,
-			publishedAt: externalPosts.publishedAt,
-			metricsUpdatedAt: externalPosts.metricsUpdatedAt,
-		})
-		.from(externalPosts)
-		.where(gt(externalPosts.publishedAt, maxAge))
-		.orderBy(externalPosts.metricsUpdatedAt)
-		.limit(MAX_EXTERNAL_PER_RUN);
-
-	// Filter by decaying schedule
-	const due = candidates.filter((p) =>
-		needsRefresh(p.publishedAt, p.metricsUpdatedAt),
-	);
+			pollGeneration: externalPosts.metricsPollGeneration,
+		});
 
 	if (due.length === 0) return;
 
 	// Group by social account for batching
 	const byAccount = new Map<
 		string,
-		{ organizationId: string; platform: string; postIds: string[] }
+		{
+			accountId: string;
+			organizationId: string;
+			platform: string;
+			pollGeneration: number;
+			postIds: string[];
+		}
 	>();
 
 	for (const post of due) {
-		const key = post.socialAccountId;
+		const key = `${post.socialAccountId}:${post.pollGeneration}`;
 		let entry = byAccount.get(key);
 		if (!entry) {
 			entry = {
+				accountId: post.socialAccountId,
 				organizationId: post.organizationId,
 				platform: post.platform,
+				pollGeneration: post.pollGeneration,
 				postIds: [],
 			};
 			byAccount.set(key, entry);
@@ -212,15 +330,23 @@ async function enqueueExternalPostRefresh(
 	}
 
 	const messages: { body: RefreshExternalMetricsBatchMessage }[] = [];
-	for (const [accountId, data] of byAccount) {
-		for (let i = 0; i < data.postIds.length; i += EXTERNAL_BATCH_SIZE) {
+	for (const data of byAccount.values()) {
+		for (
+			let i = 0;
+			i < data.postIds.length;
+			i += EXTERNAL_METRICS_POLL.batchSize
+		) {
 			messages.push({
 				body: {
 					type: "refresh_external_metrics_batch",
 					organization_id: data.organizationId,
-					social_account_id: accountId,
+					social_account_id: data.accountId,
 					platform: data.platform,
-					external_post_ids: data.postIds.slice(i, i + EXTERNAL_BATCH_SIZE),
+					external_post_ids: data.postIds.slice(
+						i,
+						i + EXTERNAL_METRICS_POLL.batchSize,
+					),
+					poll_generation: data.pollGeneration,
 				},
 			});
 		}
@@ -244,6 +370,35 @@ export async function refreshInternalPostMetrics(
 	message: RefreshInternalMetricsMessage,
 ): Promise<void> {
 	const db = createDb(env.HYPERDRIVE.connectionString);
+	const observationWindowStart = new Date(message.observation_window_start);
+	if (Number.isNaN(observationWindowStart.getTime())) {
+		throw new Error("invalid analytics observation window");
+	}
+	const claimStartedAt = new Date();
+	const [claimedPost] = await db
+		.update(posts)
+		.set({
+			metricsRefreshStartedAt: claimStartedAt,
+			metricsPollAttempts: sql`${posts.metricsPollAttempts} + 1`,
+			revision: sql`${posts.revision} + 1`,
+			updatedAt: claimStartedAt,
+		})
+		.where(
+			and(
+				eq(posts.id, message.post_id),
+				eq(posts.organizationId, message.organization_id),
+				eq(posts.status, "published"),
+				eq(posts.metricsRefreshWindowStart, observationWindowStart),
+				isNull(posts.metricsRefreshStartedAt),
+				gt(posts.metricsRefreshLeaseExpiresAt, claimStartedAt),
+			),
+		)
+		.returning({
+			id: posts.id,
+			publishedAt: posts.publishedAt,
+			attempts: posts.metricsPollAttempts,
+		});
+	if (!claimedPost) return;
 
 	// Load the post's published targets with their social accounts
 	const targets = await db
@@ -277,7 +432,18 @@ export async function refreshInternalPostMetrics(
 			),
 		);
 
-	if (targets.length === 0) return;
+	if (targets.length === 0) {
+		await finishInternalMetricsPollFailure(
+			db,
+			message,
+			observationWindowStart,
+			claimStartedAt,
+			claimedPost.attempts,
+			new Error("No active published targets remain for metrics polling"),
+			"permanent",
+		);
+		return;
+	}
 
 	// Aggregate metrics across all targets
 	const aggregated = {
@@ -292,6 +458,10 @@ export async function refreshInternalPostMetrics(
 	};
 	let totalEngagement = 0;
 	let anyMatch = false;
+	let lastFailure: unknown = new Error(
+		"Provider returned no metrics for the claimed post",
+	);
+	let lastFailureClass: ProviderReadErrorClass = "transient";
 	const now = new Date();
 
 	// Cache the windowed list-fetch per (account, date-window) so a multi-target
@@ -303,7 +473,13 @@ export async function refreshInternalPostMetrics(
 		if (!target.platformPostId) continue;
 
 		const fetcher = getPlatformFetcher(target.platform);
-		if (!fetcher) continue;
+		if (!fetcher) {
+			lastFailure = new Error(
+				`No analytics fetcher for platform ${target.platform}`,
+			);
+			lastFailureClass = "permanent";
+			continue;
+		}
 
 		let accessToken: string;
 		try {
@@ -314,7 +490,9 @@ export async function refreshInternalPostMetrics(
 				refreshToken: target.accountRefreshToken,
 				tokenExpiresAt: target.accountTokenExpiresAt,
 			});
-		} catch {
+		} catch (error) {
+			lastFailure = error;
+			lastFailureClass = classifyProviderReadError(error);
 			continue; // Can't refresh token, skip this target
 		}
 
@@ -359,19 +537,42 @@ export async function refreshInternalPostMetrics(
 			if (match) {
 				anyMatch = true;
 				// Write to postAnalytics (time-series)
-				await db.insert(postAnalytics).values({
-					postTargetId: target.targetId,
-					platform:
-						target.platform as typeof postAnalytics.$inferInsert.platform,
-					impressions: match.impressions,
-					reach: match.reach,
-					likes: match.likes,
-					comments: match.comments,
-					shares: match.shares,
-					saves: match.saves,
-					clicks: match.clicks,
-					views: 0,
-				});
+				await db
+					.insert(postAnalytics)
+					.values({
+						postTargetId: target.targetId,
+						platform:
+							target.platform as typeof postAnalytics.$inferInsert.platform,
+						impressions: match.impressions,
+						reach: match.reach,
+						likes: match.likes,
+						comments: match.comments,
+						shares: match.shares,
+						saves: match.saves,
+						clicks: match.clicks,
+						views: 0,
+						observationWindowStart,
+						collectedAt: now,
+					})
+					.onConflictDoUpdate({
+						target: [
+							postAnalytics.postTargetId,
+							postAnalytics.observationWindowStart,
+						],
+						set: {
+							platform:
+								target.platform as typeof postAnalytics.$inferInsert.platform,
+							impressions: match.impressions,
+							reach: match.reach,
+							likes: match.likes,
+							comments: match.comments,
+							shares: match.shares,
+							saves: match.saves,
+							clicks: match.clicks,
+							views: 0,
+							collectedAt: now,
+						},
+					});
 
 				// Aggregate for snapshot
 				aggregated.impressions += match.impressions;
@@ -385,6 +586,8 @@ export async function refreshInternalPostMetrics(
 					match.likes + match.comments + match.shares + match.saves;
 			}
 		} catch (err) {
+			lastFailure = err;
+			lastFailureClass = classifyProviderReadError(err);
 			console.error(
 				`[Analytics] Failed to fetch metrics for target ${target.targetId}:`,
 				err,
@@ -397,13 +600,27 @@ export async function refreshInternalPostMetrics(
 	// overwrite the stored snapshot with all-zeros — that would wipe a valid
 	// non-zero snapshot on a transient outage and, because metricsCollectedAt is
 	// bumped, could freeze zeros permanently for posts near the 14-day cutoff.
-	if (!anyMatch) return;
+	if (!anyMatch) {
+		await finishInternalMetricsPollFailure(
+			db,
+			message,
+			observationWindowStart,
+			claimStartedAt,
+			claimedPost.attempts,
+			lastFailure,
+			lastFailureClass,
+		);
+		return;
+	}
 
 	// Calculate engagement rate if we have data
 	const engagementRate =
 		aggregated.impressions > 0
 			? Number(((totalEngagement / aggregated.impressions) * 100).toFixed(2))
 			: 0;
+	const nextPollAt = claimedPost.publishedAt
+		? nextMetricsPollAt(claimedPost.publishedAt, now)
+		: null;
 
 	// Update the post's metricsSnapshot for fast Sent tab display
 	await db
@@ -411,6 +628,13 @@ export async function refreshInternalPostMetrics(
 		.set({
 			metricsSnapshot: { ...aggregated, engagement_rate: engagementRate },
 			metricsCollectedAt: now,
+			metricsNextPollAt:
+				nextPollAt ?? new Date(now.getTime() + 24 * 60 * 60 * 1_000),
+			metricsRefreshLeaseExpiresAt: null,
+			metricsRefreshStartedAt: null,
+			metricsPollAttempts: 0,
+			metricsPollLastError: null,
+			metricsPollLastErrorClass: null,
 			revision: sql`${posts.revision} + 1`,
 			updatedAt: now,
 		})
@@ -418,8 +642,62 @@ export async function refreshInternalPostMetrics(
 			and(
 				eq(posts.id, message.post_id),
 				eq(posts.organizationId, message.organization_id),
+				eq(posts.metricsRefreshWindowStart, observationWindowStart),
+				eq(posts.metricsRefreshStartedAt, claimStartedAt),
 			),
 		);
+}
+
+async function finishInternalMetricsPollFailure(
+	db: Database,
+	message: RefreshInternalMetricsMessage,
+	observationWindowStart: Date,
+	claimStartedAt: Date,
+	attempts: number,
+	error: unknown,
+	errorClass: ProviderReadErrorClass,
+): Promise<void> {
+	const failedAt = new Date();
+	const retrySeconds = exponentialBackoffSeconds(
+		attempts,
+		INTERNAL_METRICS_POLL.retry,
+		`${message.post_id}:${attempts}`,
+	);
+	const exhausted = attempts >= INTERNAL_METRICS_POLL.maxAutomaticAttempts;
+	const detail = error instanceof Error ? error.message : String(error);
+	await db
+		.update(posts)
+		.set({
+			metricsNextPollAt: new Date(
+				failedAt.getTime() +
+					(errorClass === "permanent" ? 24 * 60 * 60 : retrySeconds) * 1_000,
+			),
+			metricsRefreshLeaseExpiresAt: null,
+			metricsRefreshStartedAt: null,
+			metricsPollLastError: (exhausted
+				? `Automatic internal metrics attempt budget reached; polling is suspended. ${detail}`
+				: detail
+			).slice(0, 1_000),
+			metricsPollLastErrorClass: errorClass,
+			revision: sql`${posts.revision} + 1`,
+			updatedAt: failedAt,
+		})
+		.where(
+			and(
+				eq(posts.id, message.post_id),
+				eq(posts.organizationId, message.organization_id),
+				eq(posts.metricsRefreshWindowStart, observationWindowStart),
+				eq(posts.metricsRefreshStartedAt, claimStartedAt),
+			),
+		);
+	if (exhausted) {
+		console.error("[Analytics] automatic internal metrics polling suspended", {
+			organizationId: message.organization_id,
+			postId: message.post_id,
+			attempts,
+			errorClass,
+		});
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -453,51 +731,96 @@ export async function refreshExternalPostMetricsBatch(
 	// Get the external post fetcher
 	const { getExternalPostFetcher } = await import("./external-post-sync/index");
 	const fetcher = getExternalPostFetcher(platform);
-	if (!fetcher) return;
 
-	let accessToken: string;
-	try {
-		accessToken = await refreshTokenIfNeeded(env, account);
-	} catch {
-		return;
-	}
-
-	// Load external posts to get platform post IDs
+	// Claim this exact producer generation before any provider read. Duplicate
+	// queue deliveries cannot claim rows already started by another consumer.
+	const claimStartedAt = new Date();
 	const extPosts = await db
-		.select({
-			id: externalPosts.id,
-			platformPostId: externalPosts.platformPostId,
+		.update(externalPosts)
+		.set({
+			metricsPollStartedAt: claimStartedAt,
+			metricsPollAttempts: sql`${externalPosts.metricsPollAttempts} + 1`,
+			updatedAt: claimStartedAt,
 		})
-		.from(externalPosts)
 		.where(
 			and(
 				inArray(externalPosts.id, message.external_post_ids),
 				eq(externalPosts.organizationId, message.organization_id),
 				eq(externalPosts.socialAccountId, message.social_account_id),
 				eq(externalPosts.platform, platform),
+				eq(externalPosts.metricsPollGeneration, message.poll_generation),
+				isNull(externalPosts.metricsPollStartedAt),
+				gt(externalPosts.metricsPollLeaseExpiresAt, claimStartedAt),
 			),
-		);
+		)
+		.returning({
+			id: externalPosts.id,
+			platformPostId: externalPosts.platformPostId,
+			publishedAt: externalPosts.publishedAt,
+			attempts: externalPosts.metricsPollAttempts,
+		});
 
 	if (extPosts.length === 0) return;
+	if (!fetcher) {
+		await failExternalMetricsPoll(
+			db,
+			message,
+			claimStartedAt,
+			extPosts,
+			new Error(`No metrics fetcher for platform ${platform}`),
+			"permanent",
+		);
+		return;
+	}
+
+	let accessToken: string;
+	try {
+		accessToken = await refreshTokenIfNeeded(env, account);
+	} catch (error) {
+		await failExternalMetricsPoll(db, message, claimStartedAt, extPosts, error);
+		return;
+	}
 
 	const platformPostIds = extPosts.map((p) => p.platformPostId);
-	const metricsMap = await fetcher.fetchPostMetrics(
-		accessToken,
-		account.platformAccountId,
-		platformPostIds,
-	);
+	let metricsMap: Awaited<ReturnType<typeof fetcher.fetchPostMetrics>>;
+	try {
+		metricsMap = await fetcher.fetchPostMetrics(
+			accessToken,
+			account.platformAccountId,
+			platformPostIds,
+		);
+	} catch (error) {
+		await failExternalMetricsPoll(db, message, claimStartedAt, extPosts, error);
+		return;
+	}
 
 	const now = new Date();
 	await Promise.allSettled(
 		extPosts.map((post) => {
 			const metrics = metricsMap.get(post.platformPostId);
-			if (!metrics) return Promise.resolve();
+			const missingDelaySeconds = exponentialBackoffSeconds(
+				post.attempts,
+				EXTERNAL_METRICS_POLL.retry,
+				`${post.id}:${post.attempts}`,
+			);
+			const nextPollAt = metrics
+				? nextMetricsPollAt(post.publishedAt, now)
+				: new Date(now.getTime() + missingDelaySeconds * 1000);
 
 			return db
 				.update(externalPosts)
 				.set({
-					metrics,
-					metricsUpdatedAt: now,
+					...(metrics ? { metrics, metricsUpdatedAt: now } : {}),
+					metricsNextPollAt: nextPollAt,
+					metricsPollLeaseExpiresAt: null,
+					metricsPollStartedAt: null,
+					metricsPollAttempts: metrics ? 0 : post.attempts,
+					metricsPollLastError: metrics
+						? null
+						: post.attempts >= EXTERNAL_METRICS_POLL.maxAutomaticAttempts
+							? "Automatic metrics poll attempt budget reached; polling is suspended until a manual refresh succeeds"
+							: "Provider returned no metrics for the claimed post",
+					metricsPollLastErrorClass: metrics ? null : "transient",
 					updatedAt: now,
 				})
 				.where(
@@ -505,6 +828,58 @@ export async function refreshExternalPostMetricsBatch(
 						eq(externalPosts.id, post.id),
 						eq(externalPosts.organizationId, message.organization_id),
 						eq(externalPosts.socialAccountId, message.social_account_id),
+						eq(externalPosts.metricsPollGeneration, message.poll_generation),
+						eq(externalPosts.metricsPollStartedAt, claimStartedAt),
+					),
+				);
+		}),
+	);
+}
+
+async function failExternalMetricsPoll(
+	db: Database,
+	message: RefreshExternalMetricsBatchMessage,
+	claimStartedAt: Date,
+	claimedPosts: Array<{ id: string; attempts: number }>,
+	error: unknown,
+	forcedClass?: "transient" | "rate_limited" | "permanent",
+): Promise<void> {
+	const failedAt = new Date();
+	const errorClass = forcedClass ?? classifyProviderReadError(error);
+	const messageText = error instanceof Error ? error.message : String(error);
+	await Promise.allSettled(
+		claimedPosts.map((post) => {
+			const retrySeconds = exponentialBackoffSeconds(
+				post.attempts,
+				EXTERNAL_METRICS_POLL.retry,
+				`${post.id}:${post.attempts}`,
+			);
+			const budgetExhausted =
+				post.attempts >= EXTERNAL_METRICS_POLL.maxAutomaticAttempts;
+			const nextPollAt = new Date(
+				failedAt.getTime() +
+					(errorClass === "permanent" ? 24 * 60 * 60 : retrySeconds) * 1000,
+			);
+			const persistedError = budgetExhausted
+				? `Automatic metrics poll attempt budget reached; polling is suspended until a manual refresh succeeds. ${messageText}`
+				: messageText;
+			return db
+				.update(externalPosts)
+				.set({
+					metricsPollLeaseExpiresAt: null,
+					metricsPollStartedAt: null,
+					metricsNextPollAt: nextPollAt,
+					metricsPollLastError: persistedError.slice(0, 1000),
+					metricsPollLastErrorClass: errorClass,
+					updatedAt: failedAt,
+				})
+				.where(
+					and(
+						eq(externalPosts.id, post.id),
+						eq(externalPosts.organizationId, message.organization_id),
+						eq(externalPosts.socialAccountId, message.social_account_id),
+						eq(externalPosts.metricsPollGeneration, message.poll_generation),
+						eq(externalPosts.metricsPollStartedAt, claimStartedAt),
 					),
 				);
 		}),
@@ -520,13 +895,68 @@ export async function scheduleFirstMetricsRefresh(
 	postId: string,
 	orgId: string,
 ): Promise<void> {
-	// Enqueue with 15-minute delay for the first metrics collection
-	await env.SYNC_QUEUE.send(
-		{
-			type: "refresh_internal_metrics",
-			organization_id: orgId,
-			post_id: postId,
-		} satisfies RefreshInternalMetricsMessage,
-		{ delaySeconds: 900 }, // 15 minutes
+	const db = createDb(env.HYPERDRIVE.connectionString);
+	const now = new Date();
+	const scheduledAt = new Date(now.getTime() + 15 * 60_000);
+	const observationWindowStart = analyticsObservationWindowStart(scheduledAt);
+	const leaseExpiresAt = new Date(
+		scheduledAt.getTime() + INTERNAL_REFRESH_LEASE_MS,
 	);
+	const [claimed] = await db
+		.update(posts)
+		.set({
+			metricsNextPollAt: scheduledAt,
+			metricsRefreshWindowStart: observationWindowStart,
+			metricsRefreshLeaseExpiresAt: leaseExpiresAt,
+			metricsRefreshStartedAt: null,
+			revision: sql`${posts.revision} + 1`,
+			updatedAt: now,
+		})
+		.where(
+			and(
+				eq(posts.id, postId),
+				eq(posts.organizationId, orgId),
+				eq(posts.status, "published"),
+				or(
+					isNull(posts.metricsRefreshLeaseExpiresAt),
+					lte(posts.metricsRefreshLeaseExpiresAt, now),
+				),
+			),
+		)
+		.returning({ id: posts.id });
+	if (!claimed) return;
+
+	try {
+		// Enqueue with 15-minute delay for the first metrics collection.
+		await env.SYNC_QUEUE.send(
+			{
+				type: "refresh_internal_metrics",
+				organization_id: orgId,
+				post_id: postId,
+				observation_window_start: observationWindowStart.toISOString(),
+			} satisfies RefreshInternalMetricsMessage,
+			{ delaySeconds: 900 },
+		);
+	} catch (error) {
+		// Release only this unstarted reservation. A later cron can enqueue it
+		// immediately instead of waiting for the delayed-message lease to expire.
+		await db
+			.update(posts)
+			.set({
+				metricsNextPollAt: now,
+				metricsRefreshLeaseExpiresAt: null,
+				metricsRefreshStartedAt: null,
+				revision: sql`${posts.revision} + 1`,
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(posts.id, postId),
+					eq(posts.organizationId, orgId),
+					eq(posts.metricsRefreshWindowStart, observationWindowStart),
+					isNull(posts.metricsRefreshStartedAt),
+				),
+			);
+		throw error;
+	}
 }

@@ -1,14 +1,38 @@
 {
 	"accountId": "3496f40fcd55a91da50ded8abea2cf7a",
+	"zoneName": "relayapi.dev",
 	"workerName": "relayapi",
+	"apiHostname": "api.relayapi.dev",
 	"apiBaseUrl": "https://api.relayapi.dev",
+	"publicLinkHostname": "go.relayapi.dev",
+	"publicLinkBaseUrl": "https://go.relayapi.dev",
 	"hyperdriveId": "11180e4939824902a75753084dc6a8e9",
+	"hyperdriveVpcServiceId": null,
 	"hyperdriveRuntimeUser": "relayapi_runtime",
+	"kvNamespaceId": "c4e14913be2b41628ef71ae12561f7e8",
+	"r2Jurisdiction": "default",
 	"mediaBucket": "relayapi-media",
 	"avatarBucket": "relayapi-avatars",
 	"thumbnailBucket": "relayapi-media-thumbnails",
 	"queueRescueBucket": "relayapi-queue-rescue-ledger",
+	"adReportBucket": "relayapi-ad-reports",
+	"publicAssetsBucket": "relayapi-public-assets",
+	"thumbnailPublicDomain": {
+		"hostname": "thumbs.relayapi.dev",
+		"zoneName": "relayapi.dev",
+		"minimumTlsVersion": "1.2"
+	},
+	"privateR2Buckets": [
+		"relayapi-media",
+		"relayapi-avatars",
+		"relayapi-media-thumbnails",
+		"relayapi-queue-rescue-ledger",
+		"relayapi-ad-reports"
+	],
+	"incompleteMultipartRetentionSeconds": 86400,
 	"queueRescueRetentionSeconds": 2592000,
+	"adReportRetentionSeconds": 691200,
+	"queueMessageRetentionSeconds": 86400,
 	"mediaEventQueue": "relayapi-media-cleanup",
 	"mediaRetentionSeconds": 2592000,
 	"mediaEventActions": [
@@ -18,21 +42,175 @@
 		"CompleteMultipartUpload",
 		"LifecycleDeletion"
 	],
+	"mediaCors": {
+		"origins": ["https://relayapi.dev"],
+		"methods": ["PUT"],
+		"headers": ["Content-Type", "If-None-Match"],
+		"exposeHeaders": ["ETag"],
+		"maxAgeSeconds": 3600
+	},
+	"workerBindings": {
+		"AI": { "type": "ai" },
+		"BASELINE_GENERATION": { "type": "plain_text", "text": "1" },
+		"PERF_LOGS": { "type": "plain_text", "text": "0" },
+		"REALTIME": {
+			"type": "durable_object_namespace",
+			"class_name": "RealtimeDO"
+		},
+		"MEDIA_PROCESSOR": {
+			"type": "durable_object_namespace",
+			"class_name": "MediaProcessorContainer"
+		},
+		"MEDIA_PROCESSING_WORKFLOW": {
+			"type": "workflow",
+			"workflow_name": "relayapi-media-processing",
+			"class_name": "MediaProcessingWorkflow"
+		},
+		"KV": {
+			"type": "kv_namespace",
+			"namespace_id": "c4e14913be2b41628ef71ae12561f7e8"
+		},
+		"MEDIA_BUCKET": {
+			"type": "r2_bucket",
+			"bucket_name": "relayapi-media"
+		},
+		"AVATAR_BUCKET": {
+			"type": "r2_bucket",
+			"bucket_name": "relayapi-avatars"
+		},
+		"THUMBNAIL_BUCKET": {
+			"type": "r2_bucket",
+			"bucket_name": "relayapi-media-thumbnails"
+		},
+		"QUEUE_RESCUE_BUCKET": {
+			"type": "r2_bucket",
+			"bucket_name": "relayapi-queue-rescue-ledger"
+		},
+		"AD_REPORT_BUCKET": {
+			"type": "r2_bucket",
+			"bucket_name": "relayapi-ad-reports"
+		},
+		"R2_EVENT_ACCOUNT_ID": {
+			"type": "plain_text",
+			"text": "3496f40fcd55a91da50ded8abea2cf7a"
+		},
+		"R2_MEDIA_BUCKET_NAME": {
+			"type": "plain_text",
+			"text": "relayapi-media"
+		},
+		"R2_MEDIA_BUCKET_JURISDICTION": {
+			"type": "plain_text",
+			"text": "default"
+		},
+		"R2_THUMBNAIL_BUCKET_NAME": {
+			"type": "plain_text",
+			"text": "relayapi-media-thumbnails"
+		},
+		"R2_THUMBNAIL_BUCKET_JURISDICTION": {
+			"type": "plain_text",
+			"text": "default"
+		},
+		"AI_EMBEDDING_PROVIDER": {
+			"type": "plain_text",
+			"text": "openai"
+		},
+		"AI_EMBEDDING_MODEL": {
+			"type": "plain_text",
+			"text": "text-embedding-3-small"
+		},
+		"AI_INFERENCE_PROVIDER": {
+			"type": "plain_text",
+			"text": "workers_ai"
+		},
+		"AI_INFERENCE_MODEL": {
+			"type": "plain_text",
+			"text": "@cf/zai-org/glm-4.7-flash"
+		},
+		"TIKTOK_VERIFIED_URL_PREFIXES": {
+			"type": "plain_text",
+			"text": ""
+		},
+		"PUBLIC_LINK_BASE_URL": {
+			"type": "plain_text",
+			"text": "https://go.relayapi.dev"
+		},
+		"IMAGES": { "type": "images" },
+		"MEDIA": { "type": "media" },
+		"HYPERDRIVE": {
+			"type": "hyperdrive",
+			"id": "11180e4939824902a75753084dc6a8e9"
+		},
+		"FREE_RATE_LIMITER": {
+			"type": "ratelimit",
+			"namespace_id": "1001",
+			"simple": { "limit": 100, "period": 60 }
+		},
+		"PRO_RATE_LIMITER": {
+			"type": "ratelimit",
+			"namespace_id": "1002",
+			"simple": { "limit": 1000, "period": 60 }
+		},
+		"FREE_KEY_BURST_LIMITER": {
+			"type": "ratelimit",
+			"namespace_id": "1003",
+			"simple": { "limit": 50, "period": 60 }
+		},
+		"PRO_KEY_BURST_LIMITER": {
+			"type": "ratelimit",
+			"namespace_id": "1004",
+			"simple": { "limit": 500, "period": 60 }
+		},
+		"PUBLISH_QUEUE": { "type": "queue", "queue_name": "relayapi-publish" },
+		"EMAIL_QUEUE": { "type": "queue", "queue_name": "relayapi-email" },
+		"REFRESH_QUEUE": { "type": "queue", "queue_name": "relayapi-refresh" },
+		"INBOX_QUEUE": { "type": "queue", "queue_name": "relayapi-inbox" },
+		"TOOLS_QUEUE": { "type": "queue", "queue_name": "relayapi-tools" },
+		"ADS_QUEUE": { "type": "queue", "queue_name": "relayapi-ads" },
+		"SYNC_QUEUE": { "type": "queue", "queue_name": "relayapi-sync" },
+		"CUSTOMER_WEBHOOK_QUEUE": {
+			"type": "queue",
+			"queue_name": "relayapi-customer-webhooks"
+		},
+		"MEDIA_PROCESSING_QUEUE": {
+			"type": "queue",
+			"queue_name": "relayapi-media-processing"
+		},
+		"QUEUE_RESCUE_QUEUE": {
+			"type": "queue",
+			"queue_name": "relayapi-queue-rescue"
+		}
+	},
 	"requiredBindings": [
 		"AI",
+		"BASELINE_GENERATION",
+		"PERF_LOGS",
 		"REALTIME",
+		"MEDIA_PROCESSOR",
+		"MEDIA_PROCESSING_WORKFLOW",
 		"KV",
 		"MEDIA_BUCKET",
 		"AVATAR_BUCKET",
 		"THUMBNAIL_BUCKET",
 		"QUEUE_RESCUE_BUCKET",
+		"AD_REPORT_BUCKET",
 		"R2_EVENT_ACCOUNT_ID",
 		"R2_MEDIA_BUCKET_NAME",
+		"R2_MEDIA_BUCKET_JURISDICTION",
+		"R2_THUMBNAIL_BUCKET_NAME",
+		"R2_THUMBNAIL_BUCKET_JURISDICTION",
+		"AI_EMBEDDING_PROVIDER",
+		"AI_EMBEDDING_MODEL",
+		"AI_INFERENCE_PROVIDER",
+		"AI_INFERENCE_MODEL",
+		"TIKTOK_VERIFIED_URL_PREFIXES",
+		"PUBLIC_LINK_BASE_URL",
 		"IMAGES",
 		"MEDIA",
 		"HYPERDRIVE",
 		"FREE_RATE_LIMITER",
 		"PRO_RATE_LIMITER",
+		"FREE_KEY_BURST_LIMITER",
+		"PRO_KEY_BURST_LIMITER",
 		"PUBLISH_QUEUE",
 		"EMAIL_QUEUE",
 		"REFRESH_QUEUE",
@@ -41,32 +219,76 @@
 		"ADS_QUEUE",
 		"SYNC_QUEUE",
 		"CUSTOMER_WEBHOOK_QUEUE",
+		"MEDIA_PROCESSING_QUEUE",
 		"QUEUE_RESCUE_QUEUE"
+	],
+	"workerRuntime": {
+		"compatibility_date": "2026-07-18",
+		"compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
+		"migration_tag": "v2",
+		"usage_model": "standard"
+	},
+	"workerSettings": {
+		"placement": { "mode": "smart" },
+		"observability": {
+			"enabled": true,
+			"head_sampling_rate": 0.1,
+			"logs": {
+				"enabled": true,
+				"head_sampling_rate": 0.1,
+				"persist": true,
+				"invocation_logs": true
+			},
+			"traces": {
+				"enabled": true,
+				"persist": true,
+				"head_sampling_rate": 0.01
+			}
+		}
+	},
+	"cronSchedules": [
+		"*/1 * * * *",
+		"*/5 * * * *",
+		"*/30 * * * *",
+		"0 9 * * *",
+		"0 9 * * MON"
 	],
 	"requiredSecrets": [
 		"CF_ACCOUNT_ID",
 		"DOWNLOADER_SERVICE_KEY",
 		"DOWNLOADER_SERVICE_URL",
 		"ENCRYPTION_KEY",
+		"MAINTENANCE_SMOKE_BYPASS_SHA256",
+		"OPENAI_API_KEY",
 		"R2_ACCESS_KEY_ID",
 		"R2_SECRET_ACCESS_KEY",
 		"RESEND_API_KEY",
 		"STRIPE_SECRET_KEY",
-		"STRIPE_WEBHOOK_SECRET"
+		"STRIPE_PRO_PRICE_ID",
+		"STRIPE_WEBHOOK_SECRET",
+		"STRIPE_PORTAL_CONFIGURATION_ID"
+	],
+	"optionalSecrets": [
+		"API_BASE_URL",
+		"OPERATIONS_ALERT_EMAIL",
+		"OPERATIONS_ALERT_WEBHOOK_URL"
 	],
 	"secretGroups": [
 		["FACEBOOK_APP_ID", "FACEBOOK_APP_SECRET", "FACEBOOK_WEBHOOK_VERIFY_TOKEN"],
 		["INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET"],
 		["INSTAGRAM_LOGIN_APP_ID", "INSTAGRAM_LOGIN_APP_SECRET"],
 		["TWITTER_CLIENT_ID", "TWITTER_CLIENT_SECRET"],
+		["TWITTER_ADS_CONSUMER_KEY", "TWITTER_ADS_CONSUMER_SECRET"],
 		["LINKEDIN_CLIENT_ID", "LINKEDIN_CLIENT_SECRET"],
 		["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
+		["TIKTOK_ADS_APP_ID", "TIKTOK_ADS_APP_SECRET"],
 		["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_HUB_SECRET"],
 		["PINTEREST_APP_ID", "PINTEREST_APP_SECRET"],
 		["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"],
 		["THREADS_APP_ID", "THREADS_APP_SECRET"],
 		["SNAPCHAT_CLIENT_ID", "SNAPCHAT_CLIENT_SECRET"],
 		["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+		["GOOGLE_ADS_DEVELOPER_TOKEN"],
 		["MASTODON_CLIENT_ID", "MASTODON_CLIENT_SECRET"],
 		["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"],
 		[
@@ -86,8 +308,12 @@
 		"relayapi-ads",
 		"relayapi-sync",
 		"relayapi-customer-webhooks",
+		"relayapi-media-processing",
 		"relayapi-queue-rescue"
 	],
+	"queueAdditionalProducers": {
+		"relayapi-email": [{ "type": "worker", "script": "relayapi-app" }]
+	},
 	"queueConsumers": [
 		{
 			"queue": "relayapi-media-cleanup",
@@ -127,6 +353,7 @@
 		{
 			"queue": "relayapi-tools",
 			"batchSize": 5,
+			"maxWaitTimeMs": 1000,
 			"maxConcurrency": 3,
 			"maxRetries": 3,
 			"deadLetterQueue": "relayapi-tools-dlq"
@@ -151,6 +378,14 @@
 			"maxConcurrency": 5,
 			"maxRetries": 5,
 			"deadLetterQueue": "relayapi-customer-webhooks-dlq"
+		},
+		{
+			"queue": "relayapi-media-processing",
+			"batchSize": 2,
+			"maxWaitTimeMs": 2000,
+			"maxConcurrency": 2,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-media-processing-dlq"
 		},
 		{
 			"queue": "relayapi-media-cleanup-dlq",
@@ -216,11 +451,18 @@
 			"deadLetterQueue": "relayapi-queue-rescue"
 		},
 		{
+			"queue": "relayapi-media-processing-dlq",
+			"batchSize": 10,
+			"maxConcurrency": 1,
+			"maxRetries": 3,
+			"deadLetterQueue": "relayapi-queue-rescue"
+		},
+		{
 			"queue": "relayapi-queue-rescue",
 			"batchSize": 10,
 			"maxWaitTimeMs": 5000,
 			"maxConcurrency": 2,
-			"maxRetries": 100
+			"maxRetries": 40
 		}
 	]
 }

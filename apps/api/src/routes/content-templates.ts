@@ -1,6 +1,11 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { contentTemplates } from "@relayapi/db";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, lt, sql } from "drizzle-orm";
+import {
+	decodeKeysetCursor,
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+} from "../lib/pagination-cursor";
 import { assertAllWorkspaceScope } from "../lib/request-access";
 import {
 	applyWorkspaceScope,
@@ -35,10 +40,14 @@ function serialize(row: typeof contentTemplates.$inferSelect) {
 
 // --- Route definitions ---
 
-const ContentTemplateListQuery = PaginationParams.extend({
-	workspace_id: z.string().optional().describe("Filter by workspace ID"),
-	tag: z.string().optional().describe("Filter by tag"),
-});
+const ContentTemplateListQuery = PaginationParams.pick({
+	cursor: true,
+	limit: true,
+})
+	.extend({
+		tag: z.string().optional().describe("Filter by tag"),
+	})
+	.strict();
 
 const listContentTemplates = createRoute({
 	operationId: "listContentTemplates",
@@ -55,6 +64,10 @@ const listContentTemplates = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		400: {
+			description: "Invalid pagination cursor",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 	},
@@ -81,6 +94,14 @@ const createContentTemplateRoute = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		400: {
+			description: "Invalid request",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "An all-workspace credential is required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 	},
 });
 
@@ -99,6 +120,10 @@ const getContentTemplate = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Template is outside the credential's workspace scope",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -130,6 +155,10 @@ const updateContentTemplateRoute = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "An all-workspace credential is required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -151,6 +180,10 @@ const deleteContentTemplate = createRoute({
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "An all-workspace credential is required",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -162,29 +195,34 @@ const deleteContentTemplate = createRoute({
 
 app.openapi(listContentTemplates, async (c) => {
 	const orgId = c.get("orgId");
-	const { limit, cursor, workspace_id, tag } = c.req.valid("query");
+	const { limit, cursor, tag } = c.req.valid("query");
 	const db = c.get("db");
 
 	const conditions = [eq(contentTemplates.organizationId, orgId)];
 	applyWorkspaceScope(c, conditions, contentTemplates.workspaceId);
-	if (workspace_id) {
-		conditions.push(eq(contentTemplates.workspaceId, workspace_id));
-	}
 	if (tag) {
 		conditions.push(
 			sql`${contentTemplates.tags} @> ${JSON.stringify([tag])}::jsonb`,
 		);
 	}
 	if (cursor) {
-		// Cursor is the createdAt timestamp of the last item
-		conditions.push(lt(contentTemplates.createdAt, new Date(cursor)));
+		const decoded = decodeKeysetCursor(cursor);
+		if (decoded.kind === "invalid") return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			decoded.kind === "composite"
+				? sql`(${contentTemplates.createdAt}, ${contentTemplates.id}) < (${decoded.timestamp}::timestamptz, ${decoded.id})`
+				: lt(contentTemplates.createdAt, new Date(decoded.timestamp)),
+		);
 	}
 
 	const rows = await db
-		.select()
+		.select({
+			...getTableColumns(contentTemplates),
+			cursorTimestamp: sql<string>`to_char(${contentTemplates.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+		})
 		.from(contentTemplates)
 		.where(and(...conditions))
-		.orderBy(desc(contentTemplates.createdAt))
+		.orderBy(desc(contentTemplates.createdAt), desc(contentTemplates.id))
 		.limit(limit + 1);
 
 	const hasMore = rows.length > limit;
@@ -194,7 +232,12 @@ app.openapi(listContentTemplates, async (c) => {
 		{
 			data: data.map(serialize),
 			next_cursor: hasMore
-				? (data.at(-1)?.createdAt.toISOString() ?? null)
+				? (() => {
+						const last = data.at(-1);
+						return last
+							? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+							: null;
+					})()
 				: null,
 			has_more: hasMore,
 		},
@@ -311,10 +354,21 @@ app.openapi(updateContentTemplateRoute, async (c) => {
 	const [updated] = await db
 		.update(contentTemplates)
 		.set(updates)
-		.where(eq(contentTemplates.id, id))
+		.where(
+			and(
+				eq(contentTemplates.id, id),
+				eq(contentTemplates.organizationId, orgId),
+			),
+		)
 		.returning();
 
-	return c.json(serialize(updated ?? existing), 200);
+	if (!updated) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Content template not found" } },
+			404,
+		);
+	}
+	return c.json(serialize(updated), 200);
 });
 
 app.openapi(deleteContentTemplate, async (c) => {
@@ -348,7 +402,21 @@ app.openapi(deleteContentTemplate, async (c) => {
 	const denied = assertWorkspaceScope(c, existing.workspaceId);
 	if (denied) return denied;
 
-	await db.delete(contentTemplates).where(eq(contentTemplates.id, id));
+	const [deleted] = await db
+		.delete(contentTemplates)
+		.where(
+			and(
+				eq(contentTemplates.id, id),
+				eq(contentTemplates.organizationId, orgId),
+			),
+		)
+		.returning({ id: contentTemplates.id });
+	if (!deleted) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Content template not found" } },
+			404,
+		);
+	}
 
 	return c.body(null, 204);
 });

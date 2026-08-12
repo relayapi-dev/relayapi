@@ -8,14 +8,14 @@
 // the Connections page and vice-versa with no extra sync.
 //
 // Mounted on the right of the canvas in two modes:
-//   - create: `createType` set, `binding` null → account picker + editor + Create
-//   - edit:   `binding` set → account shown read-only, editor + Save/Pause/Unbind
+//   - create: `createType` set, `binding` null → account picker + Create
+//   - edit:   `binding` set → account shown read-only + Pause/Unbind
 
 import { ExternalLink, Link2, Loader2, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
-	AccountSearchCombobox,
 	type AccountOption,
+	AccountSearchCombobox,
 } from "@/components/dashboard/account-search-combobox";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,7 +27,14 @@ import {
 	bindingLabel,
 	bindingStatusBadge,
 	type CanvasBindingRow,
+	isSupportedBindingType,
 } from "../bindings-tab/display";
+import {
+	normalizeProviderBindingConfig,
+	type ProviderBindingType,
+	type ProviderConfig,
+	ProviderConfigEditor,
+} from "../bindings-tab/provider-binding-tab";
 import type { BindingChannel, BindingType } from "../bindings-tab/types";
 import { PANEL_BODY_CLS, PANEL_SHELL_CLS, PanelHeader } from "./panel-styles";
 
@@ -74,13 +81,30 @@ export function BindingDetailPanel({
 	onSelectBindingId,
 	readOnly,
 }: Props) {
-	const bindingType: BindingType | null = binding?.binding_type ?? createType;
-	const ed = bindingType ? BINDING_CONFIG_EDITORS[bindingType] : null;
+	const rawBindingType = binding?.binding_type ?? createType;
+	const bindingType =
+		rawBindingType && isSupportedBindingType(rawBindingType)
+			? rawBindingType
+			: null;
+	const isLegacy = Boolean(binding && rawBindingType && !bindingType);
+	const ed = bindingType
+		? BINDING_CONFIG_EDITORS[bindingType]
+		: isLegacy && rawBindingType
+			? {
+					bindingType: null,
+					title: bindingLabel(rawBindingType),
+					subtitle:
+						"This legacy binding is not executed by the production runtime. Remove it to clean up the old configuration.",
+				}
+			: null;
 	const isCreate = !binding;
+	const providerBindingType =
+		bindingType === "get_started" ||
+		bindingType === "main_menu" ||
+		bindingType === "ice_breaker"
+			? (bindingType as ProviderBindingType)
+			: null;
 
-	const [config, setConfig] = useState<unknown>(() =>
-		ed ? (binding ? ed.parseConfig(binding.config) : ed.emptyConfig) : {},
-	);
 	const [accountId, setAccountId] = useState<string | null>(
 		binding?.social_account_id ?? null,
 	);
@@ -93,18 +117,35 @@ export function BindingDetailPanel({
 		message: string;
 	} | null>(null);
 	const [insights, setInsights] = useState<InsightsResponse | null>(null);
+	const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(
+		providerBindingType
+			? normalizeProviderBindingConfig(
+					providerBindingType,
+					binding?.config ?? null,
+					channel,
+				)
+			: null,
+	);
 
 	// Re-initialise when the selected binding / create type changes.
 	useEffect(() => {
 		setBanner(null);
-		setConfig(ed ? (binding ? ed.parseConfig(binding.config) : ed.emptyConfig) : {});
 		setAccountId(binding?.social_account_id ?? null);
 		setAccountLabel(binding ? bindingAccountHandle(binding) : null);
-	}, [binding?.id, createType]);
+		setProviderConfig(
+			providerBindingType
+				? normalizeProviderBindingConfig(
+						providerBindingType,
+						binding?.config ?? null,
+						channel,
+					)
+				: null,
+		);
+	}, [binding?.id, binding?.config, channel, createType, providerBindingType]);
 
-	// Load 7d insights for an existing live binding (stubbed types never run yet).
+	// Load 7d insights for an existing binding.
 	useEffect(() => {
-		if (!binding || ed?.stubbed) {
+		if (!binding || isLegacy) {
 			setInsights(null);
 			return;
 		}
@@ -126,7 +167,7 @@ export function BindingDetailPanel({
 		return () => {
 			cancelled = true;
 		};
-	}, [binding?.id, ed?.stubbed]);
+	}, [binding?.id, isLegacy]);
 
 	const bannerFromResponse = useCallback(async (res: Response) => {
 		const body = (await res.json().catch(() => null)) as {
@@ -142,7 +183,10 @@ export function BindingDetailPanel({
 	// A (social_account_id, binding_type) slot is unique — look up any existing
 	// row so we can reassign instead of hitting a raw 409.
 	const findExistingBinding = useCallback(
-		async (acct: string, type: BindingType): Promise<CanvasBindingRow | null> => {
+		async (
+			acct: string,
+			type: BindingType,
+		): Promise<CanvasBindingRow | null> => {
 			const url = new URL("/api/automation-bindings", window.location.origin);
 			url.searchParams.set("social_account_id", acct);
 			url.searchParams.set("binding_type", type);
@@ -159,11 +203,6 @@ export function BindingDetailPanel({
 		setBanner(null);
 		if (!accountId) {
 			setBanner({ type: "error", message: "Pick an account to bind." });
-			return;
-		}
-		const validationError = ed.validateConfig(config);
-		if (validationError) {
-			setBanner({ type: "error", message: validationError });
 			return;
 		}
 		setSaving(true);
@@ -188,8 +227,6 @@ export function BindingDetailPanel({
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						automation_id: automationId,
-						config,
-						...(ed.stubbed ? { status: "pending_sync" } : {}),
 					}),
 				});
 				if (!res.ok) {
@@ -216,7 +253,9 @@ export function BindingDetailPanel({
 					channel,
 					binding_type: bindingType,
 					automation_id: automationId,
-					config,
+					...(providerBindingType && providerConfig
+						? { config: providerConfig }
+						: {}),
 				}),
 			});
 			if (!res.ok) {
@@ -237,57 +276,54 @@ export function BindingDetailPanel({
 		bindingType,
 		accountId,
 		accountLabel,
-		config,
 		channel,
 		automationId,
 		findExistingBinding,
 		bannerFromResponse,
 		onChanged,
 		onSelectBindingId,
+		providerBindingType,
+		providerConfig,
 	]);
 
-	const handleSaveConfig = useCallback(async () => {
-		if (!binding || !ed) return;
-		setBanner(null);
-		const validationError = ed.validateConfig(config);
-		if (validationError) {
-			setBanner({ type: "error", message: validationError });
-			return;
-		}
+	const handleSaveProviderConfig = useCallback(async () => {
+		if (!binding || !providerBindingType || !providerConfig) return;
 		setSaving(true);
+		setBanner(null);
 		try {
 			const res = await fetch(`/api/automation-bindings/${binding.id}`, {
 				method: "PATCH",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					config,
-					...(ed.stubbed ? { status: "pending_sync" } : {}),
-				}),
+				body: JSON.stringify({ config: providerConfig }),
 			});
 			if (!res.ok) {
 				await bannerFromResponse(res);
 				return;
 			}
-			setBanner({
-				type: "success",
-				message: ed.stubbed
-					? "Saved — will sync to platform in v1.1."
-					: "Saved",
-			});
+			setBanner({ type: "success", message: "Provider sync queued" });
 			onChanged();
 		} catch {
 			setBanner({ type: "error", message: "Network connection lost." });
 		} finally {
 			setSaving(false);
 		}
-	}, [binding, ed, config, bannerFromResponse, onChanged]);
+	}, [
+		binding,
+		providerBindingType,
+		providerConfig,
+		bannerFromResponse,
+		onChanged,
+	]);
 
 	const handlePauseResume = useCallback(async () => {
 		if (!binding) return;
 		setBanner(null);
 		setSaving(true);
 		try {
-			const nextStatus = binding.status === "paused" ? "active" : "paused";
+			const nextStatus =
+				binding.desired_active === false || binding.status === "paused"
+					? "active"
+					: "paused";
 			const res = await fetch(`/api/automation-bindings/${binding.id}`, {
 				method: "PATCH",
 				headers: { "Content-Type": "application/json" },
@@ -401,23 +437,29 @@ export function BindingDetailPanel({
 						)}
 					</div>
 
-					{/* Platform-sync caveat for the stubbed menu surfaces */}
-					{ed.stubbed && ed.bannerCopy && (
-						<div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
-							<span className="font-medium">Platform sync in v1.1. </span>
-							{ed.bannerCopy}
+					{providerBindingType && providerConfig ? (
+						<div className="rounded-md border border-border bg-background p-3">
+							<div className="mb-3 text-[11px] font-medium text-muted-foreground">
+								Provider configuration
+							</div>
+							<ProviderConfigEditor
+								type={providerBindingType}
+								channel={channel}
+								config={providerConfig}
+								onChange={setProviderConfig}
+								disabled={saving || readOnly === true}
+							/>
+							{binding?.sync_revision !== undefined ? (
+								<p className="mt-3 text-[10px] text-muted-foreground">
+									Provider revision {binding.last_synced_revision ?? 0}/
+									{binding.sync_revision}
+								</p>
+							) : null}
 						</div>
-					)}
+					) : null}
 
-					{/* Rich config editor (menu / starters / questions) */}
-					{ed.renderEditor && (
-						<div className="rounded-md border border-border bg-card/30 p-3">
-							{ed.renderEditor(config, setConfig)}
-						</div>
-					)}
-
-					{/* Insights for an existing live binding */}
-					{!isCreate && !ed.stubbed && (
+					{/* Insights for an existing supported binding */}
+					{!isCreate && !isLegacy && (
 						<div className="grid grid-cols-2 gap-3 rounded-md border border-border/60 bg-background/50 p-3">
 							<div>
 								<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -456,21 +498,17 @@ export function BindingDetailPanel({
 								</Button>
 							) : (
 								<>
-									{ed.renderEditor && (
+									{providerBindingType ? (
 										<Button
 											size="sm"
 											className="h-7 text-xs"
 											disabled={saving}
-											onClick={() => void handleSaveConfig()}
+											onClick={() => void handleSaveProviderConfig()}
 										>
-											{saving ? (
-												<Loader2 className="size-3.5 animate-spin" />
-											) : (
-												"Save changes"
-											)}
+											Save configuration
 										</Button>
-									)}
-									{!ed.stubbed && (
+									) : null}
+									{!isLegacy && (
 										<Button
 											size="sm"
 											variant="outline"
@@ -478,7 +516,10 @@ export function BindingDetailPanel({
 											disabled={saving}
 											onClick={() => void handlePauseResume()}
 										>
-											{binding.status === "paused" ? "Resume" : "Pause"}
+											{binding.desired_active === false ||
+											binding.status === "paused"
+												? "Resume"
+												: "Pause"}
 										</Button>
 									)}
 									<Button
@@ -496,7 +537,7 @@ export function BindingDetailPanel({
 						</div>
 					)}
 
-					{!isCreate && (
+					{!isCreate && !isLegacy && (
 						<a
 							href={bindingConnectionHref(binding)}
 							className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"

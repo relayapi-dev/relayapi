@@ -1,8 +1,8 @@
 // apps/api/src/services/automations/scheduler.ts
 //
 // Cron-driven job processor for automation_scheduled_jobs (spec §8.7).
-// Supports job_types: resume_run, input_timeout, scheduled_trigger,
-// webhook_reception_failure. Uses row-level locking (FOR UPDATE SKIP LOCKED)
+// Supports run resumes/timeouts, durable internal events, scheduled triggers,
+// and webhook-reception alerts. Uses row-level locking (FOR UPDATE SKIP LOCKED)
 // to allow multiple workers to share the queue safely.
 
 import {
@@ -10,16 +10,27 @@ import {
 	automationRuns,
 	automationScheduledJobs,
 	automations as automationsTable,
-	contactSegmentMemberships,
 	contacts,
 	createDb,
 	type Database,
 } from "@relayapi/db";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { automationScheduledJobMayCrossExternalBoundary } from "../../lib/async-contract-registry";
 import type { Env } from "../../types";
+import { getContactsMatchingAnySegment } from "../dynamic-segments";
+import {
+	AUTOMATION_WEBHOOK_FAILURE_REASONS,
+	type AutomationWebhookFailureReason,
+	dispatchAutomationWebhookReceptionFailureAlert,
+} from "../operator-alerts";
 import { matchAndEnrollOrBinding } from "./binding-router";
-import { incrementCounter, runLoop, updateRunOptimistic } from "./runner";
-import type { InboundEvent } from "./trigger-matcher";
+import { parseDurableInternalEventPayload } from "./internal-events";
+import { runLoop, transitionRunTerminal, updateRunOptimistic } from "./runner";
+import {
+	isValidAutomationTimezone,
+	parseAutomationCron,
+} from "./schedule-expression";
+import { type InboundEvent, matchAndEnroll } from "./trigger-matcher";
 
 type Db = Database;
 
@@ -103,7 +114,7 @@ export async function processScheduledJobs(
 
 	// 2. Batch-claim pending rows whose run_at is due.
 	//    FOR UPDATE SKIP LOCKED lets multiple workers share the queue.
-	const claimed = (await db.execute(sql`
+	const claimedRows = (await db.execute(sql`
 		WITH claimed AS (
 			SELECT id
 			  FROM automation_scheduled_jobs
@@ -124,20 +135,27 @@ export async function processScheduledJobs(
 		       error = NULL
 		  FROM claimed
 		 WHERE j.id = claimed.id
-		RETURNING j.id, j.run_id, j.job_type, j.automation_id, j.entrypoint_id,
+		RETURNING j.id, j.organization_id, j.scope_key, j.run_id, j.job_type,
+		          j.automation_id, j.entrypoint_id,
 		          j.run_at, j.occurrence_id, j.lease_token, j.attempts, j.payload
 	`)) as unknown as Array<{
 		id: string;
+		organization_id: string;
+		scope_key: string;
 		run_id: string | null;
 		job_type: string;
 		automation_id: string | null;
 		entrypoint_id: string | null;
-		run_at: Date;
+		run_at: Date | string;
 		occurrence_id: string;
 		lease_token: number;
 		attempts: number;
 		payload: unknown;
 	}>;
+	const claimed = claimedRows.map((job) => ({
+		...job,
+		run_at: job.run_at instanceof Date ? job.run_at : new Date(job.run_at),
+	}));
 
 	let processed = 0;
 	let failed = 0;
@@ -146,9 +164,14 @@ export async function processScheduledJobs(
 		let effectStarted = false;
 		const markEffectStarted = async (): Promise<void> => {
 			if (effectStarted) return;
+			if (!automationScheduledJobMayCrossExternalBoundary(job.job_type)) {
+				throw new Error(
+					`Pure orchestration job ${job.job_type} cannot cross an external-effect boundary`,
+				);
+			}
 			const [armed] = await db
 				.update(automationScheduledJobs)
-				.set({ effectStartedAt: new Date() })
+				.set({ effectStartedAt: sql`CURRENT_TIMESTAMP` })
 				.where(
 					and(
 						eq(automationScheduledJobs.id, job.id),
@@ -205,7 +228,7 @@ export async function processScheduledJobs(
 								),
 					claimedAt: null,
 					leaseExpiresAt: null,
-					effectStartedAt: unknown ? new Date() : null,
+					effectStartedAt: unknown ? sql`CURRENT_TIMESTAMP` : null,
 					error: err instanceof Error ? err.message : String(err),
 				})
 				.where(
@@ -230,6 +253,8 @@ async function dispatchJob(
 	env: Record<string, unknown>,
 	job: {
 		id: string;
+		organization_id: string;
+		scope_key: string;
 		run_id: string | null;
 		job_type: string;
 		automation_id: string | null;
@@ -245,7 +270,6 @@ async function dispatchJob(
 	switch (job.job_type) {
 		case "resume_run": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
-			await markEffectStarted();
 			// A delay node parks the run with waitingFor='delay' and leaves
 			// currentNodeKey pointing at the delay node itself. If we call runLoop
 			// directly it would re-dispatch the delay handler, which recomputes a
@@ -281,40 +305,34 @@ async function dispatchJob(
 								e.from_port === "next",
 						)
 					: undefined;
-				const advanced = await updateRunOptimistic(
-					db,
-					delayRun.id,
-					delayRun.revision,
-					nextEdge
-						? {
-								status: "active",
-								currentNodeKey: nextEdge.to_node,
-								currentPortKey: nextEdge.to_port,
-								waitingFor: null,
-								waitingUntil: null,
-							}
-						: {
-								// Delay node has no outgoing edge — graceful completion,
-								// matching runLoop's no-outgoing-edge behavior.
-								status: "completed",
-								exitReason: "completed",
-								completedAt: new Date(),
-								waitingFor: null,
-								waitingUntil: null,
-							},
-				);
+				const advanced = nextEdge
+					? await updateRunOptimistic(db, delayRun.id, delayRun.revision, {
+							status: "active",
+							currentNodeKey: nextEdge.to_node,
+							currentPortKey: nextEdge.to_port,
+							waitingFor: null,
+							waitingUntil: null,
+						})
+					: await transitionRunTerminal(
+							db,
+							delayRun.id,
+							delayRun.revision,
+							delayRun.automationId,
+							"completed",
+							"completed",
+							{ waitingFor: null, waitingUntil: null },
+						);
 				if (!advanced) {
 					// Another worker advanced this run first — no-op.
 					return "done";
 				}
 				if (!nextEdge) {
-					// Completed via the no-outgoing-edge path — mirror runLoop and
-					// bump the completion counter (it would otherwise undercount).
-					await incrementCounter(db, delayRun.automationId, "total_completed");
 					return "done"; // completed, no further work
 				}
 			}
-			const result = await runLoop(db, job.run_id, env);
+			const result = await runLoop(db, job.run_id, env, {
+				refreshContactContext: true,
+			});
 			if (result.status === "failed") {
 				return {
 					failed: true,
@@ -326,7 +344,6 @@ async function dispatchJob(
 
 		case "input_timeout": {
 			if (!job.run_id) return { failed: true, error: "missing run_id" };
-			await markEffectStarted();
 			const run = await db.query.automationRuns.findFirst({
 				where: eq(automationRuns.id, job.run_id),
 			});
@@ -388,19 +405,155 @@ async function dispatchJob(
 				// advanced the run already — don't re-enter runLoop on a snapshot we
 				// no longer own.
 				if (!ok) return "done";
-				await runLoop(db, run.id, env);
+				await runLoop(db, run.id, env, { refreshContactContext: true });
 			} else {
+				await transitionRunTerminal(
+					db,
+					run.id,
+					run.revision,
+					run.automationId,
+					"exited",
+					"input_timeout",
+					{ waitingFor: null, waitingUntil: null },
+				);
+			}
+			return "done";
+		}
+
+		case "event_timeout": {
+			if (!job.run_id) return { failed: true, error: "missing run_id" };
+			const run = await db.query.automationRuns.findFirst({
+				where: eq(automationRuns.id, job.run_id),
+			});
+			if (!run) return "done";
+			if (run.status !== "waiting" || run.waitingFor !== "inbound_event") {
+				return "done";
+			}
+			if (run.waitingUntil && run.waitingUntil > new Date()) return "done";
+
+			const timeoutPayload = (job.payload ?? {}) as Record<string, unknown>;
+			const scheduledNodeKey =
+				typeof timeoutPayload._timeout_node_key === "string"
+					? timeoutPayload._timeout_node_key
+					: null;
+			if (scheduledNodeKey && run.currentNodeKey !== scheduledNodeKey) {
+				return "done";
+			}
+
+			const auto = await db.query.automations.findFirst({
+				where: (t, { eq: eqOp }) => eqOp(t.id, run.automationId),
+			});
+			const graph = (auto?.graph ?? { edges: [] }) as {
+				edges?: Array<{
+					from_node: string;
+					from_port: string;
+					to_node: string;
+					to_port: string;
+				}>;
+			};
+			const timeoutEdge = (graph.edges ?? []).find(
+				(edge) =>
+					edge.from_node === run.currentNodeKey && edge.from_port === "timeout",
+			);
+			if (timeoutEdge) {
 				const ok = await updateRunOptimistic(db, run.id, run.revision, {
-					status: "exited",
-					exitReason: "input_timeout",
-					completedAt: new Date(),
+					status: "active",
+					currentNodeKey: timeoutEdge.to_node,
+					currentPortKey: timeoutEdge.to_port,
 					waitingFor: null,
 					waitingUntil: null,
 				});
-				if (ok) {
-					await incrementCounter(db, run.automationId, "total_exited");
-				}
+				if (!ok) return "done";
+				await runLoop(db, run.id, env, { refreshContactContext: true });
+			} else {
+				await transitionRunTerminal(
+					db,
+					run.id,
+					run.revision,
+					run.automationId,
+					"exited",
+					"event_timeout",
+					{ waitingFor: null, waitingUntil: null },
+				);
 			}
+			return "done";
+		}
+
+		case "internal_event": {
+			if (!job.run_id || !job.automation_id) {
+				return {
+					failed: true,
+					error: "internal event is missing its authoritative run parent",
+				};
+			}
+			const payload = parseDurableInternalEventPayload(job.payload);
+			if (!payload) {
+				return { failed: true, error: "internal event payload is invalid" };
+			}
+			const [source] = await db
+				.select({
+					contactId: automationRuns.contactId,
+					conversationId: automationRuns.conversationId,
+					context: automationRuns.context,
+					channel: automationsTable.channel,
+				})
+				.from(automationRuns)
+				.innerJoin(
+					automationsTable,
+					and(
+						eq(automationsTable.id, automationRuns.automationId),
+						eq(automationsTable.organizationId, automationRuns.organizationId),
+						eq(automationsTable.scopeKey, automationRuns.scopeKey),
+					),
+				)
+				.where(
+					and(
+						eq(automationRuns.id, job.run_id),
+						eq(automationRuns.automationId, job.automation_id),
+						eq(automationRuns.organizationId, job.organization_id),
+						eq(automationRuns.scopeKey, job.scope_key),
+					),
+				)
+				.limit(1);
+			if (!source) return "done";
+			const context =
+				source.context && typeof source.context === "object"
+					? (source.context as Record<string, unknown>)
+					: {};
+			const socialAccountId =
+				typeof context._triggering_social_account_id === "string" &&
+				context._triggering_social_account_id.length > 0
+					? context._triggering_social_account_id
+					: null;
+			const event: InboundEvent = {
+				kind: payload.kind,
+				channel: source.channel as InboundEvent["channel"],
+				organizationId: job.organization_id,
+				socialAccountId,
+				contactId: source.contactId,
+				conversationId: source.conversationId,
+				triggerOccurrenceId: job.occurrence_id,
+				payload: {
+					source: "automation",
+					automation_id: job.automation_id,
+					run_id: job.run_id,
+					action_id: payload.action_id,
+					_event_depth: payload.event_depth,
+				},
+				...(payload.kind === "field_changed"
+					? {
+							fieldKey: payload.field_key,
+							fieldValueBefore: payload.field_value_before,
+							fieldValueAfter: payload.field_value_after,
+						}
+					: { tagId: payload.tag_id }),
+			};
+
+			// Enrollment is occurrence-idempotent and its initial resume job is
+			// staged in the same transaction as the child run. Therefore this
+			// job remains safely retryable and never crosses an unknown-effect
+			// boundary.
+			await matchAndEnroll(db, event, env, { deferRun: true });
 			return "done";
 		}
 
@@ -415,12 +568,93 @@ async function dispatchJob(
 				job.occurrence_id,
 				job.run_at,
 				job.payload,
-				markEffectStarted,
 			);
 		}
 
 		case "webhook_reception_failure": {
-			// Audit-only record; mark done so it doesn't retry.
+			if (!job.entrypoint_id || !job.automation_id) {
+				return {
+					failed: true,
+					error:
+						"webhook reception failure is missing its authoritative parent",
+				};
+			}
+			const [source] = await db
+				.select({
+					entrypointId: automationEntrypoints.id,
+					automationId: automationsTable.id,
+					organizationId: automationsTable.organizationId,
+					channel: automationsTable.channel,
+					socialAccountId: automationEntrypoints.socialAccountId,
+				})
+				.from(automationEntrypoints)
+				.innerJoin(
+					automationsTable,
+					eq(automationEntrypoints.automationId, automationsTable.id),
+				)
+				.where(
+					and(
+						eq(automationEntrypoints.id, job.entrypoint_id),
+						eq(automationEntrypoints.kind, "webhook_inbound"),
+						eq(automationsTable.id, job.automation_id),
+						eq(automationsTable.organizationId, job.organization_id),
+						eq(automationsTable.scopeKey, job.scope_key),
+					),
+				)
+				.limit(1);
+			if (!source) {
+				return {
+					failed: true,
+					error: "webhook reception failure parent no longer matches",
+				};
+			}
+			const payload =
+				job.payload && typeof job.payload === "object"
+					? (job.payload as Record<string, unknown>)
+					: null;
+			const reason =
+				typeof payload?.reason === "string" &&
+				AUTOMATION_WEBHOOK_FAILURE_REASONS.includes(
+					payload.reason as AutomationWebhookFailureReason,
+				)
+					? (payload.reason as AutomationWebhookFailureReason)
+					: null;
+			const requestDigest =
+				typeof payload?.request_digest === "string" &&
+				/^[a-f0-9]{64}$/.test(payload.request_digest)
+					? payload.request_digest
+					: null;
+			const receivedAt =
+				typeof payload?.received_at === "string" &&
+				!Number.isNaN(Date.parse(payload.received_at))
+					? new Date(payload.received_at).toISOString()
+					: null;
+			if (!reason || !requestDigest || !receivedAt) {
+				return {
+					failed: true,
+					error: "webhook reception failure payload is invalid",
+				};
+			}
+
+			// A rejected request is untrusted and cannot create or resolve a
+			// product contact. Dispatch a sanitized operator event tied to the
+			// authoritative entrypoint instead of contact enrollment.
+			await markEffectStarted();
+			await dispatchAutomationWebhookReceptionFailureAlert(
+				{
+					type: "automation_webhook_reception_failure",
+					organizationId: source.organizationId,
+					automationId: source.automationId,
+					entrypointId: source.entrypointId,
+					channel: source.channel,
+					socialAccountId: source.socialAccountId,
+					requestDigest,
+					reason,
+					receivedAt,
+					occurrenceId: job.occurrence_id,
+				},
+				env as unknown as Env,
+			);
 			return "done";
 		}
 
@@ -443,19 +677,6 @@ export async function processAutomationSchedule(env: Env): Promise<number> {
 		env as unknown as Record<string, unknown>,
 	);
 	return processed;
-}
-
-/**
- * Input-timeout sweeps now flow through automation_scheduled_jobs with
- * job_type='input_timeout', enqueued by the runner when a wait_input node
- * sets a timeout_at. This function is preserved as a no-op for cron wiring
- * compatibility; callers should migrate to processScheduledJobs directly.
- */
-export async function processAutomationInputTimeouts(
-	_env: Env,
-): Promise<number> {
-	// Handled inside processScheduledJobs via job_type=input_timeout.
-	return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +719,6 @@ async function dispatchScheduledTrigger(
 	occurrenceId: string,
 	scheduledFor: Date,
 	jobPayload: unknown,
-	markEffectStarted: () => Promise<void>,
 ): Promise<DispatchOutcome> {
 	const ep = await db.query.automationEntrypoints.findFirst({
 		where: eq(automationEntrypoints.id, entrypointId),
@@ -556,7 +776,14 @@ async function dispatchScheduledTrigger(
 		if (!nextRun) {
 			return { failed: true, error: "unsupported cron pattern" };
 		}
-		await insertNextScheduledJobIfNotExists(db, ep.id, nextRun, auto.id);
+		await insertNextScheduledJobIfNotExists(
+			db,
+			ep.id,
+			nextRun,
+			auto.id,
+			auto.organizationId,
+			auto.scopeKey,
+		);
 	}
 
 	// 2. Require a filter — enrolling an entire org is never intended.
@@ -603,6 +830,8 @@ async function dispatchScheduledTrigger(
 			.insert(automationScheduledJobs)
 			.values({
 				occurrenceId: `${rootOccurrenceId}:page:${nextOffset}`,
+				organizationId: auto.organizationId,
+				scopeKey: auto.scopeKey,
 				jobType: "scheduled_trigger",
 				automationId: auto.id,
 				entrypointId: ep.id,
@@ -616,11 +845,9 @@ async function dispatchScheduledTrigger(
 			})
 			.onConflictDoNothing();
 	}
-	if (batch.length > 0) await markEffectStarted();
-
 	// 3. Fire enroll-or-binding for each candidate in this batch. Continue through
-	//    the page to maximize progress, but preserve any partial page as unknown so
-	//    it is never silently acknowledged or blindly replayed.
+	//    the page to maximize progress. Each contact occurrence is independently
+	//    idempotent, so a partial page remains safely retryable.
 	let enrollmentFailures = 0;
 	try {
 		for (const contactId of batch) {
@@ -659,7 +886,7 @@ async function dispatchScheduledTrigger(
 	}
 	if (enrollmentFailures > 0) {
 		throw new Error(
-			`${enrollmentFailures} scheduled contacts have an unknown enrollment outcome`,
+			`${enrollmentFailures} scheduled contacts require idempotent retry`,
 		);
 	}
 
@@ -672,15 +899,19 @@ async function dispatchScheduledTrigger(
  * overlapping workers cannot create duplicate successors regardless of state.
  */
 async function insertNextScheduledJobIfNotExists(
-	db: Db,
+	db: Pick<Db, "insert">,
 	entrypointId: string,
 	runAt: Date,
 	automationId: string,
+	organizationId: string,
+	scopeKey: string,
 ): Promise<void> {
 	await db
 		.insert(automationScheduledJobs)
 		.values({
 			occurrenceId: automationScheduleOccurrenceId(entrypointId, runAt),
+			organizationId,
+			scopeKey,
 			jobType: "scheduled_trigger",
 			automationId,
 			entrypointId,
@@ -723,6 +954,12 @@ class InvalidScheduleFilterError extends Error {}
 function parseScheduleFilter(
 	filters: Record<string, unknown>,
 ): ParsedScheduleFilter | null {
+	const none = filters.none;
+	if (none !== undefined && (!Array.isArray(none) || none.length > 0)) {
+		throw new InvalidScheduleFilterError(
+			"schedule filters support only all/any tag or segment predicates",
+		);
+	}
 	const parseGroup = (name: "all" | "any"): ScheduleFilterPredicate[] => {
 		const rawGroup = filters[name];
 		if (rawGroup === undefined) return [];
@@ -741,9 +978,12 @@ function parseScheduleFilter(
 				value?: unknown;
 			};
 			const field =
-				predicate.field === "tag"
+				predicate.field === "tag" || predicate.field === "contact.tags"
 					? "tags"
-					: predicate.field === "segment" || predicate.field === "segments"
+					: predicate.field === "segment" ||
+							predicate.field === "segments" ||
+							predicate.field === "contact.segments" ||
+							predicate.field === "contact.segment_ids"
 						? "segment_ids"
 						: predicate.field;
 			if (field !== "tags" && field !== "segment_ids") {
@@ -779,6 +1019,33 @@ function parseScheduleFilter(
 
 	const parsed = { all: parseGroup("all"), any: parseGroup("any") };
 	return parsed.all.length === 0 && parsed.any.length === 0 ? null : parsed;
+}
+
+/** Validate the bounded filter subset a schedule can enumerate efficiently. */
+export function validateScheduleEntrypointFilters(
+	filters: unknown,
+): { valid: true } | { valid: false; error: string } {
+	if (!filters || typeof filters !== "object" || Array.isArray(filters)) {
+		return {
+			valid: false,
+			error: "schedule entrypoint requires an all/any tag or segment filter",
+		};
+	}
+	try {
+		const parsed = parseScheduleFilter(filters as Record<string, unknown>);
+		return parsed
+			? { valid: true }
+			: {
+					valid: false,
+					error:
+						"schedule entrypoint requires an all/any tag or segment filter",
+				};
+	} catch (error) {
+		return {
+			valid: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 export function combineSchedulePredicateSets(
@@ -838,24 +1105,14 @@ async function enumerateContactsForScheduleFilter(
 		const segmentIds = Array.isArray(predicate.value)
 			? predicate.value
 			: [predicate.value];
-		const rows = await db
-			.select({ id: contactSegmentMemberships.contactId })
-			.from(contactSegmentMemberships)
-			.innerJoin(
-				contacts,
-				and(
-					eq(contactSegmentMemberships.contactId, contacts.id),
-					eq(contactSegmentMemberships.organizationId, contacts.organizationId),
-				),
-			)
-			.where(
-				and(
-					eq(contactSegmentMemberships.organizationId, organizationId),
-					contactScope,
-					inArray(contactSegmentMemberships.segmentId, segmentIds),
-				),
-			);
-		return new Set(rows.map((row) => row.id));
+		return new Set(
+			await getContactsMatchingAnySegment(
+				db,
+				organizationId,
+				workspaceId,
+				segmentIds,
+			),
+		);
 	};
 
 	const allSets: Set<string>[] = [];
@@ -888,17 +1145,7 @@ export function computeNextCronRun(
 	timezone?: string,
 ): Date | null {
 	const tz = timezone && timezone.length > 0 ? timezone : "UTC";
-	if (tz === "UTC") {
-		return computeNextCronRunInZone(cron, from, "UTC");
-	}
-	// Validate the zone — `Intl.DateTimeFormat` throws `RangeError` on an
-	// unknown IANA id. Catching here keeps the error surface consistent
-	// with other unsupported-cron returns (null rather than throw).
-	try {
-		new Intl.DateTimeFormat("en-US", { timeZone: tz });
-	} catch {
-		return null;
-	}
+	if (!isValidAutomationTimezone(tz)) return null;
 	return computeNextCronRunInZone(cron, from, tz);
 }
 
@@ -960,11 +1207,8 @@ function computeNextCronRunInZone(
 	from: Date,
 	tz: string,
 ): Date | null {
-	const parts = cron.trim().split(/\s+/);
-	if (parts.length !== 5) return null;
-	const [mStr, hStr, dom, mon, dow] = parts;
-	if (mStr === undefined || hStr === undefined) return null;
-	if (dom !== "*" || mon !== "*" || dow !== "*") return null;
+	const expression = parseAutomationCron(cron);
+	if (!expression) return null;
 
 	// Seed with the zone-local wall-clock components of `from`, zero
 	// seconds/milliseconds for cleanliness.
@@ -974,9 +1218,8 @@ function computeNextCronRunInZone(
 	// hand ticks the same in every zone), but we still round to the
 	// next boundary using the wall-clock minute to preserve intuition
 	// when the operator expects firings at ":00 / :15 / :30 / :45".
-	if (hStr === "*" && /^\*\/\d+$/.test(mStr)) {
-		const n = Number(mStr.slice(2));
-		if (!Number.isFinite(n) || n < 1 || n > 59) return null;
+	if (expression.kind === "interval") {
+		const n = expression.minutes;
 		const minutes = fromZoned.minute;
 		const rem = minutes % n;
 		const add = rem === 0 ? n : n - rem;
@@ -985,7 +1228,7 @@ function computeNextCronRunInZone(
 	}
 
 	// `0 * * * *` — hourly at the top of the hour.
-	if (hStr === "*" && mStr === "0") {
+	if (expression.kind === "hourly") {
 		const next = {
 			...fromZoned,
 			hour: fromZoned.hour + 1,
@@ -996,16 +1239,8 @@ function computeNextCronRunInZone(
 	}
 
 	// `M H * * *` — daily at H:M in the target timezone.
-	const minute = Number(mStr);
-	const hour = Number(hStr);
-	if (
-		Number.isInteger(minute) &&
-		minute >= 0 &&
-		minute <= 59 &&
-		Number.isInteger(hour) &&
-		hour >= 0 &&
-		hour <= 23
-	) {
+	if (expression.kind === "daily") {
+		const { hour, minute } = expression;
 		const candidate = {
 			...fromZoned,
 			hour,
@@ -1131,35 +1366,50 @@ export async function armScheduleEntrypoint(
 	db: Db,
 	entrypointId: string,
 ): Promise<{ queued: boolean; runAt?: Date; reason?: string }> {
-	const ep = await db.query.automationEntrypoints.findFirst({
-		where: eq(automationEntrypoints.id, entrypointId),
+	return db.transaction(async (tx) => {
+		// Lock both definitions through the insert. A concurrent pause/config edit
+		// then either lands first (and is observed here) or lands second and removes
+		// the pending row, so no stale firing can survive a lifecycle transition.
+		const [ep] = await tx
+			.select()
+			.from(automationEntrypoints)
+			.where(eq(automationEntrypoints.id, entrypointId))
+			.limit(1)
+			.for("update");
+		if (!ep) return { queued: false, reason: "entrypoint_not_found" };
+		if (ep.kind !== "schedule") {
+			return { queued: false, reason: "not_schedule" };
+		}
+		if (ep.status !== "active") {
+			return { queued: false, reason: "entrypoint_not_active" };
+		}
+
+		const [automation] = await tx
+			.select()
+			.from(automationsTable)
+			.where(eq(automationsTable.id, ep.automationId))
+			.limit(1)
+			.for("update");
+		if (automation?.status !== "active") {
+			return { queued: false, reason: "automation_not_active" };
+		}
+
+		const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
+		if (!cfg.cron) return { queued: false, reason: "no_cron" };
+
+		const nextRun = computeNextCronRun(cfg.cron, new Date(), cfg.timezone);
+		if (!nextRun) return { queued: false, reason: "invalid_cron" };
+
+		await insertNextScheduledJobIfNotExists(
+			tx,
+			entrypointId,
+			nextRun,
+			ep.automationId,
+			ep.organizationId,
+			ep.scopeKey,
+		);
+		return { queued: true, runAt: nextRun };
 	});
-	if (!ep) return { queued: false, reason: "entrypoint_not_found" };
-	if (ep.kind !== "schedule") return { queued: false, reason: "not_schedule" };
-	if (ep.status !== "active") {
-		return { queued: false, reason: "entrypoint_not_active" };
-	}
-
-	const automation = await db.query.automations.findFirst({
-		where: eq(automationsTable.id, ep.automationId),
-	});
-	if (automation?.status !== "active") {
-		return { queued: false, reason: "automation_not_active" };
-	}
-
-	const cfg = (ep.config ?? {}) as { cron?: string; timezone?: string };
-	if (!cfg.cron) return { queued: false, reason: "no_cron" };
-
-	const nextRun = computeNextCronRun(cfg.cron, new Date(), cfg.timezone);
-	if (!nextRun) return { queued: false, reason: "invalid_cron" };
-
-	await insertNextScheduledJobIfNotExists(
-		db,
-		entrypointId,
-		nextRun,
-		ep.automationId,
-	);
-	return { queued: true, runAt: nextRun };
 }
 
 /**

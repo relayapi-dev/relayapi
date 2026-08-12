@@ -1,0 +1,656 @@
+name: Pre-live Destructive Inventory
+
+# This workflow performs only reversible containment plus read-only inventory.
+# It deliberately leaves maintenance active and reviewed Queues paused after a
+# successful capture. The separate cutover dispatch requires this run ID and
+# the exact manifest SHA-256, re-captures the inventory, and fails closed on
+# any difference before arming the one-use database reset sentinel.
+#
+# Required protected `production` environment secrets:
+# - PRODUCTION_DATABASE_URL
+# - PRODUCTION_RUNTIME_DATABASE_URL
+# - PRODUCTION_DATABASE_HOSTNAME
+# - PRODUCTION_DATABASE_CA_CERT
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_ID
+# - PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET
+# - MAINTENANCE_SMOKE_BYPASS_TOKEN
+# - CLOUDFLARE_API_TOKEN
+# - CLOUDFLARE_ACCOUNT_ID
+# - DOTENVX_ARMOR_TOKEN
+# - META_INVENTORY_BUSINESS_ID
+# - META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN
+# - PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID
+# - PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256
+# - PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY
+# - PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION
+# - PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION
+# - PRELIVE_STRIPE_CONNECT_ATTESTATION
+# - PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION
+# - PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI
+# - PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED
+# - PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI
+# - PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED
+# - PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION
+# - PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION
+# - PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO
+# - PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED
+# `PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256` is lowercase SHA-256 of
+# `relayapi:telnyx-inventory-credential:v1:` followed by the exact API key.
+# Initialize `PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY` to
+# `block_terminal_history`. The preliminary provider inventory is uploaded
+# before its blocker gate. The exception policy cannot run until this workflow
+# verifies the exact preliminary manifest and provider inventory from a prior
+# same-commit strict run. Reconcile every terminal-history blocker, or change
+# the protected secret to `accept_network_reversal_tail` only after consciously
+# accepting that reviewed network-reversal tail and supplying that strict run's
+# ID and manifest SHA-256. Those are the only two policy values.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact protected main commit containing the sealed generation-2 baseline
+        required: true
+        type: string
+      expected_database_name:
+        description: Exact disposable pre-live PostgreSQL database name
+        required: true
+        type: string
+      confirmation:
+        description: Type CAPTURE_CONTAINED_PRELIVE_INVENTORY
+        required: true
+        type: string
+      strict_inventory_run_id:
+        description: Prior same-commit strict inventory run ID; required only for accept_network_reversal_tail
+        required: false
+        type: string
+      strict_preliminary_manifest_sha256:
+        description: SHA-256 of that run's preliminary strict manifest; required only for accept_network_reversal_tail
+        required: false
+        type: string
+      strict_inventory_confirmation:
+        description: Re-type the strict preliminary manifest SHA-256; required only for accept_network_reversal_tail
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  STRIPE_TERMINAL_TAIL_JQ: >-
+    {
+      paymentIntents: (.stripe.paymentIntents | sort_by(.id)),
+      charges: (.stripe.charges | sort_by(.id)),
+      refunds: (.stripe.refunds | sort_by(.id)),
+      disputes: (.stripe.disputes | sort_by(.id)),
+      topups: (.stripe.topups | sort_by(.id)),
+      payouts: (.stripe.payouts | sort_by(.id))
+    }
+
+concurrency:
+  group: prelive-baseline-generation-cutover
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    name: Contain, drain, and capture exact disposable inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Pin inventory to the exact protected main source
+        env:
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          INVENTORY_CONFIRMATION: ${{ inputs.confirmation }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          database_name_pattern='^[A-Za-z_][-A-Za-z0-9_$]{0,62}$'
+          [[ "$REVIEWED_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DATABASE_NAME" =~ $database_name_pattern ]]
+          test "$INVENTORY_CONFIRMATION" = "CAPTURE_CONTAINED_PRELIVE_INVENTORY"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$REVIEWED_COMMIT_SHA"
+          test "$(git rev-parse HEAD)" = "$REVIEWED_COMMIT_SHA"
+          test "$REF_PROTECTED" = "true"
+
+      - name: Require prior strict evidence before accepting a reversal tail
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          TERMINAL_REVERSAL_POLICY: ${{ secrets.PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY }}
+          STRICT_INVENTORY_RUN_ID: ${{ inputs.strict_inventory_run_id }}
+          STRICT_PRELIMINARY_MANIFEST_SHA256: ${{ inputs.strict_preliminary_manifest_sha256 }}
+          STRICT_INVENTORY_CONFIRMATION: ${{ inputs.strict_inventory_confirmation }}
+        run: |
+          set -euo pipefail
+          case "$TERMINAL_REVERSAL_POLICY" in
+            block_terminal_history)
+              test -z "$STRICT_INVENTORY_RUN_ID"
+              test -z "$STRICT_PRELIMINARY_MANIFEST_SHA256"
+              test -z "$STRICT_INVENTORY_CONFIRMATION"
+              printf 'PRELIVE_STRICT_INVENTORY_RUN_ID=\n' >> "$GITHUB_ENV"
+              printf 'PRELIVE_STRICT_PRELIMINARY_MANIFEST_SHA256=\n' >> "$GITHUB_ENV"
+              printf 'PRELIVE_STRICT_STRIPE_TERMINAL_TAIL_SHA256=\n' >> "$GITHUB_ENV"
+              ;;
+            accept_network_reversal_tail)
+              [[ "$STRICT_INVENTORY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+              [[ "$STRICT_PRELIMINARY_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test "$STRICT_INVENTORY_CONFIRMATION" = \
+                "$STRICT_PRELIMINARY_MANIFEST_SHA256"
+              test "$STRICT_INVENTORY_RUN_ID" != "$GITHUB_RUN_ID"
+              run_json="$(
+                gh api \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${STRICT_INVENTORY_RUN_ID}"
+              )"
+              printf '%s' "$run_json" | jq -e \
+                --arg source_sha "$REVIEWED_COMMIT_SHA" '
+                  .name == "Pre-live Destructive Inventory" and
+                  .path == ".github/workflows/prelive-destructive-inventory.yml" and
+                  .event == "workflow_dispatch" and
+                  .status == "completed" and
+                  (.conclusion == "failure" or .conclusion == "success") and
+                  .head_branch == "main" and
+                  .head_sha == $source_sha
+                ' >/dev/null
+              strict_directory="$RUNNER_TEMP/prelive-strict-inventory-${STRICT_INVENTORY_RUN_ID}"
+              mkdir "$strict_directory"
+              gh run download "$STRICT_INVENTORY_RUN_ID" \
+                --repo "$GITHUB_REPOSITORY" \
+                --name "prelive-preliminary-inventory-${REVIEWED_COMMIT_SHA}" \
+                --dir "$strict_directory"
+              strict_manifest="$strict_directory/preliminary-inventory-manifest.json"
+              strict_provider="$strict_directory/preliminary-provider-inventory.json"
+              test -f "$strict_manifest"
+              test -f "$strict_provider"
+              test "$(sha256sum "$strict_manifest" | awk '{print $1}')" = \
+                "$STRICT_PRELIMINARY_MANIFEST_SHA256"
+              jq -e \
+                --arg commit "$REVIEWED_COMMIT_SHA" \
+                --arg database "$EXPECTED_DATABASE_NAME" '
+                  .schemaVersion == 1 and
+                  .commitSha == $commit and
+                  .database == $database and
+                  .capturedBeforeContainment == true and
+                  .stripeTerminalReversalPolicy == "block_terminal_history" and
+                  .strictInventoryProvenance == null and
+                  (.providerSha256 | test("^[0-9a-f]{64}$")) and
+                  (.stripeTerminalTailSha256 | test("^[0-9a-f]{64}$"))
+                ' "$strict_manifest" >/dev/null
+              test "$(sha256sum "$strict_provider" | awk '{print $1}')" = \
+                "$(jq -er '.providerSha256' "$strict_manifest")"
+              jq -e '
+                .stripe.terminalReversalPolicy == "block_terminal_history"
+              ' "$strict_provider" >/dev/null
+              strict_terminal_tail_sha="$(
+                jq -cS "$STRIPE_TERMINAL_TAIL_JQ" "$strict_provider" |
+                  sha256sum |
+                  awk '{print $1}'
+              )"
+              test "$strict_terminal_tail_sha" = \
+                "$(jq -er '.stripeTerminalTailSha256' "$strict_manifest")"
+              printf 'PRELIVE_STRICT_INVENTORY_RUN_ID=%s\n' \
+                "$STRICT_INVENTORY_RUN_ID" >> "$GITHUB_ENV"
+              printf 'PRELIVE_STRICT_PRELIMINARY_MANIFEST_SHA256=%s\n' \
+                "$STRICT_PRELIMINARY_MANIFEST_SHA256" >> "$GITHUB_ENV"
+              printf 'PRELIVE_STRICT_STRIPE_TERMINAL_TAIL_SHA256=%s\n' \
+                "$strict_terminal_tail_sha" >> "$GITHUB_ENV"
+              ;;
+            *)
+              printf 'Unsupported terminal-reversal policy: %s\n' \
+                "$TERMINAL_REVERSAL_POLICY" >&2
+              exit 1
+              ;;
+          esac
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install exact locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Require sealed generation 2
+        run: |
+          set -euo pipefail
+          jq -e '
+            .generation == 2 and
+            .lifecycle == "sealed" and
+            .transition.kind == "collapse" and
+            .transition.fromGeneration == 1
+          ' packages/db/baseline-generation.json >/dev/null
+          bun run --cwd packages/db baseline:sealed:check
+
+      - name: Verify already-deployed Cloudflare prerequisites without mutation
+        run: |
+          set -euo pipefail
+          bun run --cwd apps/api cloudflare:verify-prelive-prerequisites
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Start Access-protected production database tunnel
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRODUCTION_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+          PRODUCTION_DATABASE_HOSTNAME: ${{ secrets.PRODUCTION_DATABASE_HOSTNAME }}
+          PRODUCTION_DATABASE_CA_CERT: ${{ secrets.PRODUCTION_DATABASE_CA_CERT }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.PRODUCTION_DATABASE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DATABASE_URL"
+          test -n "$PRODUCTION_RUNTIME_DATABASE_URL"
+          test -n "$PRODUCTION_DATABASE_HOSTNAME"
+          test -n "$PRODUCTION_DATABASE_CA_CERT"
+          test -n "$TUNNEL_SERVICE_TOKEN_ID"
+          test -n "$TUNNEL_SERVICE_TOKEN_SECRET"
+          bun -e '
+            const migrationUrl = new URL(process.env.PRODUCTION_DATABASE_URL);
+            const runtimeUrl = new URL(process.env.PRODUCTION_RUNTIME_DATABASE_URL);
+            for (const url of [migrationUrl, runtimeUrl]) {
+              if (!["postgres:", "postgresql:"].includes(url.protocol)) {
+                throw new Error("Production database URLs must use PostgreSQL");
+              }
+              if (url.hostname !== process.env.PRODUCTION_DATABASE_HOSTNAME || url.port !== "5433") {
+                throw new Error("Production database URLs must target the protected local tunnel");
+              }
+              if (url.searchParams.get("sslmode") !== "verify-full") {
+                throw new Error("Production database URLs must require sslmode=verify-full");
+              }
+            }
+            if (migrationUrl.pathname !== runtimeUrl.pathname) {
+              throw new Error("Migration and runtime URLs must name the same database");
+            }
+          '
+          printf '%s\n' "$PRODUCTION_DATABASE_CA_CERT" > "$RUNNER_TEMP/relayapi-postgres-ca.crt"
+          sudo install -m 0644 "$RUNNER_TEMP/relayapi-postgres-ca.crt" \
+            /usr/local/share/ca-certificates/relayapi-postgres-ca.crt
+          sudo update-ca-certificates
+          docker run --detach --rm --pull always --network host \
+            --name "relayapi-prelive-inventory-db-${GITHUB_RUN_ID}" \
+            --env TUNNEL_SERVICE_TOKEN_ID \
+            --env TUNNEL_SERVICE_TOKEN_SECRET \
+            cloudflare/cloudflared:2026.6.0@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f \
+            access tcp \
+            --hostname "$PRODUCTION_DATABASE_HOSTNAME" \
+            --url 127.0.0.1:5433 \
+            --loglevel warn
+          printf '127.0.0.1\t%s\n' "$PRODUCTION_DATABASE_HOSTNAME" | \
+            sudo tee -a /etc/hosts >/dev/null
+          ready=false
+          for _ in $(seq 1 30); do
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/5433' 2>/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "true"
+
+      - name: Prepare the exact generation-1 ledger and read-only database preflight
+        env:
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRELIVE_RUNTIME_DATABASE_URL: ${{ secrets.PRODUCTION_RUNTIME_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          base_sha="$(jq -er '.transition.baseCommitSha' packages/db/baseline-generation.json)"
+          ledger_manifest="$RUNNER_TEMP/generation-1-migration-manifest.json"
+          git show "$base_sha:packages/db/drizzle/migration-manifest.json" > "$ledger_manifest"
+          test "$(sha256sum "$ledger_manifest" | awk '{print $1}')" = \
+            "$(jq -er '.transition.baseManifestSha256' packages/db/baseline-generation.json)"
+          export PRELIVE_EXPECTED_LEDGER_MANIFEST="$ledger_manifest"
+          export PRELIVE_EXPECTED_DATABASE="$EXPECTED_DATABASE_NAME"
+          printf 'PRELIVE_EXPECTED_LEDGER_MANIFEST=%s\n' "$ledger_manifest" >> "$GITHUB_ENV"
+          printf 'PRELIVE_EXPECTED_DATABASE=%s\n' "$EXPECTED_DATABASE_NAME" >> "$GITHUB_ENV"
+          bun run --cwd packages/db prelive:reset preflight
+
+      - name: Capture preliminary inventories before containment
+        run: |
+          set -euo pipefail
+          preliminary_directory="$RUNNER_TEMP/prelive-preliminary-inventory"
+          mkdir "$preliminary_directory"
+          database_preliminary="$preliminary_directory/preliminary-database-inventory.json"
+          provider_preliminary="$preliminary_directory/preliminary-provider-inventory.json"
+          PRELIVE_DATABASE_INVENTORY_OUTPUT="$database_preliminary" \
+            bun run --cwd packages/db prelive:inventory capture
+          PRELIVE_PROVIDER_INVENTORY_OUTPUT="$provider_preliminary" \
+            bunx dotenvx run --redact --strict --overload \
+              --token "$DOTENVX_ARMOR_TOKEN" \
+              -f apps/api/.production.secrets.vault -- \
+              bun run --cwd apps/api prelive:provider-inventory capture
+          database_sha="$(sha256sum "$database_preliminary" | awk '{print $1}')"
+          provider_sha="$(sha256sum "$provider_preliminary" | awk '{print $1}')"
+          money_count="$(jq -er '.moneyBearingReferences | length' "$database_preliminary")"
+          unresolved_count="$(jq -er '.unresolvedProviderOperations | length' "$database_preliminary")"
+          provider_blocker_count="$(jq -er '.blockingResources | length' "$provider_preliminary")"
+          terminal_reversal_policy="$(jq -er '.stripe.terminalReversalPolicy' "$provider_preliminary")"
+          terminal_tail_sha="$(
+            jq -cS "$STRIPE_TERMINAL_TAIL_JQ" "$provider_preliminary" |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          strict_run_id="${PRELIVE_STRICT_INVENTORY_RUN_ID:-}"
+          strict_manifest_sha="${PRELIVE_STRICT_PRELIMINARY_MANIFEST_SHA256:-}"
+          strict_terminal_tail_sha="${PRELIVE_STRICT_STRIPE_TERMINAL_TAIL_SHA256:-}"
+          case "$terminal_reversal_policy" in
+            block_terminal_history)
+              test -z "$strict_terminal_tail_sha"
+              ;;
+            accept_network_reversal_tail)
+              [[ "$strict_terminal_tail_sha" =~ ^[0-9a-f]{64}$ ]]
+              test "$terminal_tail_sha" = "$strict_terminal_tail_sha"
+              ;;
+            *)
+              printf 'Unsupported terminal-reversal policy: %s\n' \
+                "$terminal_reversal_policy" >&2
+              exit 1
+              ;;
+          esac
+          jq -S -n \
+            --arg commit "$REVIEWED_COMMIT_SHA" \
+            --arg database "$EXPECTED_DATABASE_NAME" \
+            --arg database_sha "$database_sha" \
+            --arg provider_sha "$provider_sha" \
+            --arg terminal_reversal_policy "$terminal_reversal_policy" \
+            --arg terminal_tail_sha "$terminal_tail_sha" \
+            --arg strict_run_id "$strict_run_id" \
+            --arg strict_manifest_sha "$strict_manifest_sha" \
+            --arg strict_terminal_tail_sha "$strict_terminal_tail_sha" \
+            --argjson money_count "$money_count" \
+            --argjson unresolved_count "$unresolved_count" \
+            --argjson provider_blocker_count "$provider_blocker_count" \
+            '{
+              schemaVersion: 1,
+              commitSha: $commit,
+              database: $database,
+              capturedBeforeContainment: true,
+              databaseSha256: $database_sha,
+              providerSha256: $provider_sha,
+              stripeTerminalReversalPolicy: $terminal_reversal_policy,
+              stripeTerminalTailSha256: $terminal_tail_sha,
+              strictInventoryProvenance: (
+                if $terminal_reversal_policy == "accept_network_reversal_tail"
+                then {
+                  runId: $strict_run_id,
+                  preliminaryManifestSha256: $strict_manifest_sha,
+                  stripeTerminalTailSha256: $strict_terminal_tail_sha
+                }
+                else null
+                end
+              ),
+              moneyBearingCount: $money_count,
+              unresolvedProviderOperationCount: $unresolved_count,
+              providerBlockingResourceCount: $provider_blocker_count
+            }' > "$preliminary_directory/preliminary-inventory-manifest.json"
+          manifest_sha="$(sha256sum "$preliminary_directory/preliminary-inventory-manifest.json" | awk '{print $1}')"
+          {
+            printf '## Preliminary pre-live provider inventory\n\n'
+            printf 'This evidence was captured before containment and before evaluating blockers.\n\n'
+            printf -- "- Manifest SHA-256: \`%s\`\n" "$manifest_sha"
+            printf -- "- Provider inventory SHA-256: \`%s\`\n" "$provider_sha"
+            printf -- "- Provider blockers: \`%s\`\n" "$provider_blocker_count"
+            printf -- "- Stripe terminal-reversal policy: \`%s\`\n" "$terminal_reversal_policy"
+            printf -- "- Stripe terminal-tail SHA-256: \`%s\`\n" "$terminal_tail_sha"
+            if [[ "$provider_blocker_count" -gt 0 ]]; then
+              printf "\nContainment will remain blocked. Reconcile every listed resource, or explicitly change the protected policy secret to \`accept_network_reversal_tail\` after review.\n"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+          META_INVENTORY_BUSINESS_ID: ${{ secrets.META_INVENTORY_BUSINESS_ID }}
+          META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN: ${{ secrets.META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN }}
+          PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID: ${{ secrets.PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID }}
+          PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256: ${{ secrets.PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256 }}
+          PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY: ${{ secrets.PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY }}
+          PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION }}
+          PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION }}
+          PRELIVE_STRIPE_CONNECT_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_CONNECT_ATTESTATION }}
+          PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION }}
+          PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI: ${{ secrets.PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI }}
+          PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED: ${{ secrets.PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED }}
+          PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI: ${{ secrets.PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI }}
+          PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED: ${{ secrets.PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED }}
+          PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION: ${{ secrets.PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION }}
+          PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION: ${{ secrets.PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION }}
+          PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO: ${{ secrets.PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO }}
+          PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED: ${{ secrets.PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED }}
+
+      - name: Upload preliminary inventory before evaluating blockers
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prelive-preliminary-inventory-${{ inputs.commit_sha }}
+          path: ${{ runner.temp }}/prelive-preliminary-inventory
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Refuse containment while local or provider money-bearing resources remain
+        run: |
+          set -euo pipefail
+          database_preliminary="$RUNNER_TEMP/prelive-preliminary-inventory/preliminary-database-inventory.json"
+          provider_preliminary="$RUNNER_TEMP/prelive-preliminary-inventory/preliminary-provider-inventory.json"
+          jq -e '.moneyBearingReferences == [] and .unresolvedProviderOperations == []' \
+            "$database_preliminary" >/dev/null
+          jq -e '.blockingResources == []' "$provider_preliminary" >/dev/null
+
+      - name: Block generation-1 producers while leaving Queue consumers running
+        id: containment
+        run: |
+          set -euo pipefail
+          bun scripts/prelive-cloudflare-cutover.ts drain-on
+          printf 'active=true\n' >> "$GITHUB_OUTPUT"
+          convergence_seconds="$(
+            bun scripts/prelive-cloudflare-cutover.ts control-convergence-seconds
+          )"
+          test "$convergence_seconds" = "120"
+          sleep "$convergence_seconds"
+          bun scripts/prelive-cloudflare-cutover.ts queues-resume
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Drain the request and one-hour presigned-PUT horizon through live Queue consumers
+        run: |
+          set -euo pipefail
+          hold_seconds="$(bun scripts/prelive-cloudflare-cutover.ts hold-seconds)"
+          test "$hold_seconds" = "3900"
+          sleep "$hold_seconds"
+
+      - name: Require three stable zero-backlog Queue observations, then freeze consumers
+        run: |
+          set -euo pipefail
+          bun scripts/prelive-cloudflare-cutover.ts queues-verify-drained
+          bun scripts/prelive-cloudflare-cutover.ts queues-pause
+          bun scripts/prelive-cloudflare-cutover.ts queues-verify-paused
+          bun scripts/prelive-cloudflare-cutover.ts maintenance-on
+          convergence_seconds="$(
+            bun scripts/prelive-cloudflare-cutover.ts control-convergence-seconds
+          )"
+          test "$convergence_seconds" = "120"
+          sleep "$convergence_seconds"
+          bun scripts/prelive-cloudflare-cutover.ts queues-verify-paused
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Prove both generation-1 Workers are closed under generation-2 maintenance
+        env:
+          MAINTENANCE_SMOKE_BYPASS_TOKEN: ${{ secrets.MAINTENANCE_SMOKE_BYPASS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$MAINTENANCE_SMOKE_BYPASS_TOKEN"
+          for endpoint in \
+            https://api.relayapi.dev/internal/cutover-smoke \
+            https://relayapi.dev/internal/cutover-smoke
+          do
+            curl --fail-with-body --silent --show-error --max-time 20 \
+              -H "x-relayapi-maintenance-smoke-bypass: $MAINTENANCE_SMOKE_BYPASS_TOKEN" \
+              "$endpoint" |
+              jq -e '
+                .ok == true and
+                .control.status == "blocked" and
+                .control.reason == "generation_mismatch" and
+                .control.application_baseline_generation == 1
+              '
+          done
+
+      - name: Capture canonical Cloudflare, database, and provider inventories
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DOTENVX_ARMOR_TOKEN: ${{ secrets.DOTENVX_ARMOR_TOKEN }}
+          META_INVENTORY_BUSINESS_ID: ${{ secrets.META_INVENTORY_BUSINESS_ID }}
+          META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN: ${{ secrets.META_INVENTORY_SYSTEM_USER_ACCESS_TOKEN }}
+          PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID: ${{ secrets.PRELIVE_EXPECTED_STRIPE_ACCOUNT_ID }}
+          PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256: ${{ secrets.PRELIVE_EXPECTED_TELNYX_API_KEY_SHA256 }}
+          PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY: ${{ secrets.PRELIVE_PROVIDER_TERMINAL_REVERSAL_POLICY }}
+          PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_BANK_TRANSFER_FUNDING_INSTRUCTIONS_ATTESTATION }}
+          PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_LEGACY_RECEIVER_SOURCES_ATTESTATION }}
+          PRELIVE_STRIPE_CONNECT_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_CONNECT_ATTESTATION }}
+          PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION: ${{ secrets.PRELIVE_STRIPE_LIVE_PRICING_TABLES_ATTESTATION }}
+          PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI: ${{ secrets.PRELIVE_STRIPE_ACCOUNT_DEDICATED_TO_RELAYAPI }}
+          PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED: ${{ secrets.PRELIVE_STRIPE_UNSUPPORTED_PRODUCTS_DISABLED }}
+          PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI: ${{ secrets.PRELIVE_TELNYX_ACCOUNT_DEDICATED_TO_RELAYAPI }}
+          PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED: ${{ secrets.PRELIVE_TELNYX_UNSUPPORTED_PRODUCTS_DISABLED }}
+          PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION: ${{ secrets.PRELIVE_TELNYX_SCHEDULED_PAYMENTS_ATTESTATION }}
+          PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION: ${{ secrets.PRELIVE_TELNYX_AUTO_RECHARGE_ATTESTATION }}
+          PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO: ${{ secrets.PRELIVE_META_WHATSAPP_OUTSTANDING_INVOICES_ZERO }}
+          PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED: ${{ secrets.PRELIVE_META_WHATSAPP_AUTOMATIC_PAYMENTS_DISABLED }}
+          REVIEWED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          EXPECTED_DATABASE_NAME: ${{ inputs.expected_database_name }}
+        run: |
+          set -euo pipefail
+          artifact_directory="$RUNNER_TEMP/prelive-destructive-inventory"
+          mkdir "$artifact_directory"
+          cloudflare_inventory="$artifact_directory/prelive-cloudflare-inventory.json"
+          database_inventory="$artifact_directory/prelive-database-inventory.json"
+          provider_inventory="$artifact_directory/prelive-provider-inventory.json"
+          PRELIVE_CLOUDFLARE_INVENTORY_OUTPUT="$cloudflare_inventory" \
+            bunx dotenvx run --redact --strict --overload \
+              --token "$DOTENVX_ARMOR_TOKEN" \
+              -f apps/api/.production.secrets.vault -- \
+              bun scripts/prelive-cloudflare-cutover.ts inventory
+          PRELIVE_DATABASE_INVENTORY_OUTPUT="$database_inventory" \
+            bun run --cwd packages/db prelive:inventory capture
+          PRELIVE_PROVIDER_INVENTORY_OUTPUT="$provider_inventory" \
+            bunx dotenvx run --redact --strict --overload \
+              --token "$DOTENVX_ARMOR_TOKEN" \
+              -f apps/api/.production.secrets.vault -- \
+              bun run --cwd apps/api prelive:provider-inventory capture
+          jq -e '.moneyBearingReferences == [] and .unresolvedProviderOperations == []' \
+            "$database_inventory" >/dev/null
+          jq -e '.blockingResources == []' "$provider_inventory" >/dev/null
+          cloudflare_sha="$(sha256sum "$cloudflare_inventory" | awk '{print $1}')"
+          database_sha="$(sha256sum "$database_inventory" | awk '{print $1}')"
+          provider_sha="$(sha256sum "$provider_inventory" | awk '{print $1}')"
+          money_count="$(jq -er '.moneyBearingReferences | length' "$database_inventory")"
+          unresolved_count="$(jq -er '.unresolvedProviderOperations | length' "$database_inventory")"
+          provider_blocker_count="$(jq -er '.blockingResources | length' "$provider_inventory")"
+          terminal_reversal_policy="$(jq -er '.stripe.terminalReversalPolicy' "$provider_inventory")"
+          terminal_tail_sha="$(
+            jq -cS "$STRIPE_TERMINAL_TAIL_JQ" "$provider_inventory" |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          strict_run_id="${PRELIVE_STRICT_INVENTORY_RUN_ID:-}"
+          strict_manifest_sha="${PRELIVE_STRICT_PRELIMINARY_MANIFEST_SHA256:-}"
+          strict_terminal_tail_sha="${PRELIVE_STRICT_STRIPE_TERMINAL_TAIL_SHA256:-}"
+          case "$terminal_reversal_policy" in
+            block_terminal_history)
+              test -z "$strict_run_id"
+              test -z "$strict_manifest_sha"
+              test -z "$strict_terminal_tail_sha"
+              ;;
+            accept_network_reversal_tail)
+              [[ "$strict_run_id" =~ ^[1-9][0-9]*$ ]]
+              [[ "$strict_manifest_sha" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$strict_terminal_tail_sha" =~ ^[0-9a-f]{64}$ ]]
+              ;;
+            *)
+              printf 'Unsupported terminal-reversal policy: %s\n' \
+                "$terminal_reversal_policy" >&2
+              exit 1
+              ;;
+          esac
+          jq -S -n \
+            --arg commit "$REVIEWED_COMMIT_SHA" \
+            --arg database "$EXPECTED_DATABASE_NAME" \
+            --arg cloudflare_sha "$cloudflare_sha" \
+            --arg database_sha "$database_sha" \
+            --arg provider_sha "$provider_sha" \
+            --arg terminal_reversal_policy "$terminal_reversal_policy" \
+            --arg terminal_tail_sha "$terminal_tail_sha" \
+            --arg strict_run_id "$strict_run_id" \
+            --arg strict_manifest_sha "$strict_manifest_sha" \
+            --arg strict_terminal_tail_sha "$strict_terminal_tail_sha" \
+            --argjson money_count "$money_count" \
+            --argjson unresolved_count "$unresolved_count" \
+            --argjson provider_blocker_count "$provider_blocker_count" \
+            '{
+              schemaVersion: 1,
+              commitSha: $commit,
+              database: $database,
+              capturedAfterContainment: true,
+              cloudflareSha256: $cloudflare_sha,
+              databaseSha256: $database_sha,
+              providerSha256: $provider_sha,
+              stripeTerminalReversalPolicy: $terminal_reversal_policy,
+              stripeTerminalTailSha256: $terminal_tail_sha,
+              strictInventoryProvenance: (
+                if $terminal_reversal_policy == "accept_network_reversal_tail"
+                then {
+                  runId: $strict_run_id,
+                  preliminaryManifestSha256: $strict_manifest_sha,
+                  stripeTerminalTailSha256: $strict_terminal_tail_sha
+                }
+                else null
+                end
+              ),
+              moneyBearingCount: $money_count,
+              unresolvedProviderOperationCount: $unresolved_count,
+              providerBlockingResourceCount: $provider_blocker_count
+            }' > "$artifact_directory/prelive-inventory-manifest.json"
+          manifest_sha="$(sha256sum "$artifact_directory/prelive-inventory-manifest.json" | awk '{print $1}')"
+          {
+            printf '## Contained pre-live destructive inventory\n\n'
+            printf 'Review the artifact, then supply this exact SHA-256 twice to the separate cutover dispatch:\n\n'
+            printf "\`%s\`\n" "$manifest_sha"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the exact contained inventory for human review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prelive-destructive-inventory-${{ inputs.commit_sha }}
+          path: ${{ runner.temp }}/prelive-destructive-inventory
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Re-contain an inventory failure
+        if: ${{ failure() && steps.containment.outputs.active == 'true' }}
+        run: |
+          set -euo pipefail
+          bun scripts/prelive-cloudflare-cutover.ts maintenance-on
+          bun scripts/prelive-cloudflare-cutover.ts queues-pause
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Stop production database tunnel
+        if: ${{ always() }}
+        run: docker rm --force "relayapi-prelive-inventory-db-${GITHUB_RUN_ID}" >/dev/null 2>&1 || true

@@ -24,7 +24,6 @@ import type {
 
 export type AutomationEntrypointKind =
 	| "dm_received"
-	| "keyword"
 	| "comment_created"
 	| "story_reply"
 	| "story_mention"
@@ -32,7 +31,6 @@ export type AutomationEntrypointKind =
 	| "ad_click"
 	| "ref_link_click"
 	| "share_to_dm"
-	| "follow"
 	| "schedule"
 	| "field_changed"
 	| "tag_applied"
@@ -44,13 +42,14 @@ export interface AutomationEntrypointResponse {
 	id: string;
 	automation_id: string;
 	channel: AutomationChannel;
-	kind: string;
+	kind: AutomationEntrypointKind;
 	status: string;
 	social_account_id: string | null;
 	config: Record<string, unknown> | null;
 	filters: Record<string, unknown> | null;
 	allow_reentry: boolean;
 	reentry_cooldown_min: number;
+	daily_cap: number | null;
 	priority: number;
 	specificity: number;
 	created_at: string;
@@ -65,6 +64,10 @@ export interface AutomationEntrypointResponse {
 export interface AutomationEntrypointCreateResponse
 	extends AutomationEntrypointResponse {
 	webhook_secret_plaintext?: string;
+	scheduling?: {
+		queued: boolean;
+		reason?: string;
+	};
 }
 
 export interface AutomationEntrypointListResponse {
@@ -74,12 +77,18 @@ export interface AutomationEntrypointListResponse {
 export interface AutomationEntrypointCreateParams {
 	channel: AutomationChannel;
 	kind: AutomationEntrypointKind;
+	/**
+	 * Optional provider identity for provider-originated or webhook triggers.
+	 * Internal schedule, field, tag, ref-link, and conversion triggers reject it.
+	 */
 	social_account_id?: string;
 	config?: Record<string, unknown>;
 	filters?: Record<string, unknown>;
 	allow_reentry?: boolean;
 	reentry_cooldown_min?: number;
+	daily_cap?: number | null;
 	priority?: number;
+	status?: "active" | "paused";
 }
 
 export interface AutomationEntrypointUpdateParams
@@ -143,7 +152,7 @@ export class AutomationEntrypoints extends APIResource {
 		id: string,
 		body: AutomationEntrypointUpdateParams,
 		options?: RequestOptions,
-	): APIPromise<AutomationEntrypointResponse> {
+	): APIPromise<AutomationEntrypointCreateResponse> {
 		return this._client.patch(path`/v1/automation-entrypoints/${id}`, {
 			body,
 			...options,

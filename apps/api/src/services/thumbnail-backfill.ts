@@ -1,5 +1,7 @@
 import { createDb, media, queueFailures } from "@relayapi/db";
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { decryptQueueFailurePayload } from "../queues/failures";
+import { deploymentQueueNames } from "../queues/queue-class";
 import type { Env } from "../types";
 import { backfillExternalPostPreviews } from "./external-post-sync/previews";
 import {
@@ -8,10 +10,14 @@ import {
 	processThumbnailForMedia,
 	RetryableMediaError,
 } from "./media-reliability";
+import { headStoredObject, storageLocatorForMedia } from "./storage-locator";
 
 const RECONCILE_BATCH = 25;
 const ABANDONED_DIRECT_UPLOAD_MS = 15 * 60 * 1000;
-const MEDIA_DLQ = "relayapi-media-cleanup-dlq";
+export const MEDIA_DEAD_LETTER_QUEUE_NAMES = deploymentQueueNames({
+	capability: "media-cleanup",
+	role: "dead-letter",
+});
 
 /**
  * Scheduled media reconciliation. In order, it replays durably recorded R2
@@ -37,13 +43,15 @@ async function replayMediaDeadLetters(
 	const failures = await db
 		.select({
 			id: queueFailures.id,
-			payload: queueFailures.payload,
+			queueName: queueFailures.queueName,
+			messageId: queueFailures.messageId,
+			payloadCiphertext: queueFailures.payloadCiphertext,
 			attempts: queueFailures.attempts,
 		})
 		.from(queueFailures)
 		.where(
 			and(
-				eq(queueFailures.queueName, MEDIA_DLQ),
+				inArray(queueFailures.queueName, [...MEDIA_DEAD_LETTER_QUEUE_NAMES]),
 				eq(queueFailures.status, "unresolved"),
 			),
 		)
@@ -51,7 +59,10 @@ async function replayMediaDeadLetters(
 		.limit(limit);
 
 	for (const failure of failures) {
-		if (!isMediaEventMessage(failure.payload)) {
+		const payload = await decryptQueueFailurePayload(env, failure).catch(
+			() => null,
+		);
+		if (!isMediaEventMessage(payload)) {
 			await db
 				.update(queueFailures)
 				.set({
@@ -64,7 +75,7 @@ async function replayMediaDeadLetters(
 		}
 
 		try {
-			await processMediaEvent(db, env, failure.payload);
+			await processMediaEvent(db, env, payload);
 			await db
 				.update(queueFailures)
 				.set({ status: "replayed", error: null, resolvedAt: new Date() })
@@ -89,6 +100,12 @@ async function reconcileDirectUploads(
 	const rows = await db
 		.select({
 			id: media.id,
+			organizationId: media.organizationId,
+			storageProvider: media.storageProvider,
+			storageBucketLocator: media.storageBucketLocator,
+			storageRegion: media.storageRegion,
+			storageLocationId: media.storageLocationId,
+			storageCredentialVersion: media.storageCredentialVersion,
 			storageKey: media.storageKey,
 			status: media.status,
 			createdAt: media.createdAt,
@@ -101,7 +118,11 @@ async function reconcileDirectUploads(
 	const now = new Date();
 	for (const row of rows) {
 		try {
-			const object = await env.MEDIA_BUCKET.head(row.storageKey);
+			const object = await headStoredObject(
+				db,
+				env,
+				storageLocatorForMedia(row),
+			);
 			if (object) {
 				await db
 					.update(media)
@@ -142,6 +163,12 @@ async function retryDueThumbnails(
 	const rows = await db
 		.select({
 			id: media.id,
+			organizationId: media.organizationId,
+			storageProvider: media.storageProvider,
+			storageBucketLocator: media.storageBucketLocator,
+			storageRegion: media.storageRegion,
+			storageLocationId: media.storageLocationId,
+			storageCredentialVersion: media.storageCredentialVersion,
 			storageKey: media.storageKey,
 			mimeType: media.mimeType,
 			thumbnailUrl: media.thumbnailUrl,

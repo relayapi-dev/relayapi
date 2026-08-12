@@ -1,6 +1,6 @@
 {
 	"label": "Presign Media URL",
-	"description": "Get a presigned upload URL for media files (images, videos, documents).",
+	"description": "Create a pending media upload intent and get a create-only presigned PUT URL. The scenario must PUT the bytes with every returned upload_headers entry and call POST /v1/media/confirm.",
 	"url": "/media/presign",
 	"method": "POST",
 	"parameters": [
@@ -17,7 +17,7 @@
 			"label": "Content Type",
 			"required": true,
 			"default": "image/jpeg",
-			"help": "MIME type: image/jpeg, image/png, video/mp4, etc."
+			"help": "Allowed media MIME type, for example image/jpeg, image/png, video/mp4, audio/mpeg, or application/pdf"
 		}
 	],
 	"response": {

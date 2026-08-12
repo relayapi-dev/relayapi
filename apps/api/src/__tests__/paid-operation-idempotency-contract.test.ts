@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { Hono } from "hono";
 import { Relay } from "../../../../packages/sdk/src/client";
 import type { Ads } from "../../../../packages/sdk/src/resources/ads";
 import type { PhoneNumbers } from "../../../../packages/sdk/src/resources/whatsapp/phone-numbers";
 import adsRoutes from "../routes/ads";
 import phoneProvisioningRoutes from "../routes/whatsapp-phone-provisioning";
+import type { Env, Variables } from "../types";
 
 type Assert<T extends true> = T;
 type RequiresIdempotencyKey<T> = T extends { idempotencyKey: string }
@@ -56,11 +58,32 @@ const openApiConfig = {
 	info: { title: "Contract test", version: "1.0.0" },
 };
 
+function authorizedFinancialRouter(
+	router: typeof adsRoutes,
+	permission: "manage_spend" | "manage_billing",
+) {
+	const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+	app.use("*", async (c, next) => {
+		c.set("orgId", "org_contract");
+		c.set("workspaceScope", "all");
+		c.set("principalType", "service");
+		c.set("permissions", ["read", "write", permission]);
+		await next();
+	});
+	app.route("/", router);
+	return app;
+}
+
 describe("paid-operation idempotency contracts", () => {
 	it("declares the required header before every paid runtime operation", async () => {
 		const adsDocument = adsRoutes.getOpenAPIDocument(openApiConfig);
 		const phoneDocument =
 			phoneProvisioningRoutes.getOpenAPIDocument(openApiConfig);
+		const authorizedAds = authorizedFinancialRouter(adsRoutes, "manage_spend");
+		const authorizedPhone = authorizedFinancialRouter(
+			phoneProvisioningRoutes,
+			"manage_billing",
+		);
 
 		expectRequiredIdempotencyKey(operationAt(adsDocument, "/campaigns"));
 		expectRequiredIdempotencyKey(operationAt(adsDocument, "/"));
@@ -68,7 +91,7 @@ describe("paid-operation idempotency contracts", () => {
 		expectRequiredIdempotencyKey(operationAt(phoneDocument, "/purchase"));
 
 		const missingHeaderRequests = [
-			adsRoutes.request("/campaigns", {
+			authorizedAds.request("/campaigns", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -77,7 +100,7 @@ describe("paid-operation idempotency contracts", () => {
 					objective: "traffic",
 				}),
 			}),
-			adsRoutes.request("/", {
+			authorizedAds.request("/", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -85,7 +108,7 @@ describe("paid-operation idempotency contracts", () => {
 					name: "Ad",
 				}),
 			}),
-			adsRoutes.request("/boost", {
+			authorizedAds.request("/boost", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -95,7 +118,7 @@ describe("paid-operation idempotency contracts", () => {
 					duration_days: 1,
 				}),
 			}),
-			phoneProvisioningRoutes.request("/purchase", {
+			authorizedPhone.request("/purchase", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
@@ -162,5 +185,32 @@ describe("paid-operation idempotency contracts", () => {
 				key: "phone-operation",
 			},
 		]);
+	});
+
+	it("runs live financial gates before a completed idempotency replay", async () => {
+		const source = await Bun.file(new URL("../app.ts", import.meta.url)).text();
+		const replay = source.indexOf(
+			'timed("idempotency", idempotencyMiddleware)',
+		);
+		for (const gate of [
+			"requireManageBillingMiddleware",
+			"requireManageSpendMiddleware",
+			"requireViewBillingMiddleware",
+		]) {
+			const lastGate = source.lastIndexOf(gate, replay);
+			expect(lastGate).toBeGreaterThan(-1);
+			expect(lastGate).toBeLessThan(replay);
+		}
+		expect(source.indexOf('"/v1/whatsapp/phone-numbers/*"')).toBeLessThan(
+			replay,
+		);
+		const phoneGate = source.slice(
+			source.indexOf('app.use("/v1/whatsapp/phone-numbers/*"'),
+			replay,
+		);
+		expect(phoneGate).toContain('c.req.method === "POST"');
+		expect(phoneGate).toContain("phone-numbers\\/purchase");
+		expect(phoneGate).toContain('c.req.method === "DELETE"');
+		expect(phoneGate).not.toContain('["POST", "PUT", "PATCH", "DELETE"]');
 	});
 });

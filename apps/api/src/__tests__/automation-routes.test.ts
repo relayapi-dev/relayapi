@@ -23,7 +23,6 @@ import {
 	contacts,
 	createDb,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
@@ -34,16 +33,25 @@ import {
 } from "../routes/_automation-catalog";
 import { aggregateInsights } from "../routes/_automation-insights";
 import {
+	BindingConfigByType,
+	BindingCreateSchema,
+	BindingUpdateSchema,
+} from "../schemas/automation-bindings";
+import {
 	EntrypointCreateSchema,
 	validateEntrypointConfig,
 } from "../schemas/automation-entrypoints";
-import { buildBindingWarnings } from "../routes/automation-bindings";
-import { BindingConfigByType } from "../schemas/automation-bindings";
-import { computeSpecificity } from "../services/automations/trigger-matcher";
 import {
 	buildGraphFromTemplate,
 	type TemplateKind,
 } from "../services/automations/templates";
+import { computeSpecificity } from "../services/automations/trigger-matcher";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -60,7 +68,7 @@ let socialAccountId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "routes-test-org",
 		slug: `routes-test-${orgId.slice(-8)}`,
@@ -105,8 +113,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 beforeAll(async () => {
@@ -131,8 +139,8 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe("automation catalog", () => {
-	it("contains all 10 node kinds", () => {
-		expect(AUTOMATION_CATALOG.node_kinds).toHaveLength(10);
+	it("contains all 12 implemented node kinds", () => {
+		expect(AUTOMATION_CATALOG.node_kinds).toHaveLength(12);
 		const kinds = AUTOMATION_CATALOG.node_kinds.map((n) => n.kind).sort();
 		expect(kinds).toEqual(
 			[
@@ -146,51 +154,60 @@ describe("automation catalog", () => {
 				"message",
 				"randomizer",
 				"start_automation",
+				"social_profile_check",
+				"wait_event",
 			].sort(),
 		);
 	});
 
-	it("contains all 15 entrypoint kinds", () => {
+	it("contains all 14 publicly creatable entrypoint kinds", () => {
 		// The dedicated `keyword` kind was removed (spec §B3); inbound-DM keyword
 		// filtering now lives on `dm_received` via its `config.keywords`.
-		expect(AUTOMATION_CATALOG.entrypoint_kinds).toHaveLength(15);
+		expect(AUTOMATION_CATALOG.entrypoint_kinds).toHaveLength(14);
 	});
 
 	it("does not expose the retired `keyword` entrypoint kind", () => {
 		const kinds = AUTOMATION_CATALOG.entrypoint_kinds.map((k) => k.kind);
 		expect(kinds).not.toContain("keyword");
+		expect(kinds).not.toContain("follow");
 		expect(kinds).toContain("dm_received");
+		expect(kinds).toContain("conversion_event");
 	});
 
-	it("marks `change_main_menu` as disabled in the action catalog", () => {
-		const a = AUTOMATION_CATALOG.action_types.find(
+	it("exposes the implemented Facebook `change_main_menu` action", () => {
+		const action = AUTOMATION_CATALOG.action_types.find(
 			(x) => x.type === "change_main_menu",
-		);
-		expect(a).toBeDefined();
-		expect((a as Record<string, unknown>).disabled).toBe(true);
+		) as Record<string, unknown> | undefined;
+		expect(action?.channels).toEqual(["facebook"]);
 	});
 
-	it("contains all 5 binding types with correct wired/stubbed split", () => {
+	it("exposes direct and provider-synchronized binding types", () => {
 		expect(AUTOMATION_CATALOG.binding_types).toHaveLength(5);
-		const wired = AUTOMATION_CATALOG.binding_types.filter(
-			(b) => b.v1_status === "wired",
-		);
-		const stubbed = AUTOMATION_CATALOG.binding_types.filter(
-			(b) => b.v1_status === "stubbed",
-		);
-		expect(wired.map((b) => b.type).sort()).toEqual([
+		expect(AUTOMATION_CATALOG.binding_types.map((b) => b.type).sort()).toEqual([
 			"default_reply",
-			"welcome_message",
-		]);
-		expect(stubbed.map((b) => b.type).sort()).toEqual([
-			"conversation_starter",
+			"get_started",
 			"ice_breaker",
 			"main_menu",
+			"welcome_message",
 		]);
+		expect(
+			AUTOMATION_CATALOG.binding_types
+				.filter((binding) => binding.v1_status === "provider_synced")
+				.map((binding) => binding.type)
+				.sort(),
+		).toEqual(["get_started", "ice_breaker", "main_menu"]);
 	});
 
-	it("contains 23 action types", () => {
-		expect(AUTOMATION_CATALOG.action_types).toHaveLength(23);
+	it("exposes durable conversion logging", () => {
+		const action = AUTOMATION_CATALOG.action_types.find(
+			(x) => x.type === "log_conversion_event",
+		) as Record<string, unknown> | undefined;
+		expect(action).toBeDefined();
+		expect(action?.disabled).not.toBe(true);
+	});
+
+	it("contains 24 action types", () => {
+		expect(AUTOMATION_CATALOG.action_types).toHaveLength(24);
 	});
 
 	it("contains channel_capabilities for all 4 supported channels", () => {
@@ -327,6 +344,53 @@ describe("entrypoint config validation", () => {
 		});
 		expect(parsed.success).toBe(false);
 	});
+
+	it("rejects an entrypoint kind that cannot execute on the selected channel", () => {
+		const parsed = EntrypointCreateSchema.safeParse({
+			channel: "facebook",
+			kind: "share_to_dm",
+			config: {},
+		});
+		expect(parsed.success).toBe(false);
+	});
+
+	it("rejects schedules the runtime cannot arm", () => {
+		expect(
+			validateEntrypointConfig("schedule", {
+				cron: "0 9 * * 1",
+				timezone: "UTC",
+			}).success,
+		).toBe(false);
+		expect(
+			validateEntrypointConfig("schedule", {
+				cron: "0 9 * * *",
+				timezone: "Not/A_Real_Zone",
+			}).success,
+		).toBe(false);
+	});
+
+	it("accepts the scheduler's supported cron subset", () => {
+		for (const cron of ["0 9 * * *", "0 * * * *", "*/15 * * * *"]) {
+			expect(
+				validateEntrypointConfig("schedule", {
+					cron,
+					timezone: "Europe/London",
+				}).success,
+			).toBe(true);
+		}
+	});
+
+	it("rejects unknown keys instead of silently persisting inert config", () => {
+		expect(
+			validateEntrypointConfig("story_mention", { keyword: "legacy" }).success,
+		).toBe(false);
+		expect(
+			validateEntrypointConfig("comment_created", {
+				post_ids: null,
+				keyword_filter: ["legacy"],
+			}).success,
+		).toBe(false);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -341,46 +405,75 @@ describe("binding config validation", () => {
 		expect(parsed.success).toBe(true);
 	});
 
-	it("accepts a conversation_starter config with ≤4 starters", () => {
-		const schema = BindingConfigByType.conversation_starter;
-		if (!schema) throw new Error("expected conversation_starter schema");
-		const parsed = schema.safeParse({
-			starters: [{ label: "Hi", payload: "greet" }],
-		});
-		expect(parsed.success).toBe(true);
+	it("accepts all direct and provider-synchronized binding types", () => {
+		const supported = [
+			["default_reply", {}],
+			["welcome_message", {}],
+			["get_started", { payload: "GET_STARTED" }],
+			[
+				"main_menu",
+				{
+					items: [{ label: "Help", action: "postback", payload: "HELP" }],
+				},
+			],
+			[
+				"ice_breaker",
+				{ questions: [{ question: "How can I order?", payload: "ORDER" }] },
+			],
+		] as const;
+		for (const [bindingType, config] of supported) {
+			const parsed = BindingCreateSchema.safeParse({
+				social_account_id: "acc_1",
+				channel: "facebook",
+				binding_type: bindingType,
+				automation_id: "auto_1",
+				config,
+			});
+			expect(parsed.success).toBe(true);
+			expect(BindingConfigByType[bindingType]?.safeParse(config).success).toBe(
+				true,
+			);
+		}
 	});
 
-	it("rejects >4 conversation_starter items", () => {
-		const schema = BindingConfigByType.conversation_starter;
-		if (!schema) throw new Error("expected conversation_starter schema");
-		const parsed = schema.safeParse({
-			starters: Array(5).fill({ label: "x", payload: "y" }),
-		});
-		expect(parsed.success).toBe(false);
+	it("accepts the documented 20-item Messenger persistent-menu limit", () => {
+		const items = Array.from({ length: 20 }, (_, index) => ({
+			label: `Menu ${index + 1}`,
+			action: "postback" as const,
+			payload: `MENU_${index + 1}`,
+		}));
+		expect(BindingConfigByType.main_menu?.safeParse({ items }).success).toBe(
+			true,
+		);
+		expect(
+			BindingConfigByType.main_menu?.safeParse({
+				items: [
+					...items,
+					{ label: "Too many", action: "postback", payload: "X" },
+				],
+			}).success,
+		).toBe(false);
 	});
 
-	it("attaches a `binding_pending_sync` warning only for stubbed binding types", () => {
-		// Stubbed types — these don't push to the platform yet. Warning MUST
-		// be present so the dashboard can surface a "not yet synced" banner.
-		for (const stubbed of [
-			"main_menu",
-			"conversation_starter",
-			"ice_breaker",
-		]) {
-			const w = buildBindingWarnings(stubbed);
-			expect(Array.isArray(w)).toBe(true);
-			if (!w) throw new Error("expected warnings array");
-			expect(w.length).toBe(1);
-			const w0 = w[0];
-			if (!w0) throw new Error("expected a warning");
-			expect(w0.code).toBe("binding_pending_sync");
-			expect(w0.message).toMatch(/v1\.1/);
-		}
+	it("rejects the retired conversation_starter binding type", () => {
+		expect(
+			BindingCreateSchema.safeParse({
+				social_account_id: "acc_1",
+				channel: "facebook",
+				binding_type: "conversation_starter",
+				automation_id: "auto_1",
+				config: {},
+			}).success,
+		).toBe(false);
+	});
 
-		// Wired types — no warning; these go live immediately.
-		for (const wired of ["default_reply", "welcome_message"]) {
-			expect(buildBindingWarnings(wired)).toBeUndefined();
-		}
+	it("rejects platform-sync-only binding statuses", () => {
+		expect(
+			BindingUpdateSchema.safeParse({ status: "pending_sync" }).success,
+		).toBe(false);
+		expect(
+			BindingUpdateSchema.safeParse({ status: "sync_failed" }).success,
+		).toBe(false);
 	});
 });
 
@@ -521,6 +614,7 @@ describe("automation-runs stop (integration)", () => {
 				name: "test-stop-auto",
 				channel: "telegram",
 				status: "active",
+				totalEnrolled: 1,
 				graph: {
 					schema_version: 1,
 					root_node_key: null,
@@ -532,11 +626,11 @@ describe("automation-runs stop (integration)", () => {
 		if (!auto) throw new Error("automation insert failed");
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "stop-test-contact",
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 
@@ -552,20 +646,42 @@ describe("automation-runs stop (integration)", () => {
 		expect(run?.status).toBe("active");
 		if (!run) throw new Error("expected run to exist");
 
-		// Simulate what the route does on /stop.
-		const [stopped] = await db
-			.update(automationRuns)
-			.set({
-				status: "exited",
-				exitReason: "admin_stopped",
-				completedAt: new Date(),
-				updatedAt: new Date(),
-			})
-			.where(eq(automationRuns.id, run.id))
-			.returning();
+		const { OpenAPIHono } = await import("@hono/zod-openapi");
+		const { default: automationRunsRouter } = await import(
+			"../routes/automation-runs"
+		);
+		// biome-ignore lint/suspicious/noExplicitAny: route harness context is intentionally minimal
+		const routeApp: any = new OpenAPIHono();
+		// biome-ignore lint/suspicious/noExplicitAny: route harness context is intentionally minimal
+		routeApp.use("*", async (c: any, next: any) => {
+			c.set("orgId", orgId);
+			c.set("db", db);
+			c.set("workspaceScope", "all");
+			await next();
+		});
+		routeApp.route("/v1/automation-runs", automationRunsRouter);
+
+		const response = await routeApp.request(
+			`/v1/automation-runs/${run.id}/stop`,
+			{ method: "POST" },
+		);
+		expect(response.status).toBe(200);
+		const stopped = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.id, run.id),
+		});
 		expect(stopped?.status).toBe("exited");
 		expect(stopped?.exitReason).toBe("admin_stopped");
 		expect(stopped?.completedAt).toBeInstanceOf(Date);
+
+		const repeated = await routeApp.request(
+			`/v1/automation-runs/${run.id}/stop`,
+			{ method: "POST" },
+		);
+		expect(repeated.status).toBe(422);
+		const autoAfter = await db.query.automations.findFirst({
+			where: eq(automations.id, auto.id),
+		});
+		expect(autoAfter?.totalExited).toBe(1);
 	});
 });
 
@@ -574,6 +690,49 @@ describe("automation-runs stop (integration)", () => {
 // ---------------------------------------------------------------------------
 
 describe("automation create from template", () => {
+	it("rejects a template account from the wrong channel", async () => {
+		if (!dbAvailable) return;
+		const { OpenAPIHono } = await import("@hono/zod-openapi");
+		const { default: automationsRouter } = await import(
+			"../routes/automations"
+		);
+		// biome-ignore lint/suspicious/noExplicitAny: route harness context is intentionally minimal
+		const routeApp: any = new OpenAPIHono();
+		// biome-ignore lint/suspicious/noExplicitAny: route harness context is intentionally minimal
+		routeApp.use("*", async (c: any, next: any) => {
+			c.set("orgId", orgId);
+			c.set("db", db);
+			c.set("workspaceScope", "all");
+			await next();
+		});
+		routeApp.route("/v1/automations", automationsRouter);
+
+		// The fixture account is Telegram. Binding it to an Instagram preset must
+		// fail before the automation or generated entrypoint is persisted.
+		const response = await routeApp.request("/v1/automations", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				name: "Wrong-channel preset",
+				channel: "instagram",
+				workspace_id: workspaceId,
+				template: {
+					kind: "comment_to_dm",
+					config: {
+						social_account_id: socialAccountId,
+						dm_message: {
+							blocks: [{ id: "reply", type: "text", text: "Hello" }],
+						},
+					},
+				},
+			}),
+		});
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			error: { code: "INVALID_ACCOUNT" },
+		});
+	});
+
 	it("builds a valid graph for every bundled template kind", () => {
 		const fixtures: Record<TemplateKind, Record<string, unknown>> = {
 			blank: {},
@@ -614,9 +773,6 @@ describe("automation create from template", () => {
 				dm_message: {
 					blocks: [{ id: "b1", type: "text", text: "Thanks!" }],
 				},
-				max_sends_per_day: 50,
-				cooldown_between_sends_ms: 2000,
-				skip_if_already_messaged: true,
 			},
 		};
 		for (const kind of Object.keys(fixtures) as TemplateKind[]) {

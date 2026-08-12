@@ -1,6 +1,38 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 import { APIResource } from '../../core/resource';
+import * as AdminAPI from './admin';
+import {
+  Admin,
+  WhatsAppAccountMutationParams,
+  WhatsAppAccountParams,
+  WhatsAppAdminCapabilities,
+  WhatsAppAdminMutation,
+  WhatsAppBlockedUserListParams,
+  WhatsAppBlockedUserListResponse,
+  WhatsAppBlockUsersParams,
+  WhatsAppBusinessUsernameResponse,
+  WhatsAppGroup,
+  WhatsAppGroupCreateParams,
+  WhatsAppGroupDeleteParams,
+  WhatsAppGroupListParams,
+  WhatsAppGroupListResponse,
+  WhatsAppGroupMessageParams,
+  WhatsAppGroupPinParams,
+  WhatsAppGroupRetrieveParams,
+  WhatsAppGroupUpdateParams,
+  WhatsAppInviteLinkResponse,
+  WhatsAppJoinRequestListParams,
+  WhatsAppJoinRequestListResponse,
+  WhatsAppRemoveParticipantsParams,
+  WhatsAppResolveJoinRequestsParams,
+  WhatsAppSetUsernameParams,
+  WhatsAppTemplateEditParams,
+  WhatsAppTemplateLibraryCreateParams,
+  WhatsAppTemplateLibraryParams,
+  WhatsAppTemplateLibraryResponse,
+  WhatsAppUsernameSuggestionsResponse,
+} from './admin';
 import * as BusinessProfileAPI from './business-profile';
 import {
   BusinessProfile,
@@ -40,8 +72,6 @@ import {
   FlowUploadJsonResponse,
   Flows,
 } from './flows';
-import * as GroupsAPI from './groups';
-import { GroupCreateParams, GroupCreateResponse, GroupListParams, GroupListResponse, Groups } from './groups';
 import * as PhoneNumbersAPI from './phone-numbers';
 import {
   PhoneNumberListParams,
@@ -72,8 +102,8 @@ import { APIPromise } from '../../core/api-promise';
 import { RequestOptions } from '../../internal/request-options';
 
 export class Whatsapp extends APIResource {
+  admin: AdminAPI.Admin = new AdminAPI.Admin(this._client);
   templates: TemplatesAPI.Templates = new TemplatesAPI.Templates(this._client);
-  groups: GroupsAPI.Groups = new GroupsAPI.Groups(this._client);
   flows: FlowsAPI.Flows = new FlowsAPI.Flows(this._client);
   businessProfile: BusinessProfileAPI.BusinessProfile = new BusinessProfileAPI.BusinessProfile(this._client);
   phoneNumbers: PhoneNumbersAPI.PhoneNumbers = new PhoneNumbersAPI.PhoneNumbers(this._client);
@@ -238,11 +268,44 @@ export interface WhatsappListPhoneNumbersParams {
 }
 
 Whatsapp.Templates = Templates;
-Whatsapp.Groups = Groups;
+Whatsapp.Admin = Admin;
+Whatsapp.Flows = Flows;
 Whatsapp.BusinessProfile = BusinessProfile;
 Whatsapp.PhoneNumbers = PhoneNumbers;
 
 export declare namespace Whatsapp {
+  export {
+    Admin as Admin,
+    type WhatsAppAdminMutation as WhatsAppAdminMutation,
+    type WhatsAppAdminCapabilities as WhatsAppAdminCapabilities,
+    type WhatsAppAccountParams as WhatsAppAccountParams,
+    type WhatsAppAccountMutationParams as WhatsAppAccountMutationParams,
+    type WhatsAppGroup as WhatsAppGroup,
+    type WhatsAppGroupListParams as WhatsAppGroupListParams,
+    type WhatsAppGroupListResponse as WhatsAppGroupListResponse,
+    type WhatsAppGroupCreateParams as WhatsAppGroupCreateParams,
+    type WhatsAppGroupRetrieveParams as WhatsAppGroupRetrieveParams,
+    type WhatsAppGroupUpdateParams as WhatsAppGroupUpdateParams,
+    type WhatsAppGroupDeleteParams as WhatsAppGroupDeleteParams,
+    type WhatsAppInviteLinkResponse as WhatsAppInviteLinkResponse,
+    type WhatsAppJoinRequestListParams as WhatsAppJoinRequestListParams,
+    type WhatsAppJoinRequestListResponse as WhatsAppJoinRequestListResponse,
+    type WhatsAppResolveJoinRequestsParams as WhatsAppResolveJoinRequestsParams,
+    type WhatsAppRemoveParticipantsParams as WhatsAppRemoveParticipantsParams,
+    type WhatsAppGroupMessageParams as WhatsAppGroupMessageParams,
+    type WhatsAppGroupPinParams as WhatsAppGroupPinParams,
+    type WhatsAppBlockedUserListParams as WhatsAppBlockedUserListParams,
+    type WhatsAppBlockedUserListResponse as WhatsAppBlockedUserListResponse,
+    type WhatsAppBlockUsersParams as WhatsAppBlockUsersParams,
+    type WhatsAppBusinessUsernameResponse as WhatsAppBusinessUsernameResponse,
+    type WhatsAppSetUsernameParams as WhatsAppSetUsernameParams,
+    type WhatsAppUsernameSuggestionsResponse as WhatsAppUsernameSuggestionsResponse,
+    type WhatsAppTemplateLibraryParams as WhatsAppTemplateLibraryParams,
+    type WhatsAppTemplateLibraryResponse as WhatsAppTemplateLibraryResponse,
+    type WhatsAppTemplateLibraryCreateParams as WhatsAppTemplateLibraryCreateParams,
+    type WhatsAppTemplateEditParams as WhatsAppTemplateEditParams,
+  };
+
   export {
     type WhatsappBulkSendResponse as WhatsappBulkSendResponse,
     type WhatsappListPhoneNumbersResponse as WhatsappListPhoneNumbersResponse,
@@ -259,14 +322,6 @@ export declare namespace Whatsapp {
     type TemplateRetrieveParams as TemplateRetrieveParams,
     type TemplateListParams as TemplateListParams,
     type TemplateDeleteParams as TemplateDeleteParams,
-  };
-
-  export {
-    Groups as Groups,
-    type GroupCreateResponse as GroupCreateResponse,
-    type GroupListResponse as GroupListResponse,
-    type GroupCreateParams as GroupCreateParams,
-    type GroupListParams as GroupListParams,
   };
 
   export {

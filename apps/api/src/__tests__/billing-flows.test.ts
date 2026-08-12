@@ -48,7 +48,6 @@ mock.module("@relayapi/db", () => {
 		organizationId: { name: "organizationId" },
 		toString: () => "apikey",
 	};
-	const usageRecords = { toString: () => "usage_records" };
 	const apiRequestLogs = { toString: () => "api_request_logs" };
 	const billingOutbox = {
 		id: { name: "id" },
@@ -63,6 +62,20 @@ mock.module("@relayapi/db", () => {
 		toString: () => "billing_outbox",
 	};
 	const stripeEvents = { toString: () => "stripe_events" };
+	const billingPeriods = {
+		id: { name: "id" },
+		organizationId: { name: "organizationId" },
+		toString: () => "billing_periods",
+	};
+	const billingOperations = {
+		id: { name: "id" },
+		organizationId: { name: "organizationId" },
+		toString: () => "billing_operations",
+	};
+	const dunningEvents = {
+		id: { name: "id" },
+		toString: () => "dunning_events",
+	};
 	const subscriptionCheckoutOperations = {
 		organizationId: { name: "organizationId" },
 		stripeCheckoutSessionId: { name: "stripeCheckoutSessionId" },
@@ -78,10 +91,12 @@ mock.module("@relayapi/db", () => {
 		organizationSubscriptions,
 		invoices,
 		apikey,
-		usageRecords,
 		apiRequestLogs,
 		billingOutbox,
 		stripeEvents,
+		billingPeriods,
+		billingOperations,
+		dunningEvents,
 		subscriptionCheckoutOperations,
 		whatsappPhoneNumbers,
 		eq: (col: unknown, val: unknown) => mockEq(col, val),
@@ -142,6 +157,35 @@ mock.module("../services/stripe", () => ({
 			},
 		};
 	},
+}));
+
+mock.module("../services/billing-periods", () => ({
+	openBillingPeriod: async () => "bp_flow_test",
+	splitBillingPeriod: async () => null,
+	shortenOpenBillingPeriod: async () => null,
+}));
+
+mock.module("../services/billing-operations", () => ({
+	processOverageBillingOperations: async () => 0,
+}));
+
+mock.module("../services/invoice-generator", () => ({
+	claimBillingPeriod: async () => true,
+	invoiceLineMatchesBillingPeriod: () => false,
+}));
+
+mock.module("../services/phone-number-operations", () => ({
+	wakePhoneAddonBillingReconciliation: async () => {},
+}));
+
+mock.module("../services/stripe-organization-lease", () => ({
+	claimStripeOrganizationFence: async (
+		_db: unknown,
+		organizationId: string,
+		ownerId: string,
+	) => ({ organizationId, ownerId, leaseToken: 1 }),
+	assertStripeOrganizationFence: async () => {},
+	releaseStripeOrganizationFence: async () => {},
 }));
 
 // ── Now import modules under test ──

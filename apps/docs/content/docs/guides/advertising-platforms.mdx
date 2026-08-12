@@ -1,0 +1,186 @@
+---
+title: Advertising Platforms
+description: Dedicated ad connections, implemented capabilities, and provider approval requirements.
+icon: BadgeDollarSign
+---
+
+## Advertising connections are separate
+
+Advertising authorization is deliberately separate from social publishing authorization. RelayAPI never reuses a Google publishing token for Google Ads, TikTok Login Kit for TikTok Ads, or X OAuth 2 credentials for X Ads. Dedicated ad connections preserve paid-media history independently; the temporary legacy Meta fallback retains its older publishing-account lifecycle until migrated.
+
+Use `GET /v1/ads/platforms` as the runtime source of truth. It reports each adapter's API version, required scopes, formats, objectives, and one of these states for every operation:
+
+- `supported`: implemented by RelayAPI; the provider can still require valid credentials and account permissions.
+- `requires_approval`: implemented only after the named provider product/app review is granted.
+- `unsupported`: RelayAPI rejects the operation before provider I/O or creation of a paid object.
+
+Do not infer write support from the presence of a platform name.
+
+## Current capability matrix
+
+| Platform | Discovery / sync | Analytics | Campaign create | Ad create | Boost | Mutation | Targeting / audiences |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Meta | Supported | Supported | Supported | Supported | Supported | Supported | Supported |
+| Google Ads | Supported | Supported | Supported (Search) | Supported (RSA) | Unsupported | Supported subset | Audience discovery supported; Audience Insights and Customer Match create/upload are approval/eligibility-gated |
+| TikTok Ads | Supported | Durable asynchronous report jobs | Supported | Supported | Supported with authorized Spark identity | Supported | Interest/DMP audience operations require separate approval |
+| LinkedIn Ads | Supported | Durable report reads after `r_ads_reporting` approval | Supported | Supported from an existing content reference | Requires approval and correct content role | Supported subset | Targeting facets and Matched Audiences are separately approval-gated |
+| Pinterest Ads | Supported | Supported | Supported | Supported | Supported | Supported | Generic targeting search unsupported; audience operations require production approval |
+| X Ads | Supported | Durable asynchronous report jobs | Supported | Supported only with a newly created campaign hierarchy | Supported | Supported subset | Generic targeting search unsupported; Tailored Audiences require approval |
+
+The five non-Meta adapters now implement the write operations marked supported. “Supported” means RelayAPI has a typed provider request, durable provider-effect/recovery plan, bounded provider I/O, and a truthful result mapping. It does not grant provider product access, fund an account, satisfy billing policy, or make an ineligible identity serve ads. RelayAPI rejects every unsupported field/operation before the provider boundary.
+
+## Advanced capability truth
+
+The advanced surface has a separate per-account authority endpoint:
+
+```http
+GET /v1/ads/accounts/{ad_account_id}/advanced-capabilities
+```
+
+Check it immediately before exposing an advanced operation. A stored provider
+probe may downgrade a coded capability or satisfy an approval gate on that
+exact connection, but it cannot promote a feature RelayAPI has not implemented.
+
+| Feature | Current implementation boundary |
+| --- | --- |
+| Durable report jobs | Supported for TikTok Ads and X Ads; LinkedIn is `requires_approval` until the exact connection has `r_ads_reporting`; Meta, Google, and Pinterest report jobs are unsupported |
+| Lead forms | `POST /v1/ads/lead-forms` links a provider form RelayAPI already observed and lists the local projection; it does not create or edit a provider form |
+| Lead inbox | Unsupported on every provider: this build has no verified lead webhook/retrieval ingestion path |
+| Lead promotion | Local-only conversion of an already-ingested encrypted lead into Relay Contacts; it does not fetch a provider lead and is not useful while lead ingestion is disabled |
+| Conversion rules/events | Unsupported on every provider because no verified delivery worker is enabled; requests fail before a durable event is accepted |
+| Messaging experiences, creative assets, catalogs, and product sets | Capability-gated **link/projection** routes for an existing provider resource or relationship; they do not create or mutate that provider resource |
+| Forecasts and keyword ideas | Unsupported on every provider in this build |
+
+RelayAPI's internal automation/contact `conversion_event` is a separate local
+event. It does not deliver an advertising conversion to Meta, Google, TikTok,
+LinkedIn, Pinterest, or X and must not be presented as ad-conversion support.
+
+`ADS_APPROVAL_REQUIRED` means the implementation exists but the exact
+connection lacks a required scope/program. `UNSUPPORTED_FEATURE` means the code
+path is intentionally unavailable and stale account metadata cannot enable it.
+
+## TikTok, X, and LinkedIn report jobs
+
+Creating a report is asynchronous and requires one `Idempotency-Key` for the
+logical report. Poll the job until it reaches `completed`, then paginate the
+normalized rows. The TypeScript SDK exposes this under `client.ads.advanced`.
+
+```typescript
+const capabilities = await client.ads.advanced.getAccountCapabilities('adacct_example');
+if (capabilities.capabilities.report_jobs.state !== 'supported') {
+  throw new Error(capabilities.capabilities.report_jobs.reason ?? 'Reports unavailable');
+}
+
+const report = await client.ads.advanced.createReport(
+  {
+    ad_account_id: 'adacct_example',
+    request: {
+      platform: 'tiktok',
+      report_type: 'BASIC',
+      data_level: 'AUCTION_CAMPAIGN',
+      dimensions: ['campaign_id'],
+      metrics: ['spend', 'impressions', 'clicks'],
+      start_date: '2026-08-01',
+      end_date: '2026-08-07',
+      output_format: 'CSV_DOWNLOAD',
+    },
+  },
+  { idempotencyKey: 'weekly-tiktok-report-2026-08-07' },
+);
+
+const current = await client.ads.advanced.retrieveReport(report.id);
+if (current.status === 'completed') {
+  const firstPage = await client.ads.advanced.listReportResults(report.id, {
+    limit: 100,
+  });
+  console.log(firstPage.data);
+}
+```
+
+Report states are `pending`, `submitting`, `provider_pending`, `downloading`,
+`completed`, `failed`, `unknown`, and `cancelled`. TikTok and X create provider
+jobs with POST requests that do not offer RelayAPI a correlation key. If a
+submission lease is lost after such a request may have been sent, RelayAPI
+marks the job `unknown` and does not automatically create a possible duplicate.
+LinkedIn reporting is a read-only GET and can be recovered safely.
+
+RelayAPI accepts TikTok's CSV download mode, bounded X result payloads, and
+LinkedIn analytics rows, normalizes them into `{dimensions, metrics}`, and
+stores provider artifacts in private object storage. Provider downloads are
+capped at 32 MiB and decompressed content at 64 MiB. Normalized rows and the
+private artifact expire after seven days; terminal job metadata remains for 90
+days. Read `result_expires_at` and consume results before expiry.
+
+## Provider-specific write contracts
+
+Non-Meta writes require the `provider_options.platform` discriminator to match the selected ad account. Do not copy settings between networks: the object hierarchy, money semantics, political-ad declarations, identity, and creative references are provider-specific.
+
+| Provider | Required campaign settings | Creative / boost authority | Important boundaries |
+| --- | --- | --- | --- |
+| Google Ads | `contains_eu_political_advertising`, manual CPC/max-clicks/max-conversions bidding, and 1–100 keyword/match-type pairs; optional network, geo, language, and CPC settings | Responsive Search Ad with 3–15 headlines, 2–4 descriptions, and 1–20 final URLs | Search/RSA only; campaign and ad group are created paused. Budgets may be daily or custom-period lifetime. Ad pause/resume/remove, campaign pause/resume/name, and same-period budget changes are supported. Social boost, RSA name, and generic targeting mutations are unsupported. |
+| LinkedIn Ads | Locale, include targeting clauses, associated organization/person URN, `political_intent`, cost type/unit cost; optional exclude clauses, format, and delivery flags | Existing `share`, `ugcPost`, or `adInMailContent` URN; the resulting Sponsored Creative URN is both the billable creative and RelayAPI ad authority | New campaign group/campaign is created non-serving (`DRAFT`, canonicalized locally as paused). Creative pause/resume/delete/name, campaign-group pause/resume/name, and sponsored-campaign daily/total budgets are supported. Boost remains approval/role-gated. Lead generation requires offsite delivery disabled; video-view campaigns require `SINGLE_VIDEO`. |
+| Pinterest Ads | Bid in micro-currency and billable event; optional bid strategy, placement group, auto-targeting, geo, and locale codes | Creative type plus existing Pin ID for standalone ads; boosts derive the selected post's Pin ID | Awareness, traffic, and video-view objectives. RelayAPI creates a paused non-CBO hierarchy before activation. Exactly one daily/lifetime budget; lifetime requires an end date; country or provider geo authority is required. Rename/status/budget/typed-targeting/archive mutations are supported. |
+| TikTok Ads | Provider location IDs, objective-compatible optimization/billing event, budget mode, advertiser-timezone schedule, and optional demographic/audience/bid fields | Authorized identity plus exactly one Spark item or uploaded video; non-Spark video also needs `display_name` | RelayAPI creates a disabled hierarchy before activation. Name/status/delete/budget/typed-targeting mutations are supported. Requires Marketing API advertiser and identity authorization at runtime. Analytics and interest/audience products remain separately gated. |
+| X Ads | Funding instrument, matching objective, placement, bid strategy, and explicit `allow_worldwide_targeting: true` | Existing Tweet ID; boost derives it from the selected post | RelayAPI creates a paused campaign/line item before the promoted-Tweet association and activation. Campaign name/status and association cancellation are supported. Existing-campaign attachment, association update, reversible ad-level pause/resume, campaign budget mutation, and generic targeting are rejected before provider I/O. |
+
+Google's EU political-ad field and LinkedIn's `political_intent` are mandatory user decisions. A dashboard or integration must present those choices explicitly and pass the user's selection; it must not silently default consent or infer political intent from the objective. LinkedIn serving still depends on provider review, billing readiness, account role, organization/member content role, and any conversion association required by the objective.
+
+Every mutation should carry one RelayAPI `Idempotency-Key`. Multi-object creation records each acknowledged provider ID before the next provider call; a retry recovers those IDs instead of creating a second campaign hierarchy.
+
+These adapters were verified with deterministic provider-contract transcripts, schema tests, and type checks. Live paid-provider canaries were not possible without approved apps, funded accounts, and authorized identities, so production enablement still requires operator-owned credential and policy canaries.
+
+## Create, rotate, inspect, and revoke connections
+
+For approved provider apps, the API supports a secure manual credential bootstrap. `POST /v1/ads/connections` first performs read-only provider account discovery. Only a credential that proves access to at least one ad account is encrypted and persisted, and those accounts are projected in the same database transaction. Secret fields are write-only and never appear in any response.
+
+`provider_principal_id` is the stable provider user/business principal represented by the credential, not an ad account ID. Use a provider-issued ID where available. A platform/principal/workspace tuple can have only one connection.
+
+```bash
+curl -X POST "https://api.relayapi.dev/v1/ads/connections" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "platform":"google",
+    "provider_principal_id":"google-user-123",
+    "access_token":"<write-only OAuth access token>",
+    "refresh_token":"<optional write-only refresh token>",
+    "access_token_expires_at":"2026-08-09T20:00:00Z",
+    "scopes":["https://www.googleapis.com/auth/adwords"],
+    "metadata":{"login_customer_id":"123-456-7890"}
+  }'
+```
+
+Rotate by sending a complete replacement credential set to `PUT /v1/ads/connections/{id}/credentials`. Rotation is compare-and-swap fenced, revalidates provider discovery before changing the stored credential, increments `credential_version`, and refreshes the local account projection. Automatic refresh-token exchange is not yet enabled; rotate before `access_token_expires_at`.
+
+Revoke with `DELETE /v1/ads/connections/{id}`. Revocation is idempotent, immediately shreds the encrypted access token, refresh token, and OAuth 1.0a token secret, and disables further sync/write authority for its accounts.
+
+## Inspect and rediscover accounts
+
+List credential metadata without returning tokens:
+
+```bash
+curl "https://api.relayapi.dev/v1/ads/connections" \
+  -H "Authorization: Bearer $RELAY_API_KEY"
+```
+
+After an approved provider OAuth exchange has supplied credentials and you have bootstrapped an active ad connection, rediscover the provider accounts it can access:
+
+```bash
+curl -X POST "https://api.relayapi.dev/v1/ads/accounts/discover" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data '{"ad_connection_id":"adconn_example"}'
+```
+
+OAuth start/callback provisioning is separate from this manual bootstrap. Publishing connections are never used as a fallback, except for the temporary legacy Meta migration path.
+
+## Provider setup gates
+
+- Meta: submit a Marketing API user access token with `ads_read` and `ads_management`. Dedicated Meta credentials use the same adapter as the temporary legacy fallback, but remain independently revocable.
+- Google: submit an OAuth access token with `https://www.googleapis.com/auth/adwords`; operators must configure `GOOGLE_ADS_DEVELOPER_TOKEN`. `metadata.login_customer_id` is optional for manager-account access. The customer ID must be authorized, and Customer Match eligibility is separate.
+- TikTok: submit a TikTok for Business Marketing API access token plus `metadata.advertiser_ids` from its OAuth exchange. Login Kit credentials do not qualify. `TIKTOK_ADS_APP_ID`/`TIKTOK_ADS_APP_SECRET` are needed by operators that run the upstream OAuth exchange; writes additionally require an authorized advertiser and creative identity.
+- LinkedIn: submit an approved Advertising API OAuth token with `rw_ads`. The credential must hold an eligible ad-account role (`ACCOUNT_BILLING_ADMIN`, `ACCOUNT_MANAGER`, `CAMPAIGN_MANAGER`, or `CREATIVE_MANAGER`) and the associated organization/member content role. Reporting additionally needs `r_ads_reporting`; Matched Audiences needs its separate product and `rw_dmp_segments` approval.
+- Pinterest: submit an OAuth token with both `ads:read` and `ads:write`. Trial/Sandbox does not cover the full audience surface; audience canaries need approved production access.
+- X: submit the OAuth 1.0a access token and `token_secret`; operators must configure `TWITTER_ADS_CONSUMER_KEY`/`TWITTER_ADS_CONSUMER_SECRET`. Ads API approval, an authorized account, and a funding instrument are mandatory; regenerate tokens after the app receives Ads access.
+
+Provider reads use bounded pagination and bounded response bodies. Rate limits and provider request identifiers are normalized into RelayAPI errors without logging access tokens, OAuth secrets, or uploaded audience data.

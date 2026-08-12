@@ -1,10 +1,28 @@
-let openapiSpec: Record<string, unknown> | null = null;
+import pinnedOpenApiSpec from "../../openapi.json";
 
-async function getSpec(): Promise<Record<string, unknown>> {
-	if (openapiSpec) return openapiSpec;
-	const res = await fetch("https://api.relayapi.dev/openapi.json");
-	openapiSpec = (await res.json()) as Record<string, unknown>;
-	return openapiSpec;
+const HTTP_METHODS = new Set([
+	"delete",
+	"get",
+	"head",
+	"options",
+	"patch",
+	"post",
+	"put",
+	"trace",
+]);
+
+function getSpec(): Record<string, unknown> {
+	if (
+		!pinnedOpenApiSpec ||
+		typeof pinnedOpenApiSpec !== "object" ||
+		!("paths" in pinnedOpenApiSpec) ||
+		typeof pinnedOpenApiSpec.paths !== "object" ||
+		pinnedOpenApiSpec.paths === null
+	) {
+		throw new Error("The pinned OpenAPI document is missing a paths object");
+	}
+
+	return pinnedOpenApiSpec as Record<string, unknown>;
 }
 
 interface OperationMatch {
@@ -13,22 +31,29 @@ interface OperationMatch {
 	operation: Record<string, unknown>;
 }
 
-export async function findOperationByTitle(
-	title: string,
-): Promise<OperationMatch | null> {
-	const spec = await getSpec();
+export function findOperationById(operationId: string): OperationMatch | null {
+	const spec = getSpec();
 	const paths = (spec.paths || {}) as Record<
 		string,
 		Record<string, Record<string, unknown>>
 	>;
 	for (const [path, methods] of Object.entries(paths)) {
 		for (const [method, operation] of Object.entries(methods)) {
-			if (operation?.summary === title) {
+			if (
+				HTTP_METHODS.has(method.toLowerCase()) &&
+				operation?.operationId === operationId
+			) {
 				return { path, method: method.toUpperCase(), operation };
 			}
 		}
 	}
 	return null;
+}
+
+export function operationIdFromPageUrl(url: string): string | null {
+	const segments = url.split("/").filter(Boolean);
+	const operationId = segments.at(-1);
+	return operationId ? decodeURIComponent(operationId) : null;
 }
 
 export function formatSchema(
@@ -179,7 +204,8 @@ export async function generateApiPageContent(page: {
 	url: string;
 }): Promise<string> {
 	const lines: string[] = [];
-	const op = await findOperationByTitle(page.data.title);
+	const operationId = operationIdFromPageUrl(page.url);
+	const op = operationId ? findOperationById(operationId) : null;
 
 	if (op) {
 		lines.push(`\`${op.method} https://api.relayapi.dev${op.path}\``);
@@ -339,7 +365,7 @@ export function generateLLMIndex(
 	const lines: string[] = [];
 	lines.push("# RelayAPI Documentation\n");
 	lines.push(
-		"> Unified social media API for posting to 21 platforms via a single API.\n",
+		"> Unified social media API for posting to 22 platforms via a single API.\n",
 	);
 	lines.push("- Documentation: https://docs.relayapi.dev");
 	lines.push(

@@ -65,6 +65,17 @@ GET /v1/queue/find-slot?strategy=smart&count=3
 - `conflicts` — number of existing posts near this time
 - `fallback` — true if no ideal slot was found
 
+## Workspace behavior
+
+Queue schedules are organization-wide shared definitions, but post-derived signals are workspace-authorized:
+
+- `GET /v1/queue/find-slot` calculates engagement and collisions across every post the calling credential may access.
+- An inaccessible `account_id` cannot contribute account preferences or historical engagement; the result may still fall back to organization queue slots.
+- Creating or updating a post with `scheduled_at: "auto"` narrows best-time history and collision checks to that post's exact workspace, including the organization-scoped (`workspace_id: null`) case.
+- Organization-scoped posts are visible to a credential with at least one workspace grant; a zero-grant credential contributes no operational post history.
+
+Best-time results are cached for up to six hours. The cache key includes the credential workspace scope, exact workspace, account, platform, and date filters, so one authorization boundary cannot reuse another boundary's analytics result.
+
 ## Per-Account Preferences
 
 Set scheduling preferences on individual accounts:

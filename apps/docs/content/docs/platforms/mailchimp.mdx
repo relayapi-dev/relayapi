@@ -62,6 +62,11 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 | `from_name` | string | No | Sender display name. |
 | `list_id` | string | No | Audience/list ID. If omitted, uses the first list in your account. |
 | `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
+| `schedule_time` | string | No | ISO 8601 delivery time. RelayAPI rounds forward to Mailchimp's next quarter-hour boundary; omission requests an immediate send. |
+
+Relay media attachments are not supported for Mailchimp campaigns. Include
+provider-hosted images in `content_html` instead of sending a post `media`
+array.
 
 ## Discovery
 

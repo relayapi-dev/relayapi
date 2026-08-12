@@ -1,10 +1,10 @@
 ---
 title: CLI
-description: Schedule and manage social media posts across 21 platforms from the terminal.
+description: Schedule and manage social media posts across 22 platforms from the terminal.
 icon: Terminal
 ---
 
-Schedule and manage social media posts across 21 platforms from the terminal. Built for developers and AI agents. Outputs JSON by default.
+Schedule and manage social media posts across 22 platforms from the terminal. Built for developers and AI agents. Outputs JSON by default.
 
 ## Setup
 
@@ -91,7 +91,7 @@ relay media upload ./banner.png
 | `relay posts update <id>` | Update a draft or scheduled post |
 | `relay posts delete <id>` | Delete a draft or scheduled post |
 | `relay posts retry <id>` | Retry failed targets on a post |
-| `relay posts unpublish <id>` | Unpublish from all platforms |
+| `relay posts unpublish <id>` | Attempt provider deletion for each published target; unsupported targets remain published with an error |
 
 ### Media
 
@@ -101,6 +101,19 @@ relay media upload ./banner.png
 | `relay media get <id>` | Get media details |
 | `relay media upload <filepath>` | Upload a file |
 | `relay media delete <id>` | Delete a media file |
+
+### Webhooks
+
+| Command | Description |
+|---------|-------------|
+| `relay webhooks list` | List customer webhook endpoints |
+| `relay webhooks create` | Create an endpoint and return its signing secret once |
+| `relay webhooks get <id>` | Find an endpoint by ID in the authorized endpoint list |
+| `relay webhooks update <id>` | Update an endpoint URL, events, or enabled state |
+| `relay webhooks delete <id>` | Delete an endpoint |
+| `relay webhooks test <id>` | Send a test delivery to an endpoint |
+| `relay webhooks logs` | List delivery and test attempts from the last seven days |
+| `relay webhooks rotate-secret <id>` | Replace an endpoint's signing secret and return it once |
 
 ## Usage
 
@@ -201,6 +214,26 @@ relay media upload ./photo.jpg
 }
 ```
 
+### Managing Webhooks
+
+Create an endpoint with one or more exact event names. RelayAPI generates the
+signing secret and returns it only in the create response:
+
+```bash
+relay webhooks create \
+  --url https://example.com/relay-events \
+  --events post.published,post.failed
+```
+
+Use `--workspace ws_abc123` to scope a new endpoint or filter `list` and `get`.
+The API has no single-endpoint read route, so `get` pages the authorized list
+until it finds the requested ID. Inspect recent attempts with either
+`relay webhooks logs` or its `relay webhooks deliveries` alias.
+
+The API does not currently expose manual redelivery, and the CLI does not run a
+local webhook listener or tunnel. Use `relay webhooks test <id>` to send a test
+request to a reachable endpoint.
+
 ## Output Formats
 
 **JSON (default)** — all commands output JSON, making the CLI suitable for scripting and AI agents:
@@ -257,7 +290,10 @@ You can also use environment variables, which override the config file:
 
 ## Supported Platforms
 
-Instagram, TikTok, X (Twitter), LinkedIn, Facebook, Threads, YouTube, Bluesky, Pinterest, Reddit, Snapchat, Telegram, Google Business Profile, WhatsApp, Mastodon, Discord, and SMS.
+Instagram, TikTok, X (Twitter), LinkedIn, Facebook, Threads, YouTube, Bluesky,
+Pinterest, Reddit, Snapchat, Telegram, Google Business Profile, WhatsApp,
+Mastodon, Discord, SMS (Twilio), Beehiiv, ConvertKit, Mailchimp, Listmonk, and
+Slack.
 
 ## Links
 

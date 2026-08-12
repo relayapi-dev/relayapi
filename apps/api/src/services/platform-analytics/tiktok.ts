@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -66,7 +70,9 @@ async function fetchAllVideos(
 
 	while (hasMore && page < maxPages) {
 		try {
-			const body: Record<string, unknown> = { max_count: Math.min(maxCount, 20) };
+			const body: Record<string, unknown> = {
+				max_count: Math.min(maxCount, 20),
+			};
 			if (cursor !== undefined) body.cursor = cursor;
 
 			const res = await fetchWithTimeout(`${BASE_URL}/video/list/`, {
@@ -76,11 +82,13 @@ async function fetchAllVideos(
 			});
 
 			if (!res.ok) {
-				console.error(`[tiktok-analytics] video/list error ${res.status}: ${await res.text()}`);
+				console.error(
+					`[tiktok-analytics] video/list error ${res.status}: ${await readProviderText(res)}`,
+				);
 				break;
 			}
 
-			const json = (await res.json()) as TikTokVideoListResponse;
+			const json = (await readProviderJson(res)) as TikTokVideoListResponse;
 			const videos = json.data?.videos ?? [];
 			allVideos.push(...videos);
 
@@ -113,11 +121,13 @@ async function fetchVideoDetails(
 		);
 
 		if (!res.ok) {
-			console.error(`[tiktok-analytics] video/query error ${res.status}: ${await res.text()}`);
+			console.error(
+				`[tiktok-analytics] video/query error ${res.status}: ${await readProviderText(res)}`,
+			);
 			return [];
 		}
 
-		const json = (await res.json()) as TikTokVideoQueryResponse;
+		const json = (await readProviderJson(res)) as TikTokVideoQueryResponse;
 		return json.data?.videos ?? [];
 	} catch (err) {
 		console.error("[tiktok-analytics] video/query fetch error:", err);
@@ -125,7 +135,10 @@ async function fetchVideoDetails(
 	}
 }
 
-function filterVideosByDateRange(videos: TikTokVideo[], dateRange: DateRange): TikTokVideo[] {
+function filterVideosByDateRange(
+	videos: TikTokVideo[],
+	dateRange: DateRange,
+): TikTokVideo[] {
 	const fromTs = new Date(`${dateRange.from}T00:00:00Z`).getTime() / 1000;
 	const toTs = new Date(`${dateRange.to}T23:59:59Z`).getTime() / 1000;
 
@@ -153,14 +166,16 @@ export const tiktokAnalytics: PlatformAnalyticsFetcher = {
 			);
 
 			if (res.ok) {
-				const json = (await res.json()) as TikTokUserInfo;
+				const json = (await readProviderJson(res)) as TikTokUserInfo;
 				const user = json.data?.user;
 				followers = user?.follower_count ?? null;
 				following = user?.following_count ?? null;
 				totalLikes = user?.likes_count ?? null;
 				videoCount = user?.video_count ?? null;
 			} else {
-				console.error(`[tiktok-analytics] user/info error ${res.status}: ${await res.text()}`);
+				console.error(
+					`[tiktok-analytics] user/info error ${res.status}: ${await readProviderText(res)}`,
+				);
 			}
 		} catch (err) {
 			console.error("[tiktok-analytics] user/info fetch error:", err);
@@ -194,7 +209,8 @@ export const tiktokAnalytics: PlatformAnalyticsFetcher = {
 		}
 
 		const engagement = likes + comments + shares;
-		const engagementRate = views > 0 ? Math.round((engagement / views) * 10000) / 100 : null;
+		const engagementRate =
+			views > 0 ? Math.round((engagement / views) * 10000) / 100 : null;
 
 		return {
 			followers,
@@ -223,7 +239,10 @@ export const tiktokAnalytics: PlatformAnalyticsFetcher = {
 	): Promise<PlatformPostMetrics[]> {
 		try {
 			const allVideos = await fetchAllVideos(accessToken, limit);
-			const rangeVideos = filterVideosByDateRange(allVideos, dateRange).slice(0, limit);
+			const rangeVideos = filterVideosByDateRange(allVideos, dateRange).slice(
+				0,
+				limit,
+			);
 
 			if (rangeVideos.length === 0) return [];
 
@@ -238,7 +257,8 @@ export const tiktokAnalytics: PlatformAnalyticsFetcher = {
 				const commentCount = v.comment_count ?? 0;
 				const shareCount = v.share_count ?? 0;
 				const totalEngagement = likeCount + commentCount + shareCount;
-				const engagementRate = viewCount > 0 ? (totalEngagement / viewCount) * 100 : 0;
+				const engagementRate =
+					viewCount > 0 ? (totalEngagement / viewCount) * 100 : 0;
 
 				return {
 					platform_post_id: v.id,
@@ -290,12 +310,18 @@ export const tiktokAnalytics: PlatformAnalyticsFetcher = {
 				rangeVideos.map((v) => v.id),
 			);
 
-			const dailyMap = new Map<string, { impressions: number; engagement: number }>();
+			const dailyMap = new Map<
+				string,
+				{ impressions: number; engagement: number }
+			>();
 
 			for (const v of details) {
 				if (!v.create_time) continue;
 				const date = new Date(v.create_time * 1000).toISOString().slice(0, 10);
-				const existing = dailyMap.get(date) || { impressions: 0, engagement: 0 };
+				const existing = dailyMap.get(date) || {
+					impressions: 0,
+					engagement: 0,
+				};
 				existing.impressions += v.view_count ?? 0;
 				existing.engagement +=
 					(v.like_count ?? 0) + (v.comment_count ?? 0) + (v.share_count ?? 0);

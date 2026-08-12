@@ -1,62 +1,151 @@
 ---
 title: Error Handling
-description: Understanding and handling API errors.
+description: Handle RelayAPI errors, request limits, idempotent retries, and uncertain provider outcomes safely.
 icon: TriangleAlert
 ---
 
-## Error Format
+## Error envelope
 
-All errors follow a consistent format:
+API errors use one JSON envelope:
 
 ```json
 {
   "error": {
     "code": "VALIDATION_ERROR",
-    "message": "Content is required",
+    "message": "Request validation failed",
     "details": {
-      "field": "content",
-      "issue": "required"
+      "issues": [
+        {
+          "code": "too_small",
+          "message": "Content is required",
+          "path": ["content"]
+        }
+      ]
     }
   }
 }
 ```
 
-## HTTP Status Codes
+`details` is optional. Branch on `error.code`; do not parse the human-readable message.
 
-| Code | Description |
-|------|-------------|
-| `400` | Bad Request — Invalid parameters or request body |
-| `401` | Unauthorized — Missing or invalid API key |
-| `403` | Forbidden — Insufficient permissions |
-| `404` | Not Found — Resource doesn't exist |
-| `409` | Conflict — Resource already exists |
-| `422` | Unprocessable — Valid request but cannot be processed |
-| `429` | Rate Limited — Too many requests |
-| `500` | Internal Error — Something went wrong on our end |
+## HTTP status codes
 
-## Error Codes
+| Status | Meaning | Typical action |
+|--------|---------|----------------|
+| `400` | Malformed JSON/form data or invalid request semantics | Correct the request; do not retry unchanged |
+| `401` | Missing, invalid, expired, or disabled API key | Replace or reactivate the credential |
+| `403` | Permission or workspace access denied | Correct permissions/workspace grants |
+| `404` | Resource is absent or belongs to another organization | Correct the resource ID |
+| `409` | State, idempotency, or concurrent-operation conflict | Inspect `error.code` and `Retry-After` |
+| `413` | Request envelope exceeded its byte limit | Send a smaller request or use the media upload flow |
+| `415` | Unsupported media type or compressed buffered body | Correct `Content-Type`/`Content-Encoding` |
+| `422` | Schema validation or an explicitly gated/unsupported provider capability | Correct `details.issues`, obtain the named approval, or stop offering the unsupported operation |
+| `429` | Rate limit exceeded | Wait for `Retry-After`, then retry with jitter |
+| `500` | Internal failure | Retry reads; retry mutations only with the original idempotency key |
+| `502` | Upstream provider failure | Inspect whether the provider outcome is known before retrying |
+| `503` | Temporary authority, billing, or service condition | Respect `Retry-After` and retry safely |
+| `504` | Upstream timeout | Retry reads; reconcile mutations before replaying them |
 
-| Code | Description |
-|------|-------------|
-| `VALIDATION_ERROR` | Request body or parameters failed validation |
-| `AUTHENTICATION_ERROR` | API key is missing, invalid, or expired |
-| `AUTHORIZATION_ERROR` | API key lacks required permissions |
-| `NOT_FOUND` | The requested resource was not found |
-| `RATE_LIMITED` | Request rate limit exceeded |
-| `PLATFORM_ERROR` | The target platform returned an error |
-| `PUBLISH_FAILED` | Post could not be published to one or more platforms |
+## Common error codes
 
-## Retry Strategy
+| Code | Meaning |
+|------|---------|
+| `BAD_REQUEST` | The request is semantically invalid |
+| `MALFORMED_JSON` | JSON could not be decoded |
+| `MALFORMED_FORM` | Multipart/form data could not be decoded |
+| `VALIDATION_ERROR` | A body, path, or query field failed schema validation |
+| `UNAUTHORIZED` | Authentication is missing or invalid |
+| `FORBIDDEN` | The credential lacks a required permission |
+| `WORKSPACE_ACCESS_DENIED` | The credential cannot access the resource's workspace |
+| `NOT_FOUND`, `ACCOUNT_NOT_FOUND`, `POST_NOT_FOUND` | The requested resource was not found in the authenticated tenant |
+| `PAYLOAD_TOO_LARGE` | The route's declared or streamed byte limit was exceeded |
+| `UNSUPPORTED_MEDIA_TYPE` | `Content-Type` is unsupported for that route |
+| `UNSUPPORTED_CONTENT_ENCODING` | A buffered authenticated request used a non-identity encoding |
+| `RATE_LIMITED` | The request exceeded a rate limit |
+| `IDEMPOTENCY_IN_PROGRESS` | Another request with the same key is still executing |
+| `IDEMPOTENCY_KEY_REUSED` | The same key was used with different route/body bytes |
+| `IDEMPOTENCY_OUTCOME_UNKNOWN` | The original mutation may have reached an external provider and needs reconciliation |
+| `PROVIDER_OUTCOME_UNKNOWN`, `PROVIDER_RESPONSE_INVALID` | A provider request may have been sent, or its nominally successful response lacked the documented operation-specific proof; stop automatic replay and reconcile the durable operation |
+| `SOCIAL_MUTATION_IN_PROGRESS` | The same provider object already has an active or ambiguous published-edit/social/WhatsApp mutation |
+| `PROVIDER_POST_ID_CHANGED` | A published-edit optimistic-concurrency fence no longer matches the target's current provider ID |
+| `PUBLISHED_EDIT_UNSUPPORTED`, `MESSAGE_EDIT_UNSUPPORTED`, `COMMENT_EDIT_UNSUPPORTED`, `READ_RECEIPT_UNSUPPORTED` | The requested platform has no verified provider contract for that social operation |
+| `DISCORD_THREAD_CONTEXT_MISSING` | A Discord forum/media-thread edit lacks the exact durable thread ID, so RelayAPI refused to guess a target |
+| `MODERATION_ACTION_UNSUPPORTED`, `ACTION_UNSUPPORTED` | The action name is invalid for that exact provider; use the documented platform matrix |
+| `WHATSAPP_GROUPS_UNAVAILABLE` | The exact connected WhatsApp phone number did not pass the feature-specific Groups read probe; this does not diagnose a particular Meta eligibility condition |
+| `WHATSAPP_PROVIDER_RESPONSE_INVALID` | WhatsApp returned HTTP success without the operation-specific success flag or durable resource/message ID; the remote outcome is treated as unknown and is not replayed automatically |
+| `ADS_APPROVAL_REQUIRED` | The advanced ad implementation exists, but this connection lacks the named provider program/scope |
+| `UNSUPPORTED_FEATURE` | RelayAPI has no enabled implementation for this provider/operation; stale capability metadata cannot enable it |
+| `UPLOAD_METADATA_MISMATCH` | A completed upload's stored size or MIME type does not match its declared session |
+| `MEDIA_PROCESSING_UNAVAILABLE` | The optional media-processing Container/Workflow is disabled for this deployment; the original upload remains usable |
+| `MEDIA_PROCESSING_TYPE_UNSUPPORTED` | The requested explicit processing kind does not accept this original media type; a custom cover requires an image or video |
+| `INTERNAL_ERROR` | RelayAPI intentionally hid internal failure details |
 
-For `429` and `500` errors, implement exponential backoff:
+Provider-specific failures use a specific code where possible. Treat the HTTP status and the documented provider disposition as authoritative rather than assuming every provider error is safe to replay.
+
+## Buffered request limits
+
+RelayAPI checks both a trustworthy `Content-Length` and the bytes received from an unknown-length or chunked body.
+
+| Request | Limit | Notes |
+|---------|-------|-------|
+| Authenticated `application/json` or `*+json` on `POST`, `PUT`, `PATCH`, or `DELETE` | 4 MiB | Non-identity `Content-Encoding` is rejected with `415` |
+| `POST /v1/posts/bulk-csv` multipart envelope | 2 MiB | The CSV file itself remains limited to 1 MiB and 500 rows |
+| `POST /v1/ideas/{id}/media` multipart envelope | 3 MiB | The uploaded file itself remains limited to 2 MiB |
+| `POST /v1/media/uploads` file bytes | 200 MiB | Direct to object storage; multipart above 64 MiB, so bytes do not traverse the Worker JSON buffer |
+| `POST /v1/media/upload` file bytes | 50 MiB | Streamed through the Worker with an independent counting limit |
+
+An inaccurate or omitted `Content-Length` does not bypass the limit. Do not compress buffered authenticated JSON or the two multipart envelopes; send `Content-Encoding: identity` or omit the header.
+
+## Upstream response containment
+
+RelayAPI independently caps publisher-provider JSON and diagnostic text that it materializes inside the API Worker at 2 MiB. An oversized or malformed provider response fails closed as an upstream/provider error; it is not a client request-envelope `413`. Streamed provider media keeps its route-specific streaming and byte limits.
+
+## Safe retries
+
+Reads can normally retry `429`, `502`, `503`, and `504` with exponential backoff and jitter. Always honor `Retry-After` when present.
+
+Mutations require more care:
+
+1. Generate one `Idempotency-Key` for the logical operation.
+2. Reuse the same key and exact body bytes for every attempt.
+3. Never switch to a new key merely because a request timed out or returned `500`/`502`.
+4. If RelayAPI returns `IDEMPOTENCY_IN_PROGRESS`, wait for `Retry-After` and retry the same request.
+5. If it returns `IDEMPOTENCY_OUTCOME_UNKNOWN`, stop automatic retries and reconcile the resource/provider state.
+
+The same rule applies to asynchronous operation resources whose status becomes
+`unknown`. In particular, a TikTok/X ad-report submission or provider-backed
+social mutation may have crossed the provider boundary before a response was
+lost. Poll the existing operation and use its documented recovery path; do not
+create a second logical operation with a new idempotency key.
+
+Published edits, social actions, and WhatsApp administration return their
+durable operation even when its embedded `status` is `failed` or `unknown`.
+Inspect that field; an HTTP success/acceptance response means the operation
+resource was returned, not necessarily that the provider mutation completed.
 
 ```typescript
-async function withRetry(fn: () => Promise<Response>, maxRetries = 3) {
-  for (let i = 0; i < maxRetries; i++) {
-    const response = await fn();
-    if (response.status !== 429 && response.status < 500) return response;
-    await new Promise((r) => setTimeout(r, Math.pow(2, i) * 1000));
+async function retryRead(url: string, apiKey: string, attempts = 4) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+
+    if (![429, 502, 503, 504].includes(response.status)) return response;
+    if (attempt === attempts - 1) return response;
+
+    const retryAfter = Number(response.headers.get('Retry-After'));
+    const baseMs = Number.isFinite(retryAfter)
+      ? retryAfter * 1000
+      : Math.min(30_000, 500 * 2 ** attempt);
+    await new Promise((resolve) =>
+      setTimeout(resolve, baseMs + Math.random() * 250),
+    );
   }
-  throw new Error("Max retries exceeded");
+
+  throw new Error('unreachable');
 }
 ```
+
+## Logging
+
+Log the HTTP status, `error.code`, request ID/correlation headers, route, and your own idempotency key. Do not log bearer tokens, OAuth codes, webhook URLs, provider tokens, raw credentials, or sensitive request bodies.

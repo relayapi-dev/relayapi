@@ -31,7 +31,14 @@ import type { Idea, IdeaComment, IdeaGroup, IdeaMedia, IdeaTag } from "./types";
 
 interface ActivityEntry {
 	id: string;
-	actor_id: string | null;
+	actor_id: string;
+	actor: {
+		id: string;
+		kind: "member" | "service";
+		user_id: string | null;
+		name: string | null;
+		image: string | null;
+	} | null;
 	action: string;
 	created_at: string;
 }
@@ -1081,13 +1088,15 @@ export function IdeaDetailDialog({
 													className="flex items-start gap-2 text-xs"
 												>
 													<div className="size-5 rounded-full bg-muted flex items-center justify-center text-[9px] font-medium text-muted-foreground shrink-0 mt-0.5">
-														{entry.actor_id
-															? entry.actor_id.slice(0, 2).toUpperCase()
-															: "–"}
+														{(entry.actor?.name ?? entry.actor_id)
+															.slice(0, 2)
+															.toUpperCase()}
 													</div>
 													<div className="flex-1">
 														<span className="text-foreground">
-															{entry.action}
+															{entry.actor?.name
+																? `${entry.actor.name} ${entry.action}`
+																: entry.action}
 														</span>
 														<span className="ml-2 text-muted-foreground">
 															{new Date(entry.created_at).toLocaleDateString(

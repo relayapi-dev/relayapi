@@ -14,7 +14,7 @@ description: Send newsletters via your self-hosted ListMonk instance using Relay
 | Analytics | No |
 
 <Callout type="warn">
-Your ListMonk instance must be accessible via **HTTPS** on a public URL. Private/internal URLs are blocked for security.
+Your Listmonk instance must be accessible through a public **HTTPS** URL. Credentials in the URL, query strings, fragments, private/reserved destinations, and redirects are rejected.
 </Callout>
 
 ## Before You Start
@@ -33,6 +33,8 @@ curl -X POST https://api.relayapi.dev/v1/connect/listmonk \
     "password": "your-password"
   }'
 ```
+
+The connector canonicalizes the verified instance URL and stores it as the account's authoritative `platform_account_id`. Every publisher call derives its base URL from that immutable value, resolves only public destinations, rejects redirects, applies a 30-second through-body timeout, and limits the response to 512 KiB. Reconnect to change the instance; `target_options` and generic account metadata cannot redirect the stored Basic credential.
 
 ## Send a Campaign
 
@@ -59,9 +61,13 @@ curl -X POST https://api.relayapi.dev/v1/posts \
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `subject` | string | No | Email subject line. Falls back to first line of content. |
-| `list_id` | number | No | ListMonk list ID to send to. If omitted, uses the first list. |
-| `template_id` | number | No | ListMonk template ID. |
+| `list_id` | positive integer | No | Listmonk list ID to send to. If omitted, uses the first list. Strings, zero, and negative values are rejected. |
+| `template_id` | positive integer | No | Listmonk template ID. Strings, zero, and negative values are rejected. |
 | `content_html` | string | No | Full HTML body. If omitted, plain text is auto-wrapped. |
+
+Relay media attachments are not supported for Listmonk campaigns. Include
+provider-hosted images in `content_html` instead of sending a post `media`
+array.
 
 ## Discovery
 
@@ -72,9 +78,11 @@ GET /v1/accounts/{id}/lists      # Returns ListMonk subscriber lists
 GET /v1/accounts/{id}/templates  # Returns ListMonk email templates
 ```
 
+Both discovery endpoints enforce the account's workspace boundary before contacting Listmonk and return `403` for an existing account outside the calling credential's grants. Provider JSON is bounded to 512 KiB.
+
 ## Automations
 
-Listmonk is self-hosted — the instance URL + API user live on `socialAccounts.metadata` as `instance_url` / `api_user`. Auth is Basic (user + API token).
+Listmonk is self-hosted. The canonical instance base is the connected account's immutable provider identity, while the Basic credential is encrypted in RelayAPI's account-credential store. Public metadata is descriptive and cannot retarget the connection.
 
 ### Send nodes (destination-only)
 

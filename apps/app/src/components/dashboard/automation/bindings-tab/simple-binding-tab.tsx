@@ -1,7 +1,5 @@
 // Shared layout for "simple" per-account bindings (default_reply,
-// welcome_message) — Plan 3 Unit C3, Task T2. Stubbed bindings (main_menu,
-// conversation_starter, ice_breaker) live in their own files because they
-// carry rich nested-config editors.
+// welcome_message) — the only binding surfaces executed by the runtime.
 //
 // Responsibilities:
 //   - Load the current binding for `(social_account_id, binding_type)` via the
@@ -17,11 +15,7 @@ import { Loader2, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AutomationPicker } from "./automation-picker";
-import type {
-	BindingChannel,
-	BindingStatus,
-	BindingType,
-} from "./types";
+import type { BindingChannel, BindingStatus, BindingType } from "./types";
 
 interface BindingRow {
 	id: string;
@@ -72,16 +66,6 @@ function statusBadge(status: string): { label: string; cls: string } {
 				label: "paused",
 				cls: "border-amber-500/30 bg-amber-500/10 text-amber-600",
 			};
-		case "pending_sync":
-			return {
-				label: "syncing",
-				cls: "border-sky-500/30 bg-sky-500/10 text-sky-600",
-			};
-		case "sync_failed":
-			return {
-				label: "sync failed",
-				cls: "border-destructive/30 bg-destructive/10 text-destructive",
-			};
 		default:
 			return {
 				label: status,
@@ -114,26 +98,19 @@ export function SimpleAutomationBindingTab({
 		setLoading(true);
 		setError(null);
 		try {
-			const url = new URL(
-				"/api/automation-bindings",
-				window.location.origin,
-			);
+			const url = new URL("/api/automation-bindings", window.location.origin);
 			url.searchParams.set("social_account_id", socialAccountId);
 			url.searchParams.set("binding_type", bindingType);
 			const res = await fetch(url.toString(), { credentials: "same-origin" });
 			if (!res.ok) {
 				const body = await res.json().catch(() => null);
 				setError(
-					body?.error?.message ||
-						body?.message ||
-						`Error ${res.status}`,
+					body?.error?.message || body?.message || `Error ${res.status}`,
 				);
 				return;
 			}
 			const json = (await res.json()) as ListResponse;
-			const row = (json.data ?? []).find(
-				(r) => r.binding_type === bindingType,
-			);
+			const row = (json.data ?? []).find((r) => r.binding_type === bindingType);
 			setBinding(row ?? null);
 		} catch {
 			setError("Network connection lost.");
@@ -184,22 +161,17 @@ export function SimpleAutomationBindingTab({
 			try {
 				if (binding) {
 					// Update existing binding's automation_id.
-					const res = await fetch(
-						`/api/automation-bindings/${binding.id}`,
-						{
-							method: "PATCH",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ automation_id: automationId }),
-						},
-					);
+					const res = await fetch(`/api/automation-bindings/${binding.id}`, {
+						method: "PATCH",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ automation_id: automationId }),
+					});
 					if (!res.ok) {
 						const body = await res.json().catch(() => null);
 						setBanner({
 							type: "error",
 							message:
-								body?.error?.message ||
-								body?.message ||
-								`Error ${res.status}`,
+								body?.error?.message || body?.message || `Error ${res.status}`,
 						});
 						return;
 					}
@@ -220,9 +192,7 @@ export function SimpleAutomationBindingTab({
 						setBanner({
 							type: "error",
 							message:
-								body?.error?.message ||
-								body?.message ||
-								`Error ${res.status}`,
+								body?.error?.message || body?.message || `Error ${res.status}`,
 						});
 						return;
 					}
@@ -257,9 +227,7 @@ export function SimpleAutomationBindingTab({
 				setBanner({
 					type: "error",
 					message:
-						body?.error?.message ||
-						body?.message ||
-						`Error ${res.status}`,
+						body?.error?.message || body?.message || `Error ${res.status}`,
 				});
 			}
 		} catch {
@@ -286,9 +254,7 @@ export function SimpleAutomationBindingTab({
 				setBanner({
 					type: "error",
 					message:
-						body?.error?.message ||
-						body?.message ||
-						`Error ${res.status}`,
+						body?.error?.message || body?.message || `Error ${res.status}`,
 				});
 				return;
 			}
@@ -425,9 +391,7 @@ export function SimpleAutomationBindingTab({
 				</div>
 			) : (
 				<div className="rounded-md border border-dashed border-border bg-card/30 p-4">
-					<p className="text-xs text-muted-foreground">
-						Not configured.
-					</p>
+					<p className="text-xs text-muted-foreground">Not configured.</p>
 					<div className="mt-3">
 						<span className="block text-[11px] font-medium text-muted-foreground">
 							Bind an automation

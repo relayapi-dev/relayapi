@@ -3,7 +3,7 @@ title: OpenClaw
 description: Install the RelayAPI skill for OpenClaw to manage social media posts from your AI assistant.
 ---
 
-The RelayAPI skill for [OpenClaw](https://openclawlab.com) lets your AI assistant create posts, manage accounts, upload media, and track analytics across 21 platforms.
+The RelayAPI skill for [OpenClaw](https://openclawlab.com) lets your AI assistant create posts, manage accounts, upload media, and work with the capabilities available across 22 publishing channels.
 
 ## Quick Reference
 
@@ -64,7 +64,7 @@ Or set it as an environment variable:
 export RELAYAPI_API_KEY="rlay_live_your_key_here"
 ```
 
-Get your key from [relayapi.dev](https://relayapi.dev/signup) under **Settings > API Keys**.
+Create a key under **Settings > API Keys** in an existing hosted or self-hosted dashboard. Hosted signup is currently invite-only; [request access](mailto:support@relayapi.dev?subject=RelayAPI%20early%20access) if needed.
 
 ### 3. Verify
 
@@ -107,7 +107,7 @@ The skill provides OpenClaw with full documentation of the RelayAPI, including:
 - **Authentication** — Bearer token via `RELAYAPI_API_KEY`
 - **Post creation** — Content, scheduling, multi-platform targeting, media attachments
 - **Account management** — List, connect, disconnect, health checks
-- **Media uploads** — Pre-signed URL upload flow
+- **Media uploads** — Pre-sign, create-only PUT with every returned header, and mandatory confirmation flow
 - **Webhooks** — Registration and HMAC-SHA256 signature verification
 - **Validation tools** — Pre-publish content validation
 - **Usage and billing** — Check API call limits

@@ -1,19 +1,16 @@
 ---
 import Container from "./Container.astro";
-import { testimonials } from "./data";
+import { productProofs } from "./data";
 ---
 
-<!-- Mirrors cursor.com "The new way to build software." testimonial grid:
-     a #f7f7f4 band with subtle-fill #f2f1ed rounded cards, 10px gaps, a
-     centered 36px regular-weight heading, and 1 → 2 (md) → 3 (lg) columns.
-     Card values transcribed from the live site's computed styles. -->
+<!-- Product facts replace the original fictional placeholder testimonials. -->
 <section class="bg-[#f7f7f4] text-[#26251e]">
 	<Container class="py-[clamp(3.5rem,8vw,4.25rem)]">
 		<h2
 			data-reveal
 			class="mx-auto text-balance text-center text-[clamp(1.875rem,3.4vw,2.375rem)] font-normal leading-[1.2] tracking-[-0.02em] text-[#26251e]"
 		>
-			The new way to post.
+			What ships today.
 		</h2>
 
 		<div
@@ -21,29 +18,17 @@ import { testimonials } from "./data";
 			class="mt-14 grid grid-cols-1 items-stretch gap-[0.625rem] md:mt-20 md:grid-cols-2 lg:grid-cols-3"
 		>
 			{
-				testimonials.map((t) => (
+				productProofs.map((proof) => (
 					<div class="flex h-full min-h-[11.25rem] flex-col rounded-[0.25rem] bg-[#f2f1ed] px-[1.125rem] pt-4 pb-[1.125rem]">
-						<figure class="flex h-full flex-col">
-							<p class="text-[1rem] font-normal leading-[1.5] text-[#26251e]">
-								{`“${t.quote}”`}
-							</p>
-							<figcaption class="mt-auto flex items-center gap-3 pt-20">
-								<span
-									style={`--avatar-bg:${t.avatarBg}`}
-									class="flex size-10 shrink-0 items-center justify-center rounded-full bg-[var(--avatar-bg)] text-[0.9375rem] font-semibold text-[#26251e] ring-1 ring-inset ring-black/[0.06]"
-								>
-									{t.initial}
-								</span>
-								<div class="min-w-0 leading-[1.5]">
-									<span class="block truncate text-[0.875rem] font-normal text-[#26251e]">
-										{t.name}
-									</span>
-									<span class="block text-[0.875rem] font-normal text-[#26251e]/60">
-										{t.role}
-									</span>
-								</div>
-							</figcaption>
-						</figure>
+						<span class="w-fit rounded-full bg-[#e4e1d9] px-2.5 py-1 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[#6e6a62]">
+							{proof.status}
+						</span>
+						<h3 class="mt-5 text-[1rem] font-semibold leading-[1.4] text-[#26251e]">
+							{proof.title}
+						</h3>
+						<p class="mt-3 text-[0.9375rem] leading-[1.55] text-[#26251e]/70">
+							{proof.detail}
+						</p>
 					</div>
 				))
 			}

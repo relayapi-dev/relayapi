@@ -18,7 +18,7 @@
 import { automationRuns, automations, type Database } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../../schemas/automation-graph";
-import { runLoop, updateRunOptimistic } from "./runner";
+import { runLoop, transitionRunTerminal, updateRunOptimistic } from "./runner";
 
 /**
  * Outcome of attempting to resume a waiting run on an interactive payload:
@@ -107,16 +107,22 @@ export async function resumeWaitingRunOnInteractive(
 		// graceful completion for unrouted ports. Guard on revision so a
 		// concurrent input_timeout fire (or a duplicate inbound payload) can't
 		// double-advance: the loser sees the CAS fail and bails.
-		const ok = await updateRunOptimistic(db, runId, run.revision, {
-			status: "completed",
-			exitReason: "completed",
-			completedAt: new Date(),
-			context: updatedContext,
-			currentPortKey: port.key,
-			waitingFor: null,
-			waitingUntil: null,
-		});
-		return ok ? "resumed" : "race";
+		const ok = await transitionRunTerminal(
+			db,
+			runId,
+			run.revision,
+			run.automationId,
+			"completed",
+			"completed",
+			{
+				context: updatedContext,
+				currentPortKey: port.key,
+				waitingFor: null,
+				waitingUntil: null,
+			},
+		);
+		if (!ok) return "race";
+		return "resumed";
 	}
 
 	const ok = await updateRunOptimistic(db, runId, run.revision, {
@@ -131,6 +137,6 @@ export async function resumeWaitingRunOnInteractive(
 
 	// Mirror enrollContact / resumeWaitingRunOnInput: ensure handlers can reach
 	// the live `db` binding via env even when the caller didn't populate it.
-	await runLoop(db, runId, { db, ...env });
+	await runLoop(db, runId, { db, ...env }, { refreshContactContext: true });
 	return "resumed";
 }

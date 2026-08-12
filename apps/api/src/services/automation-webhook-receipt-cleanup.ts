@@ -19,7 +19,10 @@ export async function cleanupAutomationWebhookReceipts(
 			.select({ id: automationWebhookReceipts.id })
 			.from(automationWebhookReceipts)
 			.where(lt(automationWebhookReceipts.expiresAt, now))
-			.orderBy(automationWebhookReceipts.expiresAt)
+			.orderBy(
+				automationWebhookReceipts.expiresAt,
+				automationWebhookReceipts.id,
+			)
 			.limit(boundedLimit);
 		if (expired.length === 0) break;
 

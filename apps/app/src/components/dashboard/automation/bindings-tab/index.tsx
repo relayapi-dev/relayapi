@@ -1,20 +1,18 @@
 // Binding tabs for the per-account detail page — Plan 3 Unit C3, Task T1.
 //
 // Renders the tab bar filtered by channel (spec §13.5) and dispatches to the
-// per-tab editors (T2-T5). `initialTab` is read from the URL by the parent
+// two live per-tab editors. `initialTab` is read from the URL by the parent
 // page; `onTabChange` lets the parent mirror the active tab back into the URL
 // without triggering a navigation.
 
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { ConversationStarterTab } from "./conversation-starter";
 import { DefaultReplyTab } from "./default-reply";
-import { IceBreakerTab } from "./ice-breaker";
-import { MainMenuTab } from "./main-menu";
+import { ProviderAutomationBindingTab } from "./provider-binding-tab";
 import {
+	type BindingChannel,
 	bindingTabsForChannel,
 	findBindingTab,
-	type BindingChannel,
 } from "./types";
 import { WelcomeMessageTab } from "./welcome-message";
 
@@ -83,11 +81,6 @@ export function BindingsTab({ socialAccount, initialTab, onTabChange }: Props) {
 						)}
 					>
 						{tab.label}
-						{tab.stubbed && (
-							<span className="ml-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0 text-[9px] font-medium text-amber-600">
-								v1.1
-							</span>
-						)}
 					</button>
 				))}
 			</div>
@@ -105,23 +98,27 @@ export function BindingsTab({ socialAccount, initialTab, onTabChange }: Props) {
 						channel={socialAccount.channel}
 					/>
 				)}
-				{activeKey === "main-menu" && (
-					(socialAccount.channel === "facebook" ||
-						socialAccount.channel === "instagram") && (
-						<MainMenuTab
-							socialAccountId={socialAccount.id}
-							channel={socialAccount.channel}
-						/>
-					)
+				{activeKey === "get-started" && (
+					<ProviderAutomationBindingTab
+						socialAccountId={socialAccount.id}
+						channel={socialAccount.channel}
+						bindingType="get_started"
+					/>
 				)}
-				{activeKey === "conversation-starter" &&
-					socialAccount.channel === "facebook" && (
-						<ConversationStarterTab socialAccountId={socialAccount.id} />
-					)}
-				{activeKey === "ice-breaker" &&
-					socialAccount.channel === "whatsapp" && (
-						<IceBreakerTab socialAccountId={socialAccount.id} />
-					)}
+				{activeKey === "main-menu" && (
+					<ProviderAutomationBindingTab
+						socialAccountId={socialAccount.id}
+						channel={socialAccount.channel}
+						bindingType="main_menu"
+					/>
+				)}
+				{activeKey === "ice-breakers" && (
+					<ProviderAutomationBindingTab
+						socialAccountId={socialAccount.id}
+						channel={socialAccount.channel}
+						bindingType="ice_breaker"
+					/>
+				)}
 			</div>
 		</div>
 	);

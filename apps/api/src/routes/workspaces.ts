@@ -6,8 +6,9 @@ import {
 	workspaceErasureSteps,
 	workspaces,
 } from "@relayapi/db";
-import { and, eq, ilike, inArray, ne, type SQL, sql } from "drizzle-orm";
+import { and, eq, ilike, inArray, ne, or, type SQL, sql } from "drizzle-orm";
 import type { Context } from "hono";
+import { INVALID_CURSOR_BODY } from "../lib/pagination-cursor";
 import {
 	assertAllWorkspaceScope,
 	assertWriteAccess,
@@ -24,6 +25,7 @@ import {
 	WorkspaceListResponse,
 	WorkspaceResponse,
 } from "../schemas/workspaces";
+import { findActiveErasureHold } from "../services/privacy-retention-policy";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
@@ -47,6 +49,18 @@ const WorkspaceConflictResponse = {
 	content: { "application/json": { schema: ErrorResponse } },
 } as const;
 
+export function workspaceSlugFromName(name: string): string {
+	const slug = name
+		.normalize("NFKD")
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 100);
+	return (
+		slug || `workspace-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`
+	);
+}
+
 const listWorkspaces = createRoute({
 	operationId: "listWorkspaces",
 	method: "get",
@@ -59,6 +73,10 @@ const listWorkspaces = createRoute({
 		200: {
 			description: "List of workspaces",
 			content: { "application/json": { schema: WorkspaceListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -82,6 +100,7 @@ const createWorkspace = createRoute({
 			description: "Workspace created",
 			content: { "application/json": { schema: WorkspaceResponse } },
 		},
+		409: WorkspaceConflictResponse,
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -219,6 +238,7 @@ async function workspaceResponse(
 	return {
 		id: row.id,
 		name: row.name,
+		slug: row.slug,
 		description: row.description,
 		lifecycle_status: row.lifecycleStatus,
 		revision: row.revision,
@@ -241,22 +261,40 @@ app.openapi(listWorkspaces, async (c) => {
 	const orgId = c.get("orgId");
 	const { search, lifecycle_status, limit, cursor } = c.req.valid("query");
 	const db = c.get("db");
-	const conditions = [eq(workspaces.organizationId, orgId)];
+	// The tenant scope this listing is anchored in. The cursor is resolved
+	// against these alone: lifecycle_status and search are caller-supplied
+	// filters that decide which rows are *returned*, and must not decide which
+	// row defines the page boundary.
+	const scopeConditions = [eq(workspaces.organizationId, orgId)];
 	const workspaceScope = c.get("workspaceScope");
 	if (workspaceScope !== "all") {
-		conditions.push(inArray(workspaces.id, workspaceScope));
+		scopeConditions.push(inArray(workspaces.id, workspaceScope));
 	}
+	const conditions = [...scopeConditions];
 	if (lifecycle_status !== "all") {
 		conditions.push(eq(workspaces.lifecycleStatus, lifecycle_status));
 	}
 	if (search) {
-		conditions.push(
+		const searchCondition = or(
 			ilike(workspaces.name, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
+			ilike(workspaces.slug, `%${search.replace(/[%_\\]/g, "\\$&")}%`),
 		);
+		if (searchCondition) conditions.push(searchCondition);
 	}
+	// Workspaces sort by (name, id) and name is mutable text, which the opaque
+	// timestamp cursor cannot carry — so this route keeps an id cursor and one
+	// scope-only lookup. Renaming the boundary workspace mid-walk can shift a
+	// row by one position, which is inherent to ordering by a mutable key and
+	// strictly better than rejecting the cursor outright.
 	if (cursor) {
+		const [cursorRow] = await db
+			.select({ name: workspaces.name })
+			.from(workspaces)
+			.where(and(...scopeConditions, eq(workspaces.id, cursor)))
+			.limit(1);
+		if (!cursorRow) return c.json(INVALID_CURSOR_BODY, 400);
 		conditions.push(
-			sql`(${workspaces.name}, ${workspaces.id}) > ((select w.name from workspaces w where w.id = ${cursor}), ${cursor})`,
+			sql`(${workspaces.name}, ${workspaces.id}) > (${cursorRow.name}, ${cursor})`,
 		);
 	}
 
@@ -265,6 +303,7 @@ app.openapi(listWorkspaces, async (c) => {
 			id: workspaces.id,
 			organizationId: workspaces.organizationId,
 			name: workspaces.name,
+			slug: workspaces.slug,
 			description: workspaces.description,
 			lifecycleStatus: workspaces.lifecycleStatus,
 			revision: workspaces.revision,
@@ -299,6 +338,7 @@ app.openapi(listWorkspaces, async (c) => {
 				return {
 					id: row.id,
 					name: row.name,
+					slug: row.slug,
 					description: row.description,
 					lifecycle_status: row.lifecycleStatus,
 					revision: row.revision,
@@ -322,11 +362,29 @@ app.openapi(createWorkspace, async (c) => {
 	const orgId = c.get("orgId");
 	const body = c.req.valid("json");
 	const db = c.get("db");
+	const slug = body.slug ?? workspaceSlugFromName(body.name);
+	const [conflict] = await db
+		.select({ id: workspaces.id })
+		.from(workspaces)
+		.where(and(eq(workspaces.organizationId, orgId), eq(workspaces.slug, slug)))
+		.limit(1);
+	if (conflict) {
+		return c.json(
+			{
+				error: {
+					code: "WORKSPACE_SLUG_CONFLICT",
+					message: `Workspace slug '${slug}' is already in use.`,
+				},
+			},
+			409,
+		);
+	}
 	const [workspace] = await db
 		.insert(workspaces)
 		.values({
 			organizationId: orgId,
 			name: body.name,
+			slug,
 			description: body.description ?? null,
 		})
 		.returning();
@@ -353,13 +411,39 @@ app.openapi(updateWorkspace, async (c) => {
 		updatedAt: Date;
 		revision: SQL;
 		name?: string;
+		slug?: string;
 		description?: string | null;
 	} = {
 		updatedAt: new Date(),
 		revision: sql`${workspaces.revision} + 1`,
 	};
 	if (body.name !== undefined) updates.name = body.name;
+	if (body.slug !== undefined) updates.slug = body.slug;
 	if (body.description !== undefined) updates.description = body.description;
+	if (body.slug !== undefined) {
+		const [conflict] = await db
+			.select({ id: workspaces.id })
+			.from(workspaces)
+			.where(
+				and(
+					eq(workspaces.organizationId, orgId),
+					eq(workspaces.slug, body.slug),
+					ne(workspaces.id, id),
+				),
+			)
+			.limit(1);
+		if (conflict) {
+			return c.json(
+				{
+					error: {
+						code: "WORKSPACE_SLUG_CONFLICT",
+						message: `Workspace slug '${body.slug}' is already in use.`,
+					},
+				},
+				409,
+			);
+		}
+	}
 
 	const [updated] = await db
 		.update(workspaces)
@@ -550,13 +634,20 @@ app.openapi(deleteWorkspace, async (c) => {
 				)
 				.returning({ id: workspaces.id });
 			if (!fenced) throw new Error("Workspace erasure fence was lost");
+			const activeHold = await findActiveErasureHold(tx, {
+				kind: "workspace",
+				organizationId,
+				workspaceId: id,
+			});
 
 			await tx
 				.insert(workspaceErasureJobs)
 				.values({
 					workspaceId: id,
 					organizationId,
+					status: activeHold ? "held" : "pending",
 					requestedBy: c.get("keyId"),
+					lastError: activeHold ? "paused_by_erasure_hold" : null,
 					auditSnapshot: {
 						previous_lifecycle_status: existing.lifecycleStatus,
 						previous_revision: existing.revision,

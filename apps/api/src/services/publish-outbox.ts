@@ -33,7 +33,11 @@ export interface NotificationOutboxInput {
 	occurrenceId: string;
 }
 
-export type PostCompletionStatus = "published" | "failed" | "partial";
+export type PostCompletionStatus =
+	| "published"
+	| "provider_draft"
+	| "failed"
+	| "partial";
 
 /**
  * One compact post-completion job carries both optional user notification and
@@ -49,6 +53,9 @@ export function postCompletionOutboxRow(input: {
 	platforms: string[];
 	occurredAt: Date;
 }): typeof publishOutbox.$inferInsert | null {
+	// A provider draft is a terminal, non-public success. It neither advances a
+	// publishing streak nor emits a misleading publish/failure notification.
+	if (input.status === "provider_draft") return null;
 	const updatesStreak =
 		input.status === "published" || input.status === "partial";
 	if (!updatesStreak && !input.userId) return null;
@@ -163,17 +170,24 @@ export function publishOutboxRow(input: {
 }
 
 export function publishQueueMessage(row: {
+	id: string;
+	organizationId: string;
 	payload: unknown;
-	operationId: string;
 }): MessageSendRequest<Record<string, unknown>> {
-	const { _queue_delay_seconds: rawDelaySeconds, ...payload } =
-		row.payload as Record<string, unknown>;
+	const { _queue_delay_seconds: rawDelaySeconds } = row.payload as Record<
+		string,
+		unknown
+	>;
 	const delaySeconds =
 		typeof rawDelaySeconds === "number" && Number.isFinite(rawDelaySeconds)
 			? Math.max(0, Math.min(86_400, Math.ceil(rawDelaySeconds)))
 			: undefined;
 	return {
-		body: { ...payload, operation_id: row.operationId },
+		body: {
+			type: "publish_outbox",
+			outbox_id: row.id,
+			org_id: row.organizationId,
+		},
 		...(delaySeconds ? { delaySeconds } : {}),
 	};
 }
@@ -213,10 +227,10 @@ export async function dispatchPublishOutbox(
 			       last_error = NULL
 			  FROM due
 			 WHERE outbox.id = due.id
-			RETURNING outbox.id, outbox.operation_id, outbox.payload
+			RETURNING outbox.id, outbox.organization_id, outbox.payload
 		`)) as unknown as Array<{
 			id: string;
-			operation_id: string;
+			organization_id: string;
 			payload: unknown;
 		}>;
 
@@ -226,7 +240,8 @@ export async function dispatchPublishOutbox(
 			await env.PUBLISH_QUEUE.sendBatch(
 				claimed.map((row) =>
 					publishQueueMessage({
-						operationId: row.operation_id,
+						id: row.id,
+						organizationId: row.organization_id,
 						payload: row.payload,
 					}),
 				),
@@ -276,6 +291,15 @@ export async function dispatchPublishOutbox(
 				  FROM publish_outbox
 				 WHERE status = 'dispatched'
 				   AND dispatched_at < ${retentionCutoff}
+				   AND NOT EXISTS (
+						SELECT 1
+						  FROM erasure_holds AS hold
+						 WHERE hold.released_at IS NULL
+						   AND hold.organization_tombstone_id =
+							   publish_outbox.organization_id
+						   AND hold.subject_kind = 'organization'
+						   AND hold.subject_id = publish_outbox.organization_id
+				   )
 				 ORDER BY dispatched_at ASC, id ASC
 				 LIMIT ${RETENTION_BATCH_SIZE}
 				 FOR UPDATE SKIP LOCKED

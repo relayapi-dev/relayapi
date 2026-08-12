@@ -3,9 +3,10 @@
 // Plan 4 / Unit RR4 / Task 5 — verifies every entrypoint kind that can fire
 // from a platform webhook or internal event reaches `matchAndEnrollOrBinding`
 // with the expected `event.kind`. Covers:
-//   - follow / ad_click / story_reply / story_mention / share_to_dm /
+//   - ad_click / story_reply / story_mention / share_to_dm /
 //     live_comment / ref_link_click / tag_applied / tag_removed /
-//     field_changed / conversion_event
+//     field_changed, plus legacy conversion_event rows retained for safe
+//     backwards-compatible execution even though new API writes reject them
 //   - cycle protection on internal events (tag_add that would retrigger
 //     itself must not infinite-loop)
 
@@ -19,7 +20,6 @@ import {
 	customFieldDefinitions,
 	customFieldValues,
 	generateId,
-	organization,
 	socialAccounts,
 	workspaces,
 } from "@relayapi/db";
@@ -27,11 +27,20 @@ import { eq } from "drizzle-orm";
 import type { Graph } from "../schemas/automation-graph";
 import { dispatchAction } from "../services/automations/actions";
 import { matchAndEnrollOrBinding } from "../services/automations/binding-router";
-import { emitInternalEvent } from "../services/automations/internal-events";
+import {
+	emitInternalEvent,
+	resolveTriggeringSocialAccountId,
+} from "../services/automations/internal-events";
 import type {
 	InboundEvent,
 	InboundEventKind,
 } from "../services/automations/trigger-matcher";
+import {
+	deleteOwnedFixtureOrganization,
+	deleteOwnedFixtureWorkspaces,
+	insertOwnedFixtureOrganization,
+} from "./helpers/owned-organization-fixture";
+import { protectedContactFixture } from "./helpers/protected-contact-fixtures";
 
 const CONN =
 	process.env.HYPERDRIVE_LOCAL_CONNECTION_STRING ??
@@ -48,7 +57,7 @@ let socialAccountId = "";
 
 async function seedFixture() {
 	orgId = generateId("org_");
-	await db.insert(organization).values({
+	await insertOwnedFixtureOrganization(db, {
 		id: orgId,
 		name: "event-kinds-org",
 		slug: `ek-${orgId.slice(-8)}`,
@@ -89,8 +98,8 @@ async function teardownFixture() {
 	await db
 		.delete(socialAccounts)
 		.where(eq(socialAccounts.organizationId, orgId));
-	await db.delete(workspaces).where(eq(workspaces.organizationId, orgId));
-	await db.delete(organization).where(eq(organization.id, orgId));
+	await deleteOwnedFixtureWorkspaces(db, orgId);
+	await deleteOwnedFixtureOrganization(db, orgId);
 }
 
 const EMPTY_GRAPH: Graph = {
@@ -126,11 +135,11 @@ async function makeAutomation(name: string) {
 async function makeContact() {
 	const [ct] = await db
 		.insert(contacts)
-		.values({
+		.values(await protectedContactFixture({
 			organizationId: orgId,
 			workspaceId,
 			name: "event-kind-contact",
-		})
+		}))
 		.returning();
 	if (!ct) throw new Error("contact insert failed");
 	return ct;
@@ -179,7 +188,6 @@ afterAll(async () => {
 
 describe("event-kind dispatch", () => {
 	const kinds: InboundEventKind[] = [
-		"follow",
 		"ad_click",
 		"story_reply",
 		"story_mention",
@@ -273,7 +281,7 @@ describe("event-kind dispatch", () => {
 		expect(result.matched).toBe(true);
 	});
 
-	it("enrolls on a conversion_event internal event", async () => {
+	it("retains matcher compatibility for a legacy conversion_event row", async () => {
 		if (!dbAvailable) return;
 		const auto = await makeAutomation("conversion-auto");
 		await makeEntrypoint(
@@ -296,6 +304,83 @@ describe("event-kind dispatch", () => {
 		};
 		const result = await matchAndEnrollOrBinding(db, event, {});
 		expect(result.matched).toBe(true);
+	});
+});
+
+describe("internal-event account propagation", () => {
+	it("resolves the originating account across inline and resumed run contexts", () => {
+		expect(
+			resolveTriggeringSocialAccountId({
+				env: { socialAccountId: "acc_inline" },
+				context: {
+					_triggering_social_account_id: "acc_persisted",
+					triggerEvent: { socialAccountId: "acc_event" },
+				},
+			}),
+		).toBe("acc_inline");
+		expect(
+			resolveTriggeringSocialAccountId({
+				env: {},
+				context: {
+					_triggering_social_account_id: "acc_persisted",
+					triggerEvent: { socialAccountId: "acc_event" },
+				},
+			}),
+		).toBe("acc_persisted");
+		expect(
+			resolveTriggeringSocialAccountId({
+				env: {},
+				context: { triggerEvent: { socialAccountId: "acc_event" } },
+			}),
+		).toBe("acc_event");
+	});
+
+	it("keeps a tag-triggered child run pinned to the source account", async () => {
+		if (!dbAvailable) return;
+
+		const listener = await makeAutomation("account-pinned-tag-listener");
+		await makeEntrypoint(
+			listener.id,
+			"tag_applied",
+			{ tag_ids: ["account-pinned"] },
+			socialAccountId,
+			100,
+		);
+		const ct = await makeContact();
+
+		await dispatchAction(
+			{
+				id: "account-pinned-tag-action",
+				type: "tag_add",
+				tag: "account-pinned",
+				on_error: "abort",
+			} as never,
+			{
+				runId: "source-account-pinned-run",
+				automationId: listener.id,
+				organizationId: orgId,
+				workspaceId,
+				contactId: ct.id,
+				conversationId: null,
+				channel: "instagram",
+				graph: EMPTY_GRAPH,
+				context: {
+					_triggering_social_account_id: socialAccountId,
+				},
+				now: new Date(),
+				db,
+				env: {},
+			},
+		);
+
+		const run = await db.query.automationRuns.findFirst({
+			where: eq(automationRuns.contactId, ct.id),
+		});
+		expect(run?.automationId).toBe(listener.id);
+		expect(
+			(run?.context as Record<string, unknown> | null)
+				?._triggering_social_account_id,
+		).toBe(socialAccountId);
 	});
 });
 
@@ -398,12 +483,12 @@ describe("no-op tag/field mutations skip internal emission", () => {
 		// Create a contact that already has the tag applied.
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "noop-contact",
 				tags: ["lead"],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 
@@ -458,12 +543,12 @@ describe("no-op tag/field mutations skip internal emission", () => {
 
 		const [ct] = await db
 			.insert(contacts)
-			.values({
+			.values(await protectedContactFixture({
 				organizationId: orgId,
 				workspaceId,
 				name: "new-tag-contact",
 				tags: [],
-			})
+			}))
 			.returning();
 		if (!ct) throw new Error("contact insert failed");
 

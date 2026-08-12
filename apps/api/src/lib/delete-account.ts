@@ -1,12 +1,14 @@
 import {
 	accountRevocationJobs,
 	adAccounts,
+	assertKvPrivacyStoreKey,
 	automationBindings,
 	automationEntrypoints,
 	autoPostRules,
 	broadcasts,
 	connectionLogs,
 	type Database,
+	queueFailures,
 	socialAccounts,
 } from "@relayapi/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -72,7 +74,23 @@ export async function invalidateAccountCaches(
 	identity: AccountCacheIdentity,
 ): Promise<void> {
 	const keys = buildAccountCacheKeys(identity);
-	await Promise.all(keys.map((key) => kv.delete(key).catch(() => {})));
+	await Promise.all(
+		keys.map((key) =>
+			kv
+				.delete(
+					assertKvPrivacyStoreKey(
+						[
+							"kv:platform-account",
+							"kv:ig-sender-id",
+							"kv:sync-dedup",
+							"kv:inbox-posts",
+						],
+						key,
+					),
+				)
+				.catch(() => {}),
+		),
+	);
 }
 
 /**
@@ -132,8 +150,10 @@ export async function deleteConnectedAccountGraph<T>(
 					sourceTokenVersion: account.tokenVersion,
 					status: "pending",
 					attempts: 0,
+					leaseToken: 0,
 					nextAttemptAt: now,
 					leaseExpiresAt: null,
+					requestMayHaveBeenSentAt: null,
 					lastError: null,
 					providerResponse: null,
 					completedAt: null,
@@ -145,8 +165,8 @@ export async function deleteConnectedAccountGraph<T>(
 			organizationId: account.organizationId,
 			socialAccountId: account.id,
 			platform: account.platform,
-			event: "disconnecting",
-			message: `Disconnect requested for ${account.displayName || account.username || account.platform}`,
+			event: "disconnected",
+			message: `Disconnected ${account.displayName || account.username || account.platform}; provider credential cleanup queued`,
 			snapshot: {
 				account_id: account.id,
 				platform: account.platform,
@@ -155,16 +175,24 @@ export async function deleteConnectedAccountGraph<T>(
 				display_name: account.displayName,
 				workspace_id: account.workspaceId,
 				requested_at: now.toISOString(),
+				provider_cleanup: "pending",
 			},
 		});
 
 		await tx
 			.update(socialAccounts)
 			.set({
-				lifecycleStatus: "disconnecting",
+				// The copied ciphertext in account_revocation_jobs is the only
+				// credential available to the cleanup worker. The active account
+				// loses every usable credential in this same transaction.
+				lifecycleStatus: "disconnected",
+				accessToken: null,
+				refreshToken: null,
+				metadata: sql`${socialAccounts.metadata} - 'meta_ads_user_access_token' - 'meta_ads_user_access_token_expires_at' - 'facebook_user_id'`,
 				disconnectRequestedAt: now,
 				disconnectReason: "user_requested",
 				tokenExpiresAt: null,
+				disconnectedAt: now,
 				updatedAt: now,
 			})
 			.where(eq(socialAccounts.id, accountId));
@@ -205,6 +233,28 @@ export async function deleteConnectedAccountGraph<T>(
 			.update(adAccounts)
 			.set({ status: "disconnected", updatedAt: now })
 			.where(eq(adAccounts.socialAccountId, accountId));
+		await tx
+			.update(queueFailures)
+			.set({
+				accountIds: sql`array_remove(${queueFailures.accountIds}, ${accountId})`,
+				payloadCiphertext: null,
+				payloadKeyId: null,
+				payloadRedactedAt: sql`COALESCE(${queueFailures.payloadRedactedAt}, ${now})`,
+				status: sql`CASE
+					WHEN ${queueFailures.status} IN ('replayed', 'dismissed')
+						THEN ${queueFailures.status}
+					ELSE 'dismissed'
+				END`,
+				resolvedAt: sql`CASE
+					WHEN ${queueFailures.status} IN ('replayed', 'dismissed')
+						THEN ${queueFailures.resolvedAt}
+					ELSE COALESCE(${queueFailures.resolvedAt}, ${now})
+				END`,
+				replayClaimToken: null,
+				replayClaimExpiresAt: null,
+				error: "account_disconnected",
+			})
+			.where(sql`${queueFailures.accountIds} @> ARRAY[${accountId}]::text[]`);
 
 		return onDisconnected?.(tx, account);
 	});

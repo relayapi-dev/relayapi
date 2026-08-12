@@ -43,17 +43,24 @@ const notifyAdmin: ActionHandler<NotifyAdminAction> = async (action, ctx) => {
 		contact_id: ctx.contactId,
 	};
 	if (action.link) data.link = applyMergeTags(action.link, mergeCtx);
+	const occurrenceId =
+		ctx.effectIdempotencyKeyFor?.(`notification:${action.id}`) ??
+		`${ctx.runId}:notification:${action.id}`;
 
-	await db.insert(notifications).values(
-		recipientIds.map((userId: string) => ({
-			userId,
-			organizationId: ctx.organizationId,
-			type: "automation_notice",
-			title,
-			body,
-			data,
-		})),
-	);
+	await db
+		.insert(notifications)
+		.values(
+			recipientIds.map((userId: string) => ({
+				userId,
+				organizationId: ctx.organizationId,
+				type: "automation_notice" as const,
+				title,
+				body,
+				data,
+				occurrenceId,
+			})),
+		)
+		.onConflictDoNothing();
 };
 
 export const notifyHandlers: ActionRegistry = {

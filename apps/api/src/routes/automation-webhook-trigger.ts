@@ -7,11 +7,11 @@
 import { createDb } from "@relayapi/db";
 import { Hono } from "hono";
 import {
-	readRequestText,
 	ResponseTooLargeError,
+	readRequestText,
 } from "../lib/fetch-public-url";
-import type { Env } from "../types";
 import { receiveAutomationWebhook } from "../services/automations/webhook-receiver";
+import type { Env } from "../types";
 
 const app = new Hono<{ Bindings: Env }>();
 const MAX_AUTOMATION_WEBHOOK_BYTES = 256 * 1024;
@@ -117,6 +117,17 @@ app.post("/:slug", async (c) => {
 					},
 				},
 				422,
+			);
+		case "enrollment_blocked":
+			return c.json(
+				{
+					error: {
+						code: "enrollment_blocked",
+						message: "automation entrypoint policy blocked enrollment",
+						details: { reason: result.reason },
+					},
+				},
+				409,
 			);
 		case "enrollment_failed":
 			return c.json(

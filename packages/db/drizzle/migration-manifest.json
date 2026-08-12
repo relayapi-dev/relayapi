@@ -9,17 +9,8 @@
       "idx": 0,
       "tag": "0000_baseline",
       "folderMillis": 1783987200000,
-      "sha256": "e51b5011b87fd41a5bbd936ad4b2efe864b02a9448db841d453c6042fe5890db",
-      "snapshotSha256": "31a36a47d8c78d2c13c3db567a271f42c0d2c41edb5ba51475073210f4d602e2",
-      "drizzleVersion": "7",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "tag": "0001_external_post_previews",
-      "folderMillis": 1784330876246,
-      "sha256": "ef769476f55ff3365437c78dab3fc28824c191c310295eacc3f24f96b0d75c70",
-      "snapshotSha256": "9e21868b5550fc6ca493a0209d352fe2f93ea7f24bc9fef7c0b1231a2723b009",
+      "sha256": "fcc111ebc50bcef85ddf510b0903d5dfb1a621f5f42578194053b0b67c15c802",
+      "snapshotSha256": "1744407c0858bf0cbaf0c73c58f8d6ecf587e5cf08ad90cc4538bab4be76755f",
       "drizzleVersion": "7",
       "breakpoints": true
     }

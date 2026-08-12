@@ -11,7 +11,7 @@ import {
 import type { Env, Variables } from "../types";
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
+const MAX_STREAMED_REPLAY_REQUEST_BYTES = 64 * 1024 * 1024;
 const MAX_REPLAY_RESPONSE_BYTES = 1024 * 1024;
 const KEY_RE = /^[A-Za-z0-9._:-]{8,255}$/;
 
@@ -75,7 +75,13 @@ export async function bindReceiptRoute(
 function resourceIdFromBody(text: string): string | null {
 	try {
 		const body = JSON.parse(text) as Record<string, unknown>;
-		for (const key of ["id", "post_id", "thread_group_id", "broadcast_id"]) {
+		for (const key of [
+			"id",
+			"post_id",
+			"thread_group_id",
+			"broadcast_id",
+			"delivery_id",
+		]) {
 			if (typeof body[key] === "string") return body[key];
 		}
 	} catch {
@@ -86,6 +92,14 @@ function resourceIdFromBody(text: string): string | null {
 
 function isReplayableStatus(status: number): boolean {
 	return status >= 200 && status < 500 && ![408, 425, 429].includes(status);
+}
+
+export function isExplicitlyRetryableConflict(response: Response): boolean {
+	return (
+		response.status === 409 &&
+		response.headers.get("Idempotency-Retryable") === "true" &&
+		response.headers.has("Retry-After")
+	);
 }
 
 type DigestTracker = {
@@ -112,9 +126,15 @@ async function drainRequestBody(request: Request): Promise<void> {
  */
 export function trackRequestDigest(request: Request): DigestTracker {
 	const declaredBytes = parseContentLength(request.headers);
-	if (declaredBytes !== null && declaredBytes > MAX_REQUEST_BYTES) {
+	if (
+		declaredBytes !== null &&
+		declaredBytes > MAX_STREAMED_REPLAY_REQUEST_BYTES
+	) {
 		void request.body?.cancel().catch(() => {});
-		throw new ResponseTooLargeError(MAX_REQUEST_BYTES, declaredBytes);
+		throw new ResponseTooLargeError(
+			MAX_STREAMED_REPLAY_REQUEST_BYTES,
+			declaredBytes,
+		);
 	}
 	if (!request.body) {
 		return {
@@ -125,7 +145,7 @@ export function trackRequestDigest(request: Request): DigestTracker {
 
 	const bounded = createBoundedReadableBody(
 		request.body,
-		MAX_REQUEST_BYTES,
+		MAX_STREAMED_REPLAY_REQUEST_BYTES,
 		declaredBytes,
 	);
 	let writeDigest: (chunk: Uint8Array) => Promise<void>;
@@ -224,6 +244,27 @@ async function markUnknown(
 		);
 }
 
+async function expireProvenNotApplied(
+	db: Variables["db"],
+	receiptId: string,
+	requestHash?: string,
+): Promise<void> {
+	await db
+		.update(idempotencyReceipts)
+		.set({
+			...(requestHash ? { requestHash } : {}),
+			expiresAt: new Date(),
+			updatedAt: new Date(),
+			lastError: "mutation effect was proven not applied",
+		})
+		.where(
+			and(
+				eq(idempotencyReceipts.id, receiptId),
+				eq(idempotencyReceipts.state, "in_progress"),
+			),
+		);
+}
+
 /** Durable replay protection for authenticated mutations. */
 export const idempotencyMiddleware = createMiddleware<{
 	Bindings: Env;
@@ -271,8 +312,9 @@ export const idempotencyMiddleware = createMiddleware<{
 	let bodyDigest: Promise<string>;
 	try {
 		if (c.req.raw.bodyUsed) {
-			// JSON body-cache has already retained the exact source text.
-			bodyDigest = sha256Hex(await c.req.text());
+			// The bounded body cache seeded arrayBuffer first, so JSON and allowlisted
+			// multipart requests are hashed without decoding or reserialization.
+			bodyDigest = sha256Hex(await c.req.arrayBuffer());
 		} else {
 			const tracked = trackRequestDigest(c.req.raw);
 			c.req.raw = tracked.request;
@@ -418,8 +460,35 @@ export const idempotencyMiddleware = createMiddleware<{
 		const requestHash = await sha256Hex(
 			JSON.stringify({ method, route, rawDigest }),
 		);
+		if (isExplicitlyRetryableConflict(c.res)) {
+			// The route has already persisted a durable domain operation and is
+			// explicitly asking the caller to resume it. Release only this outer
+			// HTTP replay receipt; the domain operation remains the idempotency and
+			// provider-reconciliation authority.
+			await db
+				.update(idempotencyReceipts)
+				.set({
+					requestHash,
+					expiresAt: new Date(),
+					updatedAt: new Date(),
+					lastError: "retry delegated to durable domain operation",
+				})
+				.where(
+					and(
+						eq(idempotencyReceipts.id, receiptId),
+						eq(idempotencyReceipts.state, "in_progress"),
+					),
+				);
+			c.res.headers.set("Idempotency-Replayed", "false");
+			return;
+		}
 
 		if (!isReplayableStatus(c.res.status)) {
+			if (c.get("mutationEffectTracker")?.isProvenNotApplied()) {
+				await expireProvenNotApplied(db, receiptId, requestHash);
+				c.res.headers.set("Idempotency-Replayed", "false");
+				return;
+			}
 			await db
 				.update(idempotencyReceipts)
 				.set({
@@ -484,11 +553,15 @@ export const idempotencyMiddleware = createMiddleware<{
 			);
 		c.res.headers.set("Idempotency-Replayed", "false");
 	} catch (error) {
-		await markUnknown(
-			db,
-			receiptId,
-			error instanceof Error ? error.message : "request handler failed",
-		);
+		if (c.get("mutationEffectTracker")?.isProvenNotApplied()) {
+			await expireProvenNotApplied(db, receiptId);
+		} else {
+			await markUnknown(
+				db,
+				receiptId,
+				error instanceof Error ? error.message : "request handler failed",
+			);
+		}
 		throw error;
 	}
 });

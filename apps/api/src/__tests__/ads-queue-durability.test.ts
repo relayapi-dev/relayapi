@@ -1,26 +1,26 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { readFileSync } from "node:fs";
-import { AdPlatformError } from "../services/ad-platforms/types";
 
-let createError: unknown;
+let syncError: unknown;
 let recordedKind: string | null = null;
+const syncCalls: Array<Record<string, unknown>> = [];
 
 mock.module("../services/ad-analytics", () => ({
 	fetchAndStoreAdMetrics: async () => {},
 }));
-mock.module("../services/ad-audience", () => ({
-	addUsersToAudience: async () => {},
-}));
-mock.module("../services/ad-service", () => ({
-	createAd: async () => {
-		if (createError) throw createError;
-	},
-	boostPost: async () => {
-		if (createError) throw createError;
-	},
-}));
 mock.module("../services/ad-sync", () => ({
-	syncExternalAds: async () => {},
+	syncAdMetrics: async (_env: unknown, input: Record<string, unknown>) => {
+		syncCalls.push(input);
+		if (syncError) throw syncError;
+	},
+	syncExternalAds: async (
+		_env: unknown,
+		accountId: string,
+		organizationId: string,
+	) => {
+		syncCalls.push({ accountId, organizationId });
+		if (syncError) throw syncError;
+	},
 }));
 mock.module("../queues/failures", () => ({
 	recordQueueFailure: async (
@@ -37,7 +37,7 @@ const { consumeAdsQueue } = await import("../queues/ads");
 
 import type { Env } from "../types";
 
-function trackedMessage(type: "create_ad" | "boost_post", attempts = 1) {
+function trackedMessage(body: Record<string, unknown>, attempts = 1) {
 	let acknowledgements = 0;
 	let retries = 0;
 	let retryDelay: number | undefined;
@@ -45,7 +45,7 @@ function trackedMessage(type: "create_ad" | "boost_post", attempts = 1) {
 		id: "ads_operation_1",
 		timestamp: new Date(),
 		attempts,
-		body: { type, org_id: "org_1", params: {} },
+		body,
 		ack: () => {
 			acknowledgements += 1;
 		},
@@ -53,11 +53,7 @@ function trackedMessage(type: "create_ad" | "boost_post", attempts = 1) {
 			retries += 1;
 			retryDelay = options?.delaySeconds;
 		},
-	} as Message<{
-		type: string;
-		org_id: string;
-		params: Record<string, unknown>;
-	}>;
+	} as Message<Record<string, unknown>>;
 	return {
 		value,
 		acknowledgements: () => acknowledgements,
@@ -76,15 +72,38 @@ function batch(message: Message<never>): MessageBatch<never> {
 	};
 }
 
-describe("ads Queue paid-operation durability", () => {
+describe("ads Queue identifier-only durability", () => {
 	beforeEach(() => {
-		createError = undefined;
+		syncError = undefined;
 		recordedKind = null;
+		syncCalls.length = 0;
 	});
 
-	it("retries a pre-boundary/transient paid-operation failure", async () => {
-		createError = new Error("temporary database outage");
-		const message = trackedMessage("create_ad", 2);
+	it("rejects raw paid-operation parameters instead of carrying them in Queue", async () => {
+		const message = trackedMessage({
+			type: "create_ad",
+			org_id: "org_1",
+			params: { targeting: { emails: ["person@example.test"] } },
+		});
+
+		await consumeAdsQueue(batch(message.value as Message<never>), {} as Env);
+
+		expect(message.acknowledgements()).toBe(1);
+		expect(message.retries()).toBe(0);
+		expect(recordedKind).toBe("permanent_input");
+		expect(syncCalls).toEqual([]);
+	});
+
+	it("retries transient identifier-based metric sync", async () => {
+		syncError = new Error("temporary database outage");
+		const message = trackedMessage(
+			{
+				type: "sync_metrics",
+				org_id: "org_1",
+				ad_id: "ad_1",
+			},
+			2,
+		);
 
 		await consumeAdsQueue(batch(message.value as Message<never>), {} as Env);
 
@@ -94,45 +113,24 @@ describe("ads Queue paid-operation durability", () => {
 		expect(recordedKind).toBeNull();
 	});
 
-	it("records and ACKs an already-ambiguous provider outcome", async () => {
-		createError = new AdPlatformError(
-			"UNKNOWN_EXTERNAL_OUTCOME",
-			"provider may have accepted the request",
-		);
-		const message = trackedMessage("boost_post");
-
-		await consumeAdsQueue(batch(message.value as Message<never>), {} as Env);
-
-		expect(message.acknowledgements()).toBe(1);
-		expect(message.retries()).toBe(0);
-		expect(recordedKind).toBe("unknown_external_outcome");
-	});
-
-	it("records and ACKs permanent paid-operation input", async () => {
-		createError = new AdPlatformError(
-			"MISSING_OBJECTIVE",
-			"objective is required",
-		);
-		const message = trackedMessage("create_ad");
-
-		await consumeAdsQueue(batch(message.value as Message<never>), {} as Env);
-
-		expect(message.acknowledgements()).toBe(1);
-		expect(message.retries()).toBe(0);
-		expect(recordedKind).toBe("permanent_input");
-	});
-
-	it("ACKs a completed paid operation", async () => {
-		const message = trackedMessage("create_ad");
+	it("ACKs an identifier-based external sync", async () => {
+		const message = trackedMessage({
+			type: "sync_external",
+			org_id: "org_1",
+			ad_account_id: "ada_1",
+		});
 
 		await consumeAdsQueue(batch(message.value as Message<never>), {} as Env);
 
 		expect(message.acknowledgements()).toBe(1);
 		expect(message.retries()).toBe(0);
 		expect(recordedKind).toBeNull();
+		expect(syncCalls).toEqual([
+			{ accountId: "ada_1", organizationId: "org_1" },
+		]);
 	});
 
-	it("does not use inactive tenants or social accounts for paid provider work", () => {
+	it("does not use inactive tenants or provider authorities for paid provider work", () => {
 		const service = readFileSync(
 			new URL("../services/ad-service.ts", import.meta.url),
 			"utf8",
@@ -144,7 +142,7 @@ describe("ads Queue paid-operation durability", () => {
 		expect(service).toContain('eq(socialAccounts.lifecycleStatus, "active")');
 		expect(service).toContain('eq(organization.lifecycleStatus, "active")');
 		expect(reconciler).toContain(
-			'"Paid operation cannot resume because its organization or social account is inactive"',
+			'"Paid operation cannot resume because its organization or provider authority is inactive"',
 		);
 		expect(reconciler).toContain('status: "manual_review"');
 	});

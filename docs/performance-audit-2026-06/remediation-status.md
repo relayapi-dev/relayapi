@@ -180,9 +180,12 @@ caller still opens a per-delivery client (minor perf).
 
 ## 4. Deferred by design (perf / architectural — not regressions)
 
-- **Webhook delivery → dedicated queue** with native retry/backoff. Today
-  delivery is awaited on the publish/cron path (correct, bounded); the queue
-  is the proper non-blocking version (replaces the in-process retry sleeps).
+Completed since this June snapshot: customer webhook delivery now uses a
+durable database outbox plus the dedicated `CUSTOMER_WEBHOOK_QUEUE`, with
+bounded retries and reconciliation outside publish/inbox request paths. The
+remaining items below are still architectural choices rather than confirmed
+correctness defects.
+
 - **Worker decomposition** — split queue consumers + crons into a second
   worker. Gated on cold-start P99 measurement after the §5 bundle work.
 - **Durable Object usage counters** — replace the non-atomic KV gate counter

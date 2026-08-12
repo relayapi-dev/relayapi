@@ -3,7 +3,9 @@ import { mastodonPublisher } from "../publishers/mastodon";
 import type { MediaAttachment, PublishRequest } from "../publishers/types";
 
 const originalFetch = globalThis.fetch;
-const INSTANCE_URL = "https://mastodon.example";
+// A globally-routable literal keeps the SSRF guard deterministic under the
+// mocked fetch implementation (no DoH subrequests are needed in this unit test).
+const INSTANCE_URL = "https://8.8.8.8";
 const MEDIA_URL =
 	"https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/relayapi-media/org_1/media.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test&X-Amz-Date=20260713T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=test";
 

@@ -7,13 +7,14 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+	type Action,
+	type ActionType,
 	defaultActionFor,
+	FALLBACK_ACTION_CATALOG,
 	generateActionId,
 	reorder,
 	summarizeAction,
 	validateAction,
-	type Action,
-	type ActionType,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -79,12 +80,13 @@ describe("defaultActionFor", () => {
 		expect(a.id).toBe("reused-id");
 	});
 
-	it("covers all 23 action types without throwing", () => {
+	it("creates every supported action payload", () => {
 		const types: ActionType[] = [
 			"tag_add",
 			"tag_remove",
 			"field_set",
 			"field_clear",
+			"contact_field_set",
 			"segment_add",
 			"segment_remove",
 			"subscribe_list",
@@ -105,12 +107,17 @@ describe("defaultActionFor", () => {
 			"log_conversion_event",
 			"change_main_menu",
 		];
-		expect(types).toHaveLength(23);
+		expect(types).toHaveLength(24);
 		for (const t of types) {
 			const a = defaultActionFor(t);
 			expect(a.type).toBe(t);
 			expect(a.id).toBeTruthy();
 		}
+		expect(
+			FALLBACK_ACTION_CATALOG.some(
+				(entry) => entry.type === "change_main_menu",
+			),
+		).toBe(true);
 	});
 });
 
@@ -205,13 +212,17 @@ describe("summarizeAction", () => {
 		expect(summarizeAction(a)).toBe("Pause all automations for contact");
 	});
 
-	it("labels change_main_menu with the v1.1 badge", () => {
+	it("summarises a contact-specific Messenger menu", () => {
 		const a: Action = {
 			id: "a8",
 			type: "change_main_menu",
 			on_error: "abort",
+			menu_payload: {
+				items: [{ label: "Help", action: "postback", payload: "HELP" }],
+				composer_input_disabled: false,
+			},
 		};
-		expect(summarizeAction(a)).toBe("Change main menu (v1.1)");
+		expect(summarizeAction(a)).toBe("Change Messenger menu (1 item)");
 	});
 
 	it("summarises reply_to_comment with a text preview", () => {
@@ -329,7 +340,7 @@ describe("validateAction", () => {
 		expect(problems.some((p) => p.path === "snooze_minutes")).toBe(true);
 	});
 
-	it("flags log_conversion_event missing name", () => {
+	it("requires a name for a conversion event", () => {
 		const a: Action = {
 			id: "a9",
 			type: "log_conversion_event",
@@ -337,7 +348,7 @@ describe("validateAction", () => {
 			event_name: "",
 		};
 		const problems = validateAction(a);
-		expect(problems.some((p) => p.path === "event_name")).toBe(true);
+		expect(problems).toEqual([expect.objectContaining({ path: "event_name" })]);
 	});
 
 	it("flags reply_to_comment without text", () => {
@@ -349,6 +360,33 @@ describe("validateAction", () => {
 		};
 		const problems = validateAction(a);
 		expect(problems.some((p) => p.path === "text")).toBe(true);
+	});
+
+	it("accepts 20 Messenger menu items and rejects a twenty-first", () => {
+		const items = Array.from({ length: 20 }, (_, index) => ({
+			label: `Menu ${index + 1}`,
+			action: "postback" as const,
+			payload: `MENU_${index + 1}`,
+		}));
+		const action: Action = {
+			id: "menu-limit",
+			type: "change_main_menu",
+			on_error: "abort",
+			menu_payload: { items, composer_input_disabled: false },
+		};
+		expect(validateAction(action)).toEqual([]);
+		expect(
+			validateAction({
+				...action,
+				menu_payload: {
+					...action.menu_payload,
+					items: [
+						...items,
+						{ label: "Too many", action: "postback", payload: "X" },
+					],
+				},
+			}),
+		).toContainEqual(expect.objectContaining({ path: "menu_payload.items" }));
 	});
 });
 

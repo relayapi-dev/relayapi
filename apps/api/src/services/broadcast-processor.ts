@@ -209,6 +209,8 @@ async function claimRecipientChunk(
 			   AND r.organization_id = ${lease.broadcast.organizationId}
 			   AND r.scope_key = ${lease.broadcast.scopeKey}
 			   AND r.status = 'pending'
+			   AND r.contact_identifier IS NOT NULL
+			   AND r.pii_erased_at IS NULL
 			   AND EXISTS (
 			       SELECT 1
 			         FROM broadcasts b
@@ -374,6 +376,7 @@ async function executeBroadcast(
 
 		const allowedHashes = await getAllowedRecipientHashes(
 			db,
+			env.ENCRYPTION_KEY,
 			lease.broadcast.organizationId,
 			lease.broadcast.platform,
 			"marketing",
@@ -388,7 +391,10 @@ async function executeBroadcast(
 				contact_identifier_hash:
 					recipient.contact_identifier_hash ||
 					(await hashRecipientIdentifier(
+						env.ENCRYPTION_KEY,
+						lease.broadcast.organizationId,
 						lease.broadcast.platform,
+						"marketing",
 						recipient.contact_identifier,
 					)),
 			})),

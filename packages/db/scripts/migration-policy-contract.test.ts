@@ -3,7 +3,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	auditBaselinePolicyBoundary,
+	findContractOnlyOperations,
 	findDestructiveExpandOperations,
+	findProceduralDynamicSql,
 } from "./migration-policy-contract";
 
 const journal = {
@@ -17,7 +19,7 @@ describe("migration policy baseline boundary", () => {
 	test("accepts one baseline followed by expand history", () => {
 		expect(
 			auditBaselinePolicyBoundary(journal, {
-				schemaVersion: 1,
+				schemaVersion: 2,
 				migrations: {
 					"0000_baseline": { phase: "baseline", summary: "Virgin schema" },
 					"0001_accounts": { phase: "expand", summary: "Add accounts" },
@@ -28,7 +30,7 @@ describe("migration policy baseline boundary", () => {
 
 	test("rejects an appended migration disguised as another baseline", () => {
 		const failures = auditBaselinePolicyBoundary(journal, {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			migrations: {
 				"0000_baseline": { phase: "baseline", summary: "Virgin schema" },
 				"0001_accounts": { phase: "baseline", summary: "Bypass" },
@@ -47,7 +49,7 @@ describe("migration policy baseline boundary", () => {
 			auditBaselinePolicyBoundary(
 				{ entries: [{ idx: 0, tag: "0000_other" }] },
 				{
-					schemaVersion: 1,
+					schemaVersion: 2,
 					migrations: {
 						"0000_other": { phase: "baseline", summary: "Wrong tag" },
 					},
@@ -58,7 +60,7 @@ describe("migration policy baseline boundary", () => {
 
 	test("rejects an unknown phase instead of bypassing SQL policy", () => {
 		const failures = auditBaselinePolicyBoundary(journal, {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			migrations: {
 				"0000_baseline": { phase: "baseline", summary: "Virgin schema" },
 				"0001_accounts": {
@@ -76,7 +78,48 @@ describe("migration policy baseline boundary", () => {
 	});
 });
 
+describe("contract migration rollout metadata", () => {
+	test("requires affected objects and a compatible release prerequisite", () => {
+		const failures = auditBaselinePolicyBoundary(journal, {
+			schemaVersion: 2,
+			migrations: {
+				"0000_baseline": { phase: "baseline", summary: "Virgin schema" },
+				"0001_accounts": { phase: "contract", summary: "Remove old shape" },
+			},
+		});
+		expect(failures).toContain(
+			"0001_accounts is contract and must declare non-empty affectedObjects",
+		);
+		expect(failures).toContain(
+			"0001_accounts is contract and must declare a compatibleReleasePrerequisite",
+		);
+	});
+
+	test("classifies contract-only SQL for both policy phases", () => {
+		expect(
+			findContractOnlyOperations(
+				"ALTER TABLE accounts DROP COLUMN legacy_name;",
+			),
+		).toEqual(["DROP COLUMN"]);
+	});
+});
+
 describe("expand migration destructive-operation guard", () => {
+	test("fails closed on computed procedural SQL that static DDL regexes cannot decode", () => {
+		const source = `
+			DO $body$
+			BEGIN
+				EXECUTE chr(68) || chr(82) || chr(79) || chr(80) ||
+					chr(32) || chr(84) || chr(65) || chr(66) || chr(76) || chr(69);
+			END
+			$body$;
+		`;
+		expect(findContractOnlyOperations(source)).toEqual([]);
+		expect(findProceduralDynamicSql(source)).toEqual([
+			"dynamic EXECUTE in procedural body",
+		]);
+	});
+
 	test("rejects contract-only object removal and enum/type renames", () => {
 		const source = `
 			DROP INDEX old_index;

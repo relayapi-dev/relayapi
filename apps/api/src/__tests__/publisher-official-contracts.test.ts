@@ -157,6 +157,16 @@ describe("official publisher contract validation", () => {
 				code: "CONTENT_ERROR",
 			},
 			{
+				publisher: linkedinPublisher,
+				request: request("linkedin", {
+					platformAccountId: "urn:li:organization:connected",
+					targetOptions: {
+						organization_urn: "urn:li:organization:other",
+					},
+				}),
+				code: "ORGANIZATION_URN_MISMATCH",
+			},
+			{
 				publisher: telegramPublisher,
 				request: request("telegram", { media: images(11) }),
 				code: "TOO_MANY_MEDIA",
@@ -183,12 +193,24 @@ describe("official publisher contract validation", () => {
 				publisher: smsPublisher,
 				request: request("sms", {
 					content: "x".repeat(1601),
+					metadata: { from_number: "+15550000000" },
 					targetOptions: {
 						from_number: "+15550000000",
 						phone_numbers: ["+15551111111"],
 					},
 				}),
 				code: "CONTENT_TOO_LONG",
+			},
+			{
+				publisher: smsPublisher,
+				request: request("sms", {
+					metadata: { from_number: "+15550000000" },
+					targetOptions: {
+						from_number: "+15559999999",
+						phone_numbers: ["+15551111111"],
+					},
+				}),
+				code: "SMS_SENDER_MISMATCH",
 			},
 			{
 				publisher: facebookPublisher,
@@ -205,7 +227,7 @@ describe("official publisher contract validation", () => {
 				publisher: discordPublisher,
 				request: request("discord", {
 					media: images(11),
-					accessToken: "https://discord.com/api/webhooks/id/token",
+					accessToken: "https://discord.com/api/webhooks/123/token",
 				}),
 				code: "TOO_MANY_MEDIA",
 			},
@@ -250,7 +272,7 @@ describe("official publisher contract validation", () => {
 					preview_text: "Preview",
 					scheduled_at: "2026-08-01T10:00:00Z",
 				},
-				metadata: { publication_id: "publication-1" },
+				platformAccountId: "publication-1",
 			}),
 		);
 
@@ -296,6 +318,8 @@ describe("official publisher contract validation", () => {
 		expect(Date.parse(String(sentBody?.send_at))).toBeGreaterThan(
 			Date.now() + 50_000,
 		);
+		expect(result.provider_outcome?.disposition).toBe("scheduled");
+		expect(result.provider_outcome?.provider_operation_id).toBe("42");
 	});
 
 	it("puts listmonk send_at on campaign creation and only status on transition", async () => {
@@ -314,7 +338,7 @@ describe("official publisher contract validation", () => {
 					send_at: "2026-08-01T10:00:00Z",
 					headers: { "X-Campaign": "relay" },
 				},
-				metadata: { instance_url: "https://8.8.8.8" },
+				platformAccountId: "https://8.8.8.8",
 			}),
 		);
 
@@ -324,6 +348,82 @@ describe("official publisher contract validation", () => {
 			headers: [{ "X-Campaign": "relay" }],
 		});
 		expect(bodies[1]).toEqual({ status: "scheduled" });
+		expect(result.provider_outcome?.disposition).toBe("scheduled");
+		expect(result.provider_outcome?.provider_operation_id).toBe("7");
+	});
+
+	it("keeps accepted message jobs nonterminal and preserves partial recipient outcomes", async () => {
+		globalThis.fetch = (async () =>
+			Response.json({
+				messaging_product: "whatsapp",
+				messages: [],
+			})) as unknown as typeof fetch;
+		const whatsapp = await whatsappPublisher.publish(
+			request("whatsapp", { targetOptions: { to: "15551234567" } }),
+		);
+		expect(whatsapp.success).toBe(false);
+		expect(whatsapp.platform_post_id).toBeUndefined();
+		expect(whatsapp.provider_outcome?.disposition).toBe("outcome_unknown");
+
+		let call = 0;
+		globalThis.fetch = (async () => {
+			call++;
+			return call === 1
+				? Response.json({ sid: "SM123", status: "queued" }, { status: 201 })
+				: Response.json(
+						{ code: 21211, message: "Invalid recipient" },
+						{ status: 400 },
+					);
+		}) as unknown as typeof fetch;
+		const sms = await smsPublisher.publish(
+			request("sms", {
+				metadata: { from_number: "+15550000000" },
+				targetOptions: {
+					from_number: "+15550000000",
+					phone_numbers: ["+15551111111", "+15552222222"],
+				},
+			}),
+		);
+		expect(sms.success).toBe(false);
+		expect(sms.platform_post_id).toBe("SM123");
+		expect(sms.provider_outcome?.disposition).toBe("partial");
+		expect(sms.provider_outcome?.effects).toEqual([
+			expect.objectContaining({ status: "succeeded", provider_id: "SM123" }),
+			expect.objectContaining({ status: "failed" }),
+		]);
+	});
+
+	it("retains every Telegram media-group message ID for durable cleanup", async () => {
+		globalThis.fetch = (async () =>
+			Response.json({
+				ok: true,
+				result: [
+					{ message_id: 101, chat: { id: -1001, type: "channel" } },
+					{ message_id: 102, chat: { id: -1001, type: "channel" } },
+				],
+			})) as unknown as typeof fetch;
+
+		const result = await telegramPublisher.publish(
+			request("telegram", {
+				platformAccountId: "-1001",
+				media: images(2),
+			}),
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.platform_post_id).toBe("101");
+		expect(result.provider_outcome?.effects).toEqual([
+			{
+				name: "telegram_message_0",
+				status: "succeeded",
+				provider_id: "101",
+			},
+			{
+				name: "telegram_message_1",
+				status: "succeeded",
+				provider_id: "102",
+			},
+		]);
 	});
 
 	it("counts Threads emoji by UTF-8 bytes and rejects over-limit text before I/O", async () => {
@@ -362,6 +462,35 @@ describe("official publisher contract validation", () => {
 		expect(statusUrl.searchParams.get("media_id")).toBe("1880028106020515840");
 	});
 
+	it("records LinkedIn link-preview suppression as unsupported", async () => {
+		globalThis.fetch = (async () =>
+			Response.json(
+				{},
+				{
+					status: 201,
+					headers: { "x-restli-id": "urn:li:share:preview-test" },
+				},
+			)) as unknown as typeof fetch;
+
+		const result = await linkedinPublisher.publish(
+			request("linkedin", {
+				content: "https://example.test",
+				targetOptions: { disable_link_preview: true },
+			}),
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.provider_outcome?.effects).toContainEqual({
+			name: "disable_link_preview",
+			status: "unsupported",
+			error: {
+				code: "UNSUPPORTED_OPTION",
+				message:
+					"LinkedIn does not support suppressing an automatically generated link preview; the post was published without applying this option.",
+			},
+		});
+	});
+
 	it("validates malformed Discord embeds as content errors instead of throwing TypeError", async () => {
 		expect(() =>
 			getDiscordEmbedTextLength([{ title: "valid", footer: {} }]),
@@ -374,7 +503,7 @@ describe("official publisher contract validation", () => {
 		}) as unknown as typeof fetch;
 		const result = await discordPublisher.publish(
 			request("discord", {
-				accessToken: "https://discord.com/api/webhooks/id/token",
+				accessToken: "https://discord.com/api/webhooks/123/token",
 				targetOptions: { embeds: [{ footer: {} }] },
 			}),
 		);

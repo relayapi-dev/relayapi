@@ -20,7 +20,7 @@ Actions are defined at post creation time via the `cross_post_actions` array and
 ```bash
 # Create a post with cross-post actions
 curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer rlay_live_your_api_key" \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "content": "Check out this announcement!",
@@ -70,8 +70,12 @@ Each cross-post action has its own status that you can monitor:
 | Status | Description |
 |--------|-------------|
 | `pending` | Action is waiting to execute (post not yet published or delay not yet elapsed) |
+| `processing` | RelayAPI has claimed the action and is preparing the provider request |
+| `executing` | The provider request is in progress |
+| `retry` | A retryable failure occurred and another attempt is scheduled |
 | `executed` | Action completed successfully |
 | `failed` | Action failed (e.g., platform error, account disconnected) |
+| `unknown` | The provider outcome could not be proven and requires reconciliation |
 | `cancelled` | Action was manually cancelled before execution |
 
 ## Cancellation
@@ -80,7 +84,7 @@ You can cancel a pending cross-post action before it executes:
 
 ```bash
 curl -X DELETE https://api.relayapi.dev/v1/cross-post-actions/cpa_xyz789 \
-  -H "Authorization: Bearer rlay_live_your_api_key"
+  -H "Authorization: Bearer $RELAY_API_KEY"
 ```
 
 Once an action has been executed or has already failed, it cannot be cancelled.
@@ -104,13 +108,10 @@ const post = await client.posts.create({
 });
 
 // List cross-post actions for a post
-const { data } = await client.posts.crossPostActions.list("post_abc123");
-
-// Get a specific action
-const action = await client.posts.crossPostActions.get("post_abc123", "cpa_xyz789");
+const { data } = await client.crossPostActions.listByPost("post_abc123");
 
 // Cancel a pending action
-await client.posts.crossPostActions.cancel("post_abc123", "cpa_xyz789");
+await client.crossPostActions.cancel("cpa_xyz789");
 ```
 
 ## API Endpoints
@@ -118,5 +119,4 @@ await client.posts.crossPostActions.cancel("post_abc123", "cpa_xyz789");
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/v1/posts/:post_id/cross-post-actions` | List actions for a post |
-| `GET` | `/v1/posts/:post_id/cross-post-actions/:id` | Get action details |
 | `DELETE` | `/v1/cross-post-actions/:id` | Cancel a pending action |

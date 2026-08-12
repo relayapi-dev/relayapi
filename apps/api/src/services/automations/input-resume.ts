@@ -13,7 +13,7 @@
 import { automationRuns, automations, type Database } from "@relayapi/db";
 import { eq } from "drizzle-orm";
 import type { Graph } from "../../schemas/automation-graph";
-import { runLoop, updateRunOptimistic } from "./runner";
+import { runLoop, transitionRunTerminal, updateRunOptimistic } from "./runner";
 import { testSafeAutomationRegex } from "./safe-regex";
 
 export type InputResumeOutcome =
@@ -24,9 +24,9 @@ export type InputResumeOutcome =
 
 /**
  * Attachment metadata captured from the inbound message. Populated by the
- * per-platform normalizers (Instagram / Facebook / WhatsApp / Telegram).
- * Platforms that only expose a URL still populate `url` — mime/size
- * validation simply won't trigger for them in v1.
+ * per-platform normalizers and, where necessary, provider metadata lookups.
+ * Platforms that only expose a URL still populate `url`; configured size caps
+ * fail closed when trustworthy `size_bytes` is unavailable.
  */
 export type AttachmentInput = {
 	id?: string;
@@ -35,6 +35,10 @@ export type AttachmentInput = {
 	mime_type?: string;
 	size_bytes?: number;
 } | null;
+
+export type InputAttachmentResolver = (
+	attachment: NonNullable<AttachmentInput>,
+) => Promise<NonNullable<AttachmentInput>>;
 
 export type InputConfig = {
 	field?: string;
@@ -53,11 +57,37 @@ export type InputConfig = {
 	/**
 	 * Only applies when `input_type === "file"`. If provided, the inbound
 	 * attachment's `size_bytes` must be at most this many megabytes
-	 * (1 MB == 1024 * 1024 bytes). Missing sizes are accepted — platforms
-	 * that don't surface size (e.g. Instagram media) can't be size-gated.
+	 * (1 MB == 1024 * 1024 bytes). Attachments without trustworthy size
+	 * metadata fail validation so the configured safety bound is never bypassed.
 	 */
 	max_size_mb?: number;
 };
+
+/**
+ * Lazily hydrate provider metadata only when a file input actually enforces a
+ * size cap. Provider failures deliberately preserve the unknown-size attachment
+ * so `resolveInputResume` takes its normal fail-closed retry/invalid path.
+ */
+export async function resolveAttachmentForInputValidation(
+	config: InputConfig,
+	attachment: AttachmentInput,
+	resolveAttachment?: InputAttachmentResolver,
+): Promise<AttachmentInput> {
+	if (
+		config.input_type !== "file" ||
+		config.max_size_mb === undefined ||
+		!attachment ||
+		typeof attachment.size_bytes === "number" ||
+		!resolveAttachment
+	) {
+		return attachment;
+	}
+	try {
+		return await resolveAttachment(attachment);
+	} catch {
+		return attachment;
+	}
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Loose phone validator — accepts international + / digits / spaces / dashes /
@@ -100,14 +130,18 @@ export function resolveInputResume(
 					return canRetry ? { port: "retry" } : { port: "invalid" };
 				}
 			}
-			// Size enforcement — only when operator AND platform both provide a
-			// number. Some platforms (e.g. Instagram media) don't expose size.
-			if (
-				config.max_size_mb &&
-				typeof attachment.size_bytes === "number" &&
-				attachment.size_bytes > config.max_size_mb * 1024 * 1024
-			) {
-				return canRetry ? { port: "retry" } : { port: "invalid" };
+			// A configured size cap is a hard safety boundary. Fail closed if the
+			// provider omitted size metadata; accepting an unknown size would make the
+			// operator's cap a silent no-op (notably for WhatsApp media webhooks).
+			if (config.max_size_mb !== undefined) {
+				if (
+					typeof attachment.size_bytes !== "number" ||
+					!Number.isFinite(attachment.size_bytes) ||
+					attachment.size_bytes < 0 ||
+					attachment.size_bytes > config.max_size_mb * 1024 * 1024
+				) {
+					return canRetry ? { port: "retry" } : { port: "invalid" };
+				}
 			}
 			return {
 				port: "captured",
@@ -210,6 +244,7 @@ export async function resumeWaitingRunOnInput(
 	inboundText: string,
 	attachment: AttachmentInput,
 	env: Record<string, unknown>,
+	resolveAttachment?: InputAttachmentResolver,
 ): Promise<"advanced" | "retried" | "completed" | "race"> {
 	const run = await db.query.automationRuns.findFirst({
 		where: eq(automationRuns.id, runId),
@@ -241,11 +276,16 @@ export async function resumeWaitingRunOnInput(
 	const retryMap =
 		(ctx._input_retries as Record<string, number> | undefined) ?? {};
 	const currentRetries = retryMap[node.key] ?? 0;
+	const validatedAttachment = await resolveAttachmentForInputValidation(
+		config,
+		attachment,
+		resolveAttachment,
+	);
 
 	const outcome = resolveInputResume(
 		config,
 		inboundText,
-		attachment,
+		validatedAttachment,
 		currentRetries,
 	);
 
@@ -299,15 +339,20 @@ export async function resumeWaitingRunOnInput(
 	if (!edge) {
 		// Operator didn't wire this port — graceful completion. Matches the
 		// runner's behavior when an advance port has no outgoing edge.
-		const ok = await updateRunOptimistic(db, runId, run.revision, {
-			status: "completed",
-			exitReason: "completed",
-			completedAt: new Date(),
-			context: updatedContext,
-			currentPortKey: outcome.port,
-			waitingFor: null,
-			waitingUntil: null,
-		});
+		const ok = await transitionRunTerminal(
+			db,
+			runId,
+			run.revision,
+			run.automationId,
+			"completed",
+			"completed",
+			{
+				context: updatedContext,
+				currentPortKey: outcome.port,
+				waitingFor: null,
+				waitingUntil: null,
+			},
+		);
 		// Lost the race to the timeout job / a duplicate inbound — report a race.
 		if (!ok) return "race";
 		return "completed";
@@ -328,6 +373,6 @@ export async function resumeWaitingRunOnInput(
 	if (!ok) return "race";
 
 	// Ensure handlers find a `db` binding on env too, mirroring enrollContact.
-	await runLoop(db, runId, { db, ...env });
+	await runLoop(db, runId, { db, ...env }, { refreshContactContext: true });
 	return "advanced";
 }

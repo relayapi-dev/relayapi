@@ -7,7 +7,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { actionRegistry } from "../services/automations/actions";
 import { actionGroupHandler } from "../services/automations/nodes/action-group";
-import type { RunContext } from "../services/automations/types";
+import {
+	AutomationExternalEffectUnknownError,
+	type RunContext,
+} from "../services/automations/types";
 
 // Action-group handlers return their per-action results under `payload`. The
 // HandlerResult.payload is typed `unknown`; this narrows it for assertions.
@@ -138,9 +141,7 @@ describe("action_group handler", () => {
 
 	it("routes via error when an action type is not registered", async () => {
 		const result = await actionGroupHandler.handle(
-			makeNode([
-				{ id: "a1", type: "not_registered", on_error: "abort" },
-			]),
+			makeNode([{ id: "a1", type: "not_registered", on_error: "abort" }]),
 			makeCtx(),
 		);
 
@@ -148,6 +149,22 @@ describe("action_group handler", () => {
 		if (result.result === "advance") expect(result.via_port).toBe("error");
 		expect(actionResults(result.payload)[0]?.ok).toBe(false);
 		expect(actionResults(result.payload)[0]?.error).toContain("unknown action");
+	});
+
+	it("never converts an unknown external outcome into on_error routing", async () => {
+		actionRegistry.fake_unknown = async () => {
+			throw new AutomationExternalEffectUnknownError(
+				"aef_unknown",
+				"provider outcome unknown",
+			);
+		};
+
+		await expect(
+			actionGroupHandler.handle(
+				makeNode([{ id: "a1", type: "fake_unknown", on_error: "continue" }]),
+				makeCtx(),
+			),
+		).rejects.toBeInstanceOf(AutomationExternalEffectUnknownError);
 	});
 
 	it("webhook_out surfaces missing hmac secret through on_error routing", async () => {

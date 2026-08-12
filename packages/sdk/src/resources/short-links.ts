@@ -14,7 +14,8 @@ export class ShortLinks extends APIResource {
   }
 
   /**
-   * Create or update the organization's short link configuration.
+   * Create or update the organization's short link configuration. Replacement
+   * provider credentials are verified with a read-only probe before activation.
    */
   updateConfig(
     body: ShortLinkUpdateConfigParams,
@@ -24,13 +25,10 @@ export class ShortLinks extends APIResource {
   }
 
   /**
-   * Test the configured provider by shortening a test URL.
+   * Test the configured provider with a non-mutating credential probe.
    */
-  testConfig(
-    query: ShortLinkTestConfigParams | null | undefined = {},
-    options?: RequestOptions,
-  ): APIPromise<ShortLinkTestResponse> {
-    return this._client.post('/v1/short-links/test', { query, ...options });
+  testConfig(options?: RequestOptions): APIPromise<ShortLinkTestResponse> {
+    return this._client.post('/v1/short-links/test', options);
   }
 
   /**
@@ -91,7 +89,8 @@ export interface ShortLinkResponse {
   id: string;
   workspace_id: string | null;
   original_url: string;
-  short_url: string;
+  short_url: string | null;
+  status: 'pending' | 'active' | 'manual_review';
   post_id: string | null;
   click_count: number;
   created_at: string;
@@ -141,14 +140,6 @@ export interface ShortLinkShortenParams {
   url: string;
 }
 
-export interface ShortLinkTestConfigParams {
-  /**
-   * Omit for organization scope when Require Workspace ID is disabled. When the
-   * policy is enabled, the test allocation requires this value.
-   */
-  workspace_id?: string;
-}
-
 export declare namespace ShortLinks {
   export {
     type ShortLinkConfigResponse as ShortLinkConfigResponse,
@@ -161,6 +152,5 @@ export declare namespace ShortLinks {
     type ShortLinkUpdateConfigParams as ShortLinkUpdateConfigParams,
     type ShortLinkListParams as ShortLinkListParams,
     type ShortLinkShortenParams as ShortLinkShortenParams,
-    type ShortLinkTestConfigParams as ShortLinkTestConfigParams,
   };
 }

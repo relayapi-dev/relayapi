@@ -84,7 +84,12 @@ export namespace PageSelectResponse {
       | 'whatsapp'
       | 'mastodon'
       | 'discord'
-      | 'sms';
+      | 'sms'
+      | 'beehiiv'
+      | 'convertkit'
+      | 'mailchimp'
+      | 'listmonk'
+      | 'slack';
 
     platform_account_id: string;
 

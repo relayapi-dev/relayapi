@@ -4,22 +4,32 @@
   "description": "The official TypeScript library for the Relay API",
   "author": "Relay <support@relayapi.dev>",
   "license": "Apache-2.0",
-  "type": "commonjs",
-  "main": "dist/index.js",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "default": "./dist/index.js"
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.mjs"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "import": "./dist/internal.mjs",
+      "require": "./dist/internal.cjs",
+      "default": "./dist/internal.mjs"
     }
   },
   "files": [
     "dist/**"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "bun scripts/build.mjs",
+    "prepack": "bun run build",
+    "test": "bun test",
+    "test:package": "bun run build && node tests/package-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

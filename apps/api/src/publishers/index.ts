@@ -12,6 +12,7 @@ import { mailchimpPublisher } from "./mailchimp";
 import { mastodonPublisher } from "./mastodon";
 import { pinterestPublisher } from "./pinterest";
 import { redditPublisher } from "./reddit";
+import { slackPublisher } from "./slack";
 import { smsPublisher } from "./sms";
 import { snapchatPublisher } from "./snapchat";
 import { telegramPublisher } from "./telegram";
@@ -33,6 +34,7 @@ publishers.set("linkedin", linkedinPublisher);
 publishers.set("mastodon", mastodonPublisher);
 publishers.set("pinterest", pinterestPublisher);
 publishers.set("reddit", redditPublisher);
+publishers.set("slack", slackPublisher);
 publishers.set("sms", smsPublisher);
 publishers.set("snapchat", snapchatPublisher);
 publishers.set("telegram", telegramPublisher);
@@ -57,9 +59,13 @@ export function isSupportedPlatform(platform: Platform): boolean {
 export type {
 	EngagementAccount,
 	EngagementActionResult,
+	ProviderDisposition,
+	ProviderEffect,
+	ProviderOutcome,
 	PublishErrorCode,
 	Publisher,
 	PublishRequest,
 	PublishResult,
+	ReconcileRequest,
 } from "./types";
 export { classifyPublishError } from "./types";

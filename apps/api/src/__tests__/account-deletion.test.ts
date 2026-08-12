@@ -27,9 +27,11 @@ function createMockLifecycleDb(status = "active"): {
 	db: Database;
 	operations: string[];
 	revocationValues: Array<Record<string, unknown>>;
+	accountUpdates: Array<Record<string, unknown>>;
 } {
 	const operations: string[] = [];
 	const revocationValues: Array<Record<string, unknown>> = [];
+	const accountUpdates: Array<Record<string, unknown>> = [];
 	const account = {
 		id: "acc_123",
 		organizationId: "org_123",
@@ -73,9 +75,10 @@ function createMockLifecycleDb(status = "active"): {
 			},
 		}),
 		update: (table: unknown) => ({
-			set: () => ({
+			set: (values: Record<string, unknown>) => ({
 				where: async () => {
 					operations.push(`update:${TABLE_NAMES.get(table)}`);
+					if (table === socialAccounts) accountUpdates.push(values);
 				},
 			}),
 		}),
@@ -86,12 +89,13 @@ function createMockLifecycleDb(status = "active"): {
 			callback(tx),
 	} as unknown as Database;
 
-	return { db, operations, revocationValues };
+	return { db, operations, revocationValues, accountUpdates };
 }
 
 describe("deleteConnectedAccountGraph", () => {
 	it("preserves account/history and durably stages revocation before pausing work", async () => {
-		const { db, operations, revocationValues } = createMockLifecycleDb();
+		const { db, operations, revocationValues, accountUpdates } =
+			createMockLifecycleDb();
 
 		await deleteConnectedAccountGraph(db, "acc_123");
 
@@ -106,6 +110,13 @@ describe("deleteConnectedAccountGraph", () => {
 		expect(operations).toContain("update:automation_bindings");
 		expect(operations).toContain("update:ad_accounts");
 		expect(revocationValues[0]?.sourceTokenVersion).toBe(9);
+		expect(accountUpdates[0]).toMatchObject({
+			lifecycleStatus: "disconnected",
+			accessToken: null,
+			refreshToken: null,
+			disconnectReason: "user_requested",
+		});
+		expect(accountUpdates[0]?.disconnectedAt).toBeInstanceOf(Date);
 		expect(
 			operations.some((operation) => operation.startsWith("delete:")),
 		).toBe(false);
@@ -114,8 +125,9 @@ describe("deleteConnectedAccountGraph", () => {
 	it("is idempotent once the durable identity is no longer active", async () => {
 		const { db, operations } = createMockLifecycleDb("disconnected");
 
-		await deleteConnectedAccountGraph(db, "acc_123");
+		const result = await deleteConnectedAccountGraph(db, "acc_123");
 
+		expect(result).toBeUndefined();
 		expect(operations).toEqual([]);
 	});
 

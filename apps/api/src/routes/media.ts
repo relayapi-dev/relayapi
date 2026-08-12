@@ -1,20 +1,33 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import { generateId, media, posts } from "@relayapi/db";
+import { type Database, generateId, media, posts } from "@relayapi/db";
 import type { AwsClient } from "aws4fetch";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import type { Context } from "hono";
+import { mediaPublicHost } from "../lib/deployment-mode";
 import {
 	createBoundedReadableBody,
 	parseContentLength,
 	ResponseTooLargeError,
 } from "../lib/fetch-public-url";
 import {
+	isAllowedMediaMimeType,
+	MAX_DIRECT_MEDIA_UPLOAD_BYTES,
+	normalizeMediaMimeType,
+	validateStoredMediaObject,
+} from "../lib/media-storage-policy";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
+import {
 	getCachedR2Client,
 	presignR2Url,
-	presignViewUrlWithCache,
-	RELAY_MEDIA_HOST,
+	presignRelayMediaUrls,
 } from "../lib/r2-presign";
+import { relayMediaReferenceFromUrl } from "../lib/relay-media-policy";
 import { resolveOperationalCreateScope } from "../lib/request-access";
-import { thumbnailKeyFor } from "../lib/thumbnails";
+import { thumbnailKeyFor, thumbnailStorageTarget } from "../lib/thumbnails";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
@@ -29,34 +42,35 @@ import {
 	MediaResponse,
 	MediaUploadResponse,
 } from "../schemas/media";
-import { processMediaDeletion } from "../services/media-reliability";
+import { enqueueAutomaticMediaNormalization } from "../services/media-processing-jobs";
+import { getMediaProcessingProjection } from "../services/media-processing-projection";
+import {
+	processMediaDeletion,
+	retireRejectedMediaUpload,
+} from "../services/media-reliability";
+import {
+	deleteStoredObject,
+	headStoredObject,
+	preferredMediaStorageTarget,
+	presignStoredObject,
+	putStoredObject,
+	storageLocatorForMedia,
+	storageLocatorForTarget,
+} from "../services/storage-locator";
 import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+function markMediaMutationNotApplied(c: AppContext): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "not_applied",
+	});
+}
 
 const PRESIGN_GET_EXPIRES = 3600; // 1 hour
-export const MAX_MEDIA_UPLOAD_BYTES = 50 * 1024 * 1024;
 
-// SECURITY: Allowed MIME types to prevent stored XSS via SVG/HTML uploads
-const ALLOWED_MIME_TYPES = new Set([
-	"image/jpeg",
-	"image/png",
-	"image/gif",
-	"image/webp",
-	"image/heic",
-	"image/heif",
-	"image/avif",
-	"video/mp4",
-	"video/webm",
-	"video/quicktime",
-	"video/mpeg",
-	"audio/mpeg",
-	"audio/mp4",
-	"audio/webm",
-	"audio/wav",
-	"audio/ogg",
-	"application/pdf",
-]);
+export { MAX_MEDIA_UPLOAD_BYTES } from "../lib/media-storage-policy";
 
 function requireR2Client(env: Env): AwsClient {
 	const client = getCachedR2Client(env);
@@ -68,33 +82,62 @@ function requireR2Client(env: Env): AwsClient {
 	return client;
 }
 
-// View URLs go through the shared KV presign cache (50-min TTL); on list
-// endpoints this replaces up to `limit` fresh SigV4 signing chains per request
-// with warm KV reads.
-async function getPresignedViewUrl(
-	env: Env,
-	client: AwsClient,
-	storageKey: string,
-): Promise<string> {
-	return presignViewUrlWithCache(env, client, storageKey, PRESIGN_GET_EXPIRES);
-}
-
 type MediaReadSource = {
+	organizationId: string;
+	status: string;
 	storageKey: string;
 	url: string | null;
 	thumbnailUrl: string | null;
 	originalDeletedAt: Date | null;
+	deletionRequestedAt: Date | null;
 };
 
-/** Never mint a fresh URL for an original R2 object known to be gone. */
+/**
+ * Never mint a fresh URL unless the current DB row is ready and available. The
+ * batch policy query also prevents historical or URL-derived keys from being
+ * signed merely because they share the tenant prefix.
+ */
+async function getMediaReadUrls(
+	db: Database,
+	env: Env,
+	records: MediaReadSource[],
+): Promise<Array<string | null>> {
+	if (records.length === 0) return [];
+	const organizationId = records[0]?.organizationId;
+	if (!organizationId) return records.map(() => null);
+	const candidates = records.map((record) => ({
+		url:
+			record.status === "ready" &&
+			!record.deletionRequestedAt &&
+			!record.originalDeletedAt &&
+			record.url
+				? record.url
+				: record.thumbnailUrl,
+	}));
+	const resolved =
+		(await presignRelayMediaUrls(
+			db,
+			env,
+			candidates,
+			PRESIGN_GET_EXPIRES,
+			organizationId,
+		)) ?? candidates;
+	return resolved.map((item, index) => {
+		if (!item.url) return null;
+		// An unchanged canonical URL means the row failed the DB readiness policy
+		// or signing is unavailable. Do not expose it as if it were fetchable.
+		return relayMediaReferenceFromUrl(item.url, mediaPublicHost(env))
+			? (records[index]?.thumbnailUrl ?? null)
+			: item.url;
+	});
+}
+
 export async function getMediaReadUrl(
+	db: Database,
 	env: Env,
 	record: MediaReadSource,
 ): Promise<string | null> {
-	if (record.originalDeletedAt || record.url === null) {
-		return record.thumbnailUrl || null;
-	}
-	return getPresignedViewUrl(env, requireR2Client(env), record.storageKey);
+	return (await getMediaReadUrls(db, env, [record]))[0] ?? null;
 }
 
 // --- Route definitions ---
@@ -111,6 +154,10 @@ const listMedia = createRoute({
 		200: {
 			description: "List of media files",
 			content: { "application/json": { schema: MediaListResponse } },
+		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
 		},
 		401: {
 			description: "Unauthorized",
@@ -221,7 +268,7 @@ const presignMedia = createRoute({
 	tags: ["Media"],
 	summary: "Get a pre-signed upload URL",
 	description:
-		"Generate a pre-signed URL for direct upload to R2. The client can PUT the file to the returned URL.",
+		"Create a pending media upload intent and generate a create-only pre-signed R2 PUT URL. Send every header in upload_headers exactly as returned, including Content-Type and If-None-Match, then call POST /v1/media/confirm; confirmation is mandatory before using the canonical media URL.",
 	security: [{ Bearer: [] }],
 	request: {
 		body: {
@@ -304,7 +351,7 @@ const confirmMedia = createRoute({
 	tags: ["Media"],
 	summary: "Confirm a presigned upload completed",
 	description:
-		"After uploading a file to the presigned URL, call this endpoint to mark the media as ready.",
+		"Mandatory final step for a presigned upload. Verifies the stored object and marks the pending media intent ready.",
 	security: [{ Bearer: [] }],
 	request: {
 		body: {
@@ -313,7 +360,9 @@ const confirmMedia = createRoute({
 					schema: z.object({
 						storage_key: z
 							.string()
-							.describe("The storage key from the presign response URL"),
+							.describe(
+								"The path portion of the canonical url returned by POST /v1/media/presign, without the leading slash",
+							),
 					}),
 				},
 			},
@@ -357,31 +406,30 @@ app.openapi(listMedia, async (c) => {
 			conditions.push(workspaceCondition);
 		}
 	}
-	// Composite keyset on (created_at, id) — the full sort key. The cursor is the
-	// id of the last item from the previous page; we read that row's created_at
-	// as text (avoiding the JS-Date microsecond truncation that would skip rows)
-	// and bind it back with an explicit ::timestamptz cast. A plain created_at
-	// keyset would drop rows that share a created_at across the page boundary.
+	// Composite keyset on (created_at, id) — the full sort key, carried in the
+	// cursor itself. Resolving it from a row instead would 400 whenever the
+	// boundary row is deleted or filtered out between pages, and would cost an
+	// extra round-trip. A plain created_at keyset would drop rows that share a
+	// created_at across the page boundary.
 	if (cursor) {
-		const [cursorRow] = await db
-			.select({ createdAt: sql<string>`${media.createdAt}::text` })
-			.from(media)
-			.where(eq(media.id, cursor))
-			.limit(1);
-		if (cursorRow) {
-			conditions.push(
-				sql`(${media.createdAt}, ${media.id}) < (${cursorRow.createdAt}::timestamptz, ${cursor})`,
-			);
-		}
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
+		conditions.push(
+			sql`(${media.createdAt}, ${media.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
+		);
 	}
 
 	const records = await db
 		.select({
 			id: media.id,
+			organizationId: media.organizationId,
+			workspaceId: media.workspaceId,
+			status: media.status,
 			storageKey: media.storageKey,
 			url: media.url,
 			thumbnailUrl: media.thumbnailUrl,
 			originalDeletedAt: media.originalDeletedAt,
+			deletionRequestedAt: media.deletionRequestedAt,
 			filename: media.filename,
 			mimeType: media.mimeType,
 			size: media.size,
@@ -389,6 +437,7 @@ app.openapi(listMedia, async (c) => {
 			height: media.height,
 			duration: media.duration,
 			createdAt: media.createdAt,
+			cursorTimestamp: sql<string>`to_char(${media.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 		})
 		.from(media)
 		.where(and(...conditions))
@@ -397,14 +446,28 @@ app.openapi(listMedia, async (c) => {
 
 	const hasMore = records.length > limit;
 	const data = records.slice(0, limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
-	const urls = await Promise.all(data.map((r) => getMediaReadUrl(c.env, r)));
+	const urls = await getMediaReadUrls(db, c.env, data);
 
 	return c.json(
 		{
 			data: data.map((r, i) => ({
 				id: r.id,
+				workspace_id: r.workspaceId,
+				original_available:
+					r.originalDeletedAt === null &&
+					r.deletionRequestedAt === null &&
+					r.url !== null,
 				url: urls[i] ?? null,
+				reference_url:
+					r.originalDeletedAt === null && r.deletionRequestedAt === null
+						? r.url
+						: null,
 				filename: r.filename,
 				mime_type: r.mimeType,
 				size: r.size,
@@ -413,7 +476,7 @@ app.openapi(listMedia, async (c) => {
 				duration: r.duration ?? null,
 				created_at: r.createdAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 		},
 		200,
@@ -424,16 +487,17 @@ app.openapi(uploadMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { filename, workspace_id } = c.req.valid("query");
 	const scope = await resolveOperationalCreateScope(c, workspace_id, "media");
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) {
+		markMediaMutationNotApplied(c);
+		return scope.response as never;
+	}
 	const contentType =
 		c.req.header("content-type") ?? "application/octet-stream";
+	const normalizedContentType = normalizeMediaMimeType(contentType);
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (
-		!ALLOWED_MIME_TYPES.has(
-			(contentType.split(";")[0] ?? "").trim().toLowerCase(),
-		)
-	) {
+	if (!isAllowedMediaMimeType(contentType)) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -449,13 +513,14 @@ app.openapi(uploadMedia, async (c) => {
 	// counting stream below independently enforces the same bound when the
 	// header is absent, zero, malformed, or dishonest.
 	const contentLength = parseContentLength(c.req.raw.headers);
-	if (contentLength !== null && contentLength > MAX_MEDIA_UPLOAD_BYTES) {
+	if (contentLength !== null && contentLength > MAX_DIRECT_MEDIA_UPLOAD_BYTES) {
+		markMediaMutationNotApplied(c);
 		void c.req.raw.body?.cancel().catch(() => {});
 		return c.json(
 			{
 				error: {
 					code: "FILE_TOO_LARGE",
-					message: `Max upload size is ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
+					message: `The streaming upload endpoint accepts at most ${MAX_DIRECT_MEDIA_UPLOAD_BYTES / 1024 / 1024} MiB; use resumable direct-to-R2 uploads for larger media`,
 				},
 			} as never,
 			413 as never,
@@ -464,6 +529,7 @@ app.openapi(uploadMedia, async (c) => {
 
 	const requestBody = c.req.raw.body;
 	if (!requestBody) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "BAD_REQUEST", message: "Request body is empty" } },
 			400,
@@ -471,7 +537,7 @@ app.openapi(uploadMedia, async (c) => {
 	}
 	const boundedBody = createBoundedReadableBody(
 		requestBody,
-		MAX_MEDIA_UPLOAD_BYTES,
+		MAX_DIRECT_MEDIA_UPLOAD_BYTES,
 		contentLength,
 	);
 
@@ -485,10 +551,13 @@ app.openapi(uploadMedia, async (c) => {
 		.replace(/\0/g, "")
 		.replace(/[<>"'&]/g, "_")
 		.replace(/[%#?]/g, "_");
-	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
-	const url = `https://media.relayapi.dev/${storageKey}`;
+	const storageKey = `${orgId}/media/${generateId("file_")}/${safeFilename}`;
+	const url = `https://${mediaPublicHost(c.env)}/${storageKey}`;
 	const db = c.get("db");
 	const mediaId = generateId("med_");
+	const storageTarget = await preferredMediaStorageTarget(db, c.env, orgId);
+	const storageProvider = storageTarget.provider;
+	const storageLocator = storageLocatorForTarget(storageTarget, storageKey);
 
 	// Persist the upload intent before R2 sees the object. An object-create event
 	// can therefore always find the row, and a Worker crash after the PUT leaves
@@ -498,9 +567,18 @@ app.openapi(uploadMedia, async (c) => {
 		organizationId: orgId,
 		workspaceId: scope.workspaceId,
 		filename: safeFilename,
-		mimeType: contentType,
+		mimeType: normalizedContentType,
 		size: contentLength ?? 0,
 		storageKey,
+		storageProvider,
+		storageBucketLocator: storageTarget.bucket,
+		storageRegion: storageTarget.region,
+		...(storageTarget.provider === "byos"
+			? {
+					storageLocationId: storageTarget.locationId,
+					storageCredentialVersion: storageTarget.credentialVersion,
+				}
+			: {}),
 		url,
 		status: "uploading",
 	});
@@ -511,9 +589,9 @@ app.openapi(uploadMedia, async (c) => {
 		streamFailure = error;
 	});
 	try {
-		await c.env.MEDIA_BUCKET.put(storageKey, boundedBody.body, {
-			httpMetadata: { contentType },
-			customMetadata: { orgId, filename: safeFilename },
+		await putStoredObject(db, c.env, storageLocator, boundedBody.body, {
+			contentType,
+			metadata: { orgId, filename: safeFilename },
 		});
 		size = await boundedBody.bytesRead;
 	} catch (error) {
@@ -532,7 +610,7 @@ app.openapi(uploadMedia, async (c) => {
 				{
 					error: {
 						code: "FILE_TOO_LARGE",
-						message: `Max upload size is ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
+						message: `The streaming upload endpoint accepts at most ${MAX_DIRECT_MEDIA_UPLOAD_BYTES / 1024 / 1024} MiB; use resumable direct-to-R2 uploads for larger media`,
 					},
 				} as never,
 				413 as never,
@@ -543,7 +621,7 @@ app.openapi(uploadMedia, async (c) => {
 
 	if (size === 0) {
 		await Promise.all([
-			c.env.MEDIA_BUCKET.delete(storageKey),
+			deleteStoredObject(db, c.env, storageLocator),
 			db
 				.update(media)
 				.set({ status: "upload_failed" })
@@ -561,9 +639,28 @@ app.openapi(uploadMedia, async (c) => {
 		.update(media)
 		.set({ status: "ready", size })
 		.where(eq(media.id, mediaId));
+	await enqueueAutomaticMediaNormalization(db, c.env, {
+		id: mediaId,
+		organizationId: orgId,
+		workspaceId: scope.workspaceId,
+		storageProvider,
+		storageBucketLocator: storageTarget.bucket,
+		storageRegion: storageTarget.region,
+		storageLocationId:
+			storageTarget.provider === "byos" ? storageTarget.locationId : null,
+		storageCredentialVersion:
+			storageTarget.provider === "byos"
+				? storageTarget.credentialVersion
+				: null,
+		storageKey,
+		mimeType: normalizedContentType,
+	}).catch((error) => {
+		console.error("[media-processing] automatic handoff failed", error);
+	});
 
 	return c.json(
 		{
+			id: mediaId,
 			url,
 			type: contentType,
 			size,
@@ -586,15 +683,16 @@ app.openapi(uploadMedia, async (c) => {
 app.openapi(presignMedia, async (c) => {
 	const orgId = c.get("orgId");
 	const { filename, content_type, workspace_id } = c.req.valid("json");
+	const normalizedContentType = normalizeMediaMimeType(content_type);
 	const scope = await resolveOperationalCreateScope(c, workspace_id, "media");
-	if (!scope.ok) return scope.response as never;
+	if (!scope.ok) {
+		markMediaMutationNotApplied(c);
+		return scope.response as never;
+	}
 
 	// SECURITY: Validate MIME type against allowlist to prevent stored XSS
-	if (
-		!ALLOWED_MIME_TYPES.has(
-			(content_type.split(";")[0] ?? "").trim().toLowerCase(),
-		)
-	) {
+	if (!isAllowedMediaMimeType(content_type)) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -606,8 +704,15 @@ app.openapi(presignMedia, async (c) => {
 		);
 	}
 
+	const db = c.get("db");
+	const storageTarget = await preferredMediaStorageTarget(db, c.env, orgId);
+	const storageProvider = storageTarget.provider;
 	const { R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, CF_ACCOUNT_ID } = c.env;
-	if (!R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !CF_ACCOUNT_ID) {
+	if (
+		storageProvider === "r2" &&
+		(!R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !CF_ACCOUNT_ID)
+	) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -628,38 +733,65 @@ app.openapi(presignMedia, async (c) => {
 		.replace(/\.\./g, "_")
 		.replace(/\0/g, "")
 		.replace(/[%#?]/g, "_");
-	const storageKey = `${orgId}/${generateId("file_")}/${safeFilename}`;
+	const storageKey = `${orgId}/media/${generateId("file_")}/${safeFilename}`;
 	const expiresIn = 3600; // 1 hour
 
-	const client = requireR2Client(c.env);
+	const uploadUrl =
+		storageTarget.provider === "byos"
+			? await presignStoredObject(
+					db,
+					c.env,
+					storageLocatorForTarget(storageTarget, storageKey),
+					"PUT",
+					expiresIn,
+					normalizedContentType,
+				)
+			: await presignR2Url(
+					c.env,
+					requireR2Client(c.env),
+					storageKey,
+					"PUT",
+					expiresIn,
+					normalizedContentType,
+				);
 
-	const uploadUrl = await presignR2Url(
-		c.env,
-		client,
-		storageKey,
-		"PUT",
-		expiresIn,
-		content_type,
-	);
-
-	const url = `https://media.relayapi.dev/${storageKey}`;
+	const url = `https://${mediaPublicHost(c.env)}/${storageKey}`;
 
 	// Create a pending DB record so the file is tracked before upload
-	const db = c.get("db");
-	await db.insert(media).values({
-		organizationId: orgId,
-		workspaceId: scope.workspaceId,
-		filename,
-		mimeType: content_type,
-		size: 0,
-		storageKey,
-		url,
-		status: "pending",
-	});
+	const [pendingMedia] = await db
+		.insert(media)
+		.values({
+			organizationId: orgId,
+			workspaceId: scope.workspaceId,
+			filename,
+			mimeType: normalizedContentType,
+			size: 0,
+			storageKey,
+			storageProvider,
+			storageBucketLocator: storageTarget.bucket,
+			storageRegion: storageTarget.region,
+			...(storageTarget.provider === "byos"
+				? {
+						storageLocationId: storageTarget.locationId,
+						storageCredentialVersion: storageTarget.credentialVersion,
+					}
+				: {}),
+			url,
+			status: "pending",
+		})
+		.returning({ id: media.id });
+	if (!pendingMedia) {
+		throw new Error("Failed to persist the media upload intent");
+	}
 
 	return c.json(
 		{
+			id: pendingMedia.id,
 			upload_url: uploadUrl,
+			upload_headers: {
+				"Content-Type": normalizedContentType,
+				"If-None-Match": "*" as const,
+			},
 			url,
 			expires_in: expiresIn,
 		},
@@ -694,18 +826,36 @@ app.openapi(getMedia, async (c) => {
 		return c.json(WORKSPACE_ACCESS_DENIED_BODY, 403);
 	}
 
-	const url = await getMediaReadUrl(c.env, record);
+	if (record.status !== "ready" || record.deletionRequestedAt) {
+		return c.json(
+			{ error: { code: "NOT_FOUND", message: "Media not found" } },
+			404,
+		);
+	}
+
+	const url = await getMediaReadUrl(db, c.env, record);
+	const processing = await getMediaProcessingProjection(db, orgId, record.id);
 
 	return c.json(
 		{
 			id: record.id,
+			workspace_id: record.workspaceId,
+			original_available:
+				record.originalDeletedAt === null &&
+				record.deletionRequestedAt === null &&
+				record.url !== null,
 			url,
+			reference_url:
+				record.originalDeletedAt === null && record.deletionRequestedAt === null
+					? record.url
+					: null,
 			filename: record.filename,
 			mime_type: record.mimeType,
 			size: record.size,
 			width: record.width ?? null,
 			height: record.height ?? null,
 			duration: record.duration ?? null,
+			...processing,
 			created_at: record.createdAt.toISOString(),
 		},
 		200,
@@ -720,6 +870,8 @@ app.openapi(deleteMedia, async (c) => {
 	const [record] = await db
 		.select({
 			id: media.id,
+			organizationId: media.organizationId,
+			storageProvider: media.storageProvider,
 			storageKey: media.storageKey,
 			thumbnailKey: media.thumbnailKey,
 			workspaceId: media.workspaceId,
@@ -729,17 +881,21 @@ app.openapi(deleteMedia, async (c) => {
 		.limit(1);
 
 	if (!record) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Media not found" } },
 			404,
 		);
 	}
 	const denied = assertWorkspaceScope(c, record.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMediaMutationNotApplied(c);
+		return denied;
+	}
 
 	// Preserve accepted draft/scheduled/publishing posts: the durable deletion
 	// flow must not tombstone media that one of those posts still references.
-	const canonicalUrl = `https://${RELAY_MEDIA_HOST}/${record.storageKey}`;
+	const canonicalUrl = `https://${mediaPublicHost(c.env)}/${record.storageKey}`;
 	const referencing = await db
 		.select({ id: posts.id })
 		.from(posts)
@@ -747,11 +903,15 @@ app.openapi(deleteMedia, async (c) => {
 			and(
 				eq(posts.organizationId, orgId),
 				inArray(posts.status, ["draft", "scheduled", "publishing"]),
-				sql`${posts.platformOverrides}::text LIKE ${`%${canonicalUrl}%`}`,
+				sql`COALESCE(${posts.platformOverrides}, '{}'::jsonb) @> jsonb_build_object(
+					'_media',
+					jsonb_build_array(jsonb_build_object('url', ${canonicalUrl}::text))
+				)`,
 			),
 		)
 		.limit(1);
 	if (referencing.length > 0) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -768,12 +928,20 @@ app.openapi(deleteMedia, async (c) => {
 	// any later point, the every-minute reconciler resumes the two idempotent R2
 	// deletes. The row is hidden immediately but retained until both keys are gone.
 	const now = new Date();
+	const thumbnailTarget = thumbnailStorageTarget(c.env);
 	await db
 		.update(media)
 		.set({
 			status: "deleting",
 			url: null,
 			thumbnailKey: record.thumbnailKey ?? thumbnailKeyFor(record.storageKey),
+			...(record.thumbnailKey
+				? {}
+				: {
+						thumbnailStorageProvider: thumbnailTarget.provider,
+						thumbnailStorageBucketLocator: thumbnailTarget.bucket,
+						thumbnailStorageRegion: thumbnailTarget.region,
+					}),
 			deletionRequestedAt: sql<Date>`COALESCE(${media.deletionRequestedAt}, ${now})`,
 			deletionNextRetryAt: now,
 			deletionLastError: null,
@@ -791,6 +959,7 @@ app.openapi(confirmMedia, async (c) => {
 
 	// SECURITY: Validate storage key belongs to this org to prevent cross-org R2 oracle
 	if (!storage_key.startsWith(`${orgId}/`)) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{
 				error: { code: "BAD_REQUEST", message: "Invalid storage key" },
@@ -799,85 +968,22 @@ app.openapi(confirmMedia, async (c) => {
 		);
 	}
 
-	// Verify the object exists in R2
-	const r2Object = await c.env.MEDIA_BUCKET.head(storage_key);
-	if (!r2Object) {
-		return c.json(
-			{ error: { code: "NOT_FOUND", message: "Upload not found in storage" } },
-			404,
-		);
-	}
-
-	// SEC-02: Re-verify MIME type at confirm time (presigned uploads can bypass declared type)
-	const actualContentType = r2Object.httpMetadata?.contentType;
-	if (
-		actualContentType &&
-		!ALLOWED_MIME_TYPES.has(
-			(actualContentType.split(";")[0] ?? "").trim().toLowerCase(),
-		)
-	) {
-		await c.env.MEDIA_BUCKET.delete(storage_key);
-		return c.json(
-			{
-				error: {
-					code: "INVALID_FILE_TYPE",
-					message: `File type '${actualContentType}' is not allowed`,
-				},
-			},
-			400 as never,
-		);
-	}
-
-	// SEC-11: Enforce size limit on presigned uploads (direct uploads already enforce 50MB)
-	if (r2Object.size > MAX_MEDIA_UPLOAD_BYTES) {
-		await c.env.MEDIA_BUCKET.delete(storage_key);
-		return c.json(
-			{
-				error: {
-					code: "FILE_TOO_LARGE",
-					message: `File size ${r2Object.size} exceeds maximum of ${MAX_MEDIA_UPLOAD_BYTES / 1024 / 1024}MB`,
-				},
-			},
-			400 as never,
-		);
-	}
-
-	// Update the pending record with actual size and mark as ready
-	const [updated] = await db
-		.update(media)
-		.set({
-			size: r2Object.size,
-			status: "ready",
-		})
+	// Establish ownership and lifecycle state before touching R2. A tenant prefix
+	// alone is not authority to inspect or delete an object.
+	const [intent] = await db
+		.select()
+		.from(media)
 		.where(
 			and(
 				eq(media.storageKey, storage_key),
 				eq(media.organizationId, orgId),
-				eq(media.status, "pending"),
+				inArray(media.status, ["pending", "ready"]),
+				isNull(media.deletionRequestedAt),
 			),
 		)
-		.returning();
-
-	// Idempotency: a retried confirm (after a lost response) finds no pending row
-	// because the first call already marked it ready. Return the already-ready
-	// record as success instead of a misleading 404.
-	let record = updated;
-	if (!record) {
-		const [existing] = await db
-			.select()
-			.from(media)
-			.where(
-				and(
-					eq(media.storageKey, storage_key),
-					eq(media.organizationId, orgId),
-					eq(media.status, "ready"),
-				),
-			)
-			.limit(1);
-		record = existing;
-	}
-
-	if (!record) {
+		.limit(1);
+	if (!intent) {
+		markMediaMutationNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -889,12 +995,120 @@ app.openapi(confirmMedia, async (c) => {
 		);
 	}
 
-	const viewUrl = await getMediaReadUrl(c.env, record);
+	let record = intent;
+	const storedObject = await headStoredObject(
+		db,
+		c.env,
+		storageLocatorForMedia(intent),
+	);
+	if (!storedObject) {
+		markMediaMutationNotApplied(c);
+		return c.json(
+			{
+				error: {
+					code: "NOT_FOUND",
+					message: "Upload not found in storage",
+				},
+			},
+			404,
+		);
+	}
+	const validation = validateStoredMediaObject({
+		size: storedObject.size,
+		httpMetadata: { contentType: storedObject.contentType ?? undefined },
+	});
+	if (!validation.ok) {
+		await retireRejectedMediaUpload(db, c.env, intent.id);
+		return c.json(
+			{
+				error: {
+					code: validation.code,
+					message: validation.message,
+				},
+			},
+			400 as never,
+		);
+	}
+
+	if (intent.status === "pending") {
+		const [updated] = await db
+			.update(media)
+			.set({
+				size: validation.size,
+				mimeType: validation.mimeType,
+				status: "ready",
+			})
+			.where(
+				and(
+					eq(media.id, intent.id),
+					eq(media.organizationId, orgId),
+					eq(media.status, "pending"),
+					isNull(media.deletionRequestedAt),
+				),
+			)
+			.returning();
+
+		// Idempotency: if another confirm won the pending -> ready transition,
+		// return that same ready row rather than a misleading failure.
+		if (updated) {
+			record = updated;
+			c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+				kind: "committed",
+				units: 1,
+			});
+		} else {
+			const [existing] = await db
+				.select()
+				.from(media)
+				.where(
+					and(
+						eq(media.id, intent.id),
+						eq(media.organizationId, orgId),
+						eq(media.status, "ready"),
+						isNull(media.deletionRequestedAt),
+					),
+				)
+				.limit(1);
+			if (existing) {
+				record = existing;
+				markMediaMutationNotApplied(c);
+			} else {
+				markMediaMutationNotApplied(c);
+				return c.json(
+					{
+						error: {
+							code: "NOT_FOUND",
+							message: "Media upload is no longer pending",
+						},
+					},
+					404,
+				);
+			}
+		}
+	} else {
+		// Confirm is idempotent: reading an already-ready upload is K=0.
+		markMediaMutationNotApplied(c);
+	}
+
+	await enqueueAutomaticMediaNormalization(db, c.env, record).catch((error) => {
+		console.error("[media-processing] automatic handoff failed", error);
+	});
+
+	const viewUrl = await getMediaReadUrl(db, c.env, record);
 
 	return c.json(
 		{
 			id: record.id,
+			workspace_id: record.workspaceId,
+			original_available:
+				record.originalDeletedAt === null &&
+				record.deletionRequestedAt === null &&
+				record.url !== null,
 			url: viewUrl,
+			reference_url:
+				record.originalDeletedAt === null && record.deletionRequestedAt === null
+					? record.url
+					: null,
 			filename: record.filename,
 			mime_type: record.mimeType,
 			size: record.size,

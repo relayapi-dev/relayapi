@@ -35,7 +35,7 @@ async def get_transcript(
     video_id: str, lang: str | None = None
 ) -> dict[str, Any]:
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _sync_fetch, video_id, lang)
     except TranscriptsDisabled:
         return {

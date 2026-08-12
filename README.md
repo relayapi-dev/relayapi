@@ -48,7 +48,7 @@
 - **Analytics** — cross-platform metrics, best posting times, and content decay tracking
 - **Automation** — auto-post rules, sequences, engagement rules, and comment automations
 - **Advertising** — manage ads across Meta, Google, TikTok, LinkedIn, Pinterest, and Twitter
-- **Media management** — upload once, attach to any post (R2 storage with presigned URLs)
+- **Media management** — upload once, confirm, and attach to any post (durable R2 upload intents with pre-signed URLs)
 - **Webhooks** — real-time notifications for platform events with delivery logs
 - **Queue & scheduling** — smart scheduling with queue slots and optimal time suggestions
 - **URL shortening** — built-in short links with click tracking
@@ -105,6 +105,23 @@ const metrics = await client.analytics.retrieve({
 ```
 
 The SDK supports Node.js 20+, Deno, Bun, Cloudflare Workers, and Vercel Edge Runtime. Full SDK reference at [`packages/sdk`](packages/sdk/README.md).
+
+## Self-host on Cloudflare
+
+Use the deployment CLI to provision the Workers-native stack in your own
+Cloudflare account and generate a private, updateable operator repository:
+
+```bash
+mkdir my-relayapi && cd my-relayapi
+bunx @relayapi/self-host init
+bunx @relayapi/self-host doctor
+bunx @relayapi/self-host deploy
+```
+
+Self-hosted installs track stable version tags through `relayapi.lock.json`.
+The generated daily workflow opens update pull requests; merging one runs
+forward-only database migrations before deploying the API and dashboard. See
+the [self-hosting guide](apps/docs/content/docs/guides/self-hosting.mdx).
 
 ## Tech Stack
 
@@ -283,7 +300,87 @@ Then start the app(s) you are working on:
 | `bun run dev:docs` | Next.js docs site | `http://localhost:3000` |
 | `bun run dev:cli` | CLI tool in watch mode | — |
 
-### 3. Seeding a dev user
+### 3. Secret management
+
+RelayAPI commits encrypted Dotenvx vaults, never plaintext secrets. Maintainers
+can move between computers by restoring the decryption key from Dotenvx Armor;
+the OS-native secret store provides a local fallback. Public forks create their
+own keys and Armor ownership from the committed examples.
+
+On a new maintainer machine:
+
+```bash
+bunx dotenvx armor login
+bun run secrets:native -- development  # Cache in Keychain/Secret Service/Credential Manager
+bun run secrets:decrypt                # Restore ignored local development files
+bun run secrets:check
+```
+
+After changing a local development secret, refresh the committed ciphertext:
+
+```bash
+bun run secrets:encrypt -- development
+bun run secrets:validate
+```
+
+Fork owners initialize independent files and keys instead of receiving RelayAPI
+credentials:
+
+```bash
+bun run secrets:init -- development
+# Replace required placeholders in the ignored files.
+bun run secrets:encrypt -- development
+bun run secrets:armor -- development
+bun run secrets:native -- development
+```
+
+Production uses a different key and one allowlisted file per Worker. Existing
+Cloudflare values cannot be downloaded, so the repository initially contains
+only production examples and import tooling. Configure a target before its first
+protected release:
+
+```bash
+bun run secrets:init -- production
+# Securely populate apps/api/.production.secrets and/or apps/app/.production.secrets.
+bun run secrets:encrypt -- production
+bun run secrets:armor -- production
+bun run secrets:native -- production
+```
+
+The committed production vault and protected `DOTENVX_ARMOR_TOKEN` are mandatory
+for API and app releases. The preflight permits live bindings to be a subset of
+the vault intent so the release can add a first required secret, but rejects any
+stale, cross-target, wrong-type, or vault-disabled binding. The deploy uploads
+every intended value through Wrangler `--secrets-file`; the post-deploy gate then
+requires the live names to match the encrypted vault exactly.
+
+`bun run secrets:cf:sync -- api|app` is an advanced staging command: it creates
+an **undeployed** Worker version and does not change traffic. Record the returned
+candidate version ID, inspect it with `wrangler versions view <candidate> --json`,
+capture the current 100%-traffic version, and promote the candidate only through
+an explicitly reviewed `wrangler versions deploy <candidate> --yes` operation
+with rollback available. The normal bootstrap and rotation path is the protected
+deploy workflow, not `cf:sync`.
+
+Wrangler secret changes are additive. Secret deletion is therefore a separate
+production change: capture the currently deployed version, use
+`wrangler versions secret delete` to create an undeployed candidate, inspect it,
+then explicitly deploy that version with rollback available. Never use
+`wrangler secret delete` or the script-secret DELETE API as a deploy preflight;
+both immediately create and deploy a Worker version.
+`@relayapi/self-host deploy` automates that guarded version workflow: it stages
+code and desired values, removes names absent from the operator environment,
+verifies the exact candidate without exposing values, and only then assigns it
+100% of traffic.
+Cloudflare credentials and production database migration values remain GitHub
+environment secrets.
+
+Never commit `.env.keys`, `.dev.vars`, `.env`, or `.production.secrets`.
+Encrypted `.vault` files contain public keys and ciphertext only. If plaintext
+or a private key reaches Git, rotate the upstream credentials—the Git history
+cannot be made safe merely by deleting the current file.
+
+### 4. Seeding a dev user
 
 The development seed is idempotent and creates no active paid entitlement. It
 refuses production mode and non-loopback connection URLs. Set
@@ -298,7 +395,7 @@ NODE_ENV=development \
 
 Sign in at `https://dev.relayapi.dev/app` with those credentials.
 
-### 4. Database workflow
+### 5. Database workflow
 
 ```bash
 bun run db:generate   # Generate a Drizzle migration from schema changes
@@ -306,7 +403,7 @@ bun run db:migrate    # Open tunnel, apply migrations, close tunnel
 bun run db:studio     # Keep a tunnel only while Drizzle Studio runs
 ```
 
-### 5. Debugging
+### 6. Debugging
 
 - **API requests**: hit `http://localhost:8789/docs` for Swagger UI, or use `curl` with a `rlay_test_*` API key.
 - **Wrangler logs**: `bun run dev:api` streams Worker logs, including `console.log`, bindings, and queue activity.
@@ -316,16 +413,18 @@ bun run db:studio     # Keep a tunnel only while Drizzle Studio runs
 - **Queues**: Wrangler emulates queues locally; check terminal output for `PUBLISH_QUEUE` consumer runs.
 - **Type errors**: `bun run typecheck` runs all packages. Use `bun run typecheck:api` (or `:app`, `:db`, etc.) to narrow down.
 
-### 6. Checks before opening a PR
+### 7. Checks before opening a PR
 
 ```bash
 bun run typecheck            # All packages & apps compile
 bun test --cwd apps/api      # API unit tests
+bun run test:secrets         # Portable secret workflow tests
+bun run secrets:validate     # Ciphertext-only vault policy
 ```
 
 Biome handles formatting and linting — most editors pick up `biome.json` automatically.
 
-### 7. Submit the PR
+### 8. Submit the PR
 
 Open a pull request against `main`. CI runs typecheck and deploys the relevant app when the PR is merged.
 

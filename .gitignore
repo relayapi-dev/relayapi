@@ -3,6 +3,8 @@ dist
 .wrangler
 .env
 .dev.vars
+.env.keys
+.production.secrets
 drizzle/meta
 *.tsbuildinfo
 .next

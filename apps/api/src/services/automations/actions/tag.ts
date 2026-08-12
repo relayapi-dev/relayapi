@@ -5,14 +5,16 @@
 // table in the current schema, so "create if missing" collapses to "append
 // to array if not already present".
 //
-// After a successful mutation we emit an internal `tag_applied` /
-// `tag_removed` event so entrypoints listening for tag changes fire. Cycle
-// protection sits inside `emitInternalEvent` (depth counter in payload).
+// The contact mutation and its internal `tag_applied` / `tag_removed` job are
+// committed together. Cycle protection is encoded in the staged event depth.
 
 import { contacts } from "@relayapi/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Action } from "../../../schemas/automation-actions";
-import { emitInternalEvent } from "../internal-events";
+import {
+	resolveTriggeringSocialAccountId,
+	stageInternalEvent,
+} from "../internal-events";
 import type { InboundEvent } from "../trigger-matcher";
 import type { RunContext } from "../types";
 import type { ActionHandler, ActionRegistry } from "./types";
@@ -34,7 +36,7 @@ function internalEventFromCtx(
 		kind,
 		channel: (ctx.channel ?? "instagram") as InboundEvent["channel"],
 		organizationId: ctx.organizationId,
-		socialAccountId: null,
+		socialAccountId: resolveTriggeringSocialAccountId(ctx),
 		contactId: ctx.contactId,
 		conversationId: ctx.conversationId ?? null,
 		tagId: tag,
@@ -53,40 +55,45 @@ const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
 	if (!db) throw new Error("tag_add: db binding missing");
 	const tag = action.tag.trim();
 	if (!tag) return;
-
-	// Check whether the tag is already on the contact before mutating — if so
-	// this is a no-op and we must NOT emit a `tag_applied` event (which would
-	// spuriously re-fire listener automations on every repeat call).
-	const existing = await db.query.contacts.findFirst({
-		where: and(
-			eq(contacts.id, ctx.contactId),
-			eq(contacts.organizationId, ctx.organizationId),
-		),
+	const scopeKey = ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org";
+	const event = internalEventFromCtx(
+		ctx,
+		"tag_applied",
+		tag,
+		action.id,
+		(ctx.context as Record<string, unknown>)?.triggerEvent,
+	);
+	const nextTags = await db.transaction(async (tx) => {
+		const [existing] = await tx
+			.select({ tags: contacts.tags })
+			.from(contacts)
+			.where(
+				and(
+					eq(contacts.id, ctx.contactId),
+					eq(contacts.organizationId, ctx.organizationId),
+					eq(contacts.scopeKey, scopeKey),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!existing) throw new Error("tag_add: contact not found in run scope");
+		const tags = Array.isArray(existing.tags) ? existing.tags : [];
+		if (tags.includes(tag)) return null;
+		const updatedTags = [...tags, tag];
+		await tx
+			.update(contacts)
+			.set({ tags: updatedTags, updatedAt: ctx.now })
+			.where(
+				and(
+					eq(contacts.id, ctx.contactId),
+					eq(contacts.organizationId, ctx.organizationId),
+					eq(contacts.scopeKey, scopeKey),
+				),
+			);
+		await stageInternalEvent(tx, ctx, event, action.id);
+		return updatedTags;
 	});
-	const existingTags = existing?.tags;
-	const wasPresent = Array.isArray(existingTags)
-		? (existingTags as string[]).includes(tag)
-		: false;
-
-	await db
-		.update(contacts)
-		.set({
-			tags: sql`
-				CASE
-					WHEN ${tag} = ANY(${contacts.tags}) THEN ${contacts.tags}
-					ELSE array_append(${contacts.tags}, ${tag})
-				END
-			`,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(contacts.id, ctx.contactId),
-				eq(contacts.organizationId, ctx.organizationId),
-			),
-		);
-
-	if (wasPresent) return;
+	if (!nextTags) return;
 
 	// Mirror the DB mutation into `ctx.context.tags` so downstream condition
 	// nodes in the SAME run see the fresh tag set. Without this, a
@@ -94,25 +101,7 @@ const tagAdd: ActionHandler<TagAddAction> = async (action, ctx) => {
 	// takes the false branch because ctx.context was hydrated at enroll time
 	// and the runner only re-reads it across run iterations, not within a
 	// single handler chain. Fix for Plan 6 Unit RR11 / Task 5 (F6).
-	const currentTags = Array.isArray(ctx.context.tags)
-		? (ctx.context.tags as string[])
-		: [];
-	if (!currentTags.includes(tag)) {
-		ctx.context.tags = [...currentTags, tag];
-	}
-
-	// Best-effort internal event — never fail the primary tag mutation.
-	await emitInternalEvent(
-		db,
-		internalEventFromCtx(
-			ctx,
-			"tag_applied",
-			tag,
-			action.id,
-			(ctx.context as Record<string, unknown>)?.triggerEvent,
-		),
-		ctx.env,
-	);
+	ctx.context.tags = nextTags;
 };
 
 const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
@@ -120,54 +109,51 @@ const tagRemove: ActionHandler<TagRemoveAction> = async (action, ctx) => {
 	if (!db) throw new Error("tag_remove: db binding missing");
 	const tag = action.tag.trim();
 	if (!tag) return;
-
-	// Same no-op guard as tag_add — only emit `tag_removed` if the tag was
-	// actually present before the mutation.
-	const existing = await db.query.contacts.findFirst({
-		where: and(
-			eq(contacts.id, ctx.contactId),
-			eq(contacts.organizationId, ctx.organizationId),
-		),
+	const scopeKey = ctx.workspaceId ? `ws/${ctx.workspaceId}` : "org";
+	const event = internalEventFromCtx(
+		ctx,
+		"tag_removed",
+		tag,
+		action.id,
+		(ctx.context as Record<string, unknown>)?.triggerEvent,
+	);
+	const nextTags = await db.transaction(async (tx) => {
+		const [existing] = await tx
+			.select({ tags: contacts.tags })
+			.from(contacts)
+			.where(
+				and(
+					eq(contacts.id, ctx.contactId),
+					eq(contacts.organizationId, ctx.organizationId),
+					eq(contacts.scopeKey, scopeKey),
+				),
+			)
+			.for("update")
+			.limit(1);
+		if (!existing)
+			throw new Error("tag_remove: contact not found in run scope");
+		const tags = Array.isArray(existing.tags) ? existing.tags : [];
+		if (!tags.includes(tag)) return null;
+		const updatedTags = tags.filter((current) => current !== tag);
+		await tx
+			.update(contacts)
+			.set({ tags: updatedTags, updatedAt: ctx.now })
+			.where(
+				and(
+					eq(contacts.id, ctx.contactId),
+					eq(contacts.organizationId, ctx.organizationId),
+					eq(contacts.scopeKey, scopeKey),
+				),
+			);
+		await stageInternalEvent(tx, ctx, event, action.id);
+		return updatedTags;
 	});
-	const existingTags = existing?.tags;
-	const wasPresent = Array.isArray(existingTags)
-		? (existingTags as string[]).includes(tag)
-		: false;
-
-	await db
-		.update(contacts)
-		.set({
-			tags: sql`array_remove(${contacts.tags}, ${tag})`,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(contacts.id, ctx.contactId),
-				eq(contacts.organizationId, ctx.organizationId),
-			),
-		);
-
-	if (!wasPresent) return;
+	if (!nextTags) return;
 
 	// Mirror the removal into ctx.context.tags so later condition nodes in
 	// the same run see the contact without the tag. Plan 6 Unit RR11 /
 	// Task 5 (F6).
-	const currentTags = Array.isArray(ctx.context.tags)
-		? (ctx.context.tags as string[])
-		: [];
-	ctx.context.tags = currentTags.filter((t) => t !== tag);
-
-	await emitInternalEvent(
-		db,
-		internalEventFromCtx(
-			ctx,
-			"tag_removed",
-			tag,
-			action.id,
-			(ctx.context as Record<string, unknown>)?.triggerEvent,
-		),
-		ctx.env,
-	);
+	ctx.context.tags = nextTags;
 };
 
 export const tagHandlers: ActionRegistry = {

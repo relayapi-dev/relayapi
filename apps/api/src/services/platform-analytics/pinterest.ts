@@ -1,3 +1,7 @@
+import {
+	readProviderJson,
+	readProviderText,
+} from "../../lib/provider-response";
 import type {
 	PlatformAnalyticsFetcher,
 	PlatformOverview,
@@ -79,18 +83,17 @@ async function pinterestFetch<T = unknown>(
 
 		if (!res.ok) {
 			console.error(
-				`[pinterest-analytics] API error ${res.status} for ${path}: ${await res.text()}`,
+				`[pinterest-analytics] API error ${res.status} for ${path}: ${await readProviderText(res)}`,
 			);
 			return null;
 		}
 
-		return (await res.json()) as T;
+		return (await readProviderJson(res)) as T;
 	} catch (err) {
 		console.error(`[pinterest-analytics] Fetch failed for ${path}:`, err);
 		return null;
 	}
 }
-
 
 export const pinterestAnalytics: PlatformAnalyticsFetcher = {
 	async getOverview(
@@ -112,7 +115,8 @@ export const pinterestAnalytics: PlatformAnalyticsFetcher = {
 		const curImpressions = current?.all?.summary_metrics?.IMPRESSION ?? 0;
 		const curEngagement = current?.all?.summary_metrics?.ENGAGEMENT ?? 0;
 		const curPinClicks = current?.all?.summary_metrics?.PIN_CLICK ?? 0;
-		const curOutboundClicks = current?.all?.summary_metrics?.OUTBOUND_CLICK ?? 0;
+		const curOutboundClicks =
+			current?.all?.summary_metrics?.OUTBOUND_CLICK ?? 0;
 		const curSaves = current?.all?.summary_metrics?.SAVE ?? 0;
 
 		const prevImpressions = previous?.all?.summary_metrics?.IMPRESSION ?? 0;
@@ -170,7 +174,8 @@ export const pinterestAnalytics: PlatformAnalyticsFetcher = {
 				const pinClicks = pin.metrics?.PIN_CLICK ?? 0;
 				const outboundClicks = pin.metrics?.OUTBOUND_CLICK ?? 0;
 				const saves = pin.metrics?.SAVE ?? 0;
-				const engagementRate = impressions > 0 ? (engagement / impressions) * 100 : 0;
+				const engagementRate =
+					impressions > 0 ? (engagement / impressions) * 100 : 0;
 
 				const imageUrl =
 					pinData?.media?.images?.["600x"]?.url ??
@@ -191,7 +196,9 @@ export const pinterestAnalytics: PlatformAnalyticsFetcher = {
 					saves,
 					clicks: pinClicks + outboundClicks,
 					engagement_rate: engagementRate,
-					platform_url: pinData ? `https://www.pinterest.com/pin/${pin.pin_id}/` : null,
+					platform_url: pinData
+						? `https://www.pinterest.com/pin/${pin.pin_id}/`
+						: null,
 				});
 			}
 

@@ -1,10 +1,8 @@
 import { RootProvider } from "fumadocs-ui/provider/next";
-import { Inter } from "next/font/google";
 import "./global.css";
 import type { ReactNode } from "react";
 import { FeedbackWidget } from "@/components/feedback-widget";
 
-const inter = Inter({ subsets: ["latin"] });
 const metadataBase = new URL(
   process.env.NEXT_PUBLIC_SITE_URL || "https://docs.relayapi.dev",
 );
@@ -31,8 +29,8 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={inter.className} suppressHydrationWarning>
-      <body>
+    <html lang="en" suppressHydrationWarning>
+      <body className="font-sans">
         <RootProvider
           theme={{
             defaultTheme: "dark",

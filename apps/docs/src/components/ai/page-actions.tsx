@@ -2,12 +2,11 @@
 import { type ComponentProps, useMemo, useState } from 'react';
 import { Check, ChevronDown, Copy, ExternalLinkIcon, TextIcon } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { fetchMarkdownContent } from '../../lib/markdown-content';
 import { useCopyButton } from 'fumadocs-ui/utils/use-copy-button';
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/popover';
 import { buttonVariants } from '../ui/button';
 import { usePathname } from 'next/navigation';
-
-const cache = new Map<string, Promise<string>>();
 
 /**
  * see https://fumadocs.dev/docs/integrations/llms#page-actions to customise.
@@ -23,19 +22,11 @@ export function MarkdownCopyButton({
 }) {
   const [isLoading, setLoading] = useState(false);
   const [checked, onClick] = useCopyButton(async () => {
-    const cached = cache.get(markdownUrl);
-    if (cached) return navigator.clipboard.writeText(await cached);
-
     setLoading(true);
 
     try {
-      const promise = fetch(markdownUrl).then((res) => res.text());
-      cache.set(markdownUrl, promise);
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/plain': promise,
-        }),
-      ]);
+      const content = await fetchMarkdownContent(markdownUrl);
+      await navigator.clipboard.writeText(content);
     } finally {
       setLoading(false);
     }
@@ -59,15 +50,6 @@ export function MarkdownCopyButton({
       {props.children ?? 'Copy Markdown'}
     </button>
   );
-}
-
-async function fetchMarkdownContent(markdownUrl: string): Promise<string> {
-  const cached = cache.get(markdownUrl);
-  if (cached) return cached;
-
-  const promise = fetch(markdownUrl).then((res) => res.text());
-  cache.set(markdownUrl, promise);
-  return promise;
 }
 
 /**

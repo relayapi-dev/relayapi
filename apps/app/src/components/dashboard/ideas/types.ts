@@ -57,6 +57,8 @@ export interface IdeaComment {
 	author_id: string;
 	author: {
 		id: string;
+		kind: "member" | "service";
+		user_id: string | null;
 		name: string | null;
 		image: string | null;
 	} | null;

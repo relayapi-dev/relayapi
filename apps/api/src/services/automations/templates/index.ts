@@ -4,12 +4,13 @@
 // small set of high-level fields into a graph + entrypoint set that the caller
 // (POST /v1/automations) persists. See spec §7 for the template catalog.
 
+import type { AutomationEntrypointKind } from "@relayapi/db";
 import type { Graph } from "../../../schemas/automation-graph";
 import { buildBlank } from "./blank";
 import { buildCommentToDm } from "./comment-to-dm";
 import { buildFaqBot } from "./faq-bot";
-import { buildFollowerGrowth } from "./follower-growth";
 import { buildFollowToDm } from "./follow-to-dm";
+import { buildFollowerGrowth } from "./follower-growth";
 import { buildLeadCapture } from "./lead-capture";
 import { buildStoryLeads } from "./story-leads";
 import { buildWelcomeFlow } from "./welcome-flow";
@@ -25,12 +26,13 @@ export type TemplateKind =
 	| "follow_to_dm";
 
 export type TemplateEntrypoint = {
-	kind: string;
+	kind: AutomationEntrypointKind;
 	config: Record<string, unknown>;
 	socialAccountId?: string | null;
 	filters?: Record<string, unknown> | null;
 	allowReentry?: boolean;
 	reentryCooldownMin?: number;
+	dailyCap?: number | null;
 	priority?: number;
 };
 
@@ -48,7 +50,9 @@ export type TemplateBuildOutput = {
 	description?: string;
 };
 
-export type TemplateBuilder = (input: TemplateBuildInput) => TemplateBuildOutput;
+export type TemplateBuilder = (
+	input: TemplateBuildInput,
+) => TemplateBuildOutput;
 
 const TEMPLATE_BUILDERS: Record<TemplateKind, TemplateBuilder> = {
 	blank: buildBlank,

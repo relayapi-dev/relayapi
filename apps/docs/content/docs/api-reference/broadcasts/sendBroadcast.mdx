@@ -1,10 +1,9 @@
 ---
 title: Trigger immediate send
-description: >-
-  Queues the broadcast for immediate delivery. Returns 202 with the broadcast in
-  `scheduled` status; the every-minute processor sends pending recipients in
-  bounded batches and finalizes counts. Poll GET /v1/broadcasts/{id} for
-  progress.
+description: Queues the broadcast for immediate delivery. Returns 202 with the
+  broadcast in `scheduled` status; the every-minute processor sends pending
+  recipients in bounded batches and finalizes counts. Poll GET
+  /v1/broadcasts/{id} for progress.
 full: true
 _openapi:
   preload:
@@ -15,8 +14,7 @@ _openapi:
   structuredData:
     headings: []
     contents:
-      - content: >-
-          Queues the broadcast for immediate delivery. Returns 202 with the
+      - content: Queues the broadcast for immediate delivery. Returns 202 with the
           broadcast in `scheduled` status; the every-minute processor sends
           pending recipients in bounded batches and finalizes counts. Poll GET
           /v1/broadcasts/{id} for progress.

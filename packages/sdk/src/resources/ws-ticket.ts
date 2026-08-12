@@ -5,7 +5,8 @@ import { RequestOptions } from '../internal/request-options';
 export class WsTicket extends APIResource {
   /**
    * Issues a short-lived ticket the client uses to open an authenticated
-   * WebSocket connection without exposing the raw API key.
+   * WebSocket connection without exposing the raw API key. This mirrors the
+   * `retrieveWebSocketTicket` OpenAPI operation.
    */
   retrieve(options?: RequestOptions): APIPromise<WsTicketRetrieveResponse> {
     return this._client.get('/v1/ws-ticket', options);

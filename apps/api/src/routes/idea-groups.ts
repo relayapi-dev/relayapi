@@ -20,6 +20,36 @@ import type { Env, Variables } from "../types";
 
 const app = new OpenAPIHono<{ Bindings: Env; Variables: Variables }>();
 
+class IdeaGroupReorderFenceError extends Error {
+	constructor() {
+		super("Lost group reorder fence");
+		this.name = "IdeaGroupReorderFenceError";
+	}
+}
+
+function markIdeaGroupReorderNotApplied(
+	c: Parameters<typeof assertAllWorkspaceScope>[0],
+): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "not_applied",
+	});
+}
+
+function markIdeaGroupReorderCommitted(
+	c: Parameters<typeof assertAllWorkspaceScope>[0],
+): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({
+		kind: "committed",
+		units: 1,
+	});
+}
+
+function markIdeaGroupReorderUnknown(
+	c: Parameters<typeof assertAllWorkspaceScope>[0],
+): void {
+	c.get("mutationEffectTracker")?.setAuthoritativeOutcome({ kind: "unknown" });
+}
+
 function serialize(row: typeof ideaGroups.$inferSelect) {
 	return {
 		id: row.id,
@@ -503,95 +533,116 @@ const reorderIdeaGroups = createRoute({
 
 app.openapi(reorderIdeaGroups, async (c) => {
 	const denied = assertAllWorkspaceScope(c);
-	if (denied) return denied as never;
+	if (denied) {
+		markIdeaGroupReorderNotApplied(c);
+		return denied as never;
+	}
 	const orgId = c.get("orgId");
 	const { groups } = c.req.valid("json");
-	const result = await c.get("db").transaction(async (tx) => {
-		await acquireAdvisoryLocks(tx, [groupOrderLockKey(orgId, null)]);
-		const current = await tx
-			.select()
-			.from(ideaGroups)
-			.where(
-				and(
-					eq(ideaGroups.organizationId, orgId),
-					sql`${ideaGroups.workspaceId} IS NULL`,
-				),
-			)
-			.orderBy(asc(ideaGroups.position), asc(ideaGroups.id))
-			.for("update");
-		const requested = new Map(groups.map((group) => [group.id, group]));
-		const expectedPositions = new Set(groups.map((group) => group.position));
-		if (
-			requested.size !== groups.length ||
-			expectedPositions.size !== groups.length ||
-			current.length !== groups.length ||
-			groups.some((group) =>
-				current.every(
-					(row) =>
-						row.id !== group.id || row.revision !== group.expected_revision,
-				),
-			) ||
-			![...expectedPositions].every(
-				(position) => position >= 0 && position < groups.length,
-			)
-		) {
-			return { kind: "conflict" } as const;
+	const result = await (async () => {
+		try {
+			return await c.get("db").transaction(async (tx) => {
+				await acquireAdvisoryLocks(tx, [groupOrderLockKey(orgId, null)]);
+				const current = await tx
+					.select()
+					.from(ideaGroups)
+					.where(
+						and(
+							eq(ideaGroups.organizationId, orgId),
+							sql`${ideaGroups.workspaceId} IS NULL`,
+						),
+					)
+					.orderBy(asc(ideaGroups.position), asc(ideaGroups.id))
+					.for("update");
+				const requested = new Map(groups.map((group) => [group.id, group]));
+				const expectedPositions = new Set(
+					groups.map((group) => group.position),
+				);
+				if (
+					requested.size !== groups.length ||
+					expectedPositions.size !== groups.length ||
+					current.length !== groups.length ||
+					groups.some((group) =>
+						current.every(
+							(row) =>
+								row.id !== group.id || row.revision !== group.expected_revision,
+						),
+					) ||
+					![...expectedPositions].every(
+						(position) => position >= 0 && position < groups.length,
+					)
+				) {
+					return { kind: "conflict" } as const;
+				}
+
+				const temporaryBase =
+					Math.max(-1, ...current.map((group) => group.position)) +
+					current.length +
+					1;
+				const temporaryValues = sql.join(
+					current.map(
+						(group, index) =>
+							sql`(${group.id}::text, ${temporaryBase + index}::integer)`,
+					),
+					sql`, `,
+				);
+				await tx.execute(sql`
+					UPDATE idea_groups AS target
+					SET position = value.position
+					FROM (VALUES ${temporaryValues}) AS value(id, position)
+					WHERE target.id = value.id
+						AND target.organization_id = ${orgId}
+						AND target.workspace_id IS NULL
+				`);
+
+				const finalValues = sql.join(
+					groups.map(
+						(group) =>
+							sql`(${group.id}::text, ${group.position}::integer, ${group.expected_revision}::integer)`,
+					),
+					sql`, `,
+				);
+				const updated = await tx.execute<{ id: string }>(sql`
+					UPDATE idea_groups AS target
+					SET position = value.position,
+						revision = target.revision + 1,
+						updated_at = now()
+					FROM (VALUES ${finalValues}) AS value(id, position, expected_revision)
+					WHERE target.id = value.id
+						AND target.organization_id = ${orgId}
+						AND target.workspace_id IS NULL
+						AND target.revision = value.expected_revision
+					RETURNING target.id
+				`);
+				if (updated.length !== groups.length)
+					throw new IdeaGroupReorderFenceError();
+				const rows = await tx
+					.select()
+					.from(ideaGroups)
+					.where(
+						and(
+							eq(ideaGroups.organizationId, orgId),
+							sql`${ideaGroups.workspaceId} IS NULL`,
+						),
+					)
+					.orderBy(asc(ideaGroups.position), asc(ideaGroups.id));
+				return { kind: "ok", rows } as const;
+			});
+		} catch (error) {
+			if (error instanceof IdeaGroupReorderFenceError) {
+				// The sentinel is thrown by our callback before the driver can issue
+				// COMMIT, so the temporary-order writes necessarily roll back. Surface
+				// the same reload-and-retry conflict as a pre-write revision mismatch.
+				return { kind: "conflict" } as const;
+			}
+			// Raw SQL writes are inside the transaction. A rejected transaction
+			// acknowledgement cannot distinguish rollback from a lost COMMIT ack.
+			markIdeaGroupReorderUnknown(c);
+			throw error;
 		}
-
-		const temporaryBase =
-			Math.max(-1, ...current.map((group) => group.position)) +
-			current.length +
-			1;
-		const temporaryValues = sql.join(
-			current.map(
-				(group, index) =>
-					sql`(${group.id}::text, ${temporaryBase + index}::integer)`,
-			),
-			sql`, `,
-		);
-		await tx.execute(sql`
-			UPDATE idea_groups AS target
-			SET position = value.position
-			FROM (VALUES ${temporaryValues}) AS value(id, position)
-			WHERE target.id = value.id
-				AND target.organization_id = ${orgId}
-				AND target.workspace_id IS NULL
-		`);
-
-		const finalValues = sql.join(
-			groups.map(
-				(group) =>
-					sql`(${group.id}::text, ${group.position}::integer, ${group.expected_revision}::integer)`,
-			),
-			sql`, `,
-		);
-		const updated = await tx.execute<{ id: string }>(sql`
-			UPDATE idea_groups AS target
-			SET position = value.position,
-				revision = target.revision + 1,
-				updated_at = now()
-			FROM (VALUES ${finalValues}) AS value(id, position, expected_revision)
-			WHERE target.id = value.id
-				AND target.organization_id = ${orgId}
-				AND target.workspace_id IS NULL
-				AND target.revision = value.expected_revision
-			RETURNING target.id
-		`);
-		if (updated.length !== groups.length)
-			throw new Error("Lost group reorder fence");
-		const rows = await tx
-			.select()
-			.from(ideaGroups)
-			.where(
-				and(
-					eq(ideaGroups.organizationId, orgId),
-					sql`${ideaGroups.workspaceId} IS NULL`,
-				),
-			)
-			.orderBy(asc(ideaGroups.position), asc(ideaGroups.id));
-		return { kind: "ok", rows } as const;
-	});
+	})();
 	if (result.kind === "conflict") {
+		markIdeaGroupReorderNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -603,6 +654,7 @@ app.openapi(reorderIdeaGroups, async (c) => {
 			409 as never,
 		);
 	}
+	markIdeaGroupReorderCommitted(c);
 	return c.json({ data: result.rows.map(serialize) }, 200);
 });
 

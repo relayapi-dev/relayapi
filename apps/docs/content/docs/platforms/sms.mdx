@@ -1,586 +1,131 @@
 ---
 title: SMS API
-description: Send SMS and MMS messages with RelayAPI — text messages, images, multi-recipient delivery, and media messaging via Twilio.
+description: Connect a validated Twilio sender and deliver SMS or MMS with per-recipient outcomes.
 icon: MessageSquare
 ---
 
-## Quick Reference
+## Current RelayAPI capability
 
-| Property | Value |
-|----------|-------|
+| Property | RelayAPI behavior |
+|----------|-------------------|
 | Platform key | `sms` |
-| Auth method | Twilio Account SID + Auth Token |
-| Text limit | 1,600 characters (auto-segmented) |
-| Media per message | 10 (MMS) |
-| Image formats | JPEG, PNG, GIF |
-| Image max size | 5 MB |
-| Video formats | MP4 |
-| Video max size | 5 MB |
-| Message types | SMS (text), MMS (media) |
-| Multi-recipient | Yes (sends individually to each number) |
-| Scheduling | Yes |
-| Analytics | No (use Twilio dashboard) |
+| Provider | Twilio Programmable Messaging |
+| Connection | Account SID, Auth Token, and an owned SMS-capable default sender |
+| Body | Up to 1,600 characters; Twilio may bill/deliver it as multiple segments |
+| Recipients | 1–100 E.164 numbers, sent as separate Twilio messages |
+| MMS | Up to 10 public media URLs per recipient |
+| Scheduling | Yes, through RelayAPI |
+| Native analytics endpoints | No |
 
-<Callout type="info">
-**SDK source** — [TypeScript](https://www.npmjs.com/package/@relayapi/sdk) · [Python](https://pypi.org/project/relay/) · [Go](https://github.com/relayapi-dev/relay-go) · [Java](https://github.com/relayapi-dev/relay-java) · [REST API](/api-reference)
-</Callout>
+RelayAPI's current SMS publisher is Twilio-only. It does not select Telnyx or another provider from account metadata.
 
-## Before You Start
+## Connect Twilio
 
-<Callout type="warn">
-SMS uses **Twilio** as the delivery provider — you must bring your own Twilio credentials. Each message requires a **from number** (your Twilio phone number) and at least one **recipient phone number** in E.164 format (e.g., `+15017122661`). Messages longer than 160 characters are **auto-segmented** by Twilio into multiple SMS segments. MMS (media messages) supports up to **10 media URLs** per message. Multi-recipient messages are sent **individually** to each phone number (not as a group).
-</Callout>
-
-## Quick Start
-
-Send an SMS message:
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-import Relay from '@relayapi/sdk';
-
-const client = new Relay();
-
-const post = await client.posts.create({
-  content: 'Hello from RelayAPI!',
-  targets: ['sms'],
-  scheduled_at: 'now',
-  target_options: {
-    sms: {
-      from_number: '+15017122661',
-      phone_numbers: ['+14155238886']
-    }
-  }
-});
-
-console.log(post.id); // post_abc123
+```bash
+curl -X POST https://api.relayapi.dev/v1/connect/sms \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workspace_id": "ws_example",
+    "account_sid": "your-twilio-account-sid",
+    "auth_token": "your-twilio-auth-token",
+    "from_number": "+15017122661"
+  }'
 ```
-</Tab>
-<Tab value="Python">
-```python
-from relay import Relay
 
-client = Relay()
+Before storing the encrypted credential, RelayAPI verifies all three facts with Twilio:
 
-post = client.posts.create(
-    content='Hello from RelayAPI!',
-    targets=['sms'],
-    scheduled_at='now',
-    target_options={
-        'sms': {
-            'from_number': '+15017122661',
-            'phone_numbers': ['+14155238886']
-        }
-    }
-)
+1. The Account SID and Auth Token authenticate.
+2. The Twilio account is active.
+3. `from_number` is an SMS-capable incoming number owned by that account.
 
-print(post.id)  # post_abc123
-```
-</Tab>
-<Tab value="Go">
-```go
-client := relaygo.NewClient()
+The verified number and its reported MMS capability are stored as connection-owned metadata. That sender is authoritative for outbound requests: generic account metadata cannot replace it, and a credential already connected in another workspace cannot be moved by reconnecting it implicitly.
 
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Hello from RelayAPI!"),
-    Targets:     relaygo.F([]string{"sms"}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "sms": map[string]interface{}{
-            "from_number":   "+15017122661",
-            "phone_numbers": []string{"+14155238886"},
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-RelayClient client = RelayOkHttpClient.fromEnv();
+## Send SMS
 
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Hello from RelayAPI!")
-    .addTarget("sms")
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("sms", JsonValue.from(Map.of(
-            "from_number", "+15017122661",
-            "phone_numbers", List.of("+14155238886")
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
 ```bash
 curl -X POST https://api.relayapi.dev/v1/posts \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: example-idempotency-key" \
   -d '{
-    "content": "Hello from RelayAPI!",
-    "targets": ["sms"],
+    "content": "Order 12345 has shipped.",
+    "targets": ["acc_sms_example"],
     "scheduled_at": "now",
     "target_options": {
       "sms": {
-        "from_number": "+15017122661",
         "phone_numbers": ["+14155238886"]
       }
     }
   }'
 ```
-</Tab>
-</Tabs>
 
-## Content Types
+The account ID selects one exact Twilio connection. The broader `sms` selector
+is also valid, but it expands to every authorized SMS account in the post's
+workspace boundary. The connected sender is always used. Legacy
+`target_options.sms.from_number` is accepted only as a matching identity
+assertion; a different number fails with `SMS_SENDER_MISMATCH` before any
+Twilio request.
 
-### Text Message (SMS)
+## Send MMS to several recipients
 
-Plain text message up to 1,600 characters. Messages over 160 characters are auto-segmented.
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  content: 'Your order #12345 has been shipped! Track it here: https://example.com/track/12345',
-  targets: ['sms'],
-  scheduled_at: 'now',
-  target_options: {
-    sms: {
-      from_number: '+15017122661',
-      phone_numbers: ['+14155238886']
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Your order #12345 has been shipped! Track it here: https://example.com/track/12345',
-    targets=['sms'],
-    scheduled_at='now',
-    target_options={
-        'sms': {
-            'from_number': '+15017122661',
-            'phone_numbers': ['+14155238886']
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Your order #12345 has been shipped! Track it here: https://example.com/track/12345"),
-    Targets:     relaygo.F([]string{"sms"}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "sms": map[string]interface{}{
-            "from_number":   "+15017122661",
-            "phone_numbers": []string{"+14155238886"},
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Your order #12345 has been shipped! Track it here: https://example.com/track/12345")
-    .addTarget("sms")
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("sms", JsonValue.from(Map.of(
-            "from_number", "+15017122661",
-            "phone_numbers", List.of("+14155238886")
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Your order #12345 has been shipped! Track it here: https://example.com/track/12345",
-    "targets": ["sms"],
-    "scheduled_at": "now",
-    "target_options": {
-      "sms": {
-        "from_number": "+15017122661",
-        "phone_numbers": ["+14155238886"]
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-### Media Message (MMS)
-
-Send images or videos via MMS. Up to 10 media URLs per message.
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  content: "Here's your receipt!",
-  targets: ['sms'],
-  media: [
-    { url: 'https://cdn.example.com/receipt.png', type: 'image' }
+```json
+{
+  "content": "Your receipt is attached.",
+  "targets": ["acc_sms_example"],
+  "media": [
+    {"url": "https://cdn.example.com/receipt.png", "type": "image"}
   ],
-  scheduled_at: 'now',
-  target_options: {
-    sms: {
-      from_number: '+15017122661',
-      phone_numbers: ['+14155238886']
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content="Here's your receipt!",
-    targets=['sms'],
-    media=[
-        {'url': 'https://cdn.example.com/receipt.png', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'sms': {
-            'from_number': '+15017122661',
-            'phone_numbers': ['+14155238886']
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Here's your receipt!"),
-    Targets:     relaygo.F([]string{"sms"}),
-    ScheduledAt: relaygo.F("now"),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{
-        {URL: relaygo.F("https://cdn.example.com/receipt.png"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
-    }),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "sms": map[string]interface{}{
-            "from_number":   "+15017122661",
-            "phone_numbers": []string{"+14155238886"},
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Here's your receipt!")
-    .addTarget("sms")
-    .scheduledAt("now")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/receipt.png")
-        .type(PostCreateParams.Media.Type.IMAGE)
-        .build())
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("sms", JsonValue.from(Map.of(
-            "from_number", "+15017122661",
-            "phone_numbers", List.of("+14155238886")
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Here'\''s your receipt!",
-    "targets": ["sms"],
-    "media": [
-      {"url": "https://cdn.example.com/receipt.png", "type": "image"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "sms": {
-        "from_number": "+15017122661",
-        "phone_numbers": ["+14155238886"]
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-### Media-Only Message (MMS)
-
-Send media without any text body.
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  targets: ['sms'],
-  media: [
-    { url: 'https://cdn.example.com/promo.jpg', type: 'image' }
-  ],
-  scheduled_at: 'now',
-  target_options: {
-    sms: {
-      from_number: '+15017122661',
-      phone_numbers: ['+14155238886']
-    }
-  }
-});
-```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    targets=['sms'],
-    media=[
-        {'url': 'https://cdn.example.com/promo.jpg', 'type': 'image'}
-    ],
-    scheduled_at='now',
-    target_options={
-        'sms': {
-            'from_number': '+15017122661',
-            'phone_numbers': ['+14155238886']
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Targets:     relaygo.F([]string{"sms"}),
-    ScheduledAt: relaygo.F("now"),
-    Media: relaygo.F([]relaygo.PostNewParamsMedia{
-        {URL: relaygo.F("https://cdn.example.com/promo.jpg"), Type: relaygo.F(relaygo.PostNewParamsMediaTypeImage)},
-    }),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "sms": map[string]interface{}{
-            "from_number":   "+15017122661",
-            "phone_numbers": []string{"+14155238886"},
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .addTarget("sms")
-    .scheduledAt("now")
-    .addMedia(PostCreateParams.Media.builder()
-        .url("https://cdn.example.com/promo.jpg")
-        .type(PostCreateParams.Media.Type.IMAGE)
-        .build())
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("sms", JsonValue.from(Map.of(
-            "from_number", "+15017122661",
-            "phone_numbers", List.of("+14155238886")
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "targets": ["sms"],
-    "media": [
-      {"url": "https://cdn.example.com/promo.jpg", "type": "image"}
-    ],
-    "scheduled_at": "now",
-    "target_options": {
-      "sms": {
-        "from_number": "+15017122661",
-        "phone_numbers": ["+14155238886"]
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
-
-### Multi-Recipient
-
-Send the same message to multiple phone numbers. Each recipient receives an individual message.
-
-<Tabs items={['TypeScript', 'Python', 'Go', 'Java', 'curl']}>
-<Tab value="TypeScript">
-```typescript
-const post = await client.posts.create({
-  content: 'Reminder: Team meeting at 3 PM today.',
-  targets: ['sms'],
-  scheduled_at: 'now',
-  target_options: {
-    sms: {
-      from_number: '+15017122661',
-      phone_numbers: [
-        '+14155238886',
-        '+14155238887',
-        '+14155238888'
+  "scheduled_at": "now",
+  "target_options": {
+    "sms": {
+      "phone_numbers": [
+        "+14155238886",
+        "+14155238887"
       ]
     }
   }
-});
+}
 ```
-</Tab>
-<Tab value="Python">
-```python
-post = client.posts.create(
-    content='Reminder: Team meeting at 3 PM today.',
-    targets=['sms'],
-    scheduled_at='now',
-    target_options={
-        'sms': {
-            'from_number': '+15017122661',
-            'phone_numbers': [
-                '+14155238886',
-                '+14155238887',
-                '+14155238888'
-            ]
-        }
-    }
-)
-```
-</Tab>
-<Tab value="Go">
-```go
-post, err := client.Posts.New(context.TODO(), relaygo.PostNewParams{
-    Content:     relaygo.F("Reminder: Team meeting at 3 PM today."),
-    Targets:     relaygo.F([]string{"sms"}),
-    ScheduledAt: relaygo.F("now"),
-    TargetOptions: relaygo.F(map[string]interface{}{
-        "sms": map[string]interface{}{
-            "from_number": "+15017122661",
-            "phone_numbers": []string{
-                "+14155238886",
-                "+14155238887",
-                "+14155238888",
-            },
-        },
-    }),
-})
-```
-</Tab>
-<Tab value="Java">
-```java
-PostCreateResponse post = client.posts().create(PostCreateParams.builder()
-    .content("Reminder: Team meeting at 3 PM today.")
-    .addTarget("sms")
-    .scheduledAt("now")
-    .targetOptions(PostCreateParams.TargetOptions.builder()
-        .putAdditionalProperty("sms", JsonValue.from(Map.of(
-            "from_number", "+15017122661",
-            "phone_numbers", List.of("+14155238886", "+14155238887", "+14155238888")
-        )))
-        .build())
-    .build());
-```
-</Tab>
-<Tab value="curl">
-```bash
-curl -X POST https://api.relayapi.dev/v1/posts \
-  -H "Authorization: Bearer $RELAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Reminder: Team meeting at 3 PM today.",
-    "targets": ["sms"],
-    "scheduled_at": "now",
-    "target_options": {
-      "sms": {
-        "from_number": "+15017122661",
-        "phone_numbers": [
-          "+14155238886",
-          "+14155238887",
-          "+14155238888"
-        ]
-      }
-    }
-  }'
-```
-</Tab>
-</Tabs>
 
-## Media Requirements
+RelayAPI creates one Twilio Message resource per recipient. This is not a group message. Twilio fetches every `MediaUrl`, so each URL must remain publicly reachable and meet Twilio/carrier requirements. MMS availability, file support, deliverability, registration, and pricing depend on the sender and destination; an account being connected does not guarantee every MMS will be accepted.
 
-### Images
+## `target_options.sms`
 
-| Property | Requirement |
-|----------|-------------|
-| Max per message | 10 (MMS) |
-| Formats | JPEG, PNG, GIF |
-| Max file size | 5 MB |
+| Field | Type | Required | Behavior |
+|-------|------|----------|----------|
+| `phone_numbers` | E.164 string array | Yes | 1–100 recipients; each becomes a separate provider effect |
+| `from_number` | E.164 string | No | Deprecated matching assertion only. It must equal the connector-verified sender and cannot override it. |
+| `content` | string | No | SMS-specific body override |
+| `media` | array | No | SMS-specific media override, up to 10 URLs |
 
-### Videos
+The message must contain a body, at least one media URL, or both.
 
-| Property | Requirement |
-|----------|-------------|
-| Max per message | 1 |
-| Formats | MP4 |
-| Max file size | 5 MB |
+## Delivery lifecycle
 
-## `target_options` Fields
+An HTTP success from Twilio normally means the message was accepted, not delivered. RelayAPI records each returned Message SID and maps provider states as follows:
 
-All fields go inside `target_options.sms` on your post request.
+| Twilio state | RelayAPI disposition |
+|--------------|----------------------|
+| `accepted`, `scheduled`, `queued`, `sending` | Pending/accepted |
+| `sent` | Sent |
+| `delivered`, `read` | Delivered |
+| `failed`, `undelivered`, `canceled` | Failed |
+| Undocumented state | Outcome unknown |
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `content` | string | — | Override message content for SMS specifically |
-| `media` | object[] | — | Override media for SMS specifically |
-| `from_number` | string | — | **Required.** Your Twilio phone number in E.164 format (e.g., `"+15017122661"`) |
-| `phone_numbers` | string[] | — | **Required.** Recipient phone numbers in E.164 format |
+Multi-recipient operations can be partial. RelayAPI preserves one effect per recipient; it does not report the whole post as successful when one recipient was rejected. Message SID reconciliation checks each accepted message independently.
 
-## Common Errors
+Reuse the original RelayAPI idempotency key and exact body when retrying a request that did not cross the provider boundary. If the response is partial or outcome-unknown, reconcile the recorded SIDs instead of resending every recipient.
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| Missing from_number | No sender phone number provided | Add `from_number` in `target_options.sms` with your Twilio phone number. |
-| Missing phone_numbers | No recipients provided | Add at least one phone number to `phone_numbers` array. |
-| Empty content | No body text or media provided | Add text content or at least one media URL. |
-| Invalid phone number | Phone number is not in E.164 format | Use E.164 format with country code (e.g., `+14155238886`). |
-| Twilio auth error | Invalid Account SID or Auth Token | Verify your Twilio credentials in the connected account settings. |
+## Credential and compliance lifecycle
 
-## Known Quirks
+- Twilio Auth Tokens do not refresh through OAuth. Reconnect after rotation or revocation.
+- Reconnecting can validate a different sender. A publish-time field cannot change or persist another sender.
+- You are responsible for sender registration, recipient consent, opt-out handling, quiet hours, carrier rules, and Twilio charges in the jurisdictions where you send.
+- Disconnecting RelayAPI does not close the Twilio account or release its phone number.
 
-- **Twilio-powered** — you must bring your own Twilio Account SID, Auth Token, and phone number.
-- **Auto-segmentation** — messages over 160 characters are split into multiple segments by Twilio (billed per segment).
-- **1,600-character limit** — Twilio allows up to 1,600 characters per message (auto-segmented).
-- **MMS availability** — MMS (media messages) is only available in the US and Canada. International messages are SMS-only.
-- **Multi-recipient sends individually** — each phone number receives a separate message (not a group text).
-- **Media URLs must be publicly accessible** — Twilio fetches media from the provided URLs.
-- **Partial failures are possible** — when sending to multiple recipients, some may succeed while others fail.
+## Official Twilio references
 
-## Automations
-
-SMS automation is provider-abstracted — Twilio and Telnyx both supported. Provider is stored on the account metadata as `provider` (defaults to `twilio`).
-
-### Triggers
-
-| Type | Fires on |
-| --- | --- |
-| `sms_received` | Inbound SMS (any provider) |
-
-### Send nodes
-
-| Node | Twilio endpoint | Telnyx endpoint | Required fields |
-| --- | --- | --- | --- |
-| `sms_send` | `POST /2010-04-01/Accounts/{sid}/Messages.json` | `POST /v2/messages` | `text` |
-| `sms_send_mms` | same (+ `MediaUrl`) | same (+ `media_urls[]`) | `media_url`, optional `text` |
-
-Auth is Basic (Twilio: `sid:auth_token`) or Bearer (Telnyx: API key), chosen from the account's provider field.
+- [Programmable Messaging API and authentication](https://www.twilio.com/docs/messaging/api)
+- [Message resource: create and fetch status](https://www.twilio.com/docs/messaging/api/message-resource)
+- [IncomingPhoneNumber resource](https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource)

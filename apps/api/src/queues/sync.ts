@@ -1,13 +1,15 @@
 import type { AnalyticsQueueMessage } from "../services/analytics-refresh";
 import {
+	exponentialBackoffSeconds,
+	QUEUE_DELIVERY_RETRY,
+} from "../lib/async-policy";
+import {
 	refreshExternalPostMetricsBatch,
 	refreshInternalPostMetrics,
 } from "../services/analytics-refresh";
+import { syncAutomationBinding } from "../services/automations/binding-sync";
 import { processExternalPostPreview } from "../services/external-post-sync/previews";
-import {
-	refreshExternalPostMetrics,
-	syncExternalPosts,
-} from "../services/external-post-sync/sync";
+import { syncExternalPosts } from "../services/external-post-sync/sync";
 import {
 	RateLimitError,
 	type SyncQueueMessage,
@@ -29,11 +31,11 @@ export async function consumeSyncQueue(
 				case "sync_posts":
 					await syncExternalPosts(env, body);
 					break;
-				case "refresh_metrics":
-					await refreshExternalPostMetrics(env, body);
-					break;
 				case "generate_external_preview":
 					await processExternalPostPreview(env, body);
+					break;
+				case "sync_automation_binding":
+					await syncAutomationBinding(env, body);
 					break;
 				case "refresh_internal_metrics":
 					await refreshInternalPostMetrics(env, body);
@@ -73,7 +75,11 @@ export async function consumeSyncQueue(
 				);
 				message.retry({ delaySeconds: Math.min(delaySec, 900) });
 			} else if (message.attempts < 3) {
-				const delaySeconds = 2 ** message.attempts;
+				const delaySeconds = exponentialBackoffSeconds(
+					message.attempts,
+					QUEUE_DELIVERY_RETRY,
+					`${message.id}:${message.attempts}`,
+				);
 				message.retry({ delaySeconds });
 			} else {
 				console.error(

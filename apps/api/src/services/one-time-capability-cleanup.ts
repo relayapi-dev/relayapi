@@ -18,7 +18,7 @@ export async function cleanupOneTimeCapabilities(
 			.select({ id: oneTimeCapabilities.id })
 			.from(oneTimeCapabilities)
 			.where(lt(oneTimeCapabilities.expiresAt, now))
-			.orderBy(oneTimeCapabilities.expiresAt)
+			.orderBy(oneTimeCapabilities.expiresAt, oneTimeCapabilities.id)
 			.limit(boundedLimit);
 		if (rows.length === 0) break;
 

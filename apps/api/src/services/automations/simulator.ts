@@ -4,15 +4,32 @@
 // sends, no queue enqueues — just a deterministic walk through the graph that
 // records each visit. Used by the builder preview and the simulate endpoint.
 
-import type { Graph, GraphEdge, GraphNode } from "../../schemas/automation-graph";
+import { type AutomationNodeKind, isAutomationNodeKind } from "@relayapi/db";
+import type {
+	Graph,
+	GraphEdge,
+	GraphNode,
+} from "../../schemas/automation-graph";
 import { evaluateFilterGroup } from "./filter-eval";
+import {
+	type AutomationChannel,
+	CHANNEL_CAPABILITIES,
+	CHANNEL_SUPPORTS_BUTTONS,
+	CHANNEL_SUPPORTS_QUICK_REPLIES,
+} from "./platforms";
 
 export type SimulateStep = {
 	node_key: string;
-	node_kind: string;
+	node_kind: AutomationNodeKind;
 	entered_via_port_key: string | null;
 	exited_via_port_key: string | null;
-	outcome: "advance" | "wait_input" | "wait_delay" | "end" | "fail";
+	outcome:
+		| "advance"
+		| "wait_input"
+		| "wait_delay"
+		| "wait_event"
+		| "end"
+		| "fail";
 	payload?: unknown;
 };
 
@@ -26,6 +43,8 @@ export type SimulateInput = {
 	graph: Graph;
 	startNodeKey?: string;
 	testContext?: Record<string, unknown>;
+	/** Stored automation channel, used to mirror deliverable interactive controls. */
+	channel?: string;
 	/** Force a node to exit via the given port, overriding default branching. */
 	branchChoices?: Record<string, string>;
 	/** Hard cap on node visits — defaults to 100. */
@@ -33,6 +52,12 @@ export type SimulateInput = {
 };
 
 const DEFAULT_MAX_VISITS = 100;
+
+function isAutomationChannel(
+	channel: string | undefined,
+): channel is AutomationChannel {
+	return channel !== undefined && Object.hasOwn(CHANNEL_CAPABILITIES, channel);
+}
 
 export async function simulate(input: SimulateInput): Promise<SimulateResult> {
 	const { graph } = input;
@@ -57,11 +82,11 @@ export async function simulate(input: SimulateInput): Promise<SimulateResult> {
 			};
 		}
 
-		const walkResult = walkNode(graph, node, branchChoices, ctx);
+		const walkResult = walkNode(graph, node, branchChoices, ctx, input.channel);
 
 		steps.push({
 			node_key: node.key,
-			node_kind: node.kind,
+			node_kind: isAutomationNodeKind(node.kind) ? node.kind : "unknown",
 			entered_via_port_key: enteredPort,
 			exited_via_port_key: walkResult.exitPort,
 			outcome: walkResult.outcome,
@@ -114,7 +139,7 @@ type WalkResult =
 			reason: "advance";
 	  }
 	| {
-			outcome: "wait_input" | "wait_delay" | "end" | "fail";
+			outcome: "wait_input" | "wait_delay" | "wait_event" | "end" | "fail";
 			exitPort: string | null;
 			payload?: unknown;
 			reason: string;
@@ -125,6 +150,7 @@ function walkNode(
 	node: GraphNode,
 	branchChoices: Record<string, string>,
 	ctx: Record<string, unknown>,
+	channel?: string,
 ): WalkResult {
 	const forced = branchChoices[node.key];
 
@@ -141,21 +167,57 @@ function walkNode(
 			const cfg = (node.config ?? {}) as Record<string, unknown>;
 			const waitForReply = Boolean(cfg.wait_for_reply);
 			const blocks = Array.isArray(cfg.blocks) ? cfg.blocks : [];
+			const messagingChannel = isAutomationChannel(channel) ? channel : null;
 			const hasInteractive = blocks.some((b) => {
 				if (!b || typeof b !== "object") return false;
 				const bb = b as Record<string, unknown>;
-				if (!Array.isArray(bb.buttons)) return false;
-				return bb.buttons.some(
-					(btn) =>
-						btn &&
-						typeof btn === "object" &&
-						(btn as Record<string, unknown>).type === "branch",
+				const blockType = bb.type;
+				if (
+					channel !== undefined &&
+					(typeof blockType !== "string" ||
+						!messagingChannel ||
+						CHANNEL_CAPABILITIES[messagingChannel][
+							blockType as keyof (typeof CHANNEL_CAPABILITIES)[AutomationChannel]
+						] !== true)
+				) {
+					return false;
+				}
+				if (
+					channel !== undefined &&
+					(!messagingChannel || !CHANNEL_SUPPORTS_BUTTONS[messagingChannel])
+				) {
+					return false;
+				}
+				const buttonGroups: unknown[] = [bb.buttons];
+				if (Array.isArray(bb.cards)) {
+					buttonGroups.push(
+						...bb.cards.map((card) =>
+							card && typeof card === "object"
+								? (card as Record<string, unknown>).buttons
+								: undefined,
+						),
+					);
+				}
+				return buttonGroups.some(
+					(group) =>
+						Array.isArray(group) &&
+						group.some(
+							(btn) =>
+								btn &&
+								typeof btn === "object" &&
+								(btn as Record<string, unknown>).type === "branch",
+						),
 				);
 			});
 			const quickReplies = Array.isArray(cfg.quick_replies)
 				? cfg.quick_replies
 				: [];
-			if (waitForReply || hasInteractive || quickReplies.length > 0) {
+			const hasQuickReplies =
+				quickReplies.length > 0 &&
+				(channel === undefined ||
+					(messagingChannel !== null &&
+						CHANNEL_SUPPORTS_QUICK_REPLIES[messagingChannel]));
+			if (hasInteractive || hasQuickReplies || waitForReply) {
 				return {
 					outcome: "wait_input",
 					exitPort: null,
@@ -184,10 +246,29 @@ function walkNode(
 
 		case "delay": {
 			return {
-				outcome: "advance",
-				exitPort: "next",
+				outcome: "wait_delay",
+				exitPort: null,
 				payload: null,
-				reason: "advance",
+				reason: "wait_delay",
+			};
+		}
+
+		case "wait_event": {
+			if (forced) {
+				return {
+					outcome: "advance",
+					exitPort: forced,
+					payload: null,
+					reason: "advance",
+				};
+			}
+			return {
+				outcome: "wait_event",
+				exitPort: null,
+				payload: {
+					event_kinds: (node.config as { event_kinds?: unknown })?.event_kinds,
+				},
+				reason: "wait_event",
 			};
 		}
 
@@ -214,7 +295,8 @@ function walkNode(
 				};
 			}
 			const ok = evaluateFilterGroup(predicates as never, {
-				contact: null,
+				contact:
+					(ctx.contact as Record<string, unknown> | null | undefined) ?? null,
 				state: ctx,
 				tags: (ctx.tags as string[] | undefined) ?? [],
 				fields: (ctx.fields as Record<string, unknown> | undefined) ?? {},
@@ -324,11 +406,32 @@ function walkNode(
 			};
 		}
 
+		case "social_profile_check": {
+			if (forced) {
+				return {
+					outcome: "advance",
+					exitPort: forced,
+					payload: null,
+					reason: "advance",
+				};
+			}
+			const profile = ctx.social_profile as
+				| { is_user_follow_business?: unknown }
+				| undefined;
+			const follows =
+				profile?.is_user_follow_business === true ||
+				ctx.is_user_follow_business === true;
+			return {
+				outcome: "advance",
+				exitPort: follows ? "follows" : "not_follows",
+				payload: { is_user_follow_business: follows },
+				reason: "advance",
+			};
+		}
+
 		case "goto": {
 			const cfg = (node.config ?? {}) as Record<string, unknown>;
-			const target =
-				(cfg.target_node_key as string | undefined) ??
-				(cfg.target_automation_id as string | undefined);
+			const target = cfg.target_node_key as string | undefined;
 			if (!target) {
 				return {
 					outcome: "fail",
@@ -347,10 +450,14 @@ function walkNode(
 
 		case "end": {
 			const cfg = (node.config ?? {}) as Record<string, unknown>;
+			const reason =
+				typeof cfg.reason === "string" && cfg.reason.trim()
+					? cfg.reason.trim()
+					: "completed";
 			return {
 				outcome: "end",
 				exitPort: null,
-				reason: (cfg.reason as string | undefined) ?? "completed",
+				reason,
 			};
 		}
 
@@ -615,16 +722,16 @@ function pickLegacyBranchLabel(
 					}>;
 			  }
 			| undefined;
-		const firstRow = list?.sections?.flatMap((section) => section.rows ?? [])[0];
+		const firstRow = list?.sections?.flatMap(
+			(section) => section.rows ?? [],
+		)[0];
 		return firstRow?.id ?? firstRow?.title ?? "next";
 	}
 	if (nodeType === "telegram_send_keyboard") {
 		const rows = config.buttons as
 			| Array<Array<{ callback_data?: string; text?: string }>>
 			| undefined;
-		const firstButton = rows
-			?.flat()
-			.find((button) => button.callback_data);
+		const firstButton = rows?.flat().find((button) => button.callback_data);
 		return firstButton?.callback_data ?? firstButton?.text ?? "next";
 	}
 	if (nodeType.startsWith("user_input_")) return "captured";

@@ -1,0 +1,238 @@
+---
+title: Published Edits and Social Actions
+description: Edit published provider content and perform durable inbox, moderation, mention, and engagement operations.
+icon: MessagesSquare
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Capability matrix
+
+RelayAPI sends these operations to the provider and records a durable operation
+for every mutation. Support is intentionally narrower than the generic action
+enum: Relay rejects an unsupported platform/action pair before provider I/O.
+
+| Operation | Supported providers and actions |
+| --- | --- |
+| Edit a published post's text | X, Facebook Pages, Discord webhook messages, Reddit self-text |
+| Edit an outbound inbox message | Telegram, Discord |
+| Send a provider read receipt | WhatsApp, Facebook Messenger, Instagram Messaging |
+| Edit an owned comment/reply | X, Facebook, YouTube, Reddit |
+| Moderate a comment/reply | Facebook, Instagram, and X: `hide` / `unhide`; YouTube: `approve` / `hold_for_review` / `reject` |
+| Engage with a post | X and Facebook: `like` / `unlike`; Reddit: `upvote` / `downvote` / `clear_vote`; YouTube: `like` / `dislike` / `clear_rating` |
+| List mentions | Persisted normalized `story_mention` and `post_mention` webhook events for one exact account |
+
+<Callout type="warn">
+Existing OAuth connections must be reauthorized if they do not include the
+new interaction grants. Token refresh preserves existing grants; it cannot add
+permissions. See [Connecting Accounts](/guides/connecting-accounts#scope-upgrades-and-existing-connections).
+</Callout>
+
+Inbox interaction endpoints use the existing Pro inbox entitlement. Published
+post edits use the Posts API entitlement. Every operation remains organization,
+workspace, and exact-account scoped.
+
+## Edit an already-published post
+
+`PATCH /v1/posts/{id}` still edits only a draft or scheduled Relay post. To edit
+provider content that has already published, call
+`POST /v1/posts/{post_id}/edits` through `editPublished()`.
+
+```typescript
+const result = await client.posts.editPublished('post_abc123', {
+  idempotency_key: 'launch-copy-v2',
+  targets: [
+    {
+      target_id: 'pt_x123',
+      content: 'Updated launch copy',
+      expected_provider_post_id: '1987654321098765432',
+    },
+    {
+      target_id: 'pt_fb123',
+      content: 'Updated launch copy for Facebook',
+    },
+  ],
+});
+
+for (const operation of result.data) {
+  if (operation.status !== 'completed') {
+    const current = await client.posts.getPublishedEdit(
+      'post_abc123',
+      operation.id,
+    );
+    console.log(current.status);
+  }
+}
+```
+
+The post must be `published` or `partial`, and every selected target must itself
+be published. A request accepts 1–25 unique Relay target IDs and replacement
+text up to 40,000 characters per target. Targets are independent: confirmed
+successes are retained when another target fails or has an unknown outcome.
+The destination provider's smaller text limit and edit-window policy still
+apply; the 40,000-character envelope is not a promise that every provider will
+accept that much replacement text.
+
+Use `expected_provider_post_id` as an optimistic-concurrency fence. RelayAPI
+returns `409 PROVIDER_POST_ID_CHANGED` instead of editing a replacement object
+when the stored provider ID no longer matches. This matters especially on X:
+X creates a replacement Post for an edit, so RelayAPI stores the new ID and
+retains the former ID in target history. Facebook and Discord update their
+existing objects. Reddit edits self-text only; it does not change a title,
+linked URL, or native media.
+
+Discord forum/media-thread edits reuse the exact thread ID retained from the
+confirmed publish result. If a target is known to be thread-scoped but that
+durable context is missing or invalid, RelayAPI returns
+`DISCORD_THREAD_CONTEXT_MISSING` before contacting Discord. It never guesses a
+thread from the webhook or edits a same-named message elsewhere.
+
+List recent operations with:
+
+```typescript
+const history = await client.posts.listPublishedEdits('post_abc123', {
+  limit: 20,
+});
+```
+
+## Edit an outbound conversation message
+
+Message editing requires an outbound Relay inbox message in the selected
+conversation. Relay uses its stored provider conversation/message IDs, so a
+caller cannot redirect the credential to an arbitrary chat.
+
+```typescript
+const operation = await client.inbox.conversations.editMessage(
+  'conv_abc123',
+  'msg_outbound123',
+  {
+    idempotency_key: 'fix-message-123',
+    text: 'Corrected response',
+  },
+);
+```
+
+This operation is available for Telegram bot-authored messages and Discord
+webhook-authored messages. Editing an inbound message returns
+`MESSAGE_NOT_EDITABLE`; other platforms return `MESSAGE_EDIT_UNSUPPORTED`.
+For a persisted Discord thread message, the inbox projection must contain an
+exact valid thread ID (or an exact thread conversation ID); a thread-scoped
+message without that context fails closed before provider I/O.
+
+## Send a read receipt
+
+Pass the Relay ID of an inbound message, not an arbitrary provider ID:
+
+```typescript
+const operation = await client.inbox.conversations.sendReadReceipt(
+  'conv_abc123',
+  {
+    idempotency_key: 'read-msg-456',
+    message_id: 'msg_inbound456',
+  },
+);
+```
+
+RelayAPI sends the provider-native receipt on WhatsApp, Facebook Messenger, or
+Instagram Messaging and records `provider_read_at` only after provider
+acknowledgement.
+
+## Edit and moderate comments
+
+Comment paths take a provider-native comment/reply ID plus the exact Relay
+account that owns or moderates it.
+
+```typescript
+await client.inbox.comments.edit('provider_comment_id', {
+  idempotency_key: 'comment-copy-v2',
+  account_id: 'acc_facebook123',
+  text: 'Corrected Page reply',
+});
+
+await client.inbox.comments.moderate('provider_comment_id', {
+  idempotency_key: 'hide-abuse-123',
+  account_id: 'acc_facebook123',
+  action: 'hide',
+});
+```
+
+Only use an action shown in the capability matrix. In particular, YouTube's
+moderation statuses are not interchangeable with hide/unhide, and Instagram
+does not expose comment editing through this RelayAPI surface.
+
+## Like, vote, or rate a post
+
+The path identifies the provider-native post ID; `account_id` selects the exact
+authorized actor.
+
+```typescript
+await client.inbox.engagePost('provider_post_id', {
+  idempotency_key: 'like-post-123',
+  account_id: 'acc_twitter123',
+  action: 'like',
+});
+```
+
+Do not substitute action names across providers. For example, Reddit uses
+`clear_vote`, while YouTube uses `clear_rating`.
+
+## List normalized mentions
+
+```typescript
+const mentions = await client.inbox.listMentions({
+  account_id: 'acc_instagram123',
+  limit: 50,
+});
+```
+
+This endpoint pages through mention events already persisted by RelayAPI's
+signed webhook ingestion. It does not query the provider for historical
+mentions and cannot recover events that were never delivered to RelayAPI.
+
+## Idempotency and ambiguous outcomes
+
+Every provider mutation on this page requires a caller-generated
+`Idempotency-Key`; the TypeScript SDK exposes it as `idempotency_key`. Reuse the
+same key only for the same logical mutation. Reusing it with different content
+returns `409 IDEMPOTENCY_KEY_REUSED`, and another active or ambiguous mutation
+against the same provider object returns `409 SOCIAL_MUTATION_IN_PROGRESS`.
+
+Operations use these statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `pending` / `processing` | Admitted or currently executing |
+| `request_may_have_been_sent` | Relay crossed the provider request boundary but has not recorded a conclusive outcome |
+| `unknown` | The provider may have applied the mutation; Relay will not replay that remote write automatically |
+| `completed` | The provider acknowledged the mutation and Relay's local projection completed |
+| `failed` | A definitive failure proved that the provider did not apply the requested mutation |
+
+RelayAPI validates the provider-specific acknowledgement instead of treating
+every HTTP `2xx` as success. A response that omits the documented success
+state, exact resource/message ID, or empty/`204` confirmation for that operation
+becomes `PROVIDER_RESPONSE_INVALID` and stays outcome-unknown. This prevents an
+unproven remote write from being projected or replayed as a safe failure.
+
+Poll nonterminal or ambiguous inbox operations with the exact account:
+
+```typescript
+const current = await client.inbox.getSocialMutation('smut_abc123', {
+  account_id: 'acc_facebook123',
+});
+```
+
+<Callout type="warn">
+Do not retry an `unknown` mutation with a new idempotency key. Inspect the
+provider and the durable operation first; a new key could apply the action
+twice. Relay may safely retry only a provider-confirmed local projection—it
+never replays an ambiguous provider request.
+</Callout>
+
+## Official provider references
+
+- [X create or edit a Post](https://docs.x.com/x-api/posts/create-or-edit-post), [manage likes](https://docs.x.com/x-api/posts/likes/quickstart/manage-likes), and [hide replies](https://docs.x.com/x-api/posts/hide-replies/quickstart)
+- [Meta Page post updates](https://developers.facebook.com/docs/graph-api/reference/post/#updating), [comments](https://developers.facebook.com/docs/graph-api/reference/comment/), and [object likes](https://developers.facebook.com/docs/graph-api/reference/object/likes/)
+- [Discord Edit Webhook Message](https://docs.discord.com/developers/resources/webhook#edit-webhook-message)
+- [Telegram `editMessageText`](https://core.telegram.org/bots/api#editmessagetext)
+- [Reddit `api/editusertext`](https://www.reddit.com/dev/api/#POST_api_editusertext) and [`api/vote`](https://www.reddit.com/dev/api/#POST_api_vote)
+- [YouTube comments update](https://developers.google.com/youtube/v3/docs/comments/update), [moderation status](https://developers.google.com/youtube/v3/docs/comments/setModerationStatus), and [video rating](https://developers.google.com/youtube/v3/docs/videos/rate)

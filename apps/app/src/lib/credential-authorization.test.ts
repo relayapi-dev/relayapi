@@ -1,23 +1,114 @@
 import { describe, expect, it } from "bun:test";
+import { DASHBOARD_SESSION_AUTHORITY_HEADER } from "@relayapi/config";
 import { POST as bootstrapDashboardKey } from "../pages/api/bootstrap-key";
 import { GET as getDashboardKeyStatus } from "../pages/api/dashboard-key-status";
-import { requireClient, requireOrganizationAdmin } from "./api-utils";
+import {
+	dashboardSessionRequestOptions,
+	requireClient,
+	requireOrganizationAdmin,
+} from "./api-utils";
 import {
 	canManageOrganizationCredentials,
 	getDashboardCredentialPermissions,
 	hasCurrentDashboardCredentialPermissions,
 } from "./credential-authorization";
+import { encryptDashboardApiKey } from "./dashboard-key-envelope";
+
+const DASHBOARD_CREDENTIAL_SECRET = `test-dashboard-secret-${"a".repeat(32)}`;
+
+interface MockSelectQuery {
+	leftJoin: () => MockSelectQuery;
+	where: () => MockSelectQuery;
+	limit: () => Promise<unknown[]>;
+}
+
+function orderedSelect(...responses: unknown[][]) {
+	let call = 0;
+	return () => {
+		const query = {} as MockSelectQuery;
+		query.leftJoin = () => query;
+		query.where = () => query;
+		query.limit = async () => responses[call++] ?? [];
+		return { from: () => query };
+	};
+}
+
+function existingMemberPrincipalSelect(
+	memberId: string,
+	principalId: string,
+	userId: string,
+	role: string,
+	locksStaleCredential = false,
+) {
+	let authoritySelect = 0;
+	const responses = [
+		[{ id: memberId }],
+		[{ id: principalId, scopeMode: "all" }],
+		[
+			{
+				id: userId,
+				banned: false,
+				banExpires: null,
+				credentialVersion: "legacy-v1",
+			},
+		],
+		[{ id: memberId, role }],
+		[{ id: `org_for_${memberId}`, lifecycleStatus: "active" }],
+		...(locksStaleCredential ? [[{ id: `key_for_${memberId}` }]] : []),
+		[
+			{
+				id: principalId,
+				memberId,
+				lifecycleStatus: "active",
+			},
+		],
+	];
+	return () => ({
+		from: () => ({
+			where: () => ({
+				for: () => ({
+					limit: async () => {
+						const response = responses[authoritySelect] ?? [];
+						authoritySelect += 1;
+						return response;
+					},
+				}),
+			}),
+		}),
+	});
+}
 
 describe("dashboard credential authorization", () => {
+	it("derives mutation authority only from the server-resolved session", () => {
+		const options = dashboardSessionRequestOptions({
+			session: { id: "session_from_locals" },
+		});
+		expect(options).toEqual({
+			headers: {
+				[DASHBOARD_SESSION_AUTHORITY_HEADER]: "session_from_locals",
+			},
+		});
+		expect(dashboardSessionRequestOptions({ session: null })).toBeNull();
+		expect(dashboardSessionRequestOptions({ session: { id: 123 } })).toBeNull();
+	});
+
 	it("grants API-key administration only to organization owners and admins", () => {
-		for (const role of ["owner", "admin"]) {
-			expect(canManageOrganizationCredentials(role)).toBe(true);
-			expect(getDashboardCredentialPermissions(role)).toEqual([
-				"read",
-				"write",
-				"manage_api_keys",
-			]);
-		}
+		expect(canManageOrganizationCredentials("owner")).toBe(true);
+		expect(getDashboardCredentialPermissions("owner")).toEqual([
+			"read",
+			"write",
+			"manage_api_keys",
+			"view_billing",
+			"manage_billing",
+			"manage_spend",
+		]);
+		expect(canManageOrganizationCredentials("admin")).toBe(true);
+		expect(getDashboardCredentialPermissions("admin")).toEqual([
+			"read",
+			"write",
+			"manage_api_keys",
+			"manage_spend",
+		]);
 
 		expect(canManageOrganizationCredentials("member")).toBe(false);
 		expect(canManageOrganizationCredentials("member,admin")).toBe(true);
@@ -76,28 +167,30 @@ describe("dashboard credential authorization", () => {
 		let insertedValues: { permissions?: unknown } | undefined;
 		let disabledCredentials = 0;
 		let purgedExpiredCredentials = 0;
+		const authoritySelect = existingMemberPrincipalSelect(
+			"mem_123",
+			"prn_123",
+			"user_123",
+			"member",
+		);
 		const kvWrites = new Map<string, string>();
 		const response = await getDashboardKeyStatus({
 			locals: {
 				user: { id: "user_123" },
 				organization: { id: "org_123" },
 				organizationMembershipRole: "member",
+				dashboardCredentialSecret: DASHBOARD_CREDENTIAL_SECRET,
 				db: {
-					select: () => ({
-						from: () => ({
-							where: () => ({
-								limit: async () => [
-									{
-										status: "active",
-										aiEnabled: true,
-										dailyToolLimit: 17,
-									},
-								],
-							}),
-						}),
-					}),
+					select: orderedSelect([
+						{
+							status: "active",
+							aiEnabled: true,
+							dailyToolLimitOverride: 17,
+						},
+					]),
 					transaction: async (callback: (tx: unknown) => Promise<unknown>) =>
 						callback({
+							select: authoritySelect,
 							delete: () => ({
 								where: async () => {
 									purgedExpiredCredentials += 1;
@@ -140,6 +233,9 @@ describe("dashboard credential authorization", () => {
 		expect(authData.permissions).toEqual(["read", "write"]);
 		expect(authData.ai_enabled).toBe(true);
 		expect(authData.daily_tool_limit).toBe(17);
+		const pointer = kvWrites.get("dashboard-key:org_123:user_123");
+		expect(pointer).toStartWith("v2.");
+		expect(pointer).not.toContain("rlay_live_");
 	});
 
 	it("rotates an expired principal credential instead of reporting no key", async () => {
@@ -153,43 +249,51 @@ describe("dashboard credential authorization", () => {
 			.join("");
 		const deletedKeys: string[] = [];
 		const kvWrites = new Map<string, string>();
-		let selectCall = 0;
 		let insertedValues: { key?: unknown; permissions?: unknown } | undefined;
 		let disabled = false;
 		let purgedExpiredCredentials = 0;
+		const authoritySelect = existingMemberPrincipalSelect(
+			"mem_expired",
+			"prn_expired",
+			"user_expired",
+			"member",
+			true,
+		);
+		const pointerName = "dashboard-key:org_expired:user_expired";
+		const oldEnvelope = await encryptDashboardApiKey(
+			oldRawKey,
+			DASHBOARD_CREDENTIAL_SECRET,
+			pointerName,
+		);
 
 		const response = await getDashboardKeyStatus({
 			locals: {
 				user: { id: "user_expired" },
 				organization: { id: "org_expired" },
 				organizationMembershipRole: "member",
+				dashboardCredentialSecret: DASHBOARD_CREDENTIAL_SECRET,
 				db: {
-					select: () => ({
-						from: () => ({
-							where: () => ({
-								limit: async () => {
-									selectCall += 1;
-									return selectCall === 1
-										? [
-												{
-													enabled: true,
-													expiresAt: new Date(0),
-													referenceId: "user_expired",
-													organizationId: "org_expired",
-													metadata: {
-														principal_type: "dashboard_user",
-														principal_id: "user_expired",
-													},
-													permissions: "read,write",
-												},
-											]
-										: [];
-								},
-							}),
-						}),
-					}),
+					select: orderedSelect(
+						[
+							{
+								enabled: true,
+								expiresAt: new Date(0),
+								referenceId: "user_expired",
+								organizationId: "org_expired",
+								principalId: "prn_expired",
+								permissions: "read,write",
+								credentialVersion: null,
+								liveUserId: "user_expired",
+								userBanned: false,
+								userBanExpires: null,
+								userCredentialVersion: "legacy-v1",
+							},
+						],
+						[],
+					),
 					transaction: async (callback: (tx: unknown) => Promise<unknown>) =>
 						callback({
+							select: authoritySelect,
 							delete: () => ({
 								where: async () => {
 									purgedExpiredCredentials += 1;
@@ -213,7 +317,7 @@ describe("dashboard credential authorization", () => {
 						}),
 				},
 				kv: {
-					get: async () => oldRawKey,
+					get: async () => oldEnvelope,
 					put: async (key: string, value: string) => {
 						kvWrites.set(key, value);
 					},
@@ -235,43 +339,56 @@ describe("dashboard credential authorization", () => {
 		expect(kvWrites.get("dashboard-key:org_expired:user_expired")).not.toBe(
 			oldRawKey,
 		);
+		expect(kvWrites.get("dashboard-key:org_expired:user_expired")).toStartWith(
+			"v2.",
+		);
 	});
 
 	it("reuses a current credential without writes or rotation", async () => {
 		const rawKey = "rlay_live_current_test_credential";
 		let transactions = 0;
 		let kvWrites = 0;
+		const authoritySelect = existingMemberPrincipalSelect(
+			"mem_current",
+			"prn_current",
+			"user_current",
+			"admin",
+		);
+		const pointerName = "dashboard-key:org_current:user_current";
+		const currentEnvelope = await encryptDashboardApiKey(
+			rawKey,
+			DASHBOARD_CREDENTIAL_SECRET,
+			pointerName,
+		);
 		const response = await bootstrapDashboardKey({
 			locals: {
 				user: { id: "user_current" },
 				organization: { id: "org_current" },
 				organizationMembershipRole: "admin",
+				dashboardCredentialSecret: DASHBOARD_CREDENTIAL_SECRET,
 				db: {
-					select: () => ({
-						from: () => ({
-							where: () => ({
-								limit: async () => [
-									{
-										enabled: true,
-										expiresAt: new Date(Date.now() + 60_000),
-										referenceId: "user_current",
-										organizationId: "org_current",
-										permissions: "read,write,manage_api_keys",
-										metadata: {
-											principal_type: "dashboard_user",
-											principal_id: "user_current",
-										},
-									},
-								],
-							}),
-						}),
-					}),
-					transaction: async () => {
+					select: orderedSelect([
+						{
+							enabled: true,
+							expiresAt: new Date(Date.now() + 60_000),
+							referenceId: "user_current",
+							organizationId: "org_current",
+							principalId: "prn_current",
+							permissions: "read,write,manage_api_keys,manage_spend",
+							credentialVersion: null,
+							liveUserId: "user_current",
+							userBanned: false,
+							userBanExpires: null,
+							userCredentialVersion: "legacy-v1",
+						},
+					]),
+					transaction: async (callback: (tx: unknown) => Promise<unknown>) => {
 						transactions += 1;
+						return callback({ select: authoritySelect });
 					},
 				},
 				kv: {
-					get: async () => rawKey,
+					get: async () => currentEnvelope,
 					put: async () => {
 						kvWrites += 1;
 					},
@@ -281,31 +398,32 @@ describe("dashboard credential authorization", () => {
 		} as never);
 
 		expect(response.status).toBe(200);
-		expect(transactions).toBe(0);
+		expect(transactions).toBe(1);
 		expect(kvWrites).toBe(0);
 	});
 
 	it("recovers a direct dashboard API request when its credential is missing", async () => {
 		const kv = new Map<string, string>();
+		const authoritySelect = existingMemberPrincipalSelect(
+			"mem_direct",
+			"prn_direct",
+			"user_direct",
+			"member",
+		);
 		const result = await requireClient({
 			locals: {
 				user: { id: "user_direct" },
 				organization: { id: "org_direct" },
 				organizationMembershipRole: "member",
+				dashboardCredentialSecret: DASHBOARD_CREDENTIAL_SECRET,
 				db: {
-					select: () => ({
-						from: () => ({
-							where: () => ({ limit: async () => [] }),
-						}),
-					}),
+					select: orderedSelect([]),
 					transaction: async (callback: (tx: unknown) => Promise<unknown>) =>
 						callback({
 							delete: () => ({
 								where: async () => undefined,
 							}),
-							select: () => ({
-								from: () => ({ where: async () => [] }),
-							}),
+							select: authoritySelect,
 							update: () => ({
 								set: () => ({ where: async () => undefined }),
 							}),

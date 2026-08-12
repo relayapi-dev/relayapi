@@ -1,3 +1,4 @@
+import { readProviderJson } from "../lib/provider-response";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
 	socialAccountSyncState,
@@ -23,14 +24,22 @@ import {
 	deleteConnectedAccountGraph,
 	invalidateAccountCaches,
 } from "../lib/delete-account";
+import { fetchPublicUrl, readResponseJson } from "../lib/fetch-public-url";
 import { fetchLinkedInAccessibleOrganizations } from "../lib/linkedin-rest";
+import { listmonkApiUrl } from "../lib/listmonk-instance";
 import { buildMailchimpApiUrl, getMailchimpDatacenter } from "../lib/mailchimp";
+import {
+	encodeTimestampIdCursor,
+	INVALID_CURSOR_BODY,
+	tryDecodeTimestampIdCursor,
+} from "../lib/pagination-cursor";
 import { assertAllWorkspaceScope } from "../lib/request-access";
-import { isBlockedUrlWithDns } from "../lib/ssrf-guard";
 import {
 	applyWorkspaceScope,
 	assertWorkspaceScope,
 } from "../lib/workspace-scope";
+import { markMutationInputNotApplied } from "../middleware/mutation-validation";
+import { deleteQueueRescueSubject } from "../queues/queue-rescue";
 import {
 	AccountHealthResponse,
 	AccountListResponse,
@@ -102,6 +111,10 @@ const listAccounts = createRoute({
 			description: "List of accounts",
 			content: { "application/json": { schema: AccountListResponse } },
 		},
+		400: {
+			description: "Invalid cursor",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		401: {
 			description: "Unauthorized",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -124,6 +137,10 @@ const getAccount = createRoute({
 		},
 		401: {
 			description: "Unauthorized",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
+		403: {
+			description: "Workspace access denied",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
 		404: {
@@ -504,11 +521,13 @@ app.openapi(listAccounts, async (c) => {
 
 	const conditions = [...baseConditions];
 	// Keyset pagination on the actual sort key (connected_at, id). The cursor is
-	// the id of the last row from the previous page; resolve its connected_at in
-	// SQL so equal timestamps are tie-broken deterministically by id.
+	// the id of the last row from the previous page; resolve its connected_at from
+	// the same filtered tenant scope so equal timestamps are tie-broken by id.
 	if (cursor) {
+		const key = tryDecodeTimestampIdCursor(cursor);
+		if (!key) return c.json(INVALID_CURSOR_BODY, 400);
 		conditions.push(
-			sql`(${socialAccounts.connectedAt}, ${socialAccounts.id}) < ((select s.connected_at from social_accounts s where s.id = ${cursor}), ${cursor})`,
+			sql`(${socialAccounts.connectedAt}, ${socialAccounts.id}) < (${key.timestamp}::timestamptz, ${key.id})`,
 		);
 	}
 
@@ -526,6 +545,7 @@ app.openapi(listAccounts, async (c) => {
 				connectedAt: socialAccounts.connectedAt,
 				updatedAt: socialAccounts.updatedAt,
 				workspaceName: workspaces.name,
+				cursorTimestamp: sql<string>`to_char(${socialAccounts.connectedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
 			})
 			.from(socialAccounts)
 			.leftJoin(workspaces, eq(socialAccounts.workspaceId, workspaces.id))
@@ -541,6 +561,11 @@ app.openapi(listAccounts, async (c) => {
 	const total = countRows[0]?.total ?? 0;
 	const hasMore = accounts.length > limit;
 	const data = accounts.slice(0, limit);
+	const last = data.at(-1);
+	const nextCursor =
+		hasMore && last
+			? encodeTimestampIdCursor(last.cursorTimestamp, last.id)
+			: null;
 
 	return c.json(
 		{
@@ -558,7 +583,7 @@ app.openapi(listAccounts, async (c) => {
 				connected_at: a.connectedAt.toISOString(),
 				updated_at: a.updatedAt.toISOString(),
 			})),
-			next_cursor: hasMore ? (data.at(-1)?.id ?? null) : null,
+			next_cursor: nextCursor,
 			has_more: hasMore,
 			total,
 		},
@@ -645,6 +670,7 @@ app.openapi(deleteAccount, async (c) => {
 		.limit(1);
 
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -652,7 +678,10 @@ app.openapi(deleteAccount, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	let persistedDisconnectEvent: PersistedWebhookEvent | undefined;
 	try {
@@ -676,13 +705,21 @@ app.openapi(deleteAccount, async (c) => {
 					},
 				),
 		);
-		console.log(`[accounts] Started lifecycle disconnect for ${id}`);
 	} catch (err) {
 		console.error(`[accounts] Failed to delete account ${id}:`, err);
 		return c.json(
 			{ error: { code: "DELETE_FAILED", message: "Failed to delete account" } },
 			500,
 		);
+	}
+	if (!persistedDisconnectEvent) {
+		// DELETE is idempotent. The durable account identity can outlive its
+		// active lifecycle, so a replay after the first disconnect is exact K=0.
+		// Keep the cache/rescue cleanup below: it repairs a prior interrupted
+		// response but is not a new customer-visible account mutation.
+		markMutationInputNotApplied(c);
+	} else {
+		console.log(`[accounts] Started lifecycle disconnect for ${id}`);
 	}
 
 	// Invalidate the KV caches that reference this account so platform webhooks
@@ -693,6 +730,14 @@ app.openapi(deleteAccount, async (c) => {
 			platform: account.platform,
 			platformAccountId: account.platformAccountId,
 			webhookAccountId: account.webhookAccountId,
+		}),
+	);
+	c.executionCtx.waitUntil(
+		deleteQueueRescueSubject(c.env.QUEUE_RESCUE_BUCKET, orgId, {
+			kind: "account",
+			id,
+		}).catch(() => {
+			console.error("[accounts] Queue rescue subject cleanup failed");
 		}),
 	);
 
@@ -1033,7 +1078,7 @@ app.openapi(getFacebookPages, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: Array<{
 				id: string;
 				name: string;
@@ -1065,6 +1110,7 @@ app.openapi(setFacebookPage, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1072,7 +1118,10 @@ app.openapi(setFacebookPage, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1193,6 +1242,7 @@ app.openapi(setLinkedInOrg, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1200,7 +1250,10 @@ app.openapi(setLinkedInOrg, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1307,7 +1360,7 @@ app.openapi(getPinterestBoards, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items: Array<{
 				id: string;
 				name: string;
@@ -1338,6 +1391,7 @@ app.openapi(setPinterestBoard, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1345,7 +1399,10 @@ app.openapi(setPinterestBoard, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1488,7 +1545,7 @@ app.openapi(getRedditSubreddits, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			data: {
 				children: Array<{
 					data: {
@@ -1525,6 +1582,7 @@ app.openapi(setRedditSubreddit, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1532,7 +1590,10 @@ app.openapi(setRedditSubreddit, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1586,7 +1647,7 @@ app.openapi(getRedditFlairs, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as Array<{
+		const json = (await readProviderJson(res)) as Array<{
 			id: string;
 			text: string;
 			text_color: string;
@@ -1701,7 +1762,7 @@ app.openapi(getGmbLocations, async (c) => {
 		if (!accountsRes.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const accountsJson = (await accountsRes.json()) as {
+		const accountsJson = (await readProviderJson(accountsRes)) as {
 			accounts: Array<{ name: string }>;
 		};
 		const gmbAccount = accountsJson.accounts?.[0];
@@ -1721,7 +1782,7 @@ app.openapi(getGmbLocations, async (c) => {
 		if (!locationsRes.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const locationsJson = (await locationsRes.json()) as {
+		const locationsJson = (await readProviderJson(locationsRes)) as {
 			locations: Array<{
 				name: string;
 				title: string;
@@ -1752,6 +1813,7 @@ app.openapi(setGmbLocation, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1759,7 +1821,10 @@ app.openapi(setGmbLocation, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -1867,7 +1932,7 @@ app.openapi(getYoutubePlaylists, async (c) => {
 		if (!res.ok) {
 			return c.json({ data: [] }, 200);
 		}
-		const json = (await res.json()) as {
+		const json = (await readProviderJson(res)) as {
 			items?: Array<{
 				id: string;
 				snippet: {
@@ -1906,6 +1971,7 @@ app.openapi(setYoutubePlaylist, async (c) => {
 
 	const account = await getOwnedAccount(db, id, orgId, c.env.ENCRYPTION_KEY);
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -1913,7 +1979,10 @@ app.openapi(setYoutubePlaylist, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const metadata = {
 		...(account.metadata as object),
@@ -2024,6 +2093,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 		);
 
 		if (res.status === 401) {
+			await res.body?.cancel().catch(() => undefined);
 			return c.json(
 				{
 					error: {
@@ -2036,6 +2106,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 		}
 
 		if (res.status === 429) {
+			await res.body?.cancel().catch(() => undefined);
 			return c.json(
 				{
 					error: {
@@ -2049,6 +2120,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 		}
 
 		if (!res.ok) {
+			await res.body?.cancel().catch(() => undefined);
 			return c.json(
 				{
 					error: {
@@ -2060,7 +2132,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 			);
 		}
 
-		const json = (await res.json()) as {
+		const json = await readResponseJson<{
 			data?: {
 				creator_avatar_url?: string;
 				creator_username?: string;
@@ -2072,7 +2144,7 @@ app.openapi(getTikTokCreatorInfo, async (c) => {
 				max_video_post_duration_sec?: number;
 			};
 			error?: { code?: string; message?: string; log_id?: string };
-		};
+		}>(res, 64 * 1024);
 
 		if (json.error?.code && json.error.code !== "ok") {
 			const logSuffix = json.error.log_id
@@ -2178,6 +2250,7 @@ app.openapi(singleSync, async (c) => {
 		.limit(1);
 
 	if (!account) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
@@ -2185,10 +2258,14 @@ app.openapi(singleSync, async (c) => {
 	}
 
 	const denied = assertWorkspaceScope(c, account.workspaceId);
-	if (denied) return denied;
+	if (denied) {
+		markMutationInputNotApplied(c);
+		return denied;
+	}
 
 	const supportedPlatforms = getSupportedSyncPlatforms();
 	if (!supportedPlatforms.includes(account.platform)) {
+		markMutationInputNotApplied(c);
 		return c.json(
 			{
 				error: {
@@ -2325,6 +2402,7 @@ app.openapi(forceSync, async (c) => {
 	);
 
 	if (syncable.length === 0) {
+		markMutationInputNotApplied(c);
 		return c.json({ enqueued_count: 0 }, 200);
 	}
 
@@ -2413,6 +2491,10 @@ const getNewsletterLists = createRoute({
 			description: "Bad request",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -2441,6 +2523,10 @@ const getNewsletterTemplates = createRoute({
 			description: "Bad request",
 			content: { "application/json": { schema: ErrorResponse } },
 		},
+		403: {
+			description: "Workspace access denied",
+			content: { "application/json": { schema: ErrorResponse } },
+		},
 		404: {
 			description: "Not found",
 			content: { "application/json": { schema: ErrorResponse } },
@@ -2465,6 +2551,8 @@ app.openapi(getNewsletterLists, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
 		);
+	const denied = assertWorkspaceScope(c, account.workspaceId);
+	if (denied) return denied as never;
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
 		return c.json(
 			{
@@ -2495,7 +2583,7 @@ app.openapi(getNewsletterLists, async (c) => {
 		if (account.platform === "beehiiv") {
 			// Not applicable for Beehiiv (publication-level, not list-level)
 			lists.push({
-				id: (meta.publication_id as string) ?? account.platformAccountId,
+				id: account.platformAccountId,
 				name: (meta.publication_name as string) ?? "All Subscribers",
 				subscriber_count: null,
 			});
@@ -2507,13 +2595,13 @@ app.openapi(getNewsletterLists, async (c) => {
 				{ headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } },
 			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					lists?: Array<{
 						id: string;
 						name: string;
 						stats?: { member_count?: number };
 					}>;
-				};
+				}>(res, 512 * 1024);
 				for (const l of data.lists ?? [])
 					lists.push({
 						id: l.id,
@@ -2522,15 +2610,16 @@ app.openapi(getNewsletterLists, async (c) => {
 					});
 			}
 		} else if (account.platform === "listmonk") {
-			const url = meta.instance_url as string;
-			if (!url || (await isBlockedUrlWithDns(url)))
-				return c.json({ data: [] }, 200);
-			const res = await fetch(`${url}/api/lists?per_page=100`, {
-				headers: { Authorization: `Basic ${token}` },
-				redirect: "error",
-			});
+			const res = await fetchPublicUrl(
+				listmonkApiUrl(account.platformAccountId, "/api/lists?per_page=100"),
+				{
+					headers: { Authorization: `Basic ${token}` },
+					redirect: "error",
+					timeout: 30_000,
+				},
+			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					data?: {
 						results?: Array<{
 							id: number;
@@ -2538,7 +2627,7 @@ app.openapi(getNewsletterLists, async (c) => {
 							subscriber_count?: number;
 						}>;
 					};
-				};
+				}>(res, 512 * 1024);
 				for (const l of data.data?.results ?? [])
 					lists.push({
 						id: String(l.id),
@@ -2578,6 +2667,8 @@ app.openapi(getNewsletterTemplates, async (c) => {
 			{ error: { code: "NOT_FOUND", message: "Account not found" } },
 			404,
 		);
+	const denied = assertWorkspaceScope(c, account.workspaceId);
+	if (denied) return denied as never;
 	if (!NEWSLETTER_PLATFORMS.has(account.platform)) {
 		return c.json(
 			{
@@ -2597,7 +2688,6 @@ app.openapi(getNewsletterTemplates, async (c) => {
 			account.id,
 			"access_token",
 		)) ?? "";
-	const meta = (account.metadata ?? {}) as Record<string, unknown>;
 	const templates: Array<{
 		id: string;
 		name: string;
@@ -2606,17 +2696,21 @@ app.openapi(getNewsletterTemplates, async (c) => {
 
 	try {
 		if (account.platform === "listmonk") {
-			const url = meta.instance_url as string;
-			if (!url || (await isBlockedUrlWithDns(url)))
-				return c.json({ data: [] }, 200);
-			const res = await fetch(`${url}/api/templates?per_page=100`, {
-				headers: { Authorization: `Basic ${token}` },
-				redirect: "error",
-			});
+			const res = await fetchPublicUrl(
+				listmonkApiUrl(
+					account.platformAccountId,
+					"/api/templates?per_page=100",
+				),
+				{
+					headers: { Authorization: `Basic ${token}` },
+					redirect: "error",
+					timeout: 30_000,
+				},
+			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					data?: Array<{ id: number; name: string }>;
-				};
+				}>(res, 512 * 1024);
 				for (const t of data.data ?? [])
 					templates.push({ id: String(t.id), name: t.name, preview_url: null });
 			}
@@ -2628,9 +2722,9 @@ app.openapi(getNewsletterTemplates, async (c) => {
 				{ headers: { Authorization: `Basic ${btoa(`relayapi:${token}`)}` } },
 			);
 			if (res.ok) {
-				const data = (await res.json()) as {
+				const data = await readResponseJson<{
 					templates?: Array<{ id: number; name: string; thumbnail?: string }>;
-				};
+				}>(res, 512 * 1024);
 				for (const t of data.templates ?? [])
 					templates.push({
 						id: String(t.id),

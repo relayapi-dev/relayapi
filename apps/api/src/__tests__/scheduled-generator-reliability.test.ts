@@ -128,6 +128,8 @@ describe("F-16 database invariants", () => {
 		expect(crossPostActions.targetPlatform).toBeDefined();
 		expect(crossPostActions.readinessChecks).toBeDefined();
 		expect(crossPostActions.requestMayHaveBeenSentAt).toBeDefined();
+		expect(crossPostActions.scheduledFor).toBeDefined();
+		expect(crossPostActions.nextAttemptAt).toBeDefined();
 		expect(automationScheduledJobs.effectStartedAt).toBeDefined();
 	});
 
@@ -169,12 +171,30 @@ describe("F-16 database invariants", () => {
 			"const nextReadinessCheck = action.readinessChecks + 1",
 		);
 		expect(processor).toContain("readinessChecks: nextReadinessCheck");
+		expect(processor).toContain("lte(crossPostActions.nextAttemptAt, now)");
+		expect(processor).not.toContain("executeAt");
+		expect(processor).not.toContain("scheduledFor:");
 		expect(processor).toMatch(
 			/attempts: sql`\$\{crossPostActions\.attempts\} \+ 1`/,
 		);
 		expect(processor).toContain("eq(postTargets.id, action.sourceTargetId)");
 		expect(route).toContain("sourceTargetId: sourceTarget.id");
 		expect(route).toContain("sourcePlatform: sourceTarget.platform");
+		expect(route).toContain("scheduledFor,");
+		expect(route).toContain("nextAttemptAt: scheduledFor");
+		const updateTransaction = route.indexOf(
+			"const mutation = await db.transaction",
+		);
+		const atomicReanchor = route.indexOf(
+			"scheduledFor: sql`",
+			updateTransaction,
+		);
+		const transactionResult = route.indexOf(
+			"const updated = mutation.post",
+			updateTransaction,
+		);
+		expect(atomicReanchor).toBeGreaterThan(updateTransaction);
+		expect(atomicReanchor).toBeLessThan(transactionResult);
 	});
 });
 

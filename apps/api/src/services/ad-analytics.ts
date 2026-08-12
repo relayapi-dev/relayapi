@@ -4,6 +4,7 @@
 
 import {
 	adAccounts,
+	adConnections,
 	adMetrics,
 	ads,
 	createDb,
@@ -13,10 +14,11 @@ import {
 import { and, gte, lte, sql } from "drizzle-orm";
 import { workspaceScopeSqlCondition } from "../lib/workspace-scope";
 import type { Env } from "../types";
-import { resolveAdsAccessToken } from "./ad-access-token";
 import { getAdPlatformAdapter } from "./ad-platforms";
 import type { AdMetricPoint } from "./ad-platforms/types";
 import { AdPlatformError } from "./ad-platforms/types";
+import { requireAdCapability } from "./ad-platforms/unsupported";
+import { resolveAdProviderCredentials } from "./ad-provider-credentials";
 
 type Database = ReturnType<typeof createDb>;
 
@@ -36,28 +38,46 @@ export async function fetchAndStoreAdMetrics(
 		.select({
 			ad: ads,
 			adAccount: adAccounts,
+			adConnection: adConnections,
 			socialAccount: socialAccounts,
 		})
 		.from(ads)
 		.innerJoin(adAccounts, eq(ads.adAccountId, adAccounts.id))
-		.innerJoin(
-			socialAccounts,
-			eq(adAccounts.socialAccountId, socialAccounts.id),
-		)
-		.where(eq(ads.id, adId))
+		.leftJoin(adConnections, eq(adAccounts.adConnectionId, adConnections.id))
+		.leftJoin(socialAccounts, eq(adAccounts.socialAccountId, socialAccounts.id))
+		.where(and(eq(ads.id, adId), eq(adAccounts.status, "active")))
 		.limit(1);
 
-	if (!ad || !ad.ad.platformAdId) return [];
-
-	const accessToken = await resolveAdsAccessToken(ad.socialAccount, env);
+	if (!ad?.ad.platformAdId || !ad.adAccount) {
+		throw new AdPlatformError(
+			"INVALID_STATE",
+			"Ad metrics source is missing, inactive, or disconnected",
+		);
+	}
 
 	const adapter = getAdPlatformAdapter(ad.adAccount.platform);
-	if (!adapter) return [];
-
-	const result = await adapter.getAdMetrics(accessToken, ad.ad.platformAdId, {
-		startDate,
-		endDate,
+	if (!adapter) {
+		throw new AdPlatformError(
+			"UNSUPPORTED_PLATFORM",
+			`No metrics adapter for ${ad.adAccount.platform}`,
+		);
+	}
+	requireAdCapability(adapter, "analytics");
+	const credentials = await resolveAdProviderCredentials({
+		platform: ad.adAccount.platform,
+		providerAdAccountId: ad.adAccount.platformAdAccountId,
+		adConnection: ad.adConnection,
+		legacySocialAccount: ad.socialAccount,
+		env,
 	});
+
+	const result = await adapter.getAdMetrics(
+		credentials.accessToken,
+		ad.ad.platformAdId,
+		{ startDate, endDate },
+		undefined,
+		credentials,
+	);
 
 	// Upsert daily metrics in a single multi-row statement (collapses ~30
 	// sequential round trips per ad into one).
@@ -228,6 +248,7 @@ export async function getAdAnalyticsLive(
 		.select({
 			ad: ads,
 			adAccount: adAccounts,
+			adConnection: adConnections,
 			socialAccount: socialAccounts,
 		})
 		.from(ads)
@@ -238,24 +259,23 @@ export async function getAdAnalyticsLive(
 				eq(adAccounts.organizationId, organizationId),
 			),
 		)
-		.innerJoin(
+		.leftJoin(adConnections, eq(adAccounts.adConnectionId, adConnections.id))
+		.leftJoin(
 			socialAccounts,
 			and(
 				eq(adAccounts.socialAccountId, socialAccounts.id),
 				eq(socialAccounts.organizationId, organizationId),
 			),
 		)
-		.where(and(...conditions))
+		.where(and(...conditions, eq(adAccounts.status, "active")))
 		.limit(1);
 
-	if (!ad || !ad.ad.platformAdId) {
+	if (!ad?.ad.platformAdId || !ad.adAccount) {
 		throw new AdPlatformError(
 			"NOT_FOUND",
 			"Ad not found or has no platform ID",
 		);
 	}
-
-	const accessToken = await resolveAdsAccessToken(ad.socialAccount, env);
 
 	const adapter = getAdPlatformAdapter(ad.adAccount.platform);
 	if (!adapter) {
@@ -264,12 +284,21 @@ export async function getAdAnalyticsLive(
 			"No adapter for platform",
 		);
 	}
+	requireAdCapability(adapter, "analytics");
+	const credentials = await resolveAdProviderCredentials({
+		platform: ad.adAccount.platform,
+		providerAdAccountId: ad.adAccount.platformAdAccountId,
+		adConnection: ad.adConnection,
+		legacySocialAccount: ad.socialAccount,
+		env,
+	});
 
 	const result = await adapter.getAdMetrics(
-		accessToken,
+		credentials.accessToken,
 		ad.ad.platformAdId,
 		{ startDate, endDate },
 		breakdowns,
+		credentials,
 	);
 
 	// Compute summary from daily data
