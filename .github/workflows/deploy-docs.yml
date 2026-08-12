@@ -191,8 +191,8 @@ jobs:
             --output "$homepage" \
             https://docs.relayapi.dev/
           if grep -Eq '__name\(' "$homepage" && \
-             ! grep -Eq '(function|const|let|var)[[:space:]]+__name|__name[[:space:]]*=' "$homepage"; then
-            echo "::error::Docs HTML calls an undefined __name helper"
+             ! grep -Eq "globalThis(\\.__name|\\[[\"']__name[\"']\\])[[:space:]]*=" "$homepage"; then
+            echo "::error::Docs HTML calls __name without a durable global helper"
             exit 1
           fi
           curl --fail-with-body --silent --show-error --location \

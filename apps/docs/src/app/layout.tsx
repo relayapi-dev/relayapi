@@ -8,7 +8,7 @@ import { FeedbackWidget } from "@/components/feedback-widget";
 // unscoped `__name` call inside that string, so define the standard helper in a
 // literal script before the provider emits its theme bootstrap.
 const functionNameHelper = `
-var __name = globalThis.__name || function(target, value) {
+globalThis["__name"] = globalThis["__name"] || function(target, value) {
   return Object.defineProperty(target, "name", {
     value: value,
     configurable: true
