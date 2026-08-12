@@ -57,6 +57,26 @@ async function withConfig(
 }
 
 describe("dashboard source storage configuration", () => {
+	it("installs dependencies before the production baseline-generation guard", async () => {
+		const workflow = await readFile(
+			resolve(appRoot, "../../.github/workflows/deploy-app.yml"),
+			"utf8",
+		);
+		const baselineGuard = workflow.slice(
+			workflow.indexOf("  baseline-generation-guard:"),
+			workflow.indexOf("  test:"),
+		);
+		const installDependencies = baselineGuard.indexOf(
+			"run: bun install --frozen-lockfile",
+		);
+		const compareGenerations = baselineGuard.indexOf(
+			"bun scripts/check-live-baseline-generation.ts --allow-initial-generation-bootstrap",
+		);
+
+		expect(installDependencies).toBeGreaterThan(0);
+		expect(compareGenerations).toBeGreaterThan(installDependencies);
+	});
+
 	it("disables unused Astro sessions without provisioning SESSION KV", async () => {
 		const astroConfigUrl = pathToFileURL(
 			join(appRoot, "astro.config.mjs"),
