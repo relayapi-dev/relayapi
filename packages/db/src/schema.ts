@@ -1022,13 +1022,13 @@ export const externalSubjectCleanupJobs = pgTable(
 			.where(sql`${table.status} <> 'completed'`),
 		index("external_subject_cleanup_jobs_due_idx").on(
 			table.status,
-			sql`COALESCE(${table.organizationId}, ${table.subjectKind} || ':' || ${table.subjectId})`,
+			sql`COALESCE(${table.organizationId}, (${table.subjectKind} || ':') || ${table.subjectId})`,
 			table.nextAttemptAt,
 			table.id,
 		),
 		index("external_subject_cleanup_jobs_deadline_idx")
 			.on(
-				sql`COALESCE(${table.organizationId}, ${table.subjectKind} || ':' || ${table.subjectId})`,
+				sql`COALESCE(${table.organizationId}, (${table.subjectKind} || ':') || ${table.subjectId})`,
 				table.deadlineAt,
 				table.id,
 			)

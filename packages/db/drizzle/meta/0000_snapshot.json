@@ -1,5 +1,5 @@
 {
-  "id": "a8041182-2d6b-56f2-aa13-a8cb28ac7679",
+  "id": "dec3d230-e050-502a-bdc3-875688e861f9",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -18595,7 +18595,7 @@
               "nulls": "last"
             },
             {
-              "expression": "COALESCE(\"organization_id\", \"subject_kind\" || ':' || \"subject_id\")",
+              "expression": "COALESCE(\"organization_id\", (\"subject_kind\" || ':') || \"subject_id\")",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
@@ -18622,7 +18622,7 @@
           "name": "external_subject_cleanup_jobs_deadline_idx",
           "columns": [
             {
-              "expression": "COALESCE(\"organization_id\", \"subject_kind\" || ':' || \"subject_id\")",
+              "expression": "COALESCE(\"organization_id\", (\"subject_kind\" || ':') || \"subject_id\")",
               "asc": true,
               "isExpression": true,
               "nulls": "last"

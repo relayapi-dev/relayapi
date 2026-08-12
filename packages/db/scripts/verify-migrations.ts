@@ -28,11 +28,13 @@ import {
 	REQUIRED_BASELINE_EXTENSIONS,
 	REQUIRED_BASELINE_SCHEMAS,
 } from "./render-baseline-preamble-sql";
+import { renderBillingPeriodInvariantSql } from "./render-billing-period-invariant-sql";
 import {
 	CONTACT_SUBSCRIPTION_EVENT_APPEND_ONLY_CONTRACT,
 	renderContactSubscriptionEventInvariantSql,
 } from "./render-contact-subscription-event-invariant-sql";
 import { renderCustomMigrationSql } from "./render-custom-migration-sql";
+import { renderErasureHoldInvariantSql } from "./render-erasure-hold-invariant-sql";
 import {
 	FINANCIAL_RETENTION_RECEIPT_IMMUTABILITY_CONTRACT,
 	renderFinancialRetentionReceiptInvariantSql,
@@ -41,6 +43,11 @@ import {
 	OPERATOR_RESOLUTION_EVIDENCE_APPEND_ONLY_CONTRACT,
 	renderOperatorResolutionEvidenceInvariantSql,
 } from "./render-operator-resolution-evidence-invariant-sql";
+import { renderStorageLocationInvariantSql } from "./render-storage-location-invariant-sql";
+import {
+	renderStripeEventAttributionInvariantSql,
+	STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT,
+} from "./render-stripe-event-attribution-invariant-sql";
 
 const connectionString = (
 	globalThis as typeof globalThis & {
@@ -662,6 +669,99 @@ function expectedDatabaseTriggers(): ExpectedDatabaseTrigger[] {
 		watchedColumns: [],
 		arguments: [],
 	});
+	expected.push(
+		{
+			triggerName: "relayapi_erasure_hold_guard",
+			tableSchema: "public",
+			tableName: "erasure_holds",
+			functionSchema: "public",
+			functionName: "relayapi_guard_erasure_hold",
+			triggerType: BEFORE_INSERT_OR_UPDATE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: "relayapi_organization_hold_delete_guard",
+			tableSchema: "auth",
+			tableName: "organization",
+			functionSchema: "public",
+			functionName: "relayapi_prevent_held_root_delete",
+			triggerType: BEFORE_DELETE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: "relayapi_workspace_hold_delete_guard",
+			tableSchema: "public",
+			tableName: "workspaces",
+			functionSchema: "public",
+			functionName: "relayapi_prevent_held_root_delete",
+			triggerType: BEFORE_DELETE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: "billing_periods_authority_immutable",
+			tableSchema: "public",
+			tableName: "billing_periods",
+			functionSchema: "public",
+			functionName: "enforce_billing_period_authority",
+			triggerType: BEFORE_UPDATE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: "billing_operation_attempts_authority_immutable",
+			tableSchema: "public",
+			tableName: "billing_operation_attempts",
+			functionSchema: "public",
+			functionName: "enforce_billing_operation_attempt_authority",
+			triggerType: BEFORE_UPDATE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: "whatsapp_phone_billing_attempts_authority_immutable",
+			tableSchema: "public",
+			tableName: "whatsapp_phone_billing_attempts",
+			functionSchema: "public",
+			functionName: "enforce_phone_billing_attempt_authority",
+			triggerType: BEFORE_UPDATE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: "enforce_storage_location_immutability",
+			tableSchema: "public",
+			tableName: "storage_locations",
+			functionSchema: "public",
+			functionName: "enforce_storage_location_immutability",
+			triggerType: BEFORE_UPDATE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: "enforce_storage_credential_transition",
+			tableSchema: "public",
+			tableName: "storage_credentials",
+			functionSchema: "public",
+			functionName: "enforce_storage_credential_transition",
+			triggerType: BEFORE_UPDATE_ROW,
+			watchedColumns: [],
+			arguments: [],
+		},
+		{
+			triggerName: STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.triggerName,
+			tableSchema: STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.tableSchema,
+			tableName: STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.tableName,
+			functionSchema:
+				STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.functionSchema,
+			functionName: STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.functionName,
+			triggerType: BEFORE_UPDATE_ROW,
+			watchedColumns: [STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.columnName],
+			arguments: [],
+		},
+	);
 	const usageProjection = USAGE_BUCKET_PROJECTION_CONTRACT;
 	expected.push(
 		{
@@ -719,11 +819,17 @@ function extractGeneratedFunctionSource(
 	functionName: string,
 ): string {
 	const identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
-	const header = `CREATE OR REPLACE FUNCTION ${identifier(functionSchema)}.${identifier(functionName)}()`;
-	const headerIndex = renderedSql.indexOf(header);
-	if (headerIndex === -1) {
-		throw new Error(`Generated migration SQL is missing ${header}`);
+	const headers = [
+		`CREATE OR REPLACE FUNCTION ${identifier(functionSchema)}.${identifier(functionName)}()`,
+		`CREATE OR REPLACE FUNCTION ${functionSchema}.${functionName}()`,
+	];
+	const header = headers.find((candidate) => renderedSql.includes(candidate));
+	if (!header) {
+		throw new Error(
+			`Generated migration SQL is missing ${headers.join(" or ")}`,
+		);
 	}
+	const headerIndex = renderedSql.indexOf(header);
 	const functionSql = renderedSql.slice(headerIndex);
 	const delimiterMatch = functionSql.match(/\nAS (\$[a-z0-9_]+\$)/i);
 	const delimiter = delimiterMatch?.[1];
@@ -793,6 +899,57 @@ function expectedGeneratedFunctions(): ExpectedGeneratedFunction[] {
 	const financialReceiptSql = renderFinancialRetentionReceiptInvariantSql();
 	const conversionFact = AUTOMATION_CONVERSION_EVENT_FACT_CONTRACT;
 	const conversionFactSql = renderAutomationConversionEventInvariantSql();
+	const erasureHoldSql = renderErasureHoldInvariantSql();
+	const billingPeriodSql = renderBillingPeriodInvariantSql();
+	const storageLocationSql = renderStorageLocationInvariantSql();
+	const stripeEventAttributionSql = renderStripeEventAttributionInvariantSql();
+	const additionalInvariantFunctions = [
+		{
+			functionSchema: "public",
+			functionName: "relayapi_guard_erasure_hold",
+			functionConfig: ["search_path=pg_catalog, public, auth"],
+			renderedSql: erasureHoldSql,
+		},
+		{
+			functionSchema: "public",
+			functionName: "relayapi_prevent_held_root_delete",
+			functionConfig: ["search_path=pg_catalog, public"],
+			renderedSql: erasureHoldSql,
+		},
+		...[
+			"enforce_billing_period_authority",
+			"enforce_billing_operation_attempt_authority",
+			"enforce_phone_billing_attempt_authority",
+		].map((functionName) => ({
+			functionSchema: "public",
+			functionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			renderedSql: billingPeriodSql,
+		})),
+		...[
+			"enforce_storage_location_immutability",
+			"enforce_storage_credential_transition",
+		].map((functionName) => ({
+			functionSchema: "public",
+			functionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			renderedSql: storageLocationSql,
+		})),
+		{
+			functionSchema:
+				STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.functionSchema,
+			functionName: STRIPE_EVENT_ATTRIBUTION_INVARIANT_CONTRACT.functionName,
+			functionConfig: ["search_path=pg_catalog, public"],
+			renderedSql: stripeEventAttributionSql,
+		},
+	].map(({ renderedSql: invariantSql, ...contract }) => ({
+		...contract,
+		functionSource: extractGeneratedFunctionSource(
+			invariantSql,
+			contract.functionSchema,
+			contract.functionName,
+		),
+	}));
 	const usageProjection = USAGE_BUCKET_PROJECTION_CONTRACT;
 	return [
 		...generatedContracts,
@@ -837,6 +994,7 @@ function expectedGeneratedFunctions(): ExpectedGeneratedFunction[] {
 				conversionFact.functionName,
 			),
 		},
+		...additionalInvariantFunctions,
 		{
 			functionSchema: usageProjection.projectionFunctionSchema,
 			functionName: usageProjection.projectionFunctionName,
@@ -1018,6 +1176,11 @@ function isWrappedExpression(value: string): boolean {
 function normalizeExpression(expression: string | null): string | null {
 	if (expression === null) return null;
 	let value = canonicalizeJsonLiteral(expression.trim());
+	value = value.replace(/\binterval\s+'((?:''|[^'])*)'/gi, "'$1'::interval");
+	value = value.replace(
+		/'(\d+)\s+hours?'::interval/gi,
+		(_match, hours: string) => `'${hours.padStart(2, "0")}:00:00'::interval`,
+	);
 	value = value.replace(implicitLiteralCastPattern, "$1");
 	value = normalizeOutsideStringLiterals(value);
 	value = value.replace(
@@ -1028,6 +1191,7 @@ function normalizeExpression(expression: string | null): string | null {
 		/([a-z0-9_."()]+)=any\s*\(array\[(.*?)\]\)/g,
 		"$1 in ($2)",
 	);
+	value = value.replace(/\(([a-z_][a-z0-9_$]*\s+in\s+\([^()]*\))\)/gi, "$1");
 	while (isWrappedExpression(value)) value = value.slice(1, -1).trim();
 	return value;
 }
@@ -1384,6 +1548,34 @@ function expectedConstraints(): ExpectedConstraint[] {
 			});
 		}
 	}
+
+	const usageWindowConstraintKey =
+		"public.usage_buckets.usage_buckets_billing_period_window_fk";
+	const usageWindowConstraint = constraints.get(usageWindowConstraintKey);
+	if (!usageWindowConstraint) {
+		throw new Error(
+			`Custom migration SQL expects ${usageWindowConstraintKey} to be declared by Drizzle`,
+		);
+	}
+	constraints.set(usageWindowConstraintKey, {
+		...usageWindowConstraint,
+		deferrable: true,
+	});
+	add({
+		...base(
+			"public",
+			"billing_periods",
+			"billing_periods_invoice_org_fk",
+			"f",
+			["invoice_id", "organization_id"],
+		),
+		foreignSchema: "public",
+		foreignTable: "invoices",
+		foreignColumns: ["id", "organization_id"],
+		onUpdate: "no action",
+		onDelete: "restrict",
+		matchType: "simple",
+	});
 
 	return [...constraints.values()];
 }
