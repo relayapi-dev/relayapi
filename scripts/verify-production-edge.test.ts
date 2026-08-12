@@ -119,6 +119,18 @@ describe("production edge verification", () => {
 		}
 	});
 
+	it("keeps generated Docs pages within the Worker resource budget", () => {
+		const workflow = readFileSync(
+			resolve(import.meta.dir, "../.github/workflows/deploy-docs.yml"),
+			"utf8",
+		);
+
+		expect(workflow).toContain("Enforce API reference cache budget");
+		expect(workflow).toContain('largest_kib" -gt 4096');
+		expect(workflow).toContain("Concurrent API reference smoke failed");
+		expect(workflow).toContain("Worker exceeded resource limits|Error 1102");
+	});
+
 	it("gates every npm release on a protected main branch", () => {
 		for (const name of ["sdk", "mcp-server", "cli"]) {
 			const workflow = readFileSync(

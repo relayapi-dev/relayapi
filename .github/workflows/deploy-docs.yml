@@ -98,6 +98,27 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
 
+      - name: Enforce API reference cache budget
+        run: |
+          set -euo pipefail
+          largest_entry="$(
+            find .open-next/cache -type f -path '*/api-reference/*.cache' -exec du -k {} + \
+              | sort -nr \
+              | sed -n '1p'
+          )"
+          largest_kib="$(printf '%s\n' "$largest_entry" | awk '{print $1}')"
+          largest_file="$(printf '%s\n' "$largest_entry" | cut -f2-)"
+          if ! [[ "$largest_kib" =~ ^[0-9]+$ ]]; then
+            echo "::error::No generated API reference cache entries were found"
+            exit 1
+          fi
+          printf 'Largest API reference cache entry: %s KiB (%s)\n' \
+            "$largest_kib" "$largest_file"
+          if [ "$largest_kib" -gt 4096 ]; then
+            echo "::error::Generated API reference cache entry exceeds the 4 MiB budget"
+            exit 1
+          fi
+
       - name: Validate Docs deploy bundle
         run: bun run deploy:dry-run
         working-directory: apps/docs
@@ -198,6 +219,38 @@ jobs:
           curl --fail-with-body --silent --show-error --location \
             --retry 5 --retry-delay 3 --retry-all-errors --max-time 20 \
             https://docs.relayapi.dev/api-reference/accounts/listAccounts >/dev/null
+          routes=(
+            /api-reference/ai-knowledge/createKnowledgeBase
+            /api-reference/analytics/getAnalytics
+            /api-reference/contacts/getContact
+            /api-reference/google-business/uploadGmbMedia
+            /api-reference/inbox/getInboxConversation
+            /api-reference/posts/bulkCreatePosts
+            /api-reference/posts/createPost
+            /api-reference/webhooks/listWebhooks
+          )
+          pids=()
+          outputs=()
+          for index in "${!routes[@]}"; do
+            output="$RUNNER_TEMP/relayapi-docs-concurrent-$index.html"
+            outputs+=("$output")
+            curl --fail-with-body --silent --show-error --location --max-time 30 \
+              --output "$output" "https://docs.relayapi.dev${routes[$index]}" &
+            pids+=("$!")
+          done
+          concurrent_failed=0
+          for pid in "${pids[@]}"; do
+            if ! wait "$pid"; then concurrent_failed=1; fi
+          done
+          for output in "${outputs[@]}"; do
+            if grep -Eqi 'Worker exceeded resource limits|Error 1102|Application error' "$output"; then
+              concurrent_failed=1
+            fi
+          done
+          if [ "$concurrent_failed" -ne 0 ]; then
+            echo "::error::Concurrent API reference smoke failed"
+            exit 1
+          fi
           bun ../../scripts/verify-production-edge.ts docs
         working-directory: apps/docs
         env:
